@@ -17,6 +17,7 @@ import { readFile } from "fs/promises";
 import path from "path";
 import { revalidateTag } from "next/cache";
 import { after } from "next/server";
+import { headers } from "next/headers";
 import {
   and,
   asc,
@@ -42,6 +43,7 @@ import { callGemini } from "@/lib/ai/gemini";
 import { pingIndexNow } from "@/lib/seo/search-engines";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 import { HELP_URL } from "@/lib/site";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { TAGS } from "@/lib/storefront/tags";
 import { searchHelpArticles, getHelpCategories } from "@/lib/help/queries";
 import {
@@ -106,6 +108,18 @@ export async function suggestHelpArticles(
 /** Bump an article's view count (fire-and-forget; published-only in the RPC). */
 export async function recordHelpArticleView(id: string): Promise<void> {
   if (!id) return;
+  // Public + anon: throttle per IP so view_count — which drives the Popular
+  // ordering AND search ranking — can't be inflated by scripted requests. The
+  // cap is generous (genuine browsing is fine); on throttle we silently skip,
+  // since view counting is best-effort. rateLimit fails open on DB hiccups.
+  const { allowed } = await rateLimit(
+    `help:view:${clientIp(await headers())}`,
+    {
+      max: 200,
+      windowSeconds: 3600,
+    },
+  );
+  if (!allowed) return;
   try {
     await withAnon((db) => db.execute(sql`SELECT help_article_view(${id})`));
   } catch {
@@ -119,11 +133,28 @@ export async function voteHelpArticle(
   helpful: boolean,
 ): Promise<ActionResult> {
   if (!id) return { error: "Missing article." };
+  // Public + anon: throttle per IP. The widget already dedups one vote per
+  // article per browser client-side; this backstops scripted ratio-skewing of
+  // helpful_yes/no. On throttle, return success WITHOUT writing so a genuine
+  // reader (who votes at most a handful of times) is never shown an error.
+  const { allowed } = await rateLimit(
+    `help:vote:${clientIp(await headers())}`,
+    {
+      max: 20,
+      windowSeconds: 3600,
+    },
+  );
+  if (!allowed) return { success: true };
   try {
     await withAnon((db) =>
       db.execute(sql`SELECT help_article_vote(${id}, ${helpful})`),
     );
-    revalidateTag(TAGS.help, "max");
+    // NOTE: deliberately no revalidateTag here. This action is PUBLIC + anon,
+    // so busting the whole help cache on every vote let any visitor force
+    // repeated full invalidation (DoS amplifier). Helpful counts are
+    // operator-facing analytics with no reader-visible cache dependency (the
+    // widget confirms the vote client-side), so eventual consistency is fine —
+    // matching recordHelpArticleView, which also doesn't revalidate.
     return { success: true };
   } catch {
     return { error: "Could not record your feedback." };

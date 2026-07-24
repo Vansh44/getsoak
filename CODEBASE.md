@@ -1054,7 +1054,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
     `helpful_no`). RLS: anon reads published only; writes gated on
     `is_platform_admin()`. Public feedback/view counters are narrow atomic
     `SECURITY DEFINER` RPCs (`help_article_view`, `help_article_vote`) so no
-    write policy opens to anon. Drizzle tables added to `drizzle/schema.ts`
+    write policy opens to anon (hardened to `search_path=''` +
+    schema-qualified refs in `help_centre_02_rpc_search_path.sql`; the public
+    `voteHelpArticle` action deliberately does NOT `revalidateTag` — an
+    anon-triggerable global cache bust — so helpful counts are
+    eventual-consistency). Drizzle tables added to `drizzle/schema.ts`
     (`helpCategories`, `helpArticles`; the generated `search` column is
     intentionally absent — search uses a raw `sql` predicate).
     - **Public site** (`app/help/*`, statically generated + ISR, fully

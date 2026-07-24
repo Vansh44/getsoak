@@ -194,6 +194,12 @@ export const getPopularHelpArticles = unstable_cache(
         db
           .select(CARD_COLS)
           .from(helpArticles)
+          // See searchHelpArticles: exclude orphaned (category-less) articles so
+          // the Popular list never shows an unlinkable card.
+          .innerJoin(
+            helpCategories,
+            eq(helpArticles.categoryId, helpCategories.id),
+          )
           .where(PUBLISHED)
           .orderBy(desc(helpArticles.viewCount), desc(helpArticles.publishedAt))
           .limit(limit),
@@ -289,6 +295,14 @@ export async function searchHelpArticles(
       db
         .select(CARD_COLS)
         .from(helpArticles)
+        // INNER JOIN: only articles with a live category are reachable (a
+        // deleted category sets category_id NULL — orphaning the article, which
+        // then has no URL). Excluding them here keeps the result count honest
+        // and never surfaces an unlinkable hit. Mirrors getPublishedHelpArticleParams.
+        .innerJoin(
+          helpCategories,
+          eq(helpArticles.categoryId, helpCategories.id),
+        )
         .where(
           and(
             PUBLISHED,

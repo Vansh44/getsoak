@@ -98,15 +98,19 @@ CREATE POLICY "Write help_articles" ON help_articles FOR ALL
 -- SECURITY DEFINER functions (owned by postgres) rather than opening a write
 -- policy to anon. Each is a single conditional/relative UPDATE — no way to set
 -- an arbitrary value. Callers pass a published article id only.
-CREATE OR REPLACE FUNCTION help_article_view(p_id UUID)
-RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
-  UPDATE help_articles SET view_count = view_count + 1
+-- SECURITY DEFINER hardening: pin search_path to '' and fully-qualify every
+-- object reference, so the function can't be hijacked by a same-named object in
+-- another schema earlier on the path (matches the rest of the codebase, e.g.
+-- adjust_stock / the coupon RPCs).
+CREATE OR REPLACE FUNCTION public.help_article_view(p_id UUID)
+RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+  UPDATE public.help_articles SET view_count = view_count + 1
   WHERE id = p_id AND status = 'published';
 $$;
 
-CREATE OR REPLACE FUNCTION help_article_vote(p_id UUID, p_helpful BOOLEAN)
-RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
-  UPDATE help_articles
+CREATE OR REPLACE FUNCTION public.help_article_vote(p_id UUID, p_helpful BOOLEAN)
+RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = '' AS $$
+  UPDATE public.help_articles
      SET helpful_yes = helpful_yes + (CASE WHEN p_helpful THEN 1 ELSE 0 END),
          helpful_no  = helpful_no  + (CASE WHEN p_helpful THEN 0 ELSE 1 END)
    WHERE id = p_id AND status = 'published';
