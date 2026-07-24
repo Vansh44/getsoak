@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from "vitest";
-import { productSchema, articleSchema, breadcrumbSchema } from "./schema";
+import {
+  productSchema,
+  articleSchema,
+  breadcrumbSchema,
+  helpArticleSchema,
+} from "./schema";
 
 const SITE = "https://acme.storemink.com";
 
@@ -144,5 +149,57 @@ describe("breadcrumbSchema", () => {
       { name: "X", path: "https://other.test/x" },
     ]) as Record<string, any>;
     expect(s.itemListElement[0].item).toBe("https://other.test/x");
+  });
+});
+
+describe("helpArticleSchema", () => {
+  const HELP = "https://help.storemink.com";
+  const base = {
+    siteUrl: HELP,
+    path: "/help/payments/enable-cod",
+    title: "Enable Cash on Delivery",
+    publisherName: "StoreMink",
+  };
+
+  it("emits a TechArticle with an absolute url and @id", () => {
+    const s = helpArticleSchema(base) as Record<string, any>;
+    expect(s["@type"]).toBe("TechArticle");
+    expect(s.url).toBe(`${HELP}/help/payments/enable-cod`);
+    expect(s["@id"]).toBe(`${HELP}/help/payments/enable-cod#article`);
+    expect(s.headline).toBe("Enable Cash on Delivery");
+    expect(s.publisher).toMatchObject({
+      "@type": "Organization",
+      name: "StoreMink",
+    });
+  });
+
+  it("omits empty description and dates, resolves the logo", () => {
+    const s = helpArticleSchema(base) as Record<string, any>;
+    expect(s.description).toBeUndefined();
+    expect(s.datePublished).toBeUndefined();
+    expect(s.publisher.logo).toBeUndefined();
+
+    const full = helpArticleSchema({
+      ...base,
+      description: "Turn on COD for your store.",
+      publishedAt: "2026-07-01T00:00:00Z",
+      updatedAt: "2026-07-10T00:00:00Z",
+      logoUrl: "/icon.svg",
+    }) as Record<string, any>;
+    expect(full.description).toBe("Turn on COD for your store.");
+    expect(full.datePublished).toBe("2026-07-01T00:00:00Z");
+    expect(full.dateModified).toBe("2026-07-10T00:00:00Z");
+    expect(full.publisher.logo).toEqual({
+      "@type": "ImageObject",
+      url: `${HELP}/icon.svg`,
+    });
+  });
+
+  it("falls back dateModified to publishedAt when no updatedAt", () => {
+    const s = helpArticleSchema({
+      ...base,
+      publishedAt: "2026-07-01T00:00:00Z",
+    }) as Record<string, any>;
+    expect(s.dateModified).toBe("2026-07-01T00:00:00Z");
   });
 });

@@ -2,8 +2,15 @@ import "server-only";
 
 import { and, asc, eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import { cardColors, categories, products, taxClasses } from "@/drizzle/schema";
+import {
+  cardColors,
+  categories,
+  products,
+  stores,
+  taxClasses,
+} from "@/drizzle/schema";
 import { getActingStoreId } from "@/app/dashboard/lib/access";
+import { resolveStoreSettings } from "@/lib/settings/registry";
 import { PRODUCT_COLUMNS, VARIANT_COLUMNS } from "./columns";
 import { productVariants } from "@/drizzle/schema";
 import type {
@@ -12,6 +19,65 @@ import type {
   CardColorOption,
   TaxClassOption,
 } from "./page";
+
+/**
+ * The option lists (categories, card colours, tax classes) + the store default
+ * for the "track inventory" checkbox — everything the editor needs to CREATE a
+ * new product (no product row yet). Used by the full-page New-product route,
+ * mirroring the list page's own option loading.
+ */
+export async function getProductCreateData(): Promise<{
+  categories: CategoryOption[];
+  colors: CardColorOption[];
+  taxClasses: TaxClassOption[];
+  defaultTrackInventory: boolean;
+}> {
+  const storeId = await getActingStoreId();
+
+  return await withService(async (db) => {
+    const categoryRows = await db
+      .select({
+        id: categories.id,
+        name: categories.name,
+        slug: categories.slug,
+        status: categories.status,
+      })
+      .from(categories)
+      .where(eq(categories.storeId, storeId))
+      .orderBy(asc(categories.sortOrder), asc(categories.name));
+    const colorRows = await db
+      .select({ id: cardColors.id, name: cardColors.name, hex: cardColors.hex })
+      .from(cardColors)
+      .where(eq(cardColors.storeId, storeId))
+      .orderBy(asc(cardColors.sortOrder), asc(cardColors.name));
+    const taxClassRows = await db
+      .select({
+        id: taxClasses.id,
+        name: taxClasses.name,
+        rate: taxClasses.rate,
+      })
+      .from(taxClasses)
+      .where(eq(taxClasses.storeId, storeId))
+      .orderBy(asc(taxClasses.sortOrder), asc(taxClasses.name));
+    const storeRows = await db
+      .select({ settings: stores.settings, plan: stores.plan })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1);
+
+    const settings = resolveStoreSettings(
+      storeRows[0]?.settings as Record<string, unknown>,
+      storeRows[0]?.plan,
+    );
+
+    return {
+      categories: categoryRows as CategoryOption[],
+      colors: colorRows as CardColorOption[],
+      taxClasses: taxClassRows as TaxClassOption[],
+      defaultTrackInventory: Boolean(settings["inventory.simpleTrackDefault"]),
+    };
+  });
+}
 
 /**
  * Everything the product editor needs for one product: the product (with its

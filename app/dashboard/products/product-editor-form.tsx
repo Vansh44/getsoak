@@ -180,6 +180,20 @@ const TINTS: Record<Tint, { card: string; badge: string }> = {
   },
 };
 
+// The editor is split into tabs so a merchant sees one focused group of
+// settings at a time instead of one long scroll. Each field-Section below lives
+// under exactly one tab; `validationTab` (in handleSave) maps a save error back
+// to the tab that owns the offending field so we can jump there.
+type TabId = "basics" | "media" | "pricing" | "variants" | "visibility" | "seo";
+const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: "basics", label: "Basics", icon: Package },
+  { id: "media", label: "Media", icon: ImageIcon },
+  { id: "pricing", label: "Pricing", icon: Tag },
+  { id: "variants", label: "Variants", icon: Layers },
+  { id: "visibility", label: "Visibility", icon: Eye },
+  { id: "seo", label: "SEO", icon: Search },
+];
+
 // A titled, described, colour-tinted panel — the building block of the editor.
 function Section({
   title,
@@ -293,9 +307,9 @@ function VariantGallery({
 }
 
 /**
- * The product editor form body, sans Dialog chrome — reused by the editor modal
- * (product-editor-dialog.tsx) and the full-page edit route (product-edit-panel).
- * Mounts fresh each time it's shown, so form state is initialised lazily from
+ * The product editor form body — driven by the full-page editor panel
+ * (product-edit-panel.tsx) for both creating and editing a product. Mounts
+ * fresh each time it's shown, so form state is initialised lazily from
  * `product` (no open/reset effect needed).
  */
 export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
@@ -323,6 +337,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
     const [isGeneratingSeo, setIsGeneratingSeo] = useState(false);
     // Once the user edits the slug by hand we stop auto-deriving it from the name.
     const [slugTouched, setSlugTouched] = useState(!!product);
+    // Active editor tab + the tab a failed save jumped to (marked with a dot).
+    const [tab, setTab] = useState<TabId>("basics");
+    const [errorTab, setErrorTab] = useState<TabId | null>(null);
     const descriptionRef = useRef<HTMLTextAreaElement>(null);
     const isEditing = !!product;
 
@@ -473,40 +490,39 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
     };
 
     const handleSave = () => {
-      if (!form.name.trim()) {
-        toast.error("Name is required");
-        return;
-      }
-      if (!form.category_id) {
-        toast.error("Category is required");
-        return;
-      }
-      if (!form.description.trim()) {
-        toast.error("Description is required");
-        return;
-      }
-      if (!form.seo_title.trim() || !form.seo_description.trim()) {
-        toast.error("SEO title and description are required");
-        return;
-      }
+      // Jump to the tab that owns a failed field, flag it with a dot, and toast
+      // — so a required field on a hidden tab never errors with no visible cause.
+      const fail = (target: TabId, message: string) => {
+        setErrorTab(target);
+        setTab(target);
+        toast.error(message);
+      };
+      setErrorTab(null);
+      if (!form.name.trim()) return fail("basics", "Name is required");
+      if (!form.category_id) return fail("basics", "Category is required");
+      if (!form.description.trim())
+        return fail("basics", "Description is required");
+      if (!form.seo_title.trim() || !form.seo_description.trim())
+        return fail("seo", "SEO title and description are required");
       const badVariant = form.variants.find((v) => !v.name.trim());
-      if (badVariant) {
-        toast.error("Each variant needs a name (or remove the empty row)");
-        return;
-      }
-      if (form.selling_price > 0 && form.selling_price > form.base_price) {
-        toast.error("Selling price can't be higher than the base price");
-        return;
-      }
+      if (badVariant)
+        return fail(
+          "variants",
+          "Each variant needs a name (or remove the empty row)",
+        );
+      if (form.selling_price > 0 && form.selling_price > form.base_price)
+        return fail(
+          "pricing",
+          "Selling price can't be higher than the base price",
+        );
       const badPrice = form.variants.find(
         (v) => v.selling_price > 0 && v.selling_price > v.base_price,
       );
-      if (badPrice) {
-        toast.error(
+      if (badPrice)
+        return fail(
+          "variants",
           `Variant "${badPrice.name}" has a selling price above its base price`,
         );
-        return;
-      }
       const badSpecial = form.variants.find(
         (v) =>
           v.special_price != null &&
@@ -514,12 +530,11 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
           v.base_price > 0 &&
           v.special_price > v.base_price,
       );
-      if (badSpecial) {
-        toast.error(
+      if (badSpecial)
+        return fail(
+          "variants",
           `Variant "${badSpecial.name}" has a sale price above its base price`,
         );
-        return;
-      }
       startTransition(async () => {
         const result = isEditing
           ? await updateProduct(product!.id, form)
@@ -583,11 +598,42 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
           </div>
         )}
 
-        {/* Shopify-style two-column layout: a wide main column for the primary
-          content and a narrower sidebar for organization + SEO. Collapses to a
-          single column below lg (and in the modal, which is < lg wide). */}
-        <div className="grid grid-cols-1 gap-5 py-2 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-          <div className="space-y-4">
+        {/* Tab bar — one focused group of settings at a time, so the editor
+          never reads as one long wall of fields. A failed save flags the tab
+          that owns the offending field with a red dot (errorTab). */}
+        <div className="mb-5 flex justify-center gap-1 overflow-x-auto border-b border-[#e5e7eb]">
+          {TABS.map((t) => {
+            const active = tab === t.id;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`relative flex shrink-0 items-center gap-1.5 border-b-2 px-3.5 py-2.5 text-sm font-medium transition ${
+                  active
+                    ? "border-[#4f46e5] text-[#4f46e5]"
+                    : "border-transparent text-[#6b7280] hover:text-[#111827]"
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                {t.label}
+                {errorTab === t.id && (
+                  <span
+                    aria-hidden
+                    className="absolute right-1 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500"
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Each panel below is kept mounted and toggled with `hidden` (not
+          unmounted) so in-progress uploads and the autosized description survive
+          tab switches. Single column, capped for comfortable reading. */}
+        <div className="mx-auto max-w-3xl py-2">
+          <div className={tab === "basics" ? "space-y-4" : "hidden"}>
             {/* Product details */}
             <Section
               title="Product details"
@@ -696,7 +742,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </div>
               </div>
             </Section>
+          </div>
 
+          <div className={tab === "media" ? "space-y-4" : "hidden"}>
             {/* Media */}
             <Section
               title="Media"
@@ -747,7 +795,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </div>
               </div>
             </Section>
+          </div>
 
+          <div className={tab === "pricing" ? "space-y-4" : "hidden"}>
             {/* Pricing */}
             <Section
               title="Pricing"
@@ -873,7 +923,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </div>
               </Section>
             )}
+          </div>
 
+          <div className={tab === "variants" ? "space-y-4" : "hidden"}>
             {/* Variants */}
             <Section
               title="Variants"
@@ -1021,8 +1073,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
             </Section>
           </div>
 
-          {/* Sidebar: organization + SEO */}
-          <div className="space-y-4">
+          <div className={tab === "visibility" ? "space-y-4" : "hidden"}>
             {/* Organization & visibility */}
             <Section
               title="Organization & visibility"
@@ -1108,7 +1159,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </div>
               </div>
             </Section>
+          </div>
 
+          <div className={tab === "seo" ? "space-y-4" : "hidden"}>
             {/* Search engine listing (SEO) */}
             <Section
               title="Search engine listing"

@@ -1,11 +1,16 @@
 import type { MetadataRoute } from "next";
-import { PLATFORM_URL } from "@/lib/site";
-import { ROOT_DOMAIN, SEARCH_INDEXABLE } from "@/lib/store/host";
+import { headers } from "next/headers";
+import { HELP_URL, PLATFORM_URL } from "@/lib/site";
+import { ROOT_DOMAIN, SEARCH_INDEXABLE, isHelpHost } from "@/lib/store/host";
 import {
   getPublishedProducts,
   getPublishedBlogCards,
   getPublishedPageSlugs,
 } from "@/lib/storefront/queries";
+import {
+  getHelpCategories,
+  getPublishedHelpArticleParams,
+} from "@/lib/help/queries";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 
 // Regenerate hourly; the underlying product/blog reads are themselves cached
@@ -57,6 +62,38 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   if (!SEARCH_INDEXABLE) return [];
 
   const now = new Date();
+
+  // Help centre (help.storemink.com): its own sitemap of the docs. It has no
+  // store, so branch before the store/platform resolution below.
+  const host =
+    (await headers()).get("x-forwarded-host") || (await headers()).get("host");
+  if (isHelpHost(host)) {
+    const [categories, articles] = await Promise.all([
+      getHelpCategories().catch(() => []),
+      getPublishedHelpArticleParams().catch(() => []),
+    ]);
+    const entries: MetadataRoute.Sitemap = [
+      {
+        url: `${HELP_URL}/help`,
+        lastModified: now,
+        changeFrequency: "weekly",
+        priority: 1,
+      },
+      ...categories.map((c) => ({
+        url: `${HELP_URL}/help/${c.slug}`,
+        lastModified: now,
+        changeFrequency: "weekly" as const,
+        priority: 0.7,
+      })),
+      ...articles.map((a) => ({
+        url: `${HELP_URL}/help/${a.categorySlug}/${a.slug}`,
+        lastModified: a.updatedAt ? new Date(a.updatedAt) : now,
+        changeFrequency: "monthly" as const,
+        priority: 0.8,
+      })),
+    ];
+    return entries;
+  }
 
   // Per-host: resolve the store on the requesting domain. No real store (the
   // platform apex, or an unresolved host) → emit the platform's own sitemap

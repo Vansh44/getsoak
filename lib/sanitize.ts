@@ -20,6 +20,10 @@ const BLOG_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedAttributes: {
     ...sanitizeHtml.defaults.allowedAttributes,
     img: ["src", "alt", "width", "height"],
+    // Table cell spans (editor tables). colspan/rowspan aren't class/style/id/
+    // data-*, so without these merged cells would collapse on sanitize.
+    td: ["colspan", "rowspan"],
+    th: ["colspan", "rowspan", "scope"],
     "*": ["class", "style", "id", "data-*"],
   },
   // Whitelist specific CSS properties instead of allowing arbitrary inline
@@ -38,6 +42,9 @@ const BLOG_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
         /^#(0x)?[0-9a-f]+$/i,
         /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/,
       ],
+      // Editor table column widths (col/cell). Numeric px/% only.
+      width: [/^\d+(\.\d+)?(px|%)$/],
+      "min-width": [/^\d+(\.\d+)?(px|%)$/],
     },
   },
   // Only allow safe URL schemes for links/images.

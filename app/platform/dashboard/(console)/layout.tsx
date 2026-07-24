@@ -48,6 +48,11 @@ export default async function PlatformDashboardLayout({
       group: "ADMINISTRATION" as SectionGroup,
       items: [
         {
+          href: "/dashboard/help",
+          label: "Help Centre",
+          icon: "faq" as const,
+        },
+        {
           href: "/dashboard/operators",
           label: "Operators",
           icon: "users" as const,

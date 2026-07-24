@@ -10,14 +10,7 @@ import {
   or,
 } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import {
-  cardColors,
-  categories,
-  productVariants,
-  products,
-  stores,
-  taxClasses,
-} from "@/drizzle/schema";
+import { categories, productVariants, products } from "@/drizzle/schema";
 import { PRODUCT_COLUMNS } from "./columns";
 import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import {
@@ -28,7 +21,6 @@ import {
 } from "../lib/list-params";
 import { ProductsManagementView } from "./products-management-view";
 import { RealtimeRefresher } from "../components/realtime-refresher";
-import { resolveStoreSettings } from "@/lib/settings/registry";
 
 export type ProductFilter = "all" | "published" | "drafts" | "featured";
 const PRODUCT_FILTERS: ProductFilter[] = [
@@ -155,9 +147,6 @@ export default async function ProductsPage({
   let total: number;
   let counts: ProductCounts;
   let categoryOptions: CategoryOption[];
-  let colorOptions: CardColorOption[];
-  let taxClassOptions: TaxClassOption[];
-  let defaultTrackInventory: boolean;
   try {
     const result = await withService(async (db) => {
       const rows = await db
@@ -197,29 +186,6 @@ export default async function ProductsPage({
         .from(categories)
         .where(eq(categories.storeId, storeId))
         .orderBy(asc(categories.sortOrder), asc(categories.name));
-      const colorRows = await db
-        .select({
-          id: cardColors.id,
-          name: cardColors.name,
-          hex: cardColors.hex,
-        })
-        .from(cardColors)
-        .where(eq(cardColors.storeId, storeId))
-        .orderBy(asc(cardColors.sortOrder), asc(cardColors.name));
-      const taxClassRows = await db
-        .select({
-          id: taxClasses.id,
-          name: taxClasses.name,
-          rate: taxClasses.rate,
-        })
-        .from(taxClasses)
-        .where(eq(taxClasses.storeId, storeId))
-        .orderBy(asc(taxClasses.sortOrder), asc(taxClasses.name));
-      const storeRows = await db
-        .select({ settings: stores.settings, plan: stores.plan })
-        .from(stores)
-        .where(eq(stores.id, storeId))
-        .limit(1);
 
       // The list view only shows a variant COUNT (editing re-fetches the full
       // product + variants via /dashboard/products/[id]), so pull just variant
@@ -241,9 +207,6 @@ export default async function ProductsPage({
         statusRows,
         featuredCount: featuredRows[0]?.n ?? 0,
         categoryRows,
-        colorRows,
-        taxClassRows,
-        storeRow: storeRows[0],
         variantIds,
       };
     });
@@ -279,16 +242,7 @@ export default async function ProductsPage({
       else if (row.status === "draft") counts.drafts = row.n;
     }
 
-    // Store default for the "track inventory" checkbox on NEW simple products.
-    const settings = resolveStoreSettings(
-      result.storeRow?.settings as Record<string, unknown>,
-      result.storeRow?.plan,
-    );
-    defaultTrackInventory = Boolean(settings["inventory.simpleTrackDefault"]);
-
     categoryOptions = result.categoryRows as CategoryOption[];
-    colorOptions = result.colorRows as CardColorOption[];
-    taxClassOptions = result.taxClassRows as TaxClassOption[];
   } catch (err) {
     console.error("ProductsPage load error:", err);
     return (
@@ -312,8 +266,6 @@ export default async function ProductsPage({
       <ProductsManagementView
         products={list}
         categories={categoryOptions}
-        colors={colorOptions}
-        taxClasses={taxClassOptions}
         canManage={canManage}
         counts={counts}
         total={total}
@@ -322,7 +274,6 @@ export default async function ProductsPage({
         query={q}
         filter={filter}
         categoryFilter={categoryFilter}
-        defaultTrackInventory={defaultTrackInventory}
       />
     </>
   );

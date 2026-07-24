@@ -21,6 +21,10 @@ function resolvePlatformUrl(): string {
 
 export const PLATFORM_URL = resolvePlatformUrl();
 
+// Canonical origin of the help centre (help.{root}). Used for help-article
+// canonicals, OG urls, JSON-LD and the help branch of sitemap.ts/robots.ts.
+export const HELP_URL = `https://help.${ROOT_DOMAIN}`;
+
 // Canonical origin of the current request's store.
 export async function getStoreUrl(): Promise<string> {
   const store = await getCurrentStore();

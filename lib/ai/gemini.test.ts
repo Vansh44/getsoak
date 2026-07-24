@@ -187,21 +187,35 @@ describe("callGemini", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("returns a generic error for other non-OK statuses (e.g. 404)", async () => {
-    // 404 is neither 400/403 (immediate bail) nor 5xx, so the loop still runs
-    // all attempts before falling through to the generic message.
-    vi.useFakeTimers();
+  it("bails immediately on a 404 with a model-specific message", async () => {
     (fetch as any).mockResolvedValue(
       fakeResponse({ ok: false, status: 404, text: "not found" }),
     );
 
-    const promise = callGemini("s", "u");
-    await vi.advanceTimersByTimeAsync(600);
-    await vi.advanceTimersByTimeAsync(1200);
+    const result = await callGemini("s", "u");
+    expect(result.error).toContain("isn't available");
+    expect(result.error).toContain("GEMINI_MODEL");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 
-    const result = await promise;
-    expect(result.error).toBe("AI request failed (404). Try again.");
-    expect(fetch).toHaveBeenCalledTimes(3);
+  it("bails immediately on a 429 with a quota message", async () => {
+    (fetch as any).mockResolvedValue(
+      fakeResponse({ ok: false, status: 429, text: "quota" }),
+    );
+
+    const result = await callGemini("s", "u");
+    expect(result.error).toContain("quota exceeded");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("bails immediately on a 401 with an invalid-key message", async () => {
+    (fetch as any).mockResolvedValue(
+      fakeResponse({ ok: false, status: 401, text: "unauthorized" }),
+    );
+
+    const result = await callGemini("s", "u");
+    expect(result.error).toContain("GEMINI_API_KEY");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries 500s up to MAX_ATTEMPTS then returns the busy error", async () => {
@@ -363,5 +377,25 @@ describe("callGemini (Vertex AI backend)", () => {
     const result = await callGemini("s", "u");
     expect(result.error).toContain("Vertex AI User");
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers the free Developer API key when BOTH it and GCP_PROJECT_ID are set", async () => {
+    // The precedence rule: local + staging set GEMINI_API_KEY (free) even
+    // though a GCP project may exist for other services — the key wins, so
+    // Vertex/ADC is never consulted.
+    vi.stubEnv("GEMINI_API_KEY", "free-key");
+    vi.stubEnv("GCP_PROJECT_ID", "my-project");
+    (fetch as any).mockResolvedValue(
+      fakeResponse({ ok: true, status: 200, json: okJson("hi") }),
+    );
+
+    const result = await callGemini("sys", "user");
+    expect(result).toEqual({ text: "hi" });
+
+    const [url, init] = (fetch as any).mock.calls[0];
+    expect(url).toContain("generativelanguage.googleapis.com");
+    expect(init.headers["x-goog-api-key"]).toBe("free-key");
+    expect(init.headers.Authorization).toBeUndefined();
+    expect(mockGetAccessToken).not.toHaveBeenCalled();
   });
 });

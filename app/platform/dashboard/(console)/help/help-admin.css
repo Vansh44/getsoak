@@ -1,0 +1,698 @@
+/* Help Centre admin console. Scoped to .hc-admin so it never leaks into the
+ * rest of the platform dashboard. Neutral tokens (works on the dashboard's
+ * light shell). */
+
+/* Tokens must live on BOTH the console list (.hc-admin) AND the full-screen
+   editor (.hca-page) — the editor route renders outside .hc-admin, so without
+   this its var(--a-*) (e.g. table cell borders) would be undefined. */
+.hc-admin,
+.hca-page {
+  --a-line: #e5e5e0;
+  --a-ink: #1a1a17;
+  --a-soft: #63635c;
+  --a-faint: #9a9a90;
+  --a-surface: #f7f7f4;
+  --a-accent: #17130f;
+  --a-danger: #c0392b;
+  --a-green: #1c7c46;
+  color: var(--a-ink);
+}
+.hc-admin {
+  max-width: 1000px;
+}
+
+.hc-admin h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+}
+.hc-admin p {
+  margin: 4px 0 0;
+  color: var(--a-soft);
+  font-size: 14px;
+}
+.hc-admin a {
+  color: #7a5cff;
+}
+
+.hca-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.hca-topline-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* buttons */
+.hca-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--a-line);
+  background: #fff;
+  color: var(--a-ink);
+  cursor: pointer;
+}
+.hca-btn:hover:not(:disabled) {
+  border-color: var(--a-faint);
+}
+.hca-btn.primary {
+  background: var(--a-accent);
+  color: #fff;
+  border-color: var(--a-accent);
+}
+.hca-btn.ghost {
+  background: #fff;
+}
+.hca-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* filters */
+.hca-filters {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.hca-filters input,
+.hca-filters select {
+  height: 38px;
+  border: 1px solid var(--a-line);
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--a-ink);
+}
+.hca-filters input {
+  flex: 1;
+}
+
+/* table */
+.hca-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--a-line);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 14px;
+  background: #fff;
+}
+.hca-table th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--a-faint);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--a-line);
+  background: var(--a-surface);
+}
+.hca-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--a-line);
+  vertical-align: middle;
+}
+.hca-table tr:last-child td {
+  border-bottom: 0;
+}
+.hca-table .t-title {
+  font-weight: 600;
+}
+.hca-table .muted {
+  color: var(--a-faint);
+}
+.hca-table .t-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.hca-table .t-actions a,
+.hca-table .t-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--a-line);
+  background: #fff;
+  color: var(--a-soft);
+  cursor: pointer;
+}
+.hca-table .t-actions button:hover:not(:disabled) {
+  border-color: var(--a-faint);
+  color: var(--a-ink);
+}
+.hca-table .t-actions .danger:hover:not(:disabled) {
+  color: var(--a-danger);
+  border-color: var(--a-danger);
+}
+.badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+.badge.published {
+  background: #e5f4ec;
+  color: var(--a-green);
+}
+.badge.draft {
+  background: #f0f0ec;
+  color: var(--a-soft);
+}
+
+.hca-empty {
+  border: 1px dashed var(--a-line);
+  border-radius: 12px;
+  padding: 48px 20px;
+  text-align: center;
+  color: var(--a-soft);
+}
+
+/* ── Full-screen editor (route /dashboard/help/new | /[id]) ──
+   A focused takeover, Shopify-style: fixed over the whole viewport (above the
+   dashboard sidebar + topbar) so the editor gets the full width, with a back
+   arrow to return to the list. */
+.hca-page {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  background: var(--a-surface);
+}
+.hca-page .hca-modal {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* ── Editor table controls (TipTap) ── */
+.hca-prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 14px 0;
+  table-layout: fixed;
+}
+.hca-prose .tableWrapper {
+  overflow-x: auto;
+}
+.hca-prose td,
+.hca-prose th {
+  border: 1px solid var(--a-line);
+  padding: 8px 10px;
+  vertical-align: top;
+  position: relative;
+  min-width: 60px;
+}
+.hca-prose th {
+  background: var(--a-surface);
+  font-weight: 650;
+  text-align: left;
+}
+.hca-prose .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(90, 63, 240, 0.12);
+  pointer-events: none;
+}
+.hca-prose .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #5a3ff0;
+  pointer-events: none;
+}
+
+/* ── Dialog overlay (category manager) ── */
+.hca-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 15, 0.5);
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 24px;
+}
+.hca-modal {
+  background: #fff;
+  border-radius: 14px;
+  width: 100%;
+  max-width: 1120px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+}
+.hca-modal.small {
+  max-width: 620px;
+  align-self: center;
+  max-height: 80vh;
+}
+.hca-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--a-line);
+}
+.hca-head strong {
+  font-size: 15px;
+  flex: 1;
+}
+.hca-head-actions {
+  display: flex;
+  gap: 8px;
+}
+.hca-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--a-soft);
+  display: flex;
+}
+
+.hca-body {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  flex: 1;
+  min-height: 0;
+}
+.hca-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--a-line);
+}
+.hca-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--a-line);
+  background: var(--a-surface);
+}
+.hca-tb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--a-soft);
+  cursor: pointer;
+}
+.hca-tb:hover {
+  background: #ececff;
+}
+.hca-tb[data-active="true"] {
+  background: #e8e5ff;
+  color: #5a3ff0;
+}
+.hca-tb-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--a-line);
+  margin: 0 6px;
+}
+
+/* Floating table toolbar (BubbleMenu) — Google-Docs-style controls that appear
+   next to the table when the cursor is inside it. */
+.hca-table-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1f1b16;
+  color: #fff;
+  border-radius: 10px;
+  padding: 5px 8px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+}
+.hca-table-bar .grp {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.hca-table-bar .lbl {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 3px;
+}
+.hca-table-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.hca-table-bar button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.hca-table-bar button.danger:hover {
+  background: #c0392b;
+}
+.hca-table-bar .div {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.hca-table-bar .del-table {
+  font-weight: 500;
+}
+.hca-editor {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+}
+
+/* ── AI assistant (left panel) ── */
+.hca-ai-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--a-line);
+  background: #faf9ff;
+}
+.hca-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  font-weight: 650;
+  font-size: 14px;
+  color: #5a3ff0;
+  border-bottom: 1px solid var(--a-line);
+}
+.hca-ai-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hca-ai-empty {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--a-faint);
+}
+.hca-ai-msg {
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 11px;
+  border-radius: 10px;
+  max-width: 92%;
+}
+.hca-ai-msg.user {
+  align-self: flex-end;
+  background: #e8e5ff;
+  color: #3a2ea8;
+}
+.hca-ai-msg.ai {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid var(--a-line);
+  color: var(--a-soft);
+}
+.hca-ai-composer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--a-line);
+}
+.hca-ai-composer textarea {
+  width: 100%;
+  border: 1px solid #d8d2ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.4;
+  background: #fff;
+  color: var(--a-ink);
+  outline: none;
+  resize: none;
+}
+.hca-ai-composer textarea:focus {
+  border-color: #7a5cff;
+  box-shadow: 0 0 0 3px rgba(122, 92, 255, 0.15);
+}
+.hca-ai-composer button {
+  height: 40px;
+  border-radius: 10px;
+  border: none;
+  background: #5a3ff0;
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.hca-ai-composer button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.hca-loading {
+  padding: 40px;
+  color: var(--a-faint);
+}
+.hca-prose {
+  outline: none;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--a-ink);
+  min-height: 300px;
+}
+.hca-prose:focus {
+  outline: none;
+}
+.hca-prose h2 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 24px 0 8px;
+}
+.hca-prose h3 {
+  font-size: 17px;
+  font-weight: 650;
+  margin: 18px 0 6px;
+}
+.hca-prose p {
+  margin: 0 0 12px;
+}
+.hca-prose ul,
+.hca-prose ol {
+  padding-left: 24px;
+  margin: 0 0 12px;
+}
+/* Tailwind preflight resets list markers globally — restore them so the
+   editor shows real bullets/numbers. */
+.hca-prose ul {
+  list-style: disc outside;
+}
+.hca-prose ol {
+  list-style: decimal outside;
+}
+.hca-prose li {
+  margin: 4px 0;
+  display: list-item;
+}
+.hca-prose img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 12px 0;
+}
+.hca-prose a {
+  color: #5a3ff0;
+  text-decoration: underline;
+}
+.hca-prose blockquote {
+  border-left: 3px solid #d8d2ff;
+  padding-left: 14px;
+  color: var(--a-soft);
+  margin: 0 0 12px;
+}
+.hca-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--a-faint);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+/* sidebar */
+.hca-side {
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: #fff;
+}
+.hca-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+.hca-field > span {
+  font-weight: 600;
+  color: var(--a-soft);
+}
+.hca-field input,
+.hca-field select,
+.hca-field textarea {
+  border: 1px solid var(--a-line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--a-ink);
+  font-family: inherit;
+}
+.hca-field textarea {
+  resize: vertical;
+}
+.hca-field-group {
+  border-top: 1px solid var(--a-line);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hca-group-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--a-faint);
+}
+
+/* category manager */
+.hca-cat-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+.hca-cat-add {
+  display: grid;
+  grid-template-columns: 1fr 130px;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.hca-cat-add input,
+.hca-cat-add select {
+  height: 36px;
+  border: 1px solid var(--a-line);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 14px;
+}
+.hca-cat-add input:nth-child(3) {
+  grid-column: 1 / -1;
+}
+.hca-cat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--a-line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.hca-cat-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--a-line);
+  font-size: 14px;
+}
+.hca-cat-list li:last-child {
+  border-bottom: 0;
+}
+.hca-cat-list .muted {
+  color: var(--a-faint);
+  font-weight: 400;
+}
+.hca-cat-actions {
+  display: flex;
+  gap: 6px;
+}
+.hca-cat-actions button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--a-line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--a-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.hca-cat-actions .danger:hover {
+  color: var(--a-danger);
+  border-color: var(--a-danger);
+}
+
+/* Narrower than a comfortable 3-column: drop the right meta panel under the
+   editor, keeping the AI panel + editor side by side. */
+@media (max-width: 1160px) {
+  .hca-body {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+  .hca-side {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--a-line);
+  }
+}
+
+/* Small screens: stack everything, and cap the AI panel so it doesn't dominate. */
+@media (max-width: 820px) {
+  .hca-body {
+    grid-template-columns: 1fr;
+  }
+  .hca-ai-panel {
+    max-height: 340px;
+    border-right: 0;
+    border-bottom: 1px solid var(--a-line);
+  }
+  .hca-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--a-line);
+  }
+}

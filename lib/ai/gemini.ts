@@ -66,8 +66,15 @@ export async function callGemini(
 ): Promise<{ text?: string; error?: string }> {
   const startedAt = Date.now();
   // Resolve the backend at call time (so env stubbing / hot config works).
+  //
+  // Backend precedence: the FREE Gemini Developer API key wins whenever one is
+  // set — local + staging set GEMINI_API_KEY so their AI costs nothing — and we
+  // fall back to Vertex AI (via ADC, GCP_PROJECT_ID) only when no key is
+  // present. Production therefore omits GEMINI_API_KEY and sets GCP_PROJECT_ID
+  // to route through Vertex. (An env that sets BOTH prefers the free key.)
   const projectId = process.env.GCP_PROJECT_ID;
-  const useVertex = Boolean(projectId);
+  const hasApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const useVertex = Boolean(projectId) && !hasApiKey;
   const backend = useVertex ? "vertex" : "developer";
 
   let url: string;
@@ -107,9 +114,6 @@ export async function callGemini(
     generationConfig: {
       temperature: options.temperature ?? 0.7,
       maxOutputTokens: options.maxOutputTokens ?? 1024,
-      // gemini-2.5-flash "thinks" before answering, and those tokens come out
-      // of maxOutputTokens — with a long brand soul that can eat the whole
-      // budget and truncate the answer. Turn thinking off for these short tasks.
       thinkingConfig: { thinkingBudget: 0 },
       ...(options.responseMimeType
         ? { responseMimeType: options.responseMimeType }
@@ -148,7 +152,17 @@ export async function callGemini(
     }
 
     if (res?.ok) break;
-    if (res && (res.status === 400 || res.status === 403)) break;
+    // Don't retry permanent client errors — bad request, auth, missing model,
+    // or a hard quota cap (retrying just adds latency before the same failure).
+    if (
+      res &&
+      (res.status === 400 ||
+        res.status === 401 ||
+        res.status === 403 ||
+        res.status === 404 ||
+        res.status === 429)
+    )
+      break;
     if (attempt < MAX_ATTEMPTS)
       await new Promise((r) => setTimeout(r, 600 * attempt));
   }
@@ -177,6 +191,22 @@ export async function callGemini(
     if (res.status === 400 || res.status === 403)
       return {
         error: rejectionError,
+      };
+    if (res.status === 401)
+      return {
+        error: useVertex
+          ? "AI request unauthorized — the Vertex AI credentials are invalid or expired."
+          : "AI request unauthorized — GEMINI_API_KEY is invalid or missing. Create one at https://aistudio.google.com/apikey.",
+      };
+    if (res.status === 404)
+      return {
+        error: `The AI model "${GEMINI_MODEL}" isn't available to these credentials. Set GEMINI_MODEL to a supported model (e.g. gemini-2.0-flash).`,
+      };
+    if (res.status === 429)
+      return {
+        error: useVertex
+          ? "AI quota exceeded on Vertex AI — check the project's quota."
+          : "AI quota exceeded — this GEMINI_API_KEY's project has no remaining Gemini quota. Enable billing on the key's Google Cloud project, or use a key that has quota.",
       };
     if (res.status >= 500)
       return {

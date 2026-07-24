@@ -1,73 +1,91 @@
-const TOPICS = [
-  {
-    title: "Getting started",
-    body: "Create your store, pick your address, and understand the dashboard.",
-  },
-  {
-    title: "Setting up your store",
-    body: "Branding, homepage sections, pages, and your store's look and feel.",
-  },
-  {
-    title: "Products & inventory",
-    body: "Add products, variants, images, pricing, and track stock.",
-  },
-  {
-    title: "Payments — UPI, COD & GST",
-    body: "Connect your payment gateway, enable COD, and set up GST invoicing.",
-  },
-  {
-    title: "Domains",
-    body: "Use your free your-store.storemink.com address or connect your own domain.",
-  },
-  {
-    title: "Orders & shipping",
-    body: "Manage orders, fulfilment, and Indian logistics integrations.",
-  },
-];
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
+import {
+  getHelpCategories,
+  getHelpCategoryCounts,
+  getPopularHelpArticles,
+} from "@/lib/help/queries";
+import { HelpSearchBox } from "./components/search-box";
+import { CategoryIcon } from "./components/category-icon";
 
-export default function HelpCentre() {
+// Static + ISR: the help home is public and cache-friendly. Operator edits
+// bust TAGS.help; this bounds staleness otherwise.
+export const revalidate = 300;
+
+export default async function HelpHome() {
+  const [categories, counts, popular] = await Promise.all([
+    getHelpCategories(),
+    getHelpCategoryCounts(),
+    getPopularHelpArticles(6),
+  ]);
+
+  // Map article id → its /help/{category}/{slug} path for the popular list.
+  const catById = new Map(categories.map((c) => [c.id, c.slug]));
+
   return (
     <>
-      <nav className="stq-nav">
-        <a href="https://storemink.com" className="stq-logo">
-          Store<span>Mink</span>
-        </a>
-        <div className="stq-nav-actions">
-          <a
-            href="https://storemink.com/signup"
-            className="stq-btn stq-btn-primary"
-          >
-            Create your store
-          </a>
-        </div>
-      </nav>
-
-      <header className="stq-hero">
-        <span className="stq-kicker">Help Centre</span>
-        <h1>How can we help?</h1>
-        <p>
-          Guides and answers for setting up and growing your D2C store on
-          StoreMink. Stuck somewhere? Start with a topic below.
-        </p>
-      </header>
-
-      <section className="stq-section">
-        <div className="stq-grid">
-          {TOPICS.map((t) => (
-            <div className="stq-card" key={t.title}>
-              <h3>{t.title}</h3>
-              <p>{t.body}</p>
-            </div>
-          ))}
+      <section className="hc-hero">
+        <div className="hc-wrap">
+          <span className="kicker">Help Centre</span>
+          <h1>How can we help?</h1>
+          <HelpSearchBox />
         </div>
       </section>
 
-      <footer className="stq-footer">
-        <p>
-          Can&apos;t find what you need? Email{" "}
-          <a href="mailto:support@storemink.com">support@storemink.com</a>.
-        </p>
-      </footer>
+      <main className="hc-main">
+        <div className="hc-wrap">
+          <h2 className="hc-section-title">Browse by topic</h2>
+          {categories.length === 0 ? (
+            <div className="hc-empty">
+              Articles are on their way. Meanwhile, email{" "}
+              <a href="mailto:support@storemink.com">support@storemink.com</a>.
+            </div>
+          ) : (
+            <div className="hc-grid">
+              {categories.map((c) => (
+                <Link href={`/help/${c.slug}`} className="hc-card" key={c.id}>
+                  <div className="ic">
+                    <CategoryIcon name={c.icon} />
+                  </div>
+                  <h3>{c.title}</h3>
+                  {c.description && <p>{c.description}</p>}
+                  <span className="count">
+                    {counts[c.id] ?? 0}{" "}
+                    {(counts[c.id] ?? 0) === 1 ? "article" : "articles"}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {popular.length > 0 && (
+            <>
+              <h2 className="hc-section-title" style={{ marginTop: 48 }}>
+                Popular articles
+              </h2>
+              <div className="hc-list">
+                {popular.map((a) => {
+                  const catSlug = a.categoryId
+                    ? catById.get(a.categoryId)
+                    : undefined;
+                  if (!catSlug) return null;
+                  return (
+                    <Link href={`/help/${catSlug}/${a.slug}`} key={a.id}>
+                      <div>
+                        <div className="a-title">{a.title}</div>
+                        {a.excerpt && (
+                          <div className="a-excerpt">{a.excerpt}</div>
+                        )}
+                      </div>
+                      <ChevronRight className="chev" size={18} />
+                    </Link>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </main>
     </>
   );
 }

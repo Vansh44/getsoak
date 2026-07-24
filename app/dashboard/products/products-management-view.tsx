@@ -48,14 +48,11 @@ import {
   RowCheckbox,
   SelectAllCheckbox,
 } from "@/app/dashboard/components/bulk-actions";
-import { ProductEditorDialog } from "./product-editor-dialog";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
 import { effectivePricing, formatPrice } from "@/lib/pricing";
 import type {
   Product,
   CategoryOption,
-  CardColorOption,
-  TaxClassOption,
   ProductFilter,
   ProductCounts,
 } from "./page";
@@ -63,8 +60,6 @@ import type {
 type Props = {
   products: Product[];
   categories: CategoryOption[];
-  colors: CardColorOption[];
-  taxClasses: TaxClassOption[];
   canManage?: boolean;
   counts: ProductCounts;
   total: number;
@@ -73,14 +68,11 @@ type Props = {
   query: string;
   filter: ProductFilter;
   categoryFilter: string;
-  defaultTrackInventory?: boolean;
 };
 
 export function ProductsManagementView({
   products,
   categories,
-  colors,
-  taxClasses,
   canManage = true,
   counts,
   total,
@@ -89,7 +81,6 @@ export function ProductsManagementView({
   query,
   filter,
   categoryFilter,
-  defaultTrackInventory = false,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -97,7 +88,6 @@ export function ProductsManagementView({
   const [navigating, startNavigation] = useTransition();
   const [search, setSearch] = useState(query);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
-  const [editorOpen, setEditorOpen] = useState(false);
 
   const hrefFor = (next: {
     q?: string;
@@ -184,14 +174,9 @@ export function ProductsManagementView({
     });
   };
 
-  // Create stays an in-list modal; editing is a shareable route
-  // (/dashboard/products/[id]) so a teammate can be sent a direct link.
-  const openCreate = () => setEditorOpen(true);
-  const closeEditor = () => setEditorOpen(false);
-  const handleSaved = () => {
-    closeEditor();
-    router.refresh();
-  };
+  // Both create and edit are full-page, shareable routes so a teammate can be
+  // sent a direct link (create = /dashboard/products/new, edit = /[id]).
+  const openCreate = () => router.push("/dashboard/products/new");
   const openEdit = (product: Product) =>
     router.push(`/dashboard/products/${product.id}`);
 
@@ -661,19 +646,6 @@ export function ProductsManagementView({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {editorOpen && (
-        <ProductEditorDialog
-          open
-          product={null}
-          categories={categories}
-          colors={colors}
-          taxClasses={taxClasses}
-          onClose={closeEditor}
-          onSaved={handleSaved}
-          defaultTrackInventory={defaultTrackInventory}
-        />
-      )}
     </div>
   );
 }

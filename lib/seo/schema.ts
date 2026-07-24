@@ -147,6 +147,47 @@ export function articleSchema(i: ArticleSchemaInput): Json {
   return schema;
 }
 
+export interface HelpArticleSchemaInput {
+  /** The help-centre origin, e.g. https://help.storemink.com */
+  siteUrl: string;
+  /** Full canonical path of the article, e.g. /help/payments/enable-cod */
+  path: string;
+  title: string;
+  description?: string | null;
+  publishedAt?: string | null;
+  updatedAt?: string | null;
+  /** Publisher org name + logo (StoreMink). */
+  publisherName: string;
+  logoUrl?: string | null;
+}
+
+// schema.org/TechArticle for help-centre docs — the type Google prefers for
+// product/support documentation. Publisher is the platform org; no author
+// (docs are first-party). Emitted only for the published/public view.
+export function helpArticleSchema(i: HelpArticleSchemaInput): Json {
+  const url = absolute(i.siteUrl, i.path);
+  const logo = toAbsoluteImage(i.siteUrl, i.logoUrl);
+  const schema: Json = {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "@id": `${url}#article`,
+    headline: i.title,
+    url,
+    mainEntityOfPage: url,
+    inLanguage: "en",
+    publisher: {
+      "@type": "Organization",
+      name: i.publisherName,
+      ...(logo ? { logo: { "@type": "ImageObject", url: logo } } : {}),
+    },
+  };
+  if (i.description) schema.description = i.description;
+  if (i.publishedAt) schema.datePublished = i.publishedAt;
+  const modified = i.updatedAt ?? i.publishedAt;
+  if (modified) schema.dateModified = modified;
+  return schema;
+}
+
 // schema.org/BreadcrumbList — improves SERP breadcrumb display. Paths may be
 // absolute or store-relative (resolved against siteUrl).
 export function breadcrumbSchema(

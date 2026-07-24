@@ -1,5 +1,6 @@
-// Firebase custom-claims helpers (GCP migration Phase 6). Replace the Postgres
-// `custom_access_token_hook` (supabase/custom_access_token_hook.sql): `role` and
+// Firebase custom-claims helpers (GCP migration Phase 6). Replace the former
+// Supabase Postgres `custom_access_token_hook` (dropped in
+// supabase/phase6_03_drop_custom_access_token_hook.sql): `role` and
 // `force_password_reset` become Firebase custom claims that ride in the ID token
 // → session cookie, so the proxy can authorize dashboard routes with no DB read.
 //

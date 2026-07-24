@@ -178,6 +178,35 @@ const FAQS = [
 ];
 
 export default function StoreminkLanding() {
+  // One explicit Offer per plan, derived from the canonical catalog so the
+  // structured data can never drift from what the page (and billing) actually
+  // charge. Each carries a per-MONTH UnitPriceSpecification so Google reads the
+  // exact recurring price (₹0 / ₹500 / ₹1,500) rather than scraping a figure
+  // out of the prose — which is how a stale "₹399" leaked into an AI Overview.
+  const planOffers = PLANS.map((plan) => ({
+    "@type": "Offer",
+    name: `StoreMink ${plan.meta.name}`,
+    description: plan.meta.tagline,
+    priceCurrency: "INR",
+    price: plan.meta.monthlyInr,
+    url: `${PLATFORM_URL}/#pricing`,
+    availability: "https://schema.org/InStock",
+    priceSpecification: {
+      "@type": "UnitPriceSpecification",
+      priceCurrency: "INR",
+      price: plan.meta.monthlyInr,
+      // Recurring monthly subscription (P1M = one-month billing period).
+      billingDuration: 1,
+      billingIncrement: 1,
+      unitCode: "MON",
+      referenceQuantity: {
+        "@type": "QuantitativeValue",
+        value: 1,
+        unitCode: "MON",
+      },
+    },
+  }));
+
   // Organization + SoftwareApplication JSON-LD so search engines understand
   // what StoreMink is and its price range (₹0 up to the Pro monthly price).
   const jsonLd = {
@@ -218,6 +247,7 @@ export default function StoreminkLanding() {
           lowPrice: 0,
           highPrice: PLAN_META.pro.monthlyInr,
           offerCount: PLANS.length,
+          offers: planOffers,
         },
       },
     ],

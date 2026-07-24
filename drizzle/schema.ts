@@ -2476,3 +2476,97 @@ export const enquiryAdmin = pgView("enquiry_admin", {
 }).as(
   sql`SELECT id, name, email, phone, subject, message, status, created_by, created_at, updated_at, subject_detail, CASE status WHEN 'new'::text THEN 0 WHEN 'in_progress'::text THEN 1 WHEN 'resolved'::text THEN 2 WHEN 'archived'::text THEN 3 ELSE 4 END AS status_rank, store_id FROM enquiries e`,
 );
+
+// ─── Help Centre (platform-global; help.storemink.com) ──────────────────────
+// StoreMink's own product docs — NOT per-store data, so no store_id (mirrors
+// platform_admins). Managed by operators, read publicly. Schema + RLS +
+// FTS vector + seed live in supabase/help_centre.sql. The generated `search`
+// tsvector column is intentionally absent here (GENERATED ALWAYS, never
+// written by the app; search uses a raw sql`` predicate against it).
+export const helpCategories = pgTable(
+  "help_categories",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    slug: text().notNull(),
+    title: text().notNull(),
+    description: text(),
+    icon: text(),
+    position: integer().default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("help_categories_slug_key").on(table.slug),
+    index("help_categories_position_idx").on(table.position, table.title),
+    pgPolicy("Read help_categories", { for: "select", to: ["public"] }),
+    pgPolicy("Write help_categories", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_platform_admin())`,
+      withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);
+
+export const helpArticles = pgTable(
+  "help_articles",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    categoryId: uuid("category_id"),
+    slug: text().notNull(),
+    title: text().notNull(),
+    excerpt: text(),
+    body: text(),
+    status: text().default("draft").notNull(),
+    seoTitle: text("seo_title"),
+    seoDescription: text("seo_description"),
+    position: integer().default(0).notNull(),
+    viewCount: integer("view_count").default(0).notNull(),
+    helpfulYes: integer("helpful_yes").default(0).notNull(),
+    helpfulNo: integer("helpful_no").default(0).notNull(),
+    createdBy: text("created_by"),
+    updatedBy: text("updated_by"),
+    publishedAt: timestamp("published_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("help_articles_slug_key").on(table.slug),
+    index("help_articles_category_idx").on(
+      table.categoryId,
+      table.position,
+      table.title,
+    ),
+    foreignKey({
+      columns: [table.categoryId],
+      foreignColumns: [helpCategories.id],
+      name: "help_articles_category_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "help_articles_status_check",
+      sql`status = ANY (ARRAY['draft'::text, 'published'::text])`,
+    ),
+    pgPolicy("Read help_articles", {
+      for: "select",
+      to: ["public"],
+      using: sql`(status = 'published'::text) OR ( SELECT is_platform_admin())`,
+    }),
+    pgPolicy("Write help_articles", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_platform_admin())`,
+      withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);

@@ -11,4 +11,5 @@ export const TAGS = {
   menus: "storefront:menus",
   coupons: "storefront:coupons",
   billing: "storefront:billing",
+  help: "help:centre",
 } as const;
