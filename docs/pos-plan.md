@@ -12,19 +12,19 @@
 
 ## Owner decisions (locked 2026-07-24)
 
-| # | Decision |
-|---|---|
-| 1 | POS is served at **`{slug}.storemink.com/pos`** — a **separate app shell** from `/dashboard`, with its own auth gate. |
-| 2 | **Pro plan only.** Free/basic see an "Included in Pro — upgrade" state in the sidebar. |
-| 3 | Pro includes **2 POS locations**; each additional location is **₹1,000/mo**. v1 **gates at 2** (adding a 3rd shows upgrade/contact); the recurring charge is a fast-follow (Phase 7). |
-| 4 | Inventory is **multi-location** from day one (`inventory_levels` is truth; `products.stock` becomes a trigger-maintained aggregate so the storefront is untouched). |
-| 5 | POS staff auth = **hybrid**: individual staff accounts (portable, /pos-only) **plus** PIN quick-switch on paired shared registers. |
-| 6 | New POS roles **cashier** and **manager**, both **blocked from `/dashboard`** (only `/pos`). Managers are **location-bound** and auto-scoped on login (m1→Delhi, m2→Mumbai). Managers manage their location's inventory from a **POS-native** inventory screen. |
-| 7 | **Full India GST place-of-supply**: CGST/SGST intra-state, **IGST** inter-state, **per-location GSTIN** (state-wise registration). |
-| 8 | Receipts print to a **thermal printer** (80mm) via the **OS driver / browser print** in v1 (any driver-backed printer, zero hardware integration); raw ESC/POS is a follow-up. |
-| 9 | Merchants **scan existing supplier barcodes** (new `barcode` field they populate) — StoreMink does **not** print Luhn-SKU barcodes. |
-| 10 | Receipts also deliverable via **Twilio (WhatsApp/SMS)** as a fast-follow (Phase 6) behind a channel/provider abstraction so **Meta** slots in later. |
-| 11 | **Offline** deferred to Phase 9 as an IndexedDB outbox (server-authoritative replay; **no CRDT**). |
+| #   | Decision                                                                                                                                                                                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | POS is served at **`{slug}.storemink.com/pos`** — a **separate app shell** from `/dashboard`, with its own auth gate.                                                                                                                                           |
+| 2   | **Pro plan only.** Free/basic see an "Included in Pro — upgrade" state in the sidebar.                                                                                                                                                                          |
+| 3   | Pro includes **2 POS locations**; each additional location is **₹1,000/mo**. v1 **gates at 2** (adding a 3rd shows upgrade/contact); the recurring charge is a fast-follow (Phase 7).                                                                           |
+| 4   | Inventory is **multi-location** from day one (`inventory_levels` is truth; `products.stock` becomes a trigger-maintained aggregate so the storefront is untouched).                                                                                             |
+| 5   | POS staff auth = **hybrid**: individual staff accounts (portable, /pos-only) **plus** PIN quick-switch on paired shared registers.                                                                                                                              |
+| 6   | New POS roles **cashier** and **manager**, both **blocked from `/dashboard`** (only `/pos`). Managers are **location-bound** and auto-scoped on login (m1→Delhi, m2→Mumbai). Managers manage their location's inventory from a **POS-native** inventory screen. |
+| 7   | **Full India GST place-of-supply**: CGST/SGST intra-state, **IGST** inter-state, **per-location GSTIN** (state-wise registration).                                                                                                                              |
+| 8   | Receipts print to a **thermal printer** (80mm) via the **OS driver / browser print** in v1 (any driver-backed printer, zero hardware integration); raw ESC/POS is a follow-up.                                                                                  |
+| 9   | Merchants **scan existing supplier barcodes** (new `barcode` field they populate) — StoreMink does **not** print Luhn-SKU barcodes.                                                                                                                             |
+| 10  | Receipts also deliverable via **Twilio (WhatsApp/SMS)** as a fast-follow (Phase 6) behind a channel/provider abstraction so **Meta** slots in later.                                                                                                            |
+| 11  | **Offline** deferred to Phase 9 as an IndexedDB outbox (server-authoritative replay; **no CRDT**).                                                                                                                                                              |
 
 ---
 
@@ -49,19 +49,19 @@
 
 ## 1. Current state (verified in code)
 
-| Area | Today | POS reuse |
-|---|---|---|
-| Inventory | `products`/`product_variants`: `track_inventory`, `stock` (single int), `low_stock_threshold`, `allow_backorder`, `sku`. Append-only `stock_movements`. Atomic `reserve_stock`/`release_stock`/`adjust_stock` (`supabase/inventory_rpc.sql`). `lib/inventory/status.ts` pure status. | Add `p_location` to RPCs; `inventory_levels` becomes truth; keep `stock` as aggregate. |
-| Orders | `orders`/`order_items` (`supabase/orders_table.sql`). `customer_id` **NOT NULL** (FK `users`), `shipping_address` **NOT NULL**. Single `payment_method`/`payment_status`. `stock_status` restock-once claim. `order_no`/`order_ref` via triggers (`identifiers_04_triggers.sql`). | Relax nullability; add channel/location/register/shift/cashier + GST cols; add `order_payments`. |
-| Checkout | `placeOrder` (`app/actions/checkout-actions.ts`): re-price store-scoped, coupon+stock reserve, tax via `computeTax`, service-role writes, full reverse rollback. | `placePosSale` mirrors it exactly. |
-| Order admin | `getOrders`/`getOrderDetail`/`updateOrderStatus` (`app/actions/order-actions.ts`), gated `getManagerIdentity("orders")`. | POS orders show here, filtered by `sales_channel`. |
-| Tax/billing | `computeTax` pure (`lib/billing/tax.ts`), `tax_classes`, `store_billing_settings` (public-read; NO secrets). Printable `InvoiceDocument`. | GST split layer on top of `computeTax`; new thermal receipt. |
-| Payments | BYO Razorpay per store (`store_payment_providers`, AES-256-GCM, `lib/payments/*`, `getStoreGateway`). Platform Razorpay + `storeSubscriptions` autopay for plans (`app/actions/subscription-actions.ts`). | Card/UPI tender = the store's own gateway (0% surcharge). Extra-location billing extends the plan subscription. |
-| Settings | `lib/settings/registry.ts` — per-store keys, `minPlan` gates, per-feature settings pages, server-enforced. `stores.settings` is **anon-readable** (no secrets). | New `pos.*` keys, section `pos`, page `/dashboard/pos/settings`. |
-| Roles/access | `SECTIONS` + `can()` + `getManagerIdentity(section)` (`app/dashboard/lib/permissions.ts`, `access.ts`). RLS helper `is_store_admin(store_id)`. | New `pos` dashboard section; **POS roles (cashier/manager) are a separate model** (`pos_staff`), not `roles` slugs. |
-| Plans | `lib/plans.ts` — free/basic/pro, `PLAN_LIMITS`, `effectivePlan` (expiry-aware). | Add `posEnabled` (pro) + `posLocationsIncluded` (2). |
-| Auth/proxy | `proxy.ts` gates `/dashboard` + `/auth` via Firebase session cookie (`sm_session`); role rides in custom claims (no DB query). `/pos` currently falls straight through unauthenticated. | New `/pos` gate + device/operator cookies; dashboard-block cashier/manager. |
-| Identity | Firebase (Phase 6). `getServerUser()` seam. uids are **text**. | Staff accounts are Firebase users; PIN operators are a signed short-lived cookie. |
+| Area         | Today                                                                                                                                                                                                                                                                                | POS reuse                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Inventory    | `products`/`product_variants`: `track_inventory`, `stock` (single int), `low_stock_threshold`, `allow_backorder`, `sku`. Append-only `stock_movements`. Atomic `reserve_stock`/`release_stock`/`adjust_stock` (`supabase/inventory_rpc.sql`). `lib/inventory/status.ts` pure status. | Add `p_location` to RPCs; `inventory_levels` becomes truth; keep `stock` as aggregate.                              |
+| Orders       | `orders`/`order_items` (`supabase/orders_table.sql`). `customer_id` **NOT NULL** (FK `users`), `shipping_address` **NOT NULL**. Single `payment_method`/`payment_status`. `stock_status` restock-once claim. `order_no`/`order_ref` via triggers (`identifiers_04_triggers.sql`).    | Relax nullability; add channel/location/register/shift/cashier + GST cols; add `order_payments`.                    |
+| Checkout     | `placeOrder` (`app/actions/checkout-actions.ts`): re-price store-scoped, coupon+stock reserve, tax via `computeTax`, service-role writes, full reverse rollback.                                                                                                                     | `placePosSale` mirrors it exactly.                                                                                  |
+| Order admin  | `getOrders`/`getOrderDetail`/`updateOrderStatus` (`app/actions/order-actions.ts`), gated `getManagerIdentity("orders")`.                                                                                                                                                             | POS orders show here, filtered by `sales_channel`.                                                                  |
+| Tax/billing  | `computeTax` pure (`lib/billing/tax.ts`), `tax_classes`, `store_billing_settings` (public-read; NO secrets). Printable `InvoiceDocument`.                                                                                                                                            | GST split layer on top of `computeTax`; new thermal receipt.                                                        |
+| Payments     | BYO Razorpay per store (`store_payment_providers`, AES-256-GCM, `lib/payments/*`, `getStoreGateway`). Platform Razorpay + `storeSubscriptions` autopay for plans (`app/actions/subscription-actions.ts`).                                                                            | Card/UPI tender = the store's own gateway (0% surcharge). Extra-location billing extends the plan subscription.     |
+| Settings     | `lib/settings/registry.ts` — per-store keys, `minPlan` gates, per-feature settings pages, server-enforced. `stores.settings` is **anon-readable** (no secrets).                                                                                                                      | New `pos.*` keys, section `pos`, page `/dashboard/pos/settings`.                                                    |
+| Roles/access | `SECTIONS` + `can()` + `getManagerIdentity(section)` (`app/dashboard/lib/permissions.ts`, `access.ts`). RLS helper `is_store_admin(store_id)`.                                                                                                                                       | New `pos` dashboard section; **POS roles (cashier/manager) are a separate model** (`pos_staff`), not `roles` slugs. |
+| Plans        | `lib/plans.ts` — free/basic/pro, `PLAN_LIMITS`, `effectivePlan` (expiry-aware).                                                                                                                                                                                                      | Add `posEnabled` (pro) + `posLocationsIncluded` (2).                                                                |
+| Auth/proxy   | `proxy.ts` gates `/dashboard` + `/auth` via Firebase session cookie (`sm_session`); role rides in custom claims (no DB query). `/pos` currently falls straight through unauthenticated.                                                                                              | New `/pos` gate + device/operator cookies; dashboard-block cashier/manager.                                         |
+| Identity     | Firebase (Phase 6). `getServerUser()` seam. uids are **text**.                                                                                                                                                                                                                       | Staff accounts are Firebase users; PIN operators are a signed short-lived cookie.                                   |
 
 ---
 
@@ -69,16 +69,16 @@
 
 On a store host (`echos.storemink.com`) there are now **three** surfaces:
 
-| Surface | Path | Who | Auth |
-|---|---|---|---|
-| Storefront | `/`, `/shop`, `/cart`, … | shoppers (anon) | none (cache-friendly) |
-| **Dashboard** | `/dashboard/*` | store owner/admins | `sm_session` (Firebase); cashier/manager **blocked** |
-| **POS register** | `/pos/*` | owner/admin **or** cashier/manager **or** paired device | `sm_session` **or** `pos_device` (+`pos_operator`) |
+| Surface          | Path                     | Who                                                     | Auth                                                 |
+| ---------------- | ------------------------ | ------------------------------------------------------- | ---------------------------------------------------- |
+| Storefront       | `/`, `/shop`, `/cart`, … | shoppers (anon)                                         | none (cache-friendly)                                |
+| **Dashboard**    | `/dashboard/*`           | store owner/admins                                      | `sm_session` (Firebase); cashier/manager **blocked** |
+| **POS register** | `/pos/*`                 | owner/admin **or** cashier/manager **or** paired device | `sm_session` **or** `pos_device` (+`pos_operator`)   |
 
 `/dashboard/pos/*` = the **admin management console** for POS (locations, staff,
 settings, overview) — configured by owners in the dashboard. `/pos` = the
-**register app** used by staff. Clear split: admins *configure* POS in the
-dashboard; staff *use* it at `/pos`.
+**register app** used by staff. Clear split: admins _configure_ POS in the
+dashboard; staff _use_ it at `/pos`.
 
 ---
 
@@ -93,7 +93,7 @@ Three principal types coexist on the store host, distinguished by cookie:
    reach `/pos` and call `posUnlock`; **cannot place a sale by itself**.
 3. **`pos_operator`** (new, HMAC-signed, short-lived + idle-timeout) — the
    **active staff** after a PIN unlock. Carries `{staff_id, store_id,
-   location_id, role}`. Authorises sales/inventory per role. Locking or timeout
+location_id, role}`. Authorises sales/inventory per role. Locking or timeout
    clears it.
 
 ### 3.1 The two login paths (both "hybrid")
@@ -144,16 +144,16 @@ POS roles live in `pos_staff.role` (`'cashier' | 'manager'`), **separate** from
 dashboard `roles` slugs. Owners/admins operating `/pos` are implicitly `manager`+
 (all capabilities, all locations).
 
-| Capability | Cashier | Manager | Owner/Admin |
-|---|---|---|---|
-| Ring sale, take tender, print receipt | ✅ | ✅ | ✅ |
-| Read-only cross-location stock lookup | ✅ | ✅ | ✅ |
-| Discount above `pos.maxDiscountPercentWithoutManager` | manager PIN | ✅ | ✅ |
-| Price override | per `pos.allowPriceOverride` (+ manager PIN) | ✅ | ✅ |
-| Refund / return | manager PIN | ✅ | ✅ |
-| Open/close shift, cash drop | ❌ | ✅ | ✅ |
-| Adjust inventory (assigned location only) | ❌ | ✅ (their loc) | ✅ (all) |
-| Manage staff / pair devices | ❌ | ❌ | ✅ (dashboard) |
+| Capability                                            | Cashier                                      | Manager        | Owner/Admin    |
+| ----------------------------------------------------- | -------------------------------------------- | -------------- | -------------- |
+| Ring sale, take tender, print receipt                 | ✅                                           | ✅             | ✅             |
+| Read-only cross-location stock lookup                 | ✅                                           | ✅             | ✅             |
+| Discount above `pos.maxDiscountPercentWithoutManager` | manager PIN                                  | ✅             | ✅             |
+| Price override                                        | per `pos.allowPriceOverride` (+ manager PIN) | ✅             | ✅             |
+| Refund / return                                       | manager PIN                                  | ✅             | ✅             |
+| Open/close shift, cash drop                           | ❌                                           | ✅             | ✅             |
+| Adjust inventory (assigned location only)             | ❌                                           | ✅ (their loc) | ✅ (all)       |
+| Manage staff / pair devices                           | ❌                                           | ❌             | ✅ (dashboard) |
 
 Every capability is enforced **server-side** in the POS action from the resolved
 operator, never from a client flag. Manager location-scoping is enforced against
@@ -320,6 +320,7 @@ exactly:
    (POS sales are normally born **paid**; status `completed`).
 
 **Tenders (split allowed):**
+
 - **Cash** — record `tendered` + `change_due`.
 - **Card / UPI (external terminal)** — the store swipes on **their own** terminal;
   cashier records amount + reference. **0% surcharge** (the pitch) — StoreMink
@@ -343,9 +344,9 @@ per-location sequence, alongside the global `order_ref`.
   driver-backed thermal printer, zero integration). A `PrintReceiptButton`
   auto-triggers print on sale completion.
 - Contents: store legal name + location address + **location GSTIN**, receipt no
-  + date/time + cashier, line items, discounts, **taxable value + CGST/SGST/IGST
-  breakdown by rate**, total, tender lines + change, footer (thank-you, return
-  policy, GST note), optional QR (order lookup / future WhatsApp reorder).
+  - date/time + cashier, line items, discounts, **taxable value + CGST/SGST/IGST
+    breakdown by rate**, total, tender lines + change, footer (thank-you, return
+    policy, GST note), optional QR (order lookup / future WhatsApp reorder).
 - Follow-up (Phase 10): raw ESC/POS via WebUSB or a local print agent for
   one-tap, dialog-free printing.
 
@@ -414,6 +415,7 @@ Concrete techniques baked into the design (not aspirational):
 ## 11. Phased execution (v1 = Phases 0–2)
 
 ### Phase 0 — Foundations: plan gate, locations, per-location inventory, enable flow
+
 SQL: `pos_00_locations.sql`, `pos_01_inventory_levels.sql` (+ backfill + aggregate
 trigger), `pos_02_rpc_location.sql`, `stock_movements.location_id`, GSTIN cols.
 Code: Drizzle tables; `lib/pos/locations.ts`; `pos` section + plan-aware sidebar
@@ -425,6 +427,7 @@ location scoping, compat-wrapper equivalence, location cap.
 **Ships:** multi-location inventory in the dashboard; storefront unchanged.
 
 ### Phase 1 — POS app shell + hybrid auth + staff/roles/PIN + device pairing
+
 `app/pos/*` route group + layout (pro + `pos.enabled` gate + operator resolve);
 proxy `/pos` gate + dashboard-block for cashier/manager; `lib/pos/session.ts`
 (sign/verify `pos_device` + `pos_operator`); `lib/pos/permissions.ts`;
@@ -437,6 +440,7 @@ staff, assigns locations, sets PIN) + `pos-auth-actions.ts` (`pairDevice`,
 but admins can reach `/dashboard`.
 
 ### Phase 2 — The Register (sell) + GST + thermal receipt — **v1**
+
 `app/actions/pos-sale-actions.ts` (`getRegisterConfig`, `lookupProduct` with
 variant disambiguation, `placePosSale`, `verifyManagerPin`); `lib/billing/gst.ts`;
 `lib/pos/receipt.ts` + `components/pos/ThermalReceipt.tsx`; the register UI
@@ -451,40 +455,48 @@ invisibility.
 analytics alongside online orders.
 
 ### Phase 3 — Shifts & cash reconciliation
+
 `pos_shifts` + `pos_cash_movements`; open/close (float → expected vs counted →
 variance), cash drop/payout/paid-in, X-report (mid-shift) / Z-report (EOD).
 `pos-shift-actions.ts`. Manager/owner only.
 
 ### Phase 4 — POS-native inventory management (manager, location-scoped) + transfers
+
 Inventory screens **inside `/pos`** scoped to the operator's assigned location(s):
 counts, adjust (`adjust_stock_at`), receive stock, low-stock, `transfer_stock`
 between locations. Location-scope enforced server-side.
 
 ### Phase 5 — Returns/BORIS + store credit + gift cards
+
 `processReturn` (full/partial, restock via `release_stock_at` + negative
 movements, refund tender, tiered-discount recalculation on partial returns),
 store-credit accounts + ledger, gift-card issue/redeem tender.
 
 ### Phase 6 — Twilio WhatsApp/SMS receipts (channel/provider abstraction)
+
 `lib/pos/receipt-delivery.ts` (channel `print|whatsapp|sms|email`, provider
 `twilio|meta`), Twilio integration + templates, `pos.receiptChannel` wiring.
 Meta slots in later behind the same interface.
 
 ### Phase 7 — Metered extra-location billing (₹1,000/mo)
+
 Charge additional locations on the existing Pro Razorpay subscription (add-ons /
 quantity + webhook reconciliation); lift the Phase 0 hard cap into a paid path.
 
 ### Phase 8 — Omnichannel (BOPIS, ship-from-store, routing, inter-state IGST)
+
 Pickup queue + unclaimed-expiry sweep, ship-from-store, cross-location lookup,
 `safetyStockBuffer`, low-stock routing; make the online-checkout fulfilment
 location configurable (retire the default-location wrapper); IGST for inter-state
 shipments (the customer-state place-of-supply path from §6).
 
 ### Phase 9 — Offline outbox
+
 IndexedDB queue + Web-Worker replay through `placePosSale` + conflict surfacing.
 Server authoritative; no CRDT.
 
 ### Phase 10 — Differentiators
+
 AI Cashier Copilot (`lib/ai/gemini.ts` + brand voice + `consumeAiQuota`), camera
 barcode scan, serial/lot tracking, composite bundles, WhatsApp reorder portal,
 raw ESC/POS printing, bulk barcode CSV import.
