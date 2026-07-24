@@ -20,23 +20,26 @@ import type {
 // arrow + title + status on the left and the Save/Cancel actions on the right,
 // so saving is always one click away no matter how far the form is scrolled.
 // The header owns the buttons; the form exposes its validated save via a ref
-// (hideActions hides the form's own bar).
-export function ProductEditPanel({
+// (hideActions hides the form's own bar). Drives BOTH surfaces — editing an
+// existing product (product set) and creating a new one (product null).
+export function ProductEditorPanel({
   product,
   categories,
   colors,
   taxClasses,
+  defaultTrackInventory = false,
 }: {
-  product: Product;
+  product: Product | null;
   categories: CategoryOption[];
   colors: CardColorOption[];
   taxClasses: TaxClassOption[];
+  defaultTrackInventory?: boolean;
 }) {
   const router = useRouter();
   const formRef = useRef<ProductEditorFormHandle>(null);
   const [isPending, setIsPending] = useState(false);
-  const published = product.status === "published";
-  const isEditing = true; // this panel only ever edits an existing product
+  const isEditing = product !== null;
+  const published = product?.status === "published";
 
   return (
     <div>
@@ -77,21 +80,26 @@ export function ProductEditPanel({
               className="truncate text-lg font-semibold"
               style={{ color: "var(--dash-text)" }}
             >
-              {product.name || "Edit product"}
+              {product?.name || "New product"}
             </h1>
-            <span
-              className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
-              style={
-                published
-                  ? { background: "rgba(34, 197, 94, 0.14)", color: "#15803d" }
-                  : {
-                      background: "var(--dash-surface-2, rgba(0,0,0,0.06))",
-                      color: "var(--dash-text-3)",
-                    }
-              }
-            >
-              {published ? "Published" : "Draft"}
-            </span>
+            {isEditing && (
+              <span
+                className="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                style={
+                  published
+                    ? {
+                        background: "rgba(34, 197, 94, 0.14)",
+                        color: "#15803d",
+                      }
+                    : {
+                        background: "var(--dash-surface-2, rgba(0,0,0,0.06))",
+                        color: "var(--dash-text-3)",
+                      }
+                }
+              >
+                {published ? "Published" : "Draft"}
+              </span>
+            )}
           </div>
         </div>
 
@@ -108,9 +116,13 @@ export function ProductEditPanel({
             onClick={() => formRef.current?.submit()}
             disabled={isPending}
           >
-            {isPending ? "Saving…" : isEditing ? "Save changes" : "Save"}
+            {isPending
+              ? "Saving…"
+              : isEditing
+                ? "Save changes"
+                : "Create product"}
           </Button>
-          {published && (
+          {published && product && (
             <a
               href={`/shop/${product.slug}`}
               target="_blank"
@@ -135,8 +147,13 @@ export function ProductEditPanel({
           categories={categories}
           colors={colors}
           taxClasses={taxClasses}
+          defaultTrackInventory={defaultTrackInventory}
           onClose={() => router.push("/dashboard/products")}
-          onSaved={() => router.refresh()}
+          // Edit stays on the page (refresh to show saved values); create
+          // returns to the list, where the new product now appears.
+          onSaved={() =>
+            isEditing ? router.refresh() : router.push("/dashboard/products")
+          }
         />
       </div>
     </div>
