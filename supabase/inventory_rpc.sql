@@ -170,7 +170,10 @@ CREATE OR REPLACE FUNCTION public.adjust_stock(
   p_delta   integer,
   p_reason  text,
   p_note    text,
-  p_actor   uuid
+  -- p_actor is a user id. Since Phase 6 (Firebase) uids are STRINGS, not uuids,
+  -- this is text and stock_movements.created_by is text (see
+  -- phase6_01_uid_columns_to_text.sql + phase6_02_adjust_stock_actor_text.sql).
+  p_actor   text
 )
 RETURNS integer
 LANGUAGE plpgsql
@@ -215,5 +218,5 @@ GRANT EXECUTE ON FUNCTION public.reserve_stock(uuid, uuid, uuid, integer, uuid)
   TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.release_stock(uuid, uuid, uuid, integer, uuid, text)
   TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.adjust_stock(uuid, uuid, uuid, integer, text, text, uuid)
+GRANT EXECUTE ON FUNCTION public.adjust_stock(uuid, uuid, uuid, integer, text, text, text)
   TO authenticated, service_role;

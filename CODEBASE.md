@@ -420,9 +420,6 @@ wholesip/
 │   ├── store_pages.sql        # ★ merchant custom pages (draft + published_sections jsonb;
 │   │                          # RLS via is_store_admin; anon SELECT REVOKED then GRANTed on
 │   │                          # named cols WITHOUT draft `sections` — see §11) (+ rollback)
-│   ├── custom_access_token_hook.sql     # JWT claims (role, force_password_reset) —
-│   │                          # SUPERSEDED in Phase 6 by Firebase custom claims (lib/auth/
-│   │                          # firebase-claims.ts); kept for the Supabase-era rollback
 │   ├── phase6_01_uid_columns_to_text.sql # ★ Phase 6: retype the 25 uid-holding columns
 │   │                          # (admins.id/users.id + every created_by/updated_by/user_id/
 │   │                          # customer_id/submitted_by/added_by/invited_by) uuid→text AND
@@ -431,6 +428,17 @@ wholesip/
 │   │                          # stay uuid. Drops/recreates 7 FKs + 25 policies + 2 admin
 │   │                          # views. RUN AS postgres (owner of the tables + auth schema;
 │   │                          # `app` can't). (+ rollback)
+│   ├── phase6_02_adjust_stock_actor_text.sql # ★ Phase 6 follow-up: adjust_stock's
+│   │                          # p_actor PARAMETER was still uuid (phase6_01 retyped the
+│   │                          # created_by COLUMN but not the RPC arg) → every manual/bulk
+│   │                          # stock edit failed "invalid input syntax for type uuid".
+│   │                          # Drops the uuid overload, recreates p_actor text. RUN AS
+│   │                          # postgres. (+ rollback)
+│   ├── phase6_03_drop_custom_access_token_hook.sql # ★ Phase 6 follow-up: drops the dead
+│   │                          # Supabase-era JWT hook (superseded by firebase-claims.ts;
+│   │                          # never invoked, and stale after phase6_01) + its
+│   │                          # supabase_auth_admin grants + admins RLS policy. RUN AS
+│   │                          # postgres. (+ rollback embedded)
 │   ├── platform_admin_01_order_policies.sql # ★ routes the orders/order_items
 │   │                          # admin policies through is_store_admin() so platform
 │   │                          # operators pass them (they inlined the admins lookup and
