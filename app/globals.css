@@ -14,6 +14,17 @@
     padding: 0;
     margin: 0;
   }
+
+  /* Anchor reset — kept in @layer base (like the * reset above) so Tailwind's
+     layered utilities (text-white, underline, hover:underline, …) can override
+     it. An UNlayered `a { color: inherit }` beats every layered color utility,
+     which silently made white text invisible on dark <a>/<Link> buttons. Plain
+     anchors still get no underline: base-layer author CSS still beats the
+     browser's user-agent default. */
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 html,
@@ -27,11 +38,6 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
 }
 
 @theme inline {

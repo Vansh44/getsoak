@@ -469,6 +469,7 @@ describe("blog-actions", () => {
         "marketing.showAllCoupons": false,
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
+        "pos.enabled": false,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.error).toMatch(/disabled/i);
@@ -486,6 +487,7 @@ describe("blog-actions", () => {
         "marketing.showAllCoupons": false,
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
+        "pos.enabled": false,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.success).toBe(true);

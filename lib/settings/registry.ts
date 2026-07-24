@@ -34,6 +34,7 @@ export const SETTING_KEYS = [
   "marketing.showAllCoupons",
   "inventory.simpleTrackDefault",
   "inventory.lowStockThreshold",
+  "pos.enabled",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -58,6 +59,9 @@ export interface SettingDef {
   min?: number;
   /** For number types: maximum allowed value */
   max?: number;
+  /** Not shown in the generic settings editor — driven by a dedicated control
+   *  (e.g. pos.enabled is toggled by the Enable POS button, not a raw switch). */
+  hidden?: boolean;
 }
 
 export const SETTINGS: readonly SettingDef[] = [
@@ -124,6 +128,19 @@ export const SETTINGS: readonly SettingDef[] = [
     defaultValue: 5,
     min: 0,
     max: 1000,
+  },
+  {
+    key: "pos.enabled",
+    label: "Point of Sale",
+    description:
+      "Enable the in-store register at /pos for this store. Available on the Pro plan.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+    // Toggled via the Enable POS control on /dashboard/pos, not the raw editor.
+    hidden: true,
   },
 ];
 

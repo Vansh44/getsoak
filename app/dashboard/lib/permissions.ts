@@ -110,6 +110,26 @@ export const SECTIONS: DashboardSection[] = [
     actions: ["view", "manage"],
   },
   {
+    // Point of Sale. Plan-gated (Pro): the sidebar shows an "Included in Pro"
+    // upgrade state on free/basic and an "Enable POS" state on Pro until it's
+    // switched on (see app/dashboard/layout.tsx). Children are only surfaced
+    // once POS is enabled.
+    key: "pos",
+    label: "Point of Sale",
+    href: "/dashboard/pos",
+    icon: "pos",
+    group: "Workspace",
+    actions: ["view", "manage"],
+    children: [
+      { label: "Overview", href: "/dashboard/pos", icon: "pos" },
+      {
+        label: "Locations",
+        href: "/dashboard/pos/locations",
+        icon: "location",
+      },
+    ],
+  },
+  {
     key: "analytics",
     label: "Analytics",
     href: "/dashboard/analytics",

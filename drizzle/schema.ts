@@ -1648,6 +1648,7 @@ export const stockMovements = pgTable(
     reason: text().notNull(),
     balanceAfter: integer("balance_after").notNull(),
     orderId: uuid("order_id"),
+    locationId: uuid("location_id"),
     note: text(),
     createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1685,6 +1686,11 @@ export const stockMovements = pgTable(
       columns: [table.variantId],
       foreignColumns: [productVariants.id],
       name: "stock_movements_variant_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_movements_location_id_fkey",
     }).onDelete("set null"),
     pgPolicy("Store admins can read stock_movements", {
       as: "permissive",
@@ -1740,6 +1746,119 @@ export const storeBillingSettings = pgTable(
       as: "permissive",
       for: "select",
       to: ["public"],
+    }),
+  ],
+);
+
+// POS Phase 0: physical/warehouse locations per store (supabase/pos_00_locations.sql).
+export const storeLocations = pgTable(
+  "store_locations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    name: text().notNull(),
+    type: text().default("shop").notNull(),
+    address: jsonb(),
+    gstin: text(),
+    stateCode: text("state_code"),
+    receiptPrefix: text("receipt_prefix"),
+    isDefault: boolean("is_default").default(false).notNull(),
+    active: boolean().default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("store_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.sortOrder.asc().nullsLast().op("int4_ops"),
+    ),
+    // At most one default location per store (partial unique index in SQL).
+    uniqueIndex("store_locations_one_default")
+      .using("btree", table.storeId.asc().nullsLast().op("uuid_ops"))
+      .where(sql`is_default`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_locations_type_check",
+      sql`type = ANY (ARRAY['shop'::text, 'warehouse'::text])`,
+    ),
+    pgPolicy("Store admins manage store_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// POS Phase 0: per-location stock — the source of truth; products.stock /
+// product_variants.stock are a trigger-maintained aggregate (SUM of on_hand).
+// Writes go only through the location-aware RPCs (supabase/pos_02_rpc_location.sql).
+// Note: the single-row-per-SKU-per-location UNIQUE index uses a COALESCE
+// expression on variant_id (see pos_01_inventory_levels.sql) — not modelled here.
+export const inventoryLevels = pgTable(
+  "inventory_levels",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    onHand: integer("on_hand").default(0).notNull(),
+    reserved: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("inventory_levels_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_product_idx").using(
+      "btree",
+      table.productId.asc().nullsLast().op("uuid_ops"),
+      table.variantId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_location_idx").using(
+      "btree",
+      table.locationId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "inventory_levels_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "inventory_levels_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId],
+      foreignColumns: [products.id],
+      name: "inventory_levels_product_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.variantId],
+      foreignColumns: [productVariants.id],
+      name: "inventory_levels_variant_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read inventory_levels", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(inventory_levels.store_id) AS is_store_admin)`,
     }),
   ],
 );

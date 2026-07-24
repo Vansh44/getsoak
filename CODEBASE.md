@@ -1103,6 +1103,48 @@ group, span}` (span = columns of the 4-wide desktop grid),
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
 
+22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
+    An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
+    SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
+    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
+    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    location foundation, with ZERO changes to existing inventory/checkout code:**
+    - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
+      every store auto-gets one `is_default` "Main" location) +
+      `inventory_levels` (the per-location source of truth: `on_hand`/`reserved`
+      per (location, product, variant-or-null)). SQL: `supabase/pos_00_locations.sql`,
+      `pos_01_inventory_levels.sql`, `pos_02_rpc_location.sql` (run as `postgres`,
+      in order). `products.stock` / `product_variants.stock` become a
+      **trigger-maintained AGGREGATE** = `SUM(on_hand)` across locations
+      (`sync_stock_aggregate` trigger), so the storefront, `lib/inventory/status.ts`,
+      shop pages and the current inventory dashboard read them UNCHANGED. New
+      products/variants get a default-location level row via seed triggers; a
+      migration guard FAILS if the aggregate ever drifts after backfill.
+    - **RPCs gain a location.** `reserve_stock_at` / `release_stock_at` /
+      `adjust_stock_at(p_location, …)` operate on `inventory_levels`; the OLD
+      signatures (`reserve_stock`/`release_stock`/`adjust_stock`) are REPLACED with
+      thin wrappers delegating to the store's default location
+      (`pos_ensure_default_location`) — so `checkout-actions`, `order-actions` and
+      `inventory-actions` keep working with NO code change. `stock_movements`
+      gained `location_id`. This works because post-create stock writes ALREADY
+      flow only through those RPCs (the product editor never writes stock).
+    - **Plan + settings + enable flow.** `PLAN_LIMITS.posEnabled` (pro) +
+      `posLocationsIncluded` (2) in `lib/plans.ts`. Setting `pos.enabled`
+      (registry, section `pos`, `minPlan: pro`, `hidden` so it's driven by a
+      dedicated control, not the generic editor — new `SettingDef.hidden` flag).
+      New `pos` dashboard section (`permissions.ts`, group Workspace) rendered
+      with a **three-state sidebar** in `app/dashboard/layout.tsx`: free/basic →
+      "Included in Pro" (badge → `/dashboard/plans`); pro-not-enabled → "Enable
+      POS"; enabled → Overview + Locations children. `lib/pos/locations.ts`
+      (`getPosState`/`isPosEnabled`/`getStoreLocations`).
+      `app/actions/pos-location-actions.ts` (`enablePos`/`disablePos` +
+      location CRUD, gated `getManagerIdentity("pos")`, Pro-checked server-side,
+      location-capped; tested). Dashboard pages: `app/dashboard/pos/` (overview +
+      `locations/`). **Not yet built:** the `/pos` register app, POS staff/roles
+      (cashier/manager) + hybrid PIN auth, the sell path, GST place-of-supply,
+      thermal receipts — see `docs/pos-plan.md` Phases 1+.
+
 ## 6. Commands
 
 ```bash

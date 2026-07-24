@@ -136,6 +136,11 @@ export interface PlanLimits {
   emailCampaigns: boolean;
   /** "Powered by StoreMink" badge is removed from the storefront footer. */
   removeBadge: boolean;
+  /** May use the Point of Sale (in-store register at /pos). Pro only. */
+  posEnabled: boolean;
+  /** POS locations included at no extra cost. Additional locations are billed
+   *  per month (see docs/pos-plan.md §9.2 / Phase 7). 0 = POS not available. */
+  posLocationsIncluded: number;
 }
 
 export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
@@ -148,6 +153,8 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: false,
     emailCampaigns: false,
     removeBadge: false,
+    posEnabled: false,
+    posLocationsIncluded: 0,
   },
   basic: {
     maxProducts: 500,
@@ -158,6 +165,8 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: true,
     emailCampaigns: false,
     removeBadge: true,
+    posEnabled: false,
+    posLocationsIncluded: 0,
   },
   pro: {
     maxProducts: null,
@@ -168,6 +177,8 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: true,
     emailCampaigns: true,
     removeBadge: true,
+    posEnabled: true,
+    posLocationsIncluded: 2,
   },
 };
 
