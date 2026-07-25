@@ -259,8 +259,10 @@ function CategoryManager({
   }
 
   function remove(c: HelpCategory) {
-    if (!confirm(`Delete “${c.title}”? Its articles become uncategorised.`))
-      return;
+    // Only empty categories can be deleted — the server refuses otherwise (it
+    // would strand the articles, which need a category for their URL) and the
+    // toast below explains what to move first.
+    if (!confirm(`Delete “${c.title}”? This can't be undone.`)) return;
     start(async () => {
       const res = await deleteHelpCategory(c.id);
       if (res.error) toast.error(res.error);

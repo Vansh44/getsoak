@@ -1082,9 +1082,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Management console** at **`/dashboard/help`** (platform host; nav entry
       in `app/platform/dashboard/(console)/layout.tsx`, `faq` icon), gated by
       `getPlatformViewer()`. `app/actions/help-actions.ts` holds public actions
-      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle`) and
+      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle` — the
+      two public counters are per-IP rate-limited via `lib/rate-limit`, since
+      `view_count` drives both the Popular ordering and search ranking) and
       operator CRUD (articles + categories, publish/unpublish, reorder) under
-      `withService` after the gate, plus **AI drafting** — `runHelpAiCommand`
+      `withService` after the gate. **`deleteHelpCategory` refuses a non-empty
+      category** (atomic `NOT EXISTS` guard on the DELETE — the conditional-write
+      pattern): the FK is `ON DELETE SET NULL`, so deleting one would strand its
+      articles with no category and therefore no URL. Storefront reads
+      (`searchHelpArticles`/`getPopularHelpArticles`) inner-join the category so
+      any legacy orphan stays invisible rather than showing an unlinkable hit.
+      Plus **AI drafting** — `runHelpAiCommand`
       (Gemini via `lib/ai/gemini.ts`, a fixed technical-writer system prompt in
       `brand/tasks/help-article.md`; output sanitized) is one flexible command
       that both writes-from-scratch and edits current content per a
