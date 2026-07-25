@@ -18,7 +18,7 @@
 | 2   | **Pro plan only.** Free/basic see an "Included in Pro — upgrade" state in the sidebar.                                                                                                                                                                          |
 | 3   | Pro includes **2 POS locations**; each additional location is **₹1,000/mo**. v1 **gates at 2** (adding a 3rd shows upgrade/contact); the recurring charge is a fast-follow (Phase 7).                                                                           |
 | 4   | Inventory is **multi-location** from day one (`inventory_levels` is truth; `products.stock` becomes a trigger-maintained aggregate so the storefront is untouched).                                                                                             |
-| 5   | POS staff auth = **hybrid**: individual staff accounts (portable, /pos-only) **plus** PIN quick-switch on paired shared registers.                                                                                                                              |
+| 5   | POS staff auth = **invited accounts**: admin adds name/email/role → emailed link → staff self-registers (phone OTP + password + own 8-digit PIN). Login is **email + PIN or email + password**. Staff may only sign in on an **owner-authorized device**.       |
 | 6   | New POS roles **cashier** and **manager**, both **blocked from `/dashboard`** (only `/pos`). Managers are **location-bound** and auto-scoped on login (m1→Delhi, m2→Mumbai). Managers manage their location's inventory from a **POS-native** inventory screen. |
 | 7   | **Full India GST place-of-supply**: CGST/SGST intra-state, **IGST** inter-state, **per-location GSTIN** (state-wise registration).                                                                                                                              |
 | 8   | Receipts print to a **thermal printer** (80mm) via the **OS driver / browser print** in v1 (any driver-backed printer, zero hardware integration); raw ESC/POS is a follow-up.                                                                                  |
@@ -87,36 +87,67 @@ dashboard; staff _use_ it at `/pos`.
 Three principal types coexist on the store host, distinguished by cookie:
 
 1. **`sm_session`** (existing Firebase cookie) — owner/admins (dashboard + POS)
-   and account-based POS staff (POS only). Role rides in claims.
-2. **`pos_device`** (new, HMAC-signed via `POS_SESSION_SECRET`) — a **paired
-   register**. Long-lived, carries `{store_id, location_id, register_id}`. Can
-   reach `/pos` and call `posUnlock`; **cannot place a sale by itself**.
-3. **`pos_operator`** (new, HMAC-signed, short-lived + idle-timeout) — the
-   **active staff** after a PIN unlock. Carries `{staff_id, store_id,
-location_id, role}`. Authorises sales/inventory per role. Locking or timeout
-   clears it.
+   and POS staff signing in with their password. Role rides in claims
+   (`cashier`/`manager` ⇒ the proxy bounces them out of `/dashboard`).
+2. **`pos_device`** (new, HMAC-signed via `POS_SESSION_SECRET`) — an
+   **authorized device**. Long-lived, carries `{deviceId, storeId, locationId}`.
+   It is not an identity: it authorises the BROWSER, not a person.
+3. **`pos_operator`** (new, HMAC-signed, short-lived) — the **active staff**
+   after a PIN login. Carries `{staffId, storeId, locationId, deviceId, role}`
+   — bound to the device it was created on, so revoking the device kills it.
 
-### 3.1 The two login paths (both "hybrid")
+### 3.1 Staff onboarding (invite → self-registration)
 
-- **Account login (portable):** a POS staff member signs into `/pos/login` with
-  their own credentials (Firebase phone/email + password) → `sm_session` with a
-  `cashier`/`manager` claim. The `/pos` layout resolves their `pos_staff` row →
-  assigned location(s) → auto-context. Works on any device; login is a full
-  credential entry (slower).
-- **Paired device + PIN (fastest):** an owner/admin pairs a shop-floor tablet
-  once (enters a **pairing code** generated in `/dashboard/pos`) → mints a
-  `pos_device` cookie. Thereafter `/pos` shows a **PIN pad**; a staff member
-  types their 4–6 digit PIN → `posUnlock(pin)` verifies it **server-side**
-  against `pos_staff.pin_hash` for that device's store+location → mints a
-  `pos_operator` cookie. Login = a few taps, one round trip. This is the
-  everyday shop path.
+Staff are real accounts; the admin never sets a credential.
 
-**Security:** the operator is ALWAYS resolved server-side (PIN verify or Firebase
-uid → `pos_staff`); the client never asserts who it is. A `pos_device` alone
-cannot sell. PIN is hashed (scrypt/bcrypt), rate-limited (reuse `lib/rate-limit`),
-and never leaves the server on unlock (only a signed operator token returns).
+1. **Admin invites** (dashboard → POS → Staff): **name, email, role, locations**
+   → a `pos_staff` row with `status='invited'` + a single-use `invite_token`
+   (7-day TTL), and an emailed link to `/pos/register?token=…` (Resend; the
+   `inviteUser` pattern).
+2. **Staff self-registers** at that link: **password** (typed twice, must match)
+   → **phone OTP** (Firebase Phone auth, invisible reCAPTCHA — the signup
+   wizard's pattern) → **their own 8-digit PIN** (typed twice).
+   `completeStaffRegistration` then verifies the session's email matches the
+   invite, stores the scrypt PIN hash, links `user_id` (Firebase uid), flips
+   `status='active'`, consumes the token, and sets the **role claim**.
+   Technical ordering note: the password account must exist before a phone can
+   be linked to it, so the wizard is password → phone → PIN.
 
-### 3.2 proxy.ts changes
+### 3.2 Login (`/pos`) — email + PIN or email + password
+
+One screen, two modes:
+
+- **PIN (fast):** email + 8-digit pad → `posLoginWithPin` verifies scrypt
+  **server-side**, scoped to the device's location → signed `pos_operator`
+  cookie. One round trip.
+- **Password:** email + password → Firebase `signInWithEmailAndPassword` +
+  `establishSession` (the normal `sm_session`).
+
+### 3.3 Device restriction (why a cashier can't sell from their phone)
+
+A browser may run POS only once the **owner authorizes it** — either by tapping
+"Authorize this device" while signed in on that device (`authorizeThisDevice`),
+or by entering an authorization code generated in the dashboard
+(`createPairingCode` → `pairDevice`; single-use, 10-min TTL). It then holds the
+long-lived signed `pos_device` cookie.
+
+`resolvePosOperator` requires an authorized, non-revoked device for **both**
+staff paths (PIN and password), so correct credentials on an unauthorized device
+(the cashier's personal phone) simply do not sign them in. **Owners are exempt**
+— they must be able to authorize the first device. Revocation is immediate
+(checked against `pos_devices` on every resolve).
+
+**Honest limits:** this is per-browser-profile, not per-hardware. Clearing site
+data de-authorizes the device (the owner re-authorizes in seconds), and someone
+with the unlocked, already-trusted device plus devtools could copy the cookie —
+a different threat from "staff logs in from home". Optional hardening later:
+device fingerprinting, periodic owner re-approval, shop-IP allowlisting.
+
+**Security invariant:** the operator is ALWAYS resolved server-side (PIN verify
+or Firebase uid → `pos_staff`); the client never asserts who it is. PINs are
+scrypt-hashed and rate-limited per device (`lib/rate-limit`).
+
+### 3.4 proxy.ts changes
 
 ```
 // on store hosts, extend the gate to /pos:
@@ -138,7 +169,7 @@ layout** (a server component), not the proxy, to keep the edge check cheap and
 DB-free. A store that isn't pro / hasn't enabled POS renders a "POS isn't
 available" screen.
 
-### 3.3 Roles & capabilities (`lib/pos/permissions.ts`, pure)
+### 3.5 Roles & capabilities (`lib/pos/permissions.ts`, pure)
 
 POS roles live in `pos_staff.role` (`'cashier' | 'manager'`), **separate** from
 dashboard `roles` slugs. Owners/admins operating `/pos` are implicitly `manager`+
@@ -153,7 +184,7 @@ dashboard `roles` slugs. Owners/admins operating `/pos` are implicitly `manager`
 | Refund / return                                       | manager PIN                                  | ✅             | ✅             |
 | Open/close shift, cash drop                           | ❌                                           | ✅             | ✅             |
 | Adjust inventory (assigned location only)             | ❌                                           | ✅ (their loc) | ✅ (all)       |
-| Manage staff / pair devices                           | ❌                                           | ❌             | ✅ (dashboard) |
+| Manage staff / authorize devices                      | ❌                                           | ❌             | ✅ (dashboard) |
 
 Every capability is enforced **server-side** in the POS action from the resolved
 operator, never from a client flag. Manager location-scoping is enforced against
@@ -187,14 +218,18 @@ inventory_levels(
 pos_registers(id, store_id, location_id, name, active, created_at)
 
 pos_staff(
-  id uuid pk, store_id uuid, user_id text null,          -- Firebase uid (account path)
-  name text, role text check in ('cashier','manager'),
-  pin_hash text null, active bool default true, created_at, updated_at)
+  id uuid pk, store_id uuid, user_id text null,          -- Firebase uid (set at registration)
+  name text, email text,                                  -- unique per store; login is by email
+  role text check in ('cashier','manager'),
+  pin_hash text null,                                     -- scrypt, 8 digits, set BY THE STAFF
+  status text check in ('invited','active','disabled'),
+  invite_token text null, invite_expires_at timestamptz,  -- single-use, 7-day TTL
+  active bool default true, created_at, updated_at)
 
 pos_staff_locations(staff_id uuid, location_id uuid, is_primary bool)  -- pk(staff_id,location_id)
 
-pos_devices(id, store_id, location_id, register_id, label,
-  created_at, last_seen_at)
+pos_devices(id, store_id, location_id, label,            -- an AUTHORIZED browser
+  revoked_at, last_seen_at, created_at)
 pos_pairing_codes(code text pk, store_id, location_id, register_id,
   expires_at, used_at)                                   -- short-lived, single-use
 

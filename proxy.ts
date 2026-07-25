@@ -2,6 +2,15 @@ import { type NextRequest, NextResponse } from "next/server";
 import { parseHost, isHelpHost } from "@/lib/store/host";
 import { logError } from "@/lib/observability/logger";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/auth/session-cookie";
+import {
+  POS_DEVICE_COOKIE,
+  POS_OPERATOR_COOKIE,
+  verifyDeviceToken,
+  verifyOperatorToken,
+} from "@/lib/pos/session";
+
+// POS routes served without any POS credential (see the /pos gate below).
+const POS_PUBLIC_PATHS = ["/pos/login", "/pos/register", "/pos/reset"];
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -36,9 +45,13 @@ export async function proxy(request: NextRequest) {
   }
 
   // --- Store hosts ({slug}.storemink.com / custom domains) ---
-  // Only the dashboard + auth routes need the session gate; the storefront stays
-  // anonymous + cache-friendly (no per-request auth check).
-  if (!pathname.startsWith("/dashboard") && !pathname.startsWith("/auth")) {
+  // Only the dashboard, auth, and POS routes need the session gate; the
+  // storefront stays anonymous + cache-friendly (no per-request auth check).
+  if (
+    !pathname.startsWith("/dashboard") &&
+    !pathname.startsWith("/auth") &&
+    !pathname.startsWith("/pos")
+  ) {
     return NextResponse.next();
   }
 
@@ -55,9 +68,56 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(url);
     };
 
+    // --- POS gate: /pos requires a Firebase session (owner/admin), a paired
+    //     device, or an active operator. Fine-grained checks (Pro + pos.enabled,
+    //     operator resolution, device revocation) live in the /pos layout. The
+    //     signature-only verify here is cheap and DB-free; it returns null (→
+    //     login) when POS_SESSION_SECRET is unset, never 500s. ---
+    if (pathname.startsWith("/pos")) {
+      // Public POS entry points — reachable with NO session, device or operator.
+      //   /pos/login    — the sign-in / authorize-device screen.
+      //   /pos/register — invited staff completing setup from their email link,
+      //                   typically on their own phone. The emailed TOKEN is the
+      //                   authorization and is validated server-side by
+      //                   getInviteInfo; requiring a credential here would make
+      //                   the invitation impossible to accept.
+      //   /pos/reset    — same reasoning for the forgot-PIN/password link: a
+      //                   locked-out cashier has no credential by definition.
+      if (
+        POS_PUBLIC_PATHS.some(
+          (p) => pathname === p || pathname.startsWith(`${p}/`),
+        )
+      ) {
+        return NextResponse.next();
+      }
+      const hasDevice = !!verifyDeviceToken(
+        request.cookies.get(POS_DEVICE_COOKIE)?.value,
+      );
+      const hasOperator = !!verifyOperatorToken(
+        request.cookies.get(POS_OPERATOR_COOKIE)?.value,
+      );
+      if (!user && !hasDevice && !hasOperator) {
+        return redirectTo("/pos/login");
+      }
+      return NextResponse.next();
+    }
+
     // --- Gate 1: Auth check for /dashboard routes ---
     if (pathname.startsWith("/dashboard")) {
-      if (!user) return redirectTo("/auth/login");
+      if (!user) {
+        // A POS-only device/operator (no Firebase session) has no business in
+        // the dashboard — send it to the register, not the admin login.
+        const posOnly =
+          verifyDeviceToken(request.cookies.get(POS_DEVICE_COOKIE)?.value) ||
+          verifyOperatorToken(request.cookies.get(POS_OPERATOR_COOKIE)?.value);
+        return redirectTo(posOnly ? "/pos" : "/auth/login");
+      }
+
+      // POS staff (cashier/manager) have Firebase accounts but are POS-only —
+      // their role claim keeps them out of the dashboard entirely.
+      if (user.claims.role === "cashier" || user.claims.role === "manager") {
+        return redirectTo("/pos");
+      }
 
       // --- Gate 2: Force password reset ---
       if (user.claims.forcePasswordReset)

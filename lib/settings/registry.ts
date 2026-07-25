@@ -35,6 +35,7 @@ export const SETTING_KEYS = [
   "inventory.simpleTrackDefault",
   "inventory.lowStockThreshold",
   "pos.enabled",
+  "pos.idleLockMinutes",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -141,6 +142,19 @@ export const SETTINGS: readonly SettingDef[] = [
     minPlan: "pro",
     // Toggled via the Enable POS control on /dashboard/pos, not the raw editor.
     hidden: true,
+  },
+  {
+    key: "pos.idleLockMinutes",
+    label: "Auto-lock the register after",
+    description:
+      "Minutes of inactivity before the register locks and asks for the cashier's PIN again. Stops the next person selling as whoever walked away.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 10,
+    min: 1,
+    max: 240,
+    minPlan: "pro",
   },
 ];
 

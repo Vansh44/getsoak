@@ -1863,6 +1863,235 @@ export const inventoryLevels = pgTable(
   ],
 );
 
+// POS Phase 1: in-store operators (cashier/manager). PIN-authenticated; NOT
+// dashboard admins. pin_hash is sensitive (scrypt) — admin-only via RLS.
+export const posStaff = pgTable(
+  "pos_staff",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    userId: text("user_id"),
+    name: text().notNull(),
+    email: text().notNull(),
+    role: text().default("cashier").notNull(),
+    pinHash: text("pin_hash"),
+    status: text().default("invited").notNull(),
+    inviteToken: text("invite_token"),
+    inviteExpiresAt: timestamp("invite_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resetToken: text("reset_token"),
+    resetExpiresAt: timestamp("reset_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    active: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_staff_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_staff_role_check",
+      sql`role = ANY (ARRAY['cashier'::text, 'manager'::text])`,
+    ),
+    pgPolicy("Store admins manage pos_staff", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posStaffLocations = pgTable(
+  "pos_staff_locations",
+  {
+    staffId: uuid("staff_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+  },
+  (table) => [
+    index("pos_staff_locations_staff_idx").using(
+      "btree",
+      table.staffId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.staffId],
+      foreignColumns: [posStaff.id],
+      name: "pos_staff_locations_staff_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_staff_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.staffId, table.locationId],
+      name: "pos_staff_locations_pkey",
+    }),
+    pgPolicy("Store admins manage pos_staff_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// A register paired to a location (a signed pos_device cookie references one).
+export const posDevices = pgTable(
+  "pos_devices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    label: text().default("").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+    lastSeenAt: timestamp("last_seen_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    // Rotation state for clone detection (pos_05_device_hardening.sql).
+    tokenNonce: text("token_nonce"),
+    prevNonce: text("prev_nonce"),
+    prevNonceUntil: timestamp("prev_nonce_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    revokedReason: text("revoked_reason"),
+    revokedBy: text("revoked_by"),
+    authorizedBy: text("authorized_by"),
+    lastIp: text("last_ip"),
+  },
+  (table) => [
+    index("pos_devices_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_devices_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_devices_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_devices", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// Append-only POS security trail (pos_05_device_hardening.sql). Admin-readable;
+// written only via the service role.
+export const posAuditLog = pgTable(
+  "pos_audit_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    event: text().notNull(),
+    // Deliberately no FK — the trail must outlive the device/staff it describes.
+    deviceId: uuid("device_id"),
+    staffId: uuid("staff_id"),
+    locationId: uuid("location_id"),
+    actor: text(),
+    ip: text(),
+    detail: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_audit_log_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_audit_log_store_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read pos_audit_log", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_audit_log.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posPairingCodes = pgTable(
+  "pos_pairing_codes",
+  {
+    code: text().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_pairing_codes_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_pairing_codes_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_pairing_codes_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_pairing_codes", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
 export const storeBrandProfiles = pgTable(
   "store_brand_profiles",
   {

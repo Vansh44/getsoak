@@ -127,6 +127,13 @@ export const SECTIONS: DashboardSection[] = [
         href: "/dashboard/pos/locations",
         icon: "location",
       },
+      { label: "Staff", href: "/dashboard/pos/staff", icon: "customers" },
+      { label: "Devices", href: "/dashboard/pos/devices", icon: "channels" },
+      {
+        label: "POS Settings",
+        href: "/dashboard/pos/settings",
+        icon: "settings",
+      },
     ],
   },
   {

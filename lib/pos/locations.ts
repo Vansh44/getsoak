@@ -3,7 +3,7 @@
 // Store locations are admin-only data (RLS is_store_admin), so reads use the
 // service scope with an explicit store_id filter, mirroring store-settings.ts.
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { storeLocations } from "@/drizzle/schema";
 import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
@@ -95,6 +95,25 @@ function rowToLocation(r: Record<string, unknown>): StoreLocation {
     sortOrder: (r.sort_order as number) ?? 0,
     address: (r.address as Record<string, unknown>) ?? null,
   };
+}
+
+/** The store's default ("Main") location id, or null if none exists yet. */
+export async function getDefaultLocationId(
+  storeId: string,
+): Promise<string | null> {
+  const rows = await withService((db) =>
+    db
+      .select({ id: storeLocations.id })
+      .from(storeLocations)
+      .where(
+        and(
+          eq(storeLocations.storeId, storeId),
+          eq(storeLocations.isDefault, true),
+        ),
+      )
+      .limit(1),
+  );
+  return rows[0]?.id ?? null;
 }
 
 /** All of a store's locations, default first then by sort order. */

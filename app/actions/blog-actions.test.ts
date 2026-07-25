@@ -470,6 +470,7 @@ describe("blog-actions", () => {
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
         "pos.enabled": false,
+        "pos.idleLockMinutes": 10,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.error).toMatch(/disabled/i);
@@ -488,6 +489,7 @@ describe("blog-actions", () => {
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
         "pos.enabled": false,
+        "pos.idleLockMinutes": 10,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.success).toBe(true);

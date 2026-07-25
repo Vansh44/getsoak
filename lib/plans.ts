@@ -141,6 +141,10 @@ export interface PlanLimits {
   /** POS locations included at no extra cost. Additional locations are billed
    *  per month (see docs/pos-plan.md §9.2 / Phase 7). 0 = POS not available. */
   posLocationsIncluded: number;
+  /** Max simultaneously-authorized POS devices per location. Bounds the blast
+   *  radius of a leaked pairing code and keeps the device list reviewable —
+   *  a real shop runs a handful of registers, not dozens. */
+  posDevicesPerLocation: number;
 }
 
 export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
@@ -155,6 +159,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     removeBadge: false,
     posEnabled: false,
     posLocationsIncluded: 0,
+    posDevicesPerLocation: 0,
   },
   basic: {
     maxProducts: 500,
@@ -167,6 +172,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     removeBadge: true,
     posEnabled: false,
     posLocationsIncluded: 0,
+    posDevicesPerLocation: 0,
   },
   pro: {
     maxProducts: null,
@@ -179,6 +185,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     removeBadge: true,
     posEnabled: true,
     posLocationsIncluded: 2,
+    posDevicesPerLocation: 5,
   },
 };
 
