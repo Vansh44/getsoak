@@ -1,0 +1,685 @@
+/* ------------------------------------------------------------------------
+   Root 404 — "this store doesn't exist".
+   Self-contained and scoped to .sm404: this page renders in the ROOT layout
+   (no .stq platform wrapper, no storefront chrome) because the request Host
+   resolved to no store, so it must not depend on either stylesheet. Tokens
+   mirror platform.css so the page still reads as StoreMink.
+   ------------------------------------------------------------------------ */
+
+.sm404 {
+  --ink: #0d1117;
+  --muted: #5b6675;
+  --faint: #8b93a3;
+  --line: #e7e9ee;
+  --brand: #4f39f6;
+  --brand-2: #9333ea;
+  --ok: #0c8a51;
+  --canvas: #f7f8fa;
+  --surface: #ffffff;
+  --mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Roboto Mono", monospace;
+
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: clamp(20px, 3.4vw, 40px) clamp(20px, 4.5vw, 56px);
+  background: var(--canvas);
+  color: var(--ink);
+  font-family:
+    var(--font-outfit),
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dot grid, faded out towards the bottom so the footer stays clean. */
+.sm404::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(13, 17, 23, 0.13) 1px,
+    transparent 0
+  );
+  background-size: 26px 26px;
+  -webkit-mask-image: radial-gradient(
+    115% 85% at 72% 12%,
+    #000 0%,
+    transparent 72%
+  );
+  mask-image: radial-gradient(115% 85% at 72% 12%, #000 0%, transparent 72%);
+}
+
+/* Two soft brand aurorae — the only colour in the canvas itself. */
+.sm404::after {
+  content: "";
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 90%;
+  z-index: -3;
+  background:
+    radial-gradient(
+      42% 55% at 78% 22%,
+      rgba(79, 57, 246, 0.16),
+      transparent 70%
+    ),
+    radial-gradient(
+      38% 48% at 18% 8%,
+      rgba(147, 51, 234, 0.11),
+      transparent 70%
+    );
+  filter: blur(6px);
+}
+
+/* ---------------------------------------------------------------- shell -- */
+.sm404-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  text-decoration: none;
+  width: fit-content;
+}
+.sm404-brand span {
+  color: var(--brand);
+}
+.sm404-mark {
+  display: block;
+  flex: none;
+}
+
+.sm404-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(28px, 5vw, 72px);
+  max-width: 1220px;
+  width: 100%;
+  margin: 0 auto;
+  /* Kept tight on the vertical: the artwork is aspect-ratio driven, so on a
+     720px-tall laptop generous block padding is what tips the page into a
+     scrollbar. */
+  padding: clamp(18px, 3.2vh, 48px) 0;
+}
+
+/* ----------------------------------------------------------- copy side -- */
+.sm404-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 13px 6px 10px;
+  margin-bottom: 22px;
+}
+.sm404-eyebrow i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 4px rgba(79, 57, 246, 0.14);
+}
+
+.sm404-title {
+  font-size: clamp(40px, 6.4vw, 76px);
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+  margin: 0 0 20px;
+  text-wrap: balance;
+}
+.sm404-title em {
+  display: block;
+  font-family: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: -0.028em;
+  background: linear-gradient(96deg, var(--brand), var(--brand-2) 70%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* Descenders on the italic serif clip against the gradient box. */
+  padding-bottom: 0.08em;
+}
+
+.sm404-lede {
+  font-size: clamp(15.5px, 1.5vw, 17.5px);
+  line-height: 1.62;
+  color: var(--muted);
+  margin: 0 0 30px;
+  max-width: 46ch;
+}
+
+.sm404-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sm404-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 22px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition:
+    transform 0.16s cubic-bezier(0.22, 0.8, 0.36, 1),
+    background 0.16s,
+    box-shadow 0.16s;
+}
+.sm404-btn svg {
+  transition: transform 0.16s cubic-bezier(0.22, 0.8, 0.36, 1);
+}
+.sm404-btn-primary {
+  background: var(--ink);
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(13, 17, 23, 0.28),
+    0 10px 26px -12px rgba(13, 17, 23, 0.55);
+}
+.sm404-btn-primary:hover {
+  background: #1c2430;
+  transform: translateY(-1px);
+}
+.sm404-btn-primary:hover svg {
+  transform: translateX(3px);
+}
+.sm404-btn-ghost {
+  color: var(--ink);
+  padding-inline: 14px;
+}
+.sm404-btn-ghost:hover {
+  background: rgba(13, 17, 23, 0.05);
+}
+
+/* Support / status strip. */
+.sm404-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px clamp(28px, 5vw, 56px);
+  margin-top: clamp(34px, 6vh, 56px);
+}
+.sm404-meta dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 5px;
+}
+.sm404-meta dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.sm404-meta a {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(13, 17, 23, 0.18);
+  padding-bottom: 1px;
+}
+.sm404-meta a:hover {
+  border-bottom-color: var(--brand);
+  color: var(--brand);
+}
+.sm404-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ok);
+}
+.sm404-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: sm404-pulse 2.4s ease-in-out infinite;
+}
+@keyframes sm404-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(12, 138, 81, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(12, 138, 81, 0);
+  }
+}
+
+/* -------------------------------------------------------------- footer -- */
+.sm404-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.sm404-foot a {
+  color: var(--faint);
+  text-decoration: none;
+}
+.sm404-foot a:hover {
+  color: var(--ink);
+}
+
+/* ============================================================== artwork ==
+   A stage sized by aspect-ratio and measured as a container, so every layer
+   below can be positioned/typed in cqw and the whole collage scales as one
+   object instead of reflowing piece by piece.
+   ========================================================================= */
+.sm404-art {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  aspect-ratio: 1 / 0.94;
+  margin-inline: auto;
+  justify-self: end;
+}
+.sm404-art-glow {
+  position: absolute;
+  inset: 6% 2% 14% 4%;
+  border-radius: 50%;
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    rgba(79, 57, 246, 0.2),
+    transparent 70%
+  );
+  filter: blur(30px);
+}
+
+/* Explicit paint order for the collage — the pieces overlap by design, so the
+   stack can't be left to DOM order alone. */
+.sm404-art-glow {
+  z-index: 0;
+}
+.sm404-win-back {
+  z-index: 1;
+}
+.sm404-num {
+  z-index: 2;
+}
+.sm404-win-front {
+  z-index: 3;
+}
+.sm404-tag,
+.sm404-pill {
+  z-index: 4;
+}
+.sm404-promo {
+  z-index: 5;
+}
+
+/* -- shared window-card chrome -- */
+.sm404-win {
+  position: absolute;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3.4cqw;
+  box-shadow:
+    0 1px 2px rgba(13, 17, 23, 0.05),
+    0 18px 40px -20px rgba(13, 17, 23, 0.3);
+  overflow: hidden;
+}
+.sm404-win-bar {
+  display: flex;
+  align-items: center;
+  gap: 1.3cqw;
+  padding: 2.2cqw 2.8cqw;
+  border-bottom: 1px solid var(--line);
+  background: #fcfcfd;
+}
+.sm404-dot {
+  width: 1.5cqw;
+  height: 1.5cqw;
+  border-radius: 50%;
+  background: #e2e5ea;
+}
+.sm404-win-url {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 2.05cqw;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+/* Back window: the store that isn't there — dashed, drained skeleton. */
+.sm404-win-back {
+  left: 0;
+  top: 0;
+  width: 80%;
+  height: 54%;
+  transform: rotate(-2.6deg);
+}
+.sm404-skel {
+  padding: 3.4cqw;
+  display: grid;
+  gap: 2.2cqw;
+}
+.sm404-skel-row {
+  display: flex;
+  gap: 2.2cqw;
+}
+.sm404-skel-box {
+  border: 1.5px dashed #dcdfe6;
+  border-radius: 2cqw;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(13, 17, 23, 0.022) 0 6px,
+    transparent 6px 12px
+  );
+  flex: 1;
+  height: 11cqw;
+}
+.sm404-skel-line {
+  height: 1.9cqw;
+  border-radius: 999px;
+  background: #eef0f4;
+}
+.sm404-skel-line.is-short {
+  width: 42%;
+}
+
+/* -- the numerals -- */
+.sm404-num {
+  position: absolute;
+  left: 3%;
+  top: 29%;
+  display: flex;
+  align-items: center;
+  gap: 0.6cqw;
+  font-size: 26cqw;
+  font-weight: 800;
+  line-height: 0.78;
+  letter-spacing: -0.06em;
+  color: var(--ink);
+  text-shadow: 0 24px 50px rgba(13, 17, 23, 0.16);
+}
+/* The middle 0 is a ring with an orbiting node — the "missing" slot. */
+.sm404-o {
+  position: relative;
+  width: 17.5cqw;
+  height: 17.5cqw;
+  border-radius: 50%;
+  background:
+    linear-gradient(var(--canvas), var(--canvas)) padding-box,
+    linear-gradient(140deg, var(--brand), var(--brand-2)) border-box;
+  border: 2.6cqw solid transparent;
+}
+.sm404-o::after {
+  content: "";
+  position: absolute;
+  inset: -2.6cqw;
+  border-radius: 50%;
+  animation: sm404-orbit 7s linear infinite;
+  background: radial-gradient(
+    circle 1.5cqw at 50% 0,
+    var(--brand-2) 98%,
+    transparent
+  );
+}
+@keyframes sm404-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Front window: a live preview peeking through, the counterpoint. */
+.sm404-win-front {
+  /* Not flush at 0 — the 2.4deg rotation throws the corner a few px past the
+     stage, which reads as a clipped card against the page edge. */
+  right: 1.5%;
+  bottom: 6%;
+  width: 50%;
+  transform: rotate(2.4deg);
+}
+.sm404-preview {
+  padding: 3cqw;
+  display: grid;
+  gap: 2.2cqw;
+}
+.sm404-preview-hero {
+  height: 15cqw;
+  border-radius: 2cqw;
+  background: linear-gradient(135deg, #eceaff, #f6f2ff 55%, #eafaf1);
+  position: relative;
+  overflow: hidden;
+}
+.sm404-preview-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.75) 50%,
+    transparent 65%
+  );
+  animation: sm404-sheen 3.6s ease-in-out infinite;
+}
+@keyframes sm404-sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  55%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+.sm404-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.8cqw;
+}
+.sm404-preview-grid span {
+  height: 7cqw;
+  border-radius: 1.4cqw;
+  background: #f1f3f7;
+}
+.sm404-preview-grid span:nth-child(2) {
+  background: #eceaff;
+}
+
+/* -- floating mono tags + pills -- */
+.sm404-tag {
+  position: absolute;
+  font-family: var(--mono);
+  font-size: 2.1cqw;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.sm404-tag-a {
+  left: 4.5%;
+  top: 63%;
+}
+.sm404-pill {
+  position: absolute;
+  left: 36%;
+  top: 51%;
+  font-family: var(--mono);
+  font-size: 2.1cqw;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--brand);
+  background: #eceaff;
+  border: 1px solid rgba(79, 57, 246, 0.18);
+  border-radius: 999px;
+  padding: 1.3cqw 2.8cqw;
+  transform: rotate(-3deg);
+  animation: sm404-bob 5s ease-in-out infinite;
+}
+@keyframes sm404-bob {
+  0%,
+  100% {
+    transform: rotate(-3deg) translateY(0);
+  }
+  50% {
+    transform: rotate(-3deg) translateY(-6px);
+  }
+}
+
+/* Dark promo card — the one way out of the dead end. */
+.sm404-promo {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 62%;
+  display: flex;
+  align-items: center;
+  gap: 2.6cqw;
+  padding: 3cqw;
+  border-radius: 3.4cqw;
+  background: var(--ink);
+  color: #fff;
+  text-decoration: none;
+  box-shadow: 0 22px 46px -22px rgba(13, 17, 23, 0.72);
+  transition:
+    transform 0.18s cubic-bezier(0.22, 0.8, 0.36, 1),
+    box-shadow 0.18s;
+}
+.sm404-promo:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 30px 54px -22px rgba(13, 17, 23, 0.78);
+}
+.sm404-promo-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 8.4cqw;
+  height: 8.4cqw;
+  border-radius: 2.4cqw;
+  background: linear-gradient(140deg, var(--brand), var(--brand-2));
+}
+.sm404-promo-icon svg {
+  width: 4cqw;
+  height: 4cqw;
+}
+.sm404-promo b {
+  display: block;
+  font-size: 2.9cqw;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sm404-promo small {
+  display: block;
+  margin-top: 0.5cqw;
+  font-family: var(--mono);
+  font-size: 2.1cqw;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.62);
+}
+.sm404-promo-arrow {
+  margin-left: auto;
+  flex: none;
+  color: rgba(255, 255, 255, 0.5);
+  width: 3.4cqw;
+  height: 3.4cqw;
+}
+
+/* ------------------------------------------------------------ entrance -- */
+@keyframes sm404-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sm404-rise {
+  animation: sm404-rise 0.6s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+}
+.sm404-rise-1 {
+  animation-delay: 0.06s;
+}
+.sm404-rise-2 {
+  animation-delay: 0.13s;
+}
+.sm404-rise-3 {
+  animation-delay: 0.2s;
+}
+.sm404-rise-4 {
+  animation-delay: 0.27s;
+}
+
+/* ---------------------------------------------------------- responsive -- */
+@media (max-width: 1000px) {
+  .sm404-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: clamp(36px, 8vw, 60px);
+    padding-top: clamp(24px, 5vh, 48px);
+  }
+  .sm404-art {
+    justify-self: center;
+    max-width: 460px;
+    order: 2;
+  }
+  .sm404-title {
+    font-size: clamp(38px, 9.5vw, 60px);
+  }
+}
+@media (max-width: 560px) {
+  /* Stacked, not squeezed onto one row: side by side the ghost link gets
+     stranded in the middle of the viewport, reading as unrelated to the CTA. */
+  .sm404-cta {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .sm404-btn-primary {
+    justify-content: center;
+  }
+  .sm404-btn-ghost {
+    justify-content: center;
+  }
+  .sm404-foot {
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sm404-rise,
+  .sm404-o::after,
+  .sm404-pill,
+  .sm404-preview-hero::after,
+  .sm404-status i {
+    animation: none !important;
+  }
+  .sm404-btn,
+  .sm404-promo {
+    transition: none;
+  }
+}

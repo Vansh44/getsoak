@@ -1,0 +1,248 @@
+/* ------------------------------------------------------------------------
+   In-store 404 — the store exists, this page/product/blog doesn't.
+   Renders INSIDE the storefront layout (header + footer + the store's own
+   chrome), so unlike the root 404 this file must not carry a palette of its
+   own: every colour, radius and font here resolves through the --sm-* theme
+   tokens the (storefront) layout writes on .storefront-root. A store on the
+   grocery theme and one on the classic look therefore get the same page in
+   two different skins, with no per-theme branching.
+   ------------------------------------------------------------------------ */
+
+.sf404 {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 68vh;
+  /* Top padding clears the CLASSIC header, which is position:fixed and floats
+     transparently over page content (only the "market" variant reserves its
+     own height on .storefront-root) — without it the numerals slide under the
+     nav. */
+  padding: clamp(120px, 17vh, 180px) 24px clamp(52px, 8vh, 96px);
+}
+
+/* Accent-tinted wash — brand colour at low alpha, so it reads as the store's
+   own without competing with the copy. */
+.sf404::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: clamp(40px, 8vh, 90px);
+  width: min(680px, 92vw);
+  aspect-ratio: 1 / 0.62;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    color-mix(in srgb, var(--sm-accent) 12%, transparent),
+    transparent 70%
+  );
+  filter: blur(18px);
+}
+
+/* ------------------------------------------------------------- numerals -- */
+.sf404-art {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.04em;
+  font-size: clamp(96px, 21vw, 190px);
+  font-weight: 800;
+  line-height: 0.8;
+  letter-spacing: -0.06em;
+  color: var(--sm-ink);
+  /* em, not px/vh: the tag below hangs at an offset proportional to this box,
+     so the clearance under it must scale with the numerals or the two collide
+     at large sizes. */
+  margin-bottom: 0.5em;
+}
+
+/* The middle 0 is an open ring — the empty slot where the page should be. */
+.sf404-o {
+  position: relative;
+  width: 0.66em;
+  height: 0.66em;
+  border-radius: 50%;
+  border: 0.155em solid var(--sm-accent);
+}
+/* Second, dashed ring: slowly counter-rotating, like a shelf label spinning
+   on its hook. */
+.sf404-o::before {
+  content: "";
+  position: absolute;
+  inset: -0.115em;
+  border-radius: 50%;
+  border: 2px dashed color-mix(in srgb, var(--sm-accent) 34%, transparent);
+  animation: sf404-spin 26s linear infinite;
+}
+@keyframes sf404-spin {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+/* Price tag hanging below the numerals. Centred rather than tucked into the
+   bottom-right corner: at this display size the tag is wider than a digit, so
+   anchoring it to the corner buries the last 4 underneath it. */
+.sf404-tag {
+  position: absolute;
+  left: 50%;
+  /* % of the numerals' box height, NOT em — em on this element would resolve
+     against the tag's own 0.115em font-size and barely move it. The offset has
+     to clear the glyphs, which overflow the 0.8 line-height box. */
+  bottom: -34%;
+  transform: translateX(-50%) rotate(-3deg);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.07em;
+  padding: 0.07em 0.14em 0.07em 0.1em;
+  font-size: 0.115em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--sm-ink-soft);
+  background: var(--sm-sand);
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-pill);
+  box-shadow: 0 6px 16px rgba(var(--sm-shadow-rgb), 0.08);
+}
+/* The tag's punch hole. */
+.sf404-tag i {
+  width: 0.34em;
+  height: 0.34em;
+  border-radius: 50%;
+  background: var(--sm-cream);
+  border: 1px solid var(--sm-border);
+  flex: none;
+}
+
+/* ----------------------------------------------------------------- copy -- */
+.sf404-title {
+  font-size: clamp(26px, 3.6vw, 38px);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.12;
+  margin: 0 0 12px;
+  color: var(--sm-ink);
+  text-wrap: balance;
+}
+.sf404-lede {
+  font-size: clamp(15px, 1.6vw, 17px);
+  line-height: 1.6;
+  color: var(--sm-ink-soft);
+  margin: 0 auto clamp(26px, 4vh, 36px);
+  max-width: 46ch;
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------- search -- */
+.sf404-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(480px, 100%);
+  padding: 6px 6px 6px 16px;
+  background: var(--sm-surface);
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-pill);
+  box-shadow: 0 8px 22px rgba(var(--sm-shadow-rgb), 0.06);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+}
+.sf404-search:focus-within {
+  border-color: var(--sm-accent);
+  box-shadow: 0 8px 26px rgba(var(--sm-shadow-rgb), 0.1);
+}
+.sf404-search svg {
+  flex: none;
+  color: var(--sm-ink-faint);
+}
+.sf404-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  color: var(--sm-ink);
+  padding: 10px 0;
+}
+.sf404-search input::placeholder {
+  color: var(--sm-ink-faint);
+}
+/* Kill the WebKit search decorations — they fight the pill. */
+.sf404-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+.sf404-search button {
+  flex: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 20px;
+  border-radius: var(--sm-radius-pill);
+  background: var(--sm-accent);
+  color: var(--sm-on-accent);
+  transition: background 0.16s;
+}
+.sf404-search button:hover {
+  background: var(--sm-accent-deep);
+}
+
+/* ---------------------------------------------------------------- links -- */
+.sf404-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 10px 22px;
+  margin-top: clamp(22px, 3.5vh, 32px);
+}
+.sf404-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--sm-ink);
+  text-decoration: none;
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
+  transition:
+    color 0.16s,
+    border-color 0.16s;
+}
+.sf404-links a:hover {
+  color: var(--sm-accent);
+  border-bottom-color: currentColor;
+}
+.sf404-links a svg {
+  flex: none;
+  opacity: 0.6;
+}
+
+/* ------------------------------------------------------------ responsive -- */
+@media (max-width: 560px) {
+  .sf404 {
+    min-height: 60vh;
+  }
+  .sf404-search button {
+    padding: 11px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sf404-o::before {
+    animation: none;
+  }
+}

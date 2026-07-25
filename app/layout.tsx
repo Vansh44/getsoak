@@ -46,6 +46,11 @@ const inter = Inter({
 });
 const fraunces = Fraunces({
   subsets: ["latin"],
+  // Italic is a real face here, not a synthesized slant: the root 404's display
+  // accent is set in Fraunces italic, and faux-obliquing a serif at 70px looks
+  // broken. Still preload:false — only pages that render italic Fraunces text
+  // fetch the extra file.
+  style: ["normal", "italic"],
   variable: "--font-fraunces",
   preload: false,
 });

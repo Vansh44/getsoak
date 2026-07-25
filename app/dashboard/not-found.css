@@ -1,0 +1,160 @@
+/* ------------------------------------------------------------------------
+   Dashboard-scoped 404. Deliberately quieter than the two customer-facing
+   404s: this is an operator mid-task, not a visitor to impress, so the page
+   stays inside the admin's own visual system (--dash-* tokens, the same card
+   chrome as every other panel) and the graphic reads as a UI object rather
+   than an illustration.
+   ------------------------------------------------------------------------ */
+
+.dash404 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 62vh;
+  padding: 40px 24px;
+  text-align: center;
+}
+.dash404-inner {
+  max-width: 460px;
+}
+
+/* ---------------------------------------------------------------- art -- */
+.dash404-art {
+  position: relative;
+  width: 248px;
+  max-width: 100%;
+  /* Bottom margin also clears the 404 badge, which hangs 14px below the box. */
+  margin: 0 auto clamp(32px, 5vh, 42px);
+  aspect-ratio: 248 / 164;
+}
+.dash404-art::before {
+  content: "";
+  position: absolute;
+  inset: 12% 4% -14% 4%;
+  border-radius: 50%;
+  background: radial-gradient(
+    50% 50% at 50% 50%,
+    var(--dash-accent-soft),
+    transparent 70%
+  );
+  filter: blur(16px);
+}
+
+/* A list panel with the row that should have been here missing. */
+.dash404-panel {
+  position: absolute;
+  inset: 0;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-card-border);
+  border-radius: var(--dash-radius);
+  box-shadow: var(--dash-shadow-md);
+  overflow: hidden;
+  transform: rotate(-1.6deg);
+}
+.dash404-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--dash-border);
+  background: var(--dash-surface-2);
+}
+.dash404-panel-head span {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--dash-surface-3);
+}
+.dash404-panel-head span:first-child {
+  width: 46px;
+}
+.dash404-panel-head span:last-child {
+  width: 22px;
+  margin-left: auto;
+}
+
+.dash404-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+}
+.dash404-row + .dash404-row {
+  border-top: 1px solid var(--dash-border);
+}
+.dash404-row i {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--dash-radius-xs);
+  background: var(--dash-surface-3);
+}
+.dash404-row b {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--dash-surface-3);
+  flex: 1;
+}
+.dash404-row s {
+  width: 30px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--dash-surface-2);
+}
+
+/* The gap in the list — dashed, hatched, deliberately empty. */
+.dash404-row.is-missing {
+  margin: 0 8px;
+  padding: 10px;
+  border: 1.5px dashed var(--dash-border-hover);
+  border-radius: var(--dash-radius-sm);
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(17, 24, 39, 0.02) 0 5px,
+    transparent 5px 10px
+  );
+}
+.dash404-row.is-missing + .dash404-row {
+  border-top: 0;
+}
+
+/* Corner badge — the only accent in the composition. */
+.dash404-badge {
+  position: absolute;
+  right: -12px;
+  bottom: -14px;
+  padding: 6px 12px;
+  border-radius: var(--dash-radius-sm);
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border-strong);
+  box-shadow: var(--dash-shadow-md);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--dash-accent);
+  transform: rotate(3.5deg);
+}
+
+/* --------------------------------------------------------------- copy -- */
+.dash404-title {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  color: var(--dash-text);
+  margin: 0 0 8px;
+}
+.dash404-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dash-text-2);
+  margin: 0 auto;
+  max-width: 40ch;
+  text-wrap: pretty;
+}
+.dash404-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 22px;
+}
