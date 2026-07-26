@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { wrapBrandedEmail } from "./layout";
+import { EMAIL_THEME } from "./shell";
 import type { StoreBrand } from "@/lib/store/brand";
 
 /** Escape user-supplied values before interpolating into email HTML. */
@@ -74,9 +75,9 @@ export async function sendEnquiryAcknowledgementEmail(opts: {
         <p style="margin: 24px 0 6px;">
           <strong>Here's a copy of what you sent us:</strong>
         </p>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f5; border:1px solid #eeeeee; border-radius:8px; margin:8px 0 4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${EMAIL_THEME.panel}; border:1px solid ${EMAIL_THEME.border}; border-radius:8px; margin:8px 0 4px;">
           <tr>
-            <td style="padding:16px 18px; font-size:14px; color:#444444; line-height:1.6;">
+            <td style="padding:16px 18px; font-size:14px; color:${EMAIL_THEME.inkSoft}; line-height:1.6;">
               ${
                 trimmedSubject
                   ? `<p style="margin:0 0 10px;"><strong>Subject:</strong> ${escapeHtml(trimmedSubject)}</p>`

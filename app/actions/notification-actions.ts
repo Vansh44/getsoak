@@ -87,6 +87,9 @@ import {
   renderNotificationEmail,
 } from "@/lib/email/notification-emails";
 import { getStoreBrandById } from "@/lib/store/brand";
+import { fromAddress } from "@/lib/email/sender";
+import { rateLimit } from "@/lib/rate-limit";
+import { Resend } from "resend";
 import { PLATFORM_URL } from "@/lib/site";
 import {
   variablesFor,
@@ -963,6 +966,92 @@ export async function previewNotificationEmail(
   } catch (error) {
     logError("notifications: email preview failed", error, { key });
     return { error: "Couldn't render the preview." };
+  }
+}
+
+/**
+ * Mail the notification to the signed-in admin, exactly as it would arrive.
+ *
+ * The single highest-confidence affordance in a template editor: a preview
+ * shows what you think you wrote, a real email in your own inbox shows what
+ * your recipients will actually see (after their client has had its way with
+ * it). Sends with SAMPLE values, to the caller's OWN address only — never to a
+ * customer, and never to an address supplied by the request.
+ */
+export async function sendTestNotificationEmail(
+  key: string,
+  audience: string,
+  template: { subject?: string; body?: string },
+): Promise<{ success?: boolean; sentTo?: string; error?: string }> {
+  const access = await getViewerAccess();
+  if (!access) return { error: "Not signed in." };
+  if (!access.can("notifications", "manage")) {
+    return { error: "You don't have permission to send test emails." };
+  }
+  const def = getEventDef(key);
+  if (!def) return { error: "Unknown notification." };
+  if (!access.email) return { error: "Your account has no email address." };
+
+  const audienceKey = (AUDIENCE_KEYS as readonly string[]).includes(audience)
+    ? (audience as AudienceKey)
+    : "team";
+
+  // Rate limited per admin: this is an outbound send triggered by a button,
+  // and a stuck finger shouldn't become a mail-provider complaint.
+  const rl = await rateLimit(`notif-test:${access.userId}`, {
+    max: 10,
+    windowSeconds: 600,
+  });
+  if (!rl.allowed) {
+    return { error: "Too many test emails. Try again in a few minutes." };
+  }
+
+  const { storeId } = await currentScope();
+  const fallback = defaultEmailTemplate(def.key, audienceKey);
+  const values = sampleValuesFor(def.key);
+
+  try {
+    const brand = storeId ? await getStoreBrandById(storeId) : platformBrand();
+    const rendered = renderNotificationEmail({
+      item: {
+        title: renderTemplate(
+          (template.subject || "").trim() || fallback.subject,
+          values,
+          "text",
+        ),
+        body: renderTemplate(
+          (template.body || "").trim() || fallback.body,
+          values,
+          "text",
+        ),
+        url: "/dashboard",
+        severity: def.severity,
+      },
+      brand,
+      baseUrl: storeId ? `https://${brand.domain}` : PLATFORM_URL,
+    });
+
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey || apiKey.includes("placeholder")) {
+      return { error: "Email isn't configured in this environment yet." };
+    }
+
+    const { error } = await new Resend(apiKey).emails.send({
+      from: fromAddress(brand, { suffix: "Notifications" }),
+      to: access.email,
+      // Flagged in the subject so a test can never be mistaken for the real
+      // thing sitting in an inbox next to it.
+      subject: `[Test] ${rendered.subject}`,
+      html: rendered.html,
+    });
+    if (error) {
+      logError("notifications: test send failed", error, { key });
+      return { error: "Couldn't send the test email." };
+    }
+    return { success: true, sentTo: access.email };
+  } catch (error) {
+    logError("notifications: test send threw", error, { key });
+    return { error: "Couldn't send the test email." };
   }
 }
 

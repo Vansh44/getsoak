@@ -1,6 +1,7 @@
 import "server-only";
 import { Resend } from "resend";
 import { wrapBrandedEmail } from "./layout";
+import { EMAIL_THEME } from "./shell";
 import { PLATFORM_EMAIL_DOMAIN } from "./sender";
 import type { StoreBrand } from "@/lib/store/brand";
 
@@ -9,7 +10,9 @@ import type { StoreBrand } from "@/lib/store/brand";
 const PLATFORM_BRAND: StoreBrand = {
   name: "StoreMink",
   logoUrl: null,
-  primaryColor: "#4f46e5",
+  // Unused by the email shell now (one global palette — see shell.ts);
+  // kept because StoreBrand requires it.
+  primaryColor: "#202223",
   tagline: null,
   blurb: null,
   legalName: "StoreMink",
@@ -44,9 +47,9 @@ export async function sendOperatorOtpEmail(
   }
 
   const body = wrapBrandedEmail(
-    `<p style="margin:0 0 16px; font-size:16px; color:#111827;">Your StoreMink admin sign-in code:</p>
-     <p style="margin:0 0 8px; font-size:34px; font-weight:700; letter-spacing:8px; color:#111827; font-family:'Courier New', monospace;">${code}</p>
-     <p style="margin:16px 0 0; font-size:14px; color:#6b7280;">This code expires in 10 minutes. If you didn't request it, you can safely ignore this email — no one can sign in without it.</p>`,
+    `<p style="margin:0 0 16px; font-size:16px; color:${EMAIL_THEME.ink};">Your StoreMink admin sign-in code:</p>
+     <p style="margin:0 0 8px; font-size:34px; font-weight:700; letter-spacing:8px; color:${EMAIL_THEME.ink}; font-family:'Courier New', monospace;">${code}</p>
+     <p style="margin:16px 0 0; font-size:14px; color:${EMAIL_THEME.muted};">This code expires in 10 minutes. If you didn't request it, you can safely ignore this email — no one can sign in without it.</p>`,
     PLATFORM_BRAND,
   );
 

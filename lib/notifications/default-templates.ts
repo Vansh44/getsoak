@@ -101,20 +101,24 @@ function labelFor(name: string): string {
     .join(" ");
 }
 
-/** Longest "value" that still reads as a fact rather than a sentence. */
-const MAX_ROW_VALUE = 40;
-
 export interface DefaultTemplate {
   subject: string;
+  /** HTML. The merchant edits this directly; `inlineEmailStyles` in
+   *  lib/email/notification-emails.ts styles the supported tags at send time. */
   body: string;
 }
 
 /**
- * The built-in email copy for an event, as editable template text.
+ * The built-in email copy for an event, as editable HTML template text.
  *
- * The details list is derived from the event's own variables: the base ones
- * (store name, date, link) are excluded because they're already in the layout
- * or the button, leaving exactly the facts that make this event worth reading.
+ * Shape: an opening paragraph, then the event's own facts as a definition list
+ * (which the email shell renders as hairline-separated rows), then a closing
+ * line. Deliberately a small tag vocabulary — `<p>`, `<ul>/<li>`, `<strong>` —
+ * so a merchant can edit it confidently without knowing email HTML.
+ *
+ * The facts come from the event's declared variables, so a new event gets a
+ * sensible email for free and no template can reference a value its emitter
+ * doesn't provide.
  */
 export function defaultEmailTemplate(
   eventKey: string,
@@ -131,60 +135,28 @@ export function defaultEmailTemplate(
       "Something happened in your store.");
 
   // Event-specific facts, in the order the variable catalog declares them.
-  const details = variablesFor(eventKey)
-    .filter((v) => !BASE_NAMES.has(v.name))
-    .map((v) => `${labelFor(v.name)}: {{${v.name}}}`);
+  const facts: { label: string; token: string }[] = [
+    { label: "Reference", token: "subject_label" },
+    ...variablesFor(eventKey)
+      .filter((v) => !BASE_NAMES.has(v.name))
+      .map((v) => ({ label: labelFor(v.name), token: v.name })),
+    // A shopper knows who they are; the team needs to know who acted.
+    ...(isCustomer ? [] : [{ label: "Who", token: "actor_name" }]),
+    { label: "When", token: "date" },
+  ];
 
-  // `subject_label` is the thing itself (an order ref, a product name), so it
-  // leads the details rather than sitting among them.
-  const lines = [intro, "", "Reference: {{subject_label}}"];
-  if (details.length) lines.push(...details);
-  lines.push("When: {{date}}");
-  // A shopper knows who they are; the team needs to know who acted.
-  if (!isCustomer) lines.splice(lines.length - 1, 0, "Who: {{actor_name}}");
+  const rows = facts
+    .map((f) => `  <li><strong>${f.label}</strong><br />{{${f.token}}}</li>`)
+    .join("\n");
+
+  const closing = isCustomer
+    ? `<p>If anything looks wrong, just reply to this email and we'll sort it out.</p>`
+    : `<p>Open it in your dashboard to take the next step.</p>`;
 
   return {
     subject: isCustomer
       ? `${CUSTOMER_SUBJECT[eventKey] ?? label} · {{subject_label}}`
       : `${label}: {{subject_label}}`,
-    body: lines.join("\n"),
+    body: [`<p>${intro}</p>`, "<ul>", rows, "</ul>", closing].join("\n"),
   };
-}
-
-/**
- * Split a rendered default/merchant body into an intro paragraph and the
- * "Label: value" rows, so the email layout can lay the facts out as a table
- * instead of a wall of text. Lines that aren't in `Label: value` form stay
- * paragraphs, which keeps a merchant's free-form prose intact.
- */
-export function splitBody(body: string): {
-  paragraphs: string[];
-  rows: { label: string; value: string }[];
-} {
-  const paragraphs: string[] = [];
-  const rows: { label: string; value: string }[] = [];
-
-  for (const raw of body.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    // "Label: value" becomes a table row. The deciding signal is the VALUE's
-    // length, not the label's: real facts are short (an order ref, an amount,
-    // a name, a date), while "Heads up: this order came in through the new
-    // landing page" is a merchant's sentence that happens to contain a colon
-    // and must stay prose. This is a heuristic — a merchant CAN write a very
-    // short sentence with a colon and see it rendered as a row — but the
-    // failure mode is cosmetic, and the alternative (a wall of unformatted
-    // text) is worse for every default template we ship.
-    const match = /^([A-Za-z][A-Za-z0-9 _-]{0,28}):\s*(.*)$/.exec(line);
-    if (match && match[2].trim().length <= MAX_ROW_VALUE) {
-      // Drop rows whose value resolved to nothing — an empty "Total:" row is
-      // worse than no row.
-      if (match[2].trim()) rows.push({ label: match[1], value: match[2] });
-      continue;
-    }
-    paragraphs.push(line);
-  }
-
-  return { paragraphs, rows };
 }

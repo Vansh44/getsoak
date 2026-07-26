@@ -2,31 +2,48 @@
 // Notification email templates — the second delivery channel for the event
 // spine (CODEBASE.md §22).
 //
-// Two shapes, one branded layout:
-//   • SINGLE   — one event, one email ("instant" digest).
-//   • DIGEST   — everything that landed in one hourly/daily window, grouped
-//                into one email. This is the whole point of the digest: a
-//                store doing 400 orders a day sends its owner one summary,
-//                not 400 emails.
+// ══ ONE GLOBAL DESIGN, NOT A PER-STORE ONE ════════════════════════════════
+// Every store's notification emails use the SAME neutral palette: white card on
+// light grey, near-black text, one dark button. The only per-store things are
+// the LOGO and the STORE NAME.
 //
-// Pure: every function takes the brand and base URL rather than resolving them,
-// so the copy is unit-testable without a database or a request. The worker
-// (notification-worker.ts) does the resolving.
+// Why not the store's accent colour: a merchant picks a storefront accent for a
+// storefront. Pushed through an email it lands on colour-managed clients, dark
+// mode, and a button that has to stay legible at any hue — and the failure mode
+// is a customer receiving something that looks broken. Shopify's transactional
+// emails are near-monochrome for the same reason. Identity comes from the logo.
 //
-// Titles/bodies are built from DB values (customer names, product names), so
-// EVERY interpolation is escaped — the blog/coupon-email trust model.
+// (The OTHER email types — coupon campaigns, blog/enquiry/billing — still use
+// the older `wrapBrandedEmail` layout in lib/email/layout.ts. Unifying them is
+// a follow-up, not a silent side effect of this change.)
+//
+// Bodies are HTML written by the merchant (or our default), with {{tokens}}
+// substituted and every value escaped: they are DB-derived names going into
+// markup. `inlineEmailStyles` then inlines styles for the small tag vocabulary
+// we support, because email clients ignore <style> blocks.
 // ---------------------------------------------------------------------------
 
 import type { StoreBrand } from "@/lib/store/brand";
 import { brandFromSettings } from "@/lib/store/brand";
-import { escapeHtml } from "@/lib/email/coupon-campaign";
-import { wrapBrandedEmail } from "@/lib/email/layout";
 import { PLATFORM_EMAIL_DOMAIN } from "@/lib/email/sender";
+import {
+  EMAIL_FONT,
+  EMAIL_THEME,
+  emailButton,
+  emailFooter,
+  emailHeading,
+  emailShell,
+  escapeHtml,
+  inlineEmailStyles,
+} from "@/lib/email/shell";
+
+// Re-exported: lib/notifications/template.test.ts and callers reach for it here.
+export { inlineEmailStyles } from "@/lib/email/shell";
 import type { Digest } from "@/lib/notifications/events";
-import { splitBody } from "@/lib/notifications/default-templates";
 
 export interface NotificationEmailItem {
   title: string;
+  /** HTML body (already substituted), or plain text for legacy callers. */
   body: string | null;
   /** App-relative path ("/dashboard/orders?q=…"), absolutised against baseUrl. */
   url: string | null;
@@ -61,90 +78,54 @@ export function absoluteUrl(
   return `${baseUrl.replace(/\/+$/, "")}${trimmed}`;
 }
 
-const SEVERITY_COLOR: Record<string, string> = {
-  info: "#0284c7",
-  success: "#059669",
-  warning: "#d97706",
-  critical: "#dc2626",
-};
-
-function severityColor(severity: string): string {
-  return SEVERITY_COLOR[severity] ?? SEVERITY_COLOR.info;
-}
-
-function ctaButton(href: string, label: string, brand: StoreBrand): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 8px;">
-  <tr>
-    <td bgcolor="${escapeHtml(brand.primaryColor)}" style="background-color:${escapeHtml(brand.primaryColor)}; border-radius:8px;">
-      <a href="${escapeHtml(href)}" style="display:inline-block; padding:12px 22px; font-family:Arial, sans-serif; font-size:14px; font-weight:bold; color:#ffffff; text-decoration:none;">${escapeHtml(label)}</a>
-    </td>
-  </tr>
-</table>`;
-}
-
-/** The "why am I getting this" footer. Every notification email carries it —
- *  it is both good manners and the thing that stops people marking us spam. */
-function preferencesFooter(baseUrl: string): string {
+/** The "why am I getting this" footer. Team mail gets the preferences link;
+ *  customer mail doesn't (it's transactional — there's nothing to switch off). */
+function footer(brand: StoreBrand, baseUrl: string, isTeam: boolean): string {
   const href = `${baseUrl.replace(/\/+$/, "")}/dashboard/settings/notifications`;
-  return `<p style="margin:28px 0 0; padding-top:16px; border-top:1px solid #f0f0f0; font-family:Arial, sans-serif; font-size:12px; line-height:1.6; color:#8b93a3;">
-  You're receiving this because you have notifications turned on for this store.
-  <a href="${escapeHtml(href)}" style="color:#8b93a3;">Choose what you get emailed about</a>.
+  const reason = isTeam
+    ? `You're receiving this because you have notifications turned on for ${escapeHtml(brand.name)}. <a href="${escapeHtml(href)}" style="color:${EMAIL_THEME.muted};">Change what you get emailed about</a>.`
+    : `You're receiving this because of your order with ${escapeHtml(brand.name)}.`;
+
+  return `<p style="margin:0; font-family:${EMAIL_FONT}; font-size:12px; line-height:1.6; color:${EMAIL_THEME.muted};">
+  ${reason}
 </p>`;
 }
 
 /**
- * One event, one email. Used for the "instant" digest setting — the default for
- * the events that genuinely warrant interrupting someone (a new order, a failed
- * payment, a role change).
+ * One event, one email — the "instant" digest setting.
+ *
+ * `item.body` is HTML (our default template or the merchant's). Values were
+ * already escaped during substitution; the template itself is sanitised at save.
  */
 export function renderNotificationEmail(opts: {
   item: NotificationEmailItem;
   brand: StoreBrand;
   baseUrl: string;
+  /** Team mail gets the preferences link in its footer; customer mail doesn't. */
+  isTeam?: boolean;
 }): RenderedEmail {
-  const { item, brand, baseUrl } = opts;
+  const { item, brand, baseUrl, isTeam = true } = opts;
   const href = absoluteUrl(item.url, baseUrl);
 
-  // The body arrives as text: free-form lines plus "Label: value" facts. The
-  // facts become a scannable table rather than a paragraph — the layout every
-  // good transactional email uses, because the reader is looking for one number.
-  const { paragraphs, rows } = splitBody(item.body ?? "");
-
-  const paragraphHtml = paragraphs
-    .map(
-      (text) =>
-        `<p style="margin:0 0 12px; font-family:Arial, sans-serif; font-size:15px; line-height:1.6; color:#454b54;">${escapeHtml(text)}</p>`,
-    )
-    .join("\n");
-
-  const rowsHtml = rows.length
-    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 4px; border:1px solid #ececec; border-radius:8px; border-collapse:separate; overflow:hidden;">
-${rows
-  .map(
-    (row, i) => `  <tr>
-    <td style="padding:11px 16px; ${i > 0 ? "border-top:1px solid #f2f2f2;" : ""} font-family:Arial, sans-serif; font-size:13px; color:#8b93a3; white-space:nowrap;">${escapeHtml(row.label)}</td>
-    <td align="right" style="padding:11px 16px; ${i > 0 ? "border-top:1px solid #f2f2f2;" : ""} font-family:Arial, sans-serif; font-size:14px; font-weight:bold; color:#17130f;">${escapeHtml(row.value)}</td>
-  </tr>`,
-  )
-  .join("\n")}
-</table>`
-    : "";
-
-  const body = `
-<p style="margin:0 0 8px; font-family:Arial, sans-serif; font-size:11.5px; font-weight:bold; letter-spacing:0.6px; text-transform:uppercase; color:${severityColor(item.severity)};">
-  ${escapeHtml(brand.name)}
-</p>
-<h1 style="margin:0 0 14px; font-family:Arial, sans-serif; font-size:21px; line-height:1.3; color:#17130f;">
-  ${escapeHtml(item.title)}
-</h1>
-${paragraphHtml}
-${rowsHtml}
-${href ? ctaButton(href, "View in dashboard", brand) : ""}
-${preferencesFooter(baseUrl)}`;
+  const bodyHtml = `
+${emailHeading(item.title)}
+${inlineEmailStyles(item.body ?? "")}
+${href ? emailButton(href, isTeam ? "View in dashboard" : "View your order") : ""}`;
 
   return {
     subject: item.title,
-    html: wrapBrandedEmail(body, brand),
+    html: emailShell({
+      brand,
+      bodyHtml,
+      footerHtml: emailFooter(brand, footer(brand, baseUrl, isTeam)),
+      // First line of the body, stripped — what an inbox shows next to the
+      // subject. Without it clients grab whatever markup comes first.
+      preheader: (item.body ?? "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 120),
+    }),
   };
 }
 
@@ -162,32 +143,32 @@ export function renderNotificationDigest(opts: {
   brand: StoreBrand;
   baseUrl: string;
   digest: Digest;
+  isTeam?: boolean;
 }): RenderedEmail {
-  const { items, brand, baseUrl, digest } = opts;
+  const { items, brand, baseUrl, digest, isTeam = true } = opts;
 
   const rows = items
     .map((item) => {
       const href = absoluteUrl(item.url, baseUrl);
       const title = escapeHtml(item.title);
+      // One line of context per item — a digest is a list, not a stack of
+      // full emails.
+      const summary = (item.body ?? "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 110);
+
       return `<tr>
-  <td style="padding:14px 0; border-bottom:1px solid #f0f0f0;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-      <tr>
-        <td width="10" valign="top" style="padding-top:6px;">
-          <div style="width:8px; height:8px; border-radius:50%; background-color:${severityColor(item.severity)};"></div>
-        </td>
-        <td style="padding-left:12px; font-family:Arial, sans-serif;">
-          <div style="font-size:15px; font-weight:bold; color:#17130f;">
-            ${href ? `<a href="${escapeHtml(href)}" style="color:#17130f; text-decoration:none;">${title}</a>` : title}
-          </div>
-          ${
-            item.body
-              ? `<div style="margin-top:3px; font-size:13.5px; line-height:1.55; color:#5b6472;">${escapeHtml(item.body)}</div>`
-              : ""
-          }
-        </td>
-      </tr>
-    </table>
+  <td style="padding:15px 0; border-bottom:1px solid ${EMAIL_THEME.hairline};">
+    <div style="font-family:${EMAIL_FONT}; font-size:15px; font-weight:600; color:${EMAIL_THEME.ink};">
+      ${href ? `<a href="${escapeHtml(href)}" style="color:${EMAIL_THEME.ink}; text-decoration:none;">${title}</a>` : title}
+    </div>
+    ${
+      summary
+        ? `<div style="margin-top:3px; font-family:${EMAIL_FONT}; font-size:13.5px; line-height:1.55; color:${EMAIL_THEME.muted};">${escapeHtml(summary)}</div>`
+        : ""
+    }
   </td>
 </tr>`;
     })
@@ -196,24 +177,25 @@ export function renderNotificationDigest(opts: {
   const window = digest === "hourly" ? "in the last hour" : "since yesterday";
   const dashboardUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/activity`;
 
-  const body = `
-<p style="margin:0 0 6px; font-family:Arial, sans-serif; font-size:12px; font-weight:bold; letter-spacing:0.4px; text-transform:uppercase; color:#8b93a3;">
-  ${escapeHtml(brand.name)}
-</p>
-<h1 style="margin:0 0 4px; font-family:Arial, sans-serif; font-size:20px; line-height:1.35; color:#17130f;">
+  const bodyHtml = `
+<h1 style="margin:0 0 4px; font-family:${EMAIL_FONT}; font-size:22px; line-height:1.3; font-weight:700; letter-spacing:-0.3px; color:${EMAIL_THEME.ink};">
   ${countLabel(items.length)} ${escapeHtml(window)}
 </h1>
-<p style="margin:0 0 8px; font-family:Arial, sans-serif; font-size:14px; color:#8b93a3;">
+<p style="margin:0 0 6px; font-family:${EMAIL_FONT}; font-size:14.5px; color:${EMAIL_THEME.muted};">
   Here's what happened in your store.
 </p>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
 ${rows}
 </table>
-${ctaButton(dashboardUrl, "Open dashboard", brand)}
-${preferencesFooter(baseUrl)}`;
+${emailButton(dashboardUrl, "Open dashboard")}`;
 
   return {
     subject: `${countLabel(items.length)} from ${brand.name}`,
-    html: wrapBrandedEmail(body, brand),
+    html: emailShell({
+      brand,
+      bodyHtml,
+      footerHtml: emailFooter(brand, footer(brand, baseUrl, isTeam)),
+      preheader: `${countLabel(items.length)} ${window}`,
+    }),
   };
 }

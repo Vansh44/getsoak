@@ -12,8 +12,8 @@ import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Bell,
   BellOff,
+  ChevronLeft,
   Search,
   SlidersHorizontal,
   Store,
@@ -135,7 +135,7 @@ export function NotificationConsole({
       else params.delete(key);
     }
     startTransition(() => {
-      router.push(`/dashboard/settings/notifications?${params.toString()}`);
+      router.push(`/dashboard/settings/notifications/all?${params.toString()}`);
     });
   };
 
@@ -166,7 +166,7 @@ export function NotificationConsole({
       <header className="dash-page-header row">
         <div>
           <h1>
-            Notifications{" "}
+            All notifications{" "}
             <span className="ml-1 align-middle text-[13px] font-medium text-[var(--dash-text-3)]">
               {total}
             </span>
@@ -181,11 +181,11 @@ export function NotificationConsole({
           </p>
         </div>
         <Link
-          href="/dashboard/settings/notifications/me"
+          href="/dashboard/settings/notifications"
           className="dash-btn dash-btn-ghost dash-btn-sm shrink-0"
         >
-          <Bell className="h-4 w-4" />
-          My notifications
+          <ChevronLeft className="h-4 w-4" />
+          Back to overview
         </Link>
       </header>
 

@@ -1,42 +1,36 @@
 import { requireSectionAccess } from "../../lib/access";
-import { pickParam } from "../../lib/list-params";
 import { getNotificationConsole } from "@/app/actions/notification-actions";
-import { NotificationConsole } from "./notification-console";
+import { NotificationOverview } from "./notification-overview";
 
-// The notification console. Gated on the `notifications` permission section —
-// superadmin has it by default and an owner grants it to any role from Roles &
-// Permissions (the role editor renders SECTIONS, so it appears there with no
-// extra wiring).
+// The notification landing page.
 //
-// Notifications are cross-cutting — they belong to no single feature — so
-// unlike the per-feature settings pages (convention #9) they live under
-// /dashboard/settings alongside Account and Domain.
-export default async function NotificationConsolePage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+// ══ WHY THIS EXISTS ═══════════════════════════════════════════════════════
+// The full matrix (27 notifications × 2 audiences × 5 channels × recipients)
+// is the honest shape of the engine, but it is NOT the shape of a merchant's
+// intent. Opening a settings page to a 27-row grid answers a question nobody
+// asked.
+//
+// In practice a store wants two things:
+//   1. "What does the email my customer receives say?"
+//   2. "Who on my team gets told when an order comes in?"
+//
+// So this page leads with exactly those two jobs — the split Shopify's admin
+// uses, and for the same reason — and puts the complete list one click away at
+// /all for when someone genuinely needs it.
+export default async function NotificationsOverviewPage() {
   await requireSectionAccess("notifications", "view");
 
-  const sp = await searchParams;
-  const category = pickParam(sp.category);
-  const audience = pickParam(sp.audience);
-  const channel = pickParam(sp.channel);
-  const q = pickParam(sp.q);
-
-  const { rows, counts, total, canManage, error } =
-    await getNotificationConsole({ category, audience, channel, q });
+  // One unfiltered read; the overview groups it by audience. A notification
+  // that reaches BOTH (a new order) appears in both sections, each showing
+  // only that audience's configuration — which is how a merchant thinks about
+  // it, rather than making them pick one home for it.
+  const { rows, total, canManage, error } = await getNotificationConsole();
 
   return (
-    <NotificationConsole
+    <NotificationOverview
       rows={rows}
-      counts={counts}
       total={total}
       canManage={canManage}
-      category={category}
-      audience={audience}
-      channel={channel}
-      query={q}
       error={error}
     />
   );

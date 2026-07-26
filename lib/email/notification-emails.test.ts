@@ -109,24 +109,35 @@ describe("renderNotificationEmail", () => {
     expect(html).not.toContain("View in dashboard");
   });
 
-  // Titles/bodies are built from DB values (customer names, product names), so
-  // the guarantee is that no interpolated value can open a TAG — the escaped
-  // attribute text itself surviving as inert characters is fine.
-  it("escapes interpolated copy so no tag can form", () => {
+  // WHERE ESCAPING HAPPENS, and why it differs by field:
+  //
+  //   title — always escaped here. It is a plain string built from DB values
+  //           (an order ref, a customer name) and must never become markup.
+  //   body  — trusted HTML by the time it reaches this function. It is either
+  //           our own default template or a merchant's, sanitised with
+  //           sanitizeBlogContent at SAVE time (notification-actions.ts), and
+  //           every {{value}} substituted into it was escaped by
+  //           renderTemplate. Escaping again here would print the tags.
+  it("escapes the title so no tag can form", () => {
     const { html } = renderNotificationEmail({
-      item: item({
-        title: 'Order <img src=x onerror="alert(1)">',
-        body: "<script>alert(2)</script>",
-      }),
+      item: item({ title: 'Order <img src=x onerror="alert(1)">' }),
       brand,
       baseUrl: BASE,
     });
-    expect(html).not.toContain("<script>");
     expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;script&gt;");
     expect(html).toContain("&lt;img");
-    // The quotes that would close an attribute are escaped too.
     expect(html).toContain("onerror=&quot;");
+  });
+
+  it("renders the body as the HTML it is", () => {
+    const { html } = renderNotificationEmail({
+      item: item({ body: "<p>Hello</p><ul><li>One</li></ul>" }),
+      brand,
+      baseUrl: BASE,
+    });
+    // Styled by inlineEmailStyles rather than escaped.
+    expect(html).toContain("<p style=");
+    expect(html).toContain("<li style=");
   });
 });
 

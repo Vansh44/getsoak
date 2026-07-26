@@ -1181,8 +1181,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
     had pointed at a non-existent page since roles shipped). - Only events with a non-empty `audiences` entry are FANNED OUT into
     per-recipient rows in `notifications` (the bell inbox). An event with
     `audiences: {}` is **audit-only**: visible in the feed, silent in the bell.
-    That is how a busy store gets a full history without 400 badges a day. - **THE CONSOLE (Settings → Notifications).** One row per notification →
-    a detail page with General + a tab per channel, gated on the
+    That is how a busy store gets a full history without 400 badges a day. - **THE CONSOLE (Settings → Notifications).** The landing page leads with the
+    TWO JOBS a merchant actually arrives with — **Customer emails** ("what does
+    my shopper receive?") and **Team alerts** ("who gets told?") — the split
+    Shopify's admin uses, and for the same reason: a 27-row grid answers a
+    question nobody asked. The full filterable matrix lives one click away at
+    `/all`, so power is available without being the first thing you meet. Each
+    list is shaped to its job: customer rows lead with the message (there is
+    only ever one recipient), team rows lead with the recipients. A notification
+    reaching both audiences appears in both sections, showing only that
+    audience's config. The editor adds two affordances worth copying from
+    Shopify: **Send test to me** (a real email to the signed-in admin, rate
+    limited, `[Test]`-prefixed) and an explicit **Revert to default** per field
+    instead of the undiscoverable "clear the box".
+    The landing page switches between the two with TABS, and a row's link
+    carries `?audience=`, so opening an email from "Customer emails" lands in
+    the customer context with no audience switcher — that question was answered
+    by choosing the tab. Arriving from `/all` (no param) shows both.
+    Detail pages are addressed by a DOT-FREE slug (`order-placed`) — see the
+    proxy note in `lib/notifications/events.ts`. Gated on the
     **`notifications` permission section** (superadmin by default; an owner
     grants it to any role from Roles & Permissions, which renders SECTIONS so
     it appears with no extra wiring). Configuration resolves in THREE layers,
@@ -1214,6 +1231,23 @@ group, span}` (span = columns of the 4-wide desktop grid),
     push and whatsapp are declared and rendered as LOCKED panels. `available:
 false` is enforced in the save action, not just greyed out — a channel with
     no provider must never accept a "yes" it can't honour.
+- **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): every
+  store's notification emails use the same neutral palette (white card on light
+  grey, near-black text, one dark button) — the store's LOGO and NAME are the
+  only per-store elements. The storefront accent is deliberately NOT used:
+  pushed into an email it has to survive colour-managed clients, dark mode, and
+  a button that must stay legible at any hue, and the failure mode is a customer
+  receiving something that looks broken. Shopify's transactional mail is
+  near-monochrome for the same reason. **EVERY email type goes through this one
+  shell** — notifications, coupon campaigns, blog/enquiry notifications,
+  billing and operator OTP (the last five via `wrapBrandedEmail` in `layout.ts`,
+  now a thin adapter over `emailShell`), so the look changes in one place.
+  `escapeHtml` lives here too, at the bottom of the email layer, and
+  `coupon-campaign` re-exports it for existing callers. Bodies are
+  HTML over a small tag vocabulary (`<p>`, `<ul>/<li>`, `<strong>`, `<a>`) whose
+  styles `inlineEmailStyles` inlines at send time, because clients ignore
+  `<style>`. The TITLE is escaped there; the BODY is trusted HTML by then —
+  sanitised at save, with every `{{value}}` escaped during substitution.
 - **Merchant templates** (`variables.ts` + `template.ts`): per-channel
   subject/body with `{{token}}` substitution. Deliberately NOT a template
   language — no conditionals, loops or expressions. Three rules: values are

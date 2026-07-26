@@ -382,7 +382,11 @@ async function fanOut(
           values,
           "text",
         ),
-        body: renderTemplate(template?.body || fallback.body, values, "text"),
+        // HTML mode: the body IS html now, so every substituted value must be
+        // escaped — a customer named `<script>` must not become markup in the
+        // email. (The subject above stays "text": it's a mail header, and
+        // escaping there would print &amp; at a shopper.)
+        body: renderTemplate(template?.body || fallback.body, values, "html"),
         url: builtIn?.url ?? null,
       });
     }

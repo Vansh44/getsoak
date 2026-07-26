@@ -20,11 +20,12 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Lock, Save, Store, User } from "lucide-react";
+import { Lock, RotateCcw, Save, Send, Store, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   previewNotificationEmail,
   saveNotificationConfig,
+  sendTestNotificationEmail,
   type NotificationDetail,
 } from "@/app/actions/notification-actions";
 import { CHANNELS, type ChannelKey } from "@/lib/notifications/channels";
@@ -114,15 +115,24 @@ function Field({
 
 export function NotificationDetailView({
   detail,
+  scopedAudience,
 }: {
   detail: NotificationDetail;
+  /** Set when the URL named an audience: the page then shows only that one and
+   *  hides the switcher — you answered "who is this for" by choosing a tab. */
+  scopedAudience?: "team" | "customer";
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
   const notification = detail.notification;
   const readOnly = !detail.canManage;
-  const audiences = notification.audiences;
+  // When the URL scopes us to one audience, that IS the audience list — so
+  // there is nothing to switch between and no switcher to render.
+  const allAudiences = notification.audiences;
+  const audiences = scopedAudience
+    ? allAudiences.filter((a) => a.key === scopedAudience)
+    : allAudiences;
 
   const [activeAudience, setActiveAudience] = useState<string>(
     audiences[0]?.key ?? "team",
@@ -188,6 +198,13 @@ export function NotificationDetailView({
     emailTemplate?.body,
   ]);
 
+  // Derived values, declared before the handlers that read them.
+  const sectionLabel =
+    getSection(notification.section)?.label ?? notification.section;
+  const channelDef = CHANNELS.find((c) => c.key === activeChannel);
+  const template = currentDraft?.templates[activeChannel] ?? {};
+  const defaults = current ? detail.defaults[current.key] : undefined;
+
   const patchAudience = (key: string, patch: Partial<AudienceDraft>) =>
     setDraft((d) => ({ ...d, [key]: { ...d[key], ...patch } }));
 
@@ -199,6 +216,36 @@ export function NotificationDetailView({
         [channel]: { ...draft[current.key].templates[channel], ...patch },
       },
     });
+  };
+
+  /** Put a field back on the platform's wording. Explicit, because "clear the
+   *  box" is a rule nobody discovers on their own. */
+  const revert = (field: "subject" | "body") => {
+    if (!current) return;
+    const value =
+      field === "subject" ? (defaults?.subject ?? "") : (defaults?.body ?? "");
+    setTemplate(activeChannel, { [field]: value });
+    toast.success(`${field === "subject" ? "Subject" : "Message"} reset`);
+  };
+
+  const [isSending, setIsSending] = useState(false);
+  const sendTest = async () => {
+    if (!current) return;
+    setIsSending(true);
+    try {
+      const result = await sendTestNotificationEmail(
+        notification.key,
+        current.key,
+        {
+          subject: template.subject,
+          body: template.body,
+        },
+      );
+      if (result.error) toast.error(result.error);
+      else toast.success(`Test email sent to ${result.sentTo}`);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleSave = () => {
@@ -235,12 +282,6 @@ export function NotificationDetailView({
     });
   };
 
-  const sectionLabel =
-    getSection(notification.section)?.label ?? notification.section;
-  const channelDef = CHANNELS.find((c) => c.key === activeChannel);
-  const template = currentDraft?.templates[activeChannel] ?? {};
-  const defaults = current ? detail.defaults[current.key] : undefined;
-
   return (
     <div className="dash-page-enter flex flex-col gap-4">
       <header className="dash-page-header row">
@@ -254,6 +295,11 @@ export function NotificationDetailView({
             </Link>
             <span className="text-[var(--dash-text-3)]">/</span>
             {notification.displayName}
+            {scopedAudience && (
+              <span className="dash-badge-grey rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide">
+                {scopedAudience === "team" ? "Team" : "Customer"}
+              </span>
+            )}
           </h1>
           <p>{notification.description}</p>
         </div>
@@ -327,40 +373,44 @@ export function NotificationDetailView({
         </div>
       </section>
 
-      {/* ── Who it notifies ─────────────────────────────────────────────── */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">
-          Who this notifies
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {audiences.map((audience) => (
-            <button
-              key={audience.key}
-              type="button"
-              onClick={() => setActiveAudience(audience.key)}
-              className={`flex min-w-[250px] items-start gap-2.5 rounded-[var(--dash-radius)] border px-3.5 py-2.5 text-left transition-colors ${
-                activeAudience === audience.key
-                  ? "border-[var(--dash-accent)] bg-[var(--dash-surface)]"
-                  : "border-[var(--dash-border)] bg-[var(--dash-surface-2)] hover:border-[var(--dash-border-hover)]"
-              }`}
-            >
-              {audience.key === "team" ? (
-                <Store className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-2)]" />
-              ) : (
-                <User className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-2)]" />
-              )}
-              <span>
-                <span className="block text-[13.5px] font-semibold text-[var(--dash-text)]">
-                  {audience.label}
+      {/* ── Who it notifies. Hidden when the URL already scoped us, and when
+             the notification only reaches one audience — a "switcher" with one
+             option is just noise. ─────────────────────────────────────────── */}
+      {audiences.length > 1 && (
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">
+            Who this notifies
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {audiences.map((audience) => (
+              <button
+                key={audience.key}
+                type="button"
+                onClick={() => setActiveAudience(audience.key)}
+                className={`flex min-w-[250px] items-start gap-2.5 rounded-[var(--dash-radius)] border px-3.5 py-2.5 text-left transition-colors ${
+                  activeAudience === audience.key
+                    ? "border-[var(--dash-accent)] bg-[var(--dash-surface)]"
+                    : "border-[var(--dash-border)] bg-[var(--dash-surface-2)] hover:border-[var(--dash-border-hover)]"
+                }`}
+              >
+                {audience.key === "team" ? (
+                  <Store className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-2)]" />
+                ) : (
+                  <User className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-2)]" />
+                )}
+                <span>
+                  <span className="block text-[13.5px] font-semibold text-[var(--dash-text)]">
+                    {audience.label}
+                  </span>
+                  <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--dash-text-3)]">
+                    {audience.description}
+                  </span>
                 </span>
-                <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--dash-text-3)]">
-                  {audience.description}
-                </span>
-              </span>
-            </button>
-          ))}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {current && currentDraft && (
         <>
@@ -497,32 +547,76 @@ export function NotificationDetailView({
                   }
                   className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
                 />
-                <p className="mt-1.5 text-[12px] text-[var(--dash-text-3)]">
-                  Preview:{" "}
-                  <span className="font-medium">
-                    {renderTemplate(
-                      template.subject || defaults?.subject || "",
-                      samples,
-                      "text",
-                    )}
-                  </span>
-                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                  <p className="text-[12px] text-[var(--dash-text-3)]">
+                    Preview:{" "}
+                    <span className="font-medium">
+                      {renderTemplate(
+                        template.subject || defaults?.subject || "",
+                        samples,
+                        "text",
+                      )}
+                    </span>
+                  </p>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => revert("subject")}
+                      disabled={template.subject === defaults?.subject}
+                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      Reset to default
+                    </button>
+                  )}
+                </div>
               </Field>
 
               <Field
                 label="Message"
-                hint="Clear it to fall back to the built-in wording."
+                hint={
+                  activeChannel === "email"
+                    ? "HTML. Use <p>, <ul>/<li> and <strong> — the email styles them for you."
+                    : "Clear it to fall back to the built-in wording."
+                }
               >
                 <textarea
                   value={template.body ?? ""}
                   readOnly={readOnly}
                   placeholder={defaults?.body}
-                  rows={activeChannel === "email" ? 8 : 3}
+                  rows={activeChannel === "email" ? 12 : 3}
                   onChange={(e) =>
                     setTemplate(activeChannel, { body: e.target.value })
                   }
                   className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 font-mono text-[12.5px] text-[var(--dash-text)] outline-none"
                 />
+
+                <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => revert("body")}
+                      disabled={template.body === defaults?.body}
+                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      Reset to default
+                    </button>
+                  )}
+                  {/* A preview shows what you think you wrote; a real email in
+                      your own inbox shows what recipients will actually see. */}
+                  {!readOnly && activeChannel === "email" && (
+                    <button
+                      type="button"
+                      onClick={sendTest}
+                      disabled={isSending}
+                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-accent)] hover:underline disabled:opacity-50"
+                    >
+                      <Send className="h-3 w-3" />
+                      {isSending ? "Sending…" : "Send test to me"}
+                    </button>
+                  )}
+                </div>
 
                 <div className="mt-2 overflow-hidden rounded-md border border-[var(--dash-border)]">
                   <div className="border-b border-[var(--dash-border)] bg-[var(--dash-surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">

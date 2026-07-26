@@ -540,9 +540,9 @@ describe("recordEvent", () => {
     expect(customer.title).not.toContain("STAFF:");
     expect(customer.title).toContain("Your order is confirmed");
     expect(customer.body).toContain("Thanks for your order");
-    // "Who: …" is operational detail the shopper doesn't need — they know.
-    expect(customer.body).not.toContain("Who:");
-    expect(admin.body).toContain("Who:");
+    // "Who" is operational detail the shopper doesn't need — they know.
+    expect(customer.body).not.toContain("<strong>Who</strong>");
+    expect(admin.body).toContain("<strong>Who</strong>");
   });
 
   it("falls back to built-in copy for a field the merchant left blank", async () => {
@@ -566,7 +566,9 @@ describe("recordEvent", () => {
     // Body was not overridden, so the built-in DEFAULT email body is used —
     // which lays the facts out as "Label: value" lines.
     expect(row.body).toContain("Priya S.");
-    expect(row.body).toContain("Reference: ORD10010004");
+    // The default body is HTML with the facts as list rows.
+    expect(row.body).toContain("<strong>Reference</strong>");
+    expect(row.body).toContain("ORD10010004");
   });
 
   // The email body is the full default, not the bell's one-liner.
@@ -584,10 +586,28 @@ describe("recordEvent", () => {
     const mail = queuedEmails(mock)[0];
     expect(mail.title).toContain("ORD10010004");
     expect(mail.body).toContain("You've received a new order.");
-    expect(mail.body).toContain("Total: 1240");
-    expect(mail.body).toContain("Who: Priya S.");
-    // The bell stays short.
-    expect(fannedOut(mock)[0].body).not.toContain("Reference:");
+    expect(mail.body).toContain("<strong>Total</strong>");
+    expect(mail.body).toContain("1240");
+    expect(mail.body).toContain("Priya S.");
+    // The bell stays short — one line, no markup.
+    expect(fannedOut(mock)[0].body).not.toContain("<ul>");
+  });
+
+  // The body is HTML, so substituted values must be escaped — a customer name
+  // is DB-derived and must never become markup in an email.
+  it("escapes substituted values into the HTML body", async () => {
+    const mock = setupDb({ staff: [superadmin] });
+
+    await recordEvent({
+      type: "order.placed",
+      storeId: STORE,
+      actor: { type: "customer", label: "<script>alert(1)</script>" },
+      subject: { type: "order", id: "o1", label: "ORD1" },
+    });
+
+    const body = queuedEmails(mock)[0].body;
+    expect(body).not.toContain("<script>");
+    expect(body).toContain("&lt;script&gt;");
   });
 
   it("snapshots the store's Cc/Bcc onto staff mail only", async () => {

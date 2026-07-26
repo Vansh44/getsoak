@@ -166,7 +166,31 @@ access rules. The picker greys such a pick out and names the fix (their role).
 
 ---
 
-## 8. Files
+## 8. The console's shape
+
+The landing page leads with the two jobs a merchant arrives with, rather than
+the engine's full generality:
+
+| Page                                | What it's for                                                         |
+| ----------------------------------- | --------------------------------------------------------------------- |
+| `/dashboard/settings/notifications` | **Customer emails** + **Team alerts** — the two jobs                  |
+| `…/all`                             | Every notification, with category/audience/channel filters and search |
+| `…/[slug]`                          | One notification: audience → channels → copy (+ Send test, Revert)    |
+| `…/me`                              | A staff member's own opt-outs                                         |
+
+The two landing lists deliberately look different, because the jobs are: a
+customer row leads with the **message** (there's only ever one recipient), a
+team row leads with the **recipients** (the copy matters less than who's on the
+hook). A single uniform grid hid that asymmetry, which is what made the page
+confusing.
+
+Routes use a dot-free slug (`order-placed`, not `order.placed`) — `proxy.ts`
+exempts asset-like paths from the session gate, and a dotted segment slipped
+through it.
+
+---
+
+## 9. Files
 
 | File                                           | What it is                                     |
 | ---------------------------------------------- | ---------------------------------------------- |

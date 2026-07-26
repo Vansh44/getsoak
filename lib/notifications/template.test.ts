@@ -12,7 +12,8 @@ import {
   variablesFor,
 } from "./variables";
 import { EVENTS } from "./events";
-import { defaultEmailTemplate, splitBody } from "./default-templates";
+import { defaultEmailTemplate } from "./default-templates";
+import { inlineEmailStyles } from "@/lib/email/notification-emails";
 
 describe("renderTemplate", () => {
   it("substitutes values", () => {
@@ -222,39 +223,81 @@ describe("default email templates", () => {
 
   it("opens with a readable sentence, not a bare label", () => {
     const t = defaultEmailTemplate("order.placed");
-    expect(t.body.split("\n")[0]).toBe("You've received a new order.");
+    expect(t.body.split("\n")[0]).toBe("<p>You've received a new order.</p>");
   });
 });
 
-describe("splitBody", () => {
-  it("separates prose from Label: value facts", () => {
-    const { paragraphs, rows } = splitBody(
-      "You've received a new order.\n\nReference: ORD10010004\nTotal: 1240",
+describe("default template HTML", () => {
+  it("is HTML, not plain text", () => {
+    const t = defaultEmailTemplate("order.placed");
+    expect(t.body).toContain("<p>");
+    expect(t.body).toContain("<ul>");
+    expect(t.body).toContain("<li>");
+  });
+
+  it("leads the facts with the thing itself", () => {
+    const t = defaultEmailTemplate("order.placed");
+    expect(t.body).toContain("<strong>Reference</strong>");
+    expect(t.body).toContain("{{subject_label}}");
+  });
+
+  it("omits 'Who' from customer copy — a shopper knows who they are", () => {
+    expect(defaultEmailTemplate("order.placed", "team").body).toContain("Who");
+    expect(defaultEmailTemplate("order.placed", "customer").body).not.toContain(
+      "Who",
     );
-    expect(paragraphs).toEqual(["You've received a new order."]);
-    expect(rows).toEqual([
-      { label: "Reference", value: "ORD10010004" },
-      { label: "Total", value: "1240" },
-    ]);
   });
 
-  // An empty "Total:" row is worse than no row at all.
-  it("drops rows whose value resolved to nothing", () => {
-    const { rows } = splitBody("Reference: ORD1\nTotal: \nWho: Priya");
-    expect(rows.map((r) => r.label)).toEqual(["Reference", "Who"]);
-  });
-
-  it("keeps a merchant's free-form prose containing a colon as prose", () => {
-    const { paragraphs, rows } = splitBody(
-      "Heads up: this order came in through the new landing page we launched",
+  it("closes differently for each audience", () => {
+    expect(defaultEmailTemplate("order.placed", "customer").body).toContain(
+      "reply to this email",
     );
-    expect(rows).toEqual([]);
-    expect(paragraphs).toHaveLength(1);
+    expect(defaultEmailTemplate("order.placed", "team").body).toContain(
+      "dashboard",
+    );
   });
 
-  it("ignores blank lines", () => {
-    const { paragraphs } = splitBody("One\n\n\nTwo");
-    expect(paragraphs).toEqual(["One", "Two"]);
+  it("only uses tags the email shell knows how to style", () => {
+    const allowed = new Set(["p", "ul", "li", "strong", "br", "h2", "h3", "a"]);
+    for (const def of EVENTS) {
+      for (const audience of ["team", "customer"] as const) {
+        const body = defaultEmailTemplate(def.key, audience).body;
+        for (const match of body.matchAll(/<\/?([a-z0-9]+)/gi)) {
+          expect(allowed, `${def.key}: <${match[1]}>`).toContain(
+            match[1].toLowerCase(),
+          );
+        }
+      }
+    }
+  });
+});
+
+describe("inlineEmailStyles", () => {
+  it("inlines styles for the supported tags", () => {
+    const out = inlineEmailStyles("<p>Hello</p>");
+    expect(out).toContain("<p style=");
+    expect(out).toContain("font-family");
+  });
+
+  it("preserves other attributes", () => {
+    const out = inlineEmailStyles('<a href="https://x.test">link</a>');
+    expect(out).toContain('href="https://x.test"');
+    expect(out).toContain("style=");
+  });
+
+  // A merchant who deliberately styles something keeps their styling.
+  it("leaves a tag that already has a style attribute alone", () => {
+    const out = inlineEmailStyles('<p style="color:red">Hi</p>');
+    expect(out).toBe('<p style="color:red">Hi</p>');
+  });
+
+  it("leaves unknown tags untouched", () => {
+    expect(inlineEmailStyles("<span>x</span>")).toBe("<span>x</span>");
+  });
+
+  it("styles every occurrence, not just the first", () => {
+    const out = inlineEmailStyles("<p>a</p><p>b</p>");
+    expect(out.match(/<p style=/g)).toHaveLength(2);
   });
 });
 

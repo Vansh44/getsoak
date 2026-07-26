@@ -6,8 +6,10 @@ import { NotificationDetailView } from "./notification-detail-view";
 
 export default async function NotificationDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ key: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requireSectionAccess("notifications", "view");
   const { key } = await params;
@@ -16,6 +18,19 @@ export default async function NotificationDetailPage({
   // dashboard paths on purpose — see the note in lib/notifications/events.ts.
   const def = eventFromSlug(decodeURIComponent(key));
   if (!def) notFound();
+
+  // `?audience=` scopes the page: arriving from the "Customer emails" tab means
+  // that question is already answered, so the switcher is hidden and only that
+  // audience's settings are shown. Without the param (e.g. from /all) the page
+  // shows both, with a switcher.
+  const sp = await searchParams;
+  const audienceParam = Array.isArray(sp.audience)
+    ? sp.audience[0]
+    : sp.audience;
+  const scoped =
+    audienceParam === "team" || audienceParam === "customer"
+      ? audienceParam
+      : undefined;
 
   const detail = await getNotificationDetail(def.key);
   if ("error" in detail) {
@@ -37,5 +52,5 @@ export default async function NotificationDetailPage({
     );
   }
 
-  return <NotificationDetailView detail={detail} />;
+  return <NotificationDetailView detail={detail} scopedAudience={scoped} />;
 }
