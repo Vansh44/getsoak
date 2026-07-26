@@ -152,10 +152,22 @@ export function RegisterHome({
           <p className="mt-2 text-sm text-white/60">
             {name} · {ROLE_LABEL[role] ?? role} · {locationName}
           </p>
-          <p className="mt-6 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/70">
-            The sell screen — product grid, barcode scanning, cart, cash &amp;
-            card tender, and thermal receipts — arrives in Phase 2.
-          </p>
+
+          {/* Selling needs an authorized device: an owner on an un-authorized
+              machine can administer POS but not ring a sale here. */}
+          {deviceAuthorized ? (
+            <Link
+              href="/pos/sell"
+              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 font-semibold text-white transition-colors hover:bg-emerald-500"
+            >
+              <ShoppingBag className="h-5 w-5" strokeWidth={2} />
+              Start selling
+            </Link>
+          ) : (
+            <p className="mt-6 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/70">
+              Authorize this device above to start selling on it.
+            </p>
+          )}
         </div>
       </main>
     </div>

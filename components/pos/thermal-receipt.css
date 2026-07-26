@@ -1,0 +1,125 @@
+/* 80mm thermal receipt.
+ *
+ * Printed through the OS printer driver (window.print), so it must work on any
+ * driver-backed thermal printer with no hardware integration — the raw ESC/POS
+ * path is a later addition (docs/pos-plan.md §8).
+ *
+ * Thermal paper is unforgiving: a fixed narrow width, monospace so columns
+ * align, pure black on white (greys dither into mush), and no backgrounds —
+ * printing a filled block just wastes ribbon/heat and comes out grey. */
+
+.tr-sheet {
+  width: 72mm; /* 80mm paper minus the printer's unprintable margins */
+  margin: 0 auto;
+  padding: 2mm 0;
+  font-family: "JetBrains Mono", ui-monospace, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #000;
+  background: #fff;
+}
+
+.tr-center {
+  text-align: center;
+}
+.tr-right {
+  text-align: right;
+}
+.tr-bold {
+  font-weight: 700;
+}
+.tr-lg {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tr-muted {
+  /* Still near-black: light greys disappear on thermal paper. */
+  color: #333;
+}
+
+.tr-rule {
+  border: 0;
+  border-top: 1px dashed #000;
+  margin: 6px 0;
+}
+
+.tr-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.tr-row > span:last-child {
+  white-space: nowrap;
+}
+
+/* Line item: description on its own line, then qty × price … amount. */
+.tr-item {
+  margin-top: 4px;
+}
+.tr-item-name {
+  overflow-wrap: anywhere;
+}
+
+.tr-total {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tr-gst-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+.tr-gst-table th,
+.tr-gst-table td {
+  padding: 1px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+.tr-gst-table th:first-child,
+.tr-gst-table td:first-child {
+  text-align: left;
+}
+
+.tr-footer {
+  margin-top: 8px;
+  font-size: 10px;
+}
+
+/* ---- Print isolation -----------------------------------------------------
+ * The register is a full-screen dark app; printing must emit ONLY the sheet.
+ * Same approach as components/invoice/invoice.css. */
+@media print {
+  @page {
+    size: 80mm auto; /* continuous roll — height follows content */
+    margin: 0;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Hide everything, then re-show the receipt and its ancestors. */
+  body * {
+    visibility: hidden !important;
+  }
+  .tr-sheet,
+  .tr-sheet * {
+    visibility: visible !important;
+  }
+  .tr-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 72mm;
+    color: #000 !important;
+  }
+
+  .tr-no-print {
+    display: none !important;
+  }
+}

@@ -15,13 +15,17 @@
     margin: 0;
   }
 
-  /* Anchor reset — kept in @layer base (like the * reset above) so Tailwind's
-     layered utilities (text-white, underline, hover:underline, …) can override
-     it. An UNlayered `a { color: inherit }` beats every layered color utility,
-     which silently made white text invisible on dark <a>/<Link> buttons. Plain
-     anchors still get no underline: base-layer author CSS still beats the
-     browser's user-agent default. */
-  a {
+  /* Anchor reset via :where() — ZERO specificity, so any utility class
+     (text-white, text-[#0b0f14], underline, …) always wins.
+     Do NOT write this as a bare `a { … }`: @layer alone is not enough here.
+     The build emits this rule UN-layered at top level (verified in the browser:
+     layer blocks are properties/theme/base/utilities, yet the anchor rule sits
+     outside them), so it beat every layered utility and silently rendered
+     white-on-white text on dark <a>/<Link> buttons. Zero specificity is
+     immune to that, whatever the compiler does with layers.
+     Plain anchors still lose their underline: :where() still outranks the
+     browser's user-agent stylesheet. */
+  :where(a) {
     color: inherit;
     text-decoration: none;
   }

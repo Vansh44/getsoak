@@ -1029,6 +1029,18 @@ export const orderItems = pgTable(
       .default(0)
       .notNull(),
     taxClassName: text("tax_class_name"),
+    // India GST split (pos_06). tax_amount stays the TOTAL for this line;
+    // these three are how it divides — cgst+sgst (intra-state) XOR igst.
+    taxCgst: numeric("tax_cgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxSgst: numeric("tax_sgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxIgst: numeric("tax_igst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_order_items_order_id").using(
@@ -1066,16 +1078,72 @@ export const orderItems = pgTable(
   ],
 );
 
+// Split tenders for one sale (pos_06). orders.payment_method/payment_status
+// remain the SUMMARY; this is the itemised breakdown (cash + card + …).
+// Writes go through placePosSale under the service role, like order_items.
+export const orderPayments = pgTable(
+  "order_payments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    orderId: uuid("order_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    method: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    tendered: numeric({ precision: 12, scale: 2, mode: "number" }),
+    changeDue: numeric("change_due", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    reference: text(),
+    capturedAt: timestamp("captured_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("order_payments_order_idx").using(
+      "btree",
+      table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "order_payments_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "order_payments_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "order_payments_method_check",
+      sql`method = ANY (ARRAY['cash'::text, 'card'::text, 'upi'::text, 'gift_card'::text, 'store_credit'::text, 'razorpay'::text])`,
+    ),
+    pgPolicy("Store admins read order_payments", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(order_payments.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
 export const orders = pgTable(
   "orders",
   {
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
-    customerId: text("customer_id").notNull(),
+    // Nullable since pos_06: a walk-in POS sale has no account and no
+    // delivery address. The customer-own RLS policy (customer_id = auth.uid())
+    // never matches NULL, so those orders stay admin-only.
+    customerId: text("customer_id"),
     status: text().default("pending").notNull(),
     paymentMethod: text("payment_method").default("cash_on_delivery").notNull(),
     paymentStatus: text("payment_status").default("pending").notNull(),
-    shippingAddress: jsonb("shipping_address").notNull(),
+    shippingAddress: jsonb("shipping_address"),
     billingAddress: jsonb("billing_address"),
     subtotal: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -1107,6 +1175,18 @@ export const orders = pgTable(
     taxInclusive: boolean("tax_inclusive").default(false).notNull(),
     razorpayOrderId: text("razorpay_order_id"),
     razorpayPaymentId: text("razorpay_payment_id"),
+    // POS Phase 2 (pos_06_sell_path.sql). In-person sales share this table,
+    // tagged sales_channel='pos'; customerId/shippingAddress are nullable above
+    // because a walk-in has neither.
+    salesChannel: text("sales_channel").default("online").notNull(),
+    locationId: uuid("location_id"),
+    deviceId: uuid("device_id"),
+    cashierId: uuid("cashier_id"),
+    cashierName: text("cashier_name"),
+    receiptNo: text("receipt_no"),
+    placeOfSupplyState: text("place_of_supply_state"),
+    supplierState: text("supplier_state"),
+    customerGstin: text("customer_gstin"),
   },
   (table) => [
     index("idx_orders_customer_id").using(
@@ -1353,6 +1433,7 @@ export const productVariants = pgTable(
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     variantNo: integer("variant_no").notNull(),
+    barcode: text(),
   },
   (table) => [
     index("idx_product_variants_store_id").using(
@@ -1460,6 +1541,10 @@ export const products = pgTable(
     skuNo: integer("sku_no").notNull(),
     variantSeq: integer("variant_seq").default(0).notNull(),
     taxClassId: uuid("tax_class_id"),
+    // pos_06: the SUPPLIER barcode a cashier scans — distinct from the
+    // system-generated Luhn `sku`, which is ours and immutable.
+    barcode: text(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_products_category").using(
@@ -1723,6 +1808,10 @@ export const storeBillingSettings = pgTable(
       .defaultNow()
       .notNull(),
     updatedBy: text("updated_by"),
+    // pos_06 — India GST identity. The state code drives place-of-supply.
+    gstEnabled: boolean("gst_enabled").default(false).notNull(),
+    businessStateCode: text("business_state_code"),
+    legalName: text("legal_name"),
   },
   (table) => [
     foreignKey({

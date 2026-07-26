@@ -36,6 +36,9 @@ export const SETTING_KEYS = [
   "inventory.lowStockThreshold",
   "pos.enabled",
   "pos.idleLockMinutes",
+  "pos.allowPriceOverride",
+  "pos.requireManagerForDiscount",
+  "pos.maxDiscountPercent",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -155,6 +158,42 @@ export const SETTINGS: readonly SettingDef[] = [
     min: 1,
     max: 240,
     minPlan: "pro",
+  },
+  {
+    key: "pos.allowPriceOverride",
+    label: "Allow price overrides at the register",
+    description:
+      "Let staff change an item's price during a sale. Turn off to make listed prices final.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.requireManagerForDiscount",
+    label: "Require a manager's PIN for large discounts",
+    description:
+      "Cashiers must get a manager's PIN to discount beyond the limit below (managers and owners are never prompted).",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.maxDiscountPercent",
+    label: "Discount a cashier can give without approval",
+    description:
+      "Percent of the sale a cashier may discount before a manager's PIN is required.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 10,
+    min: 0,
+    max: 100,
+    minPlan: "pro",
+    dependsOn: "pos.requireManagerForDiscount",
   },
 ];
 
