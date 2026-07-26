@@ -40,6 +40,10 @@ export interface VariantFormData {
   special_price: number | null;
   stock: number;
   sku: string;
+  /** Scannable SUPPLIER barcode for this variant (500ml and 1L carry different
+   *  codes on the packaging). Distinct from `sku`, which is our system-generated
+   *  Luhn code and immutable. Free text: real barcodes are EAN/UPC/other. */
+  barcode?: string | null;
   images: string[]; // this variant's own gallery (empty = uses product gallery)
 }
 
@@ -63,6 +67,9 @@ export interface ProductFormData {
   allow_backorder?: boolean;
   low_stock_threshold?: number | null;
   sku?: string;
+  /** Scannable SUPPLIER barcode for a simple (variant-less) product. Products
+   *  WITH variants carry the barcode per variant instead. */
+  barcode?: string | null;
   // Optional per-product tax class (public.tax_classes). Products without one
   // fall back to the store default at checkout. Empty string / null = none.
   tax_class_id?: string | null;
@@ -171,7 +178,10 @@ function sanitizeVariants(variants: VariantFormData[]) {
         specialPrice: special,
         stock: Number.isFinite(v.stock) ? Math.trunc(v.stock) : 0,
         // SKU is system-generated & locked — set by the DB trigger on insert
-        // and immutable thereafter, so the form never writes it.
+        // and immutable thereafter, so the form never writes it. The BARCODE is
+        // the opposite: it's the merchant's own supplier code, freely editable.
+        barcode:
+          typeof v.barcode === "string" ? v.barcode.trim() || null : null,
         images,
         imageUrl: images[0] ?? null, // keep the legacy single image in sync
         sortOrder: i,
@@ -389,6 +399,11 @@ export async function createProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    // The merchant's own scannable supplier code (NOT the system sku below).
+    barcode:
+      typeof formData.barcode === "string"
+        ? formData.barcode.trim() || null
+        : null,
     // sku / sku_no are set by the DB trigger (system-generated & locked).
   });
 
@@ -492,6 +507,10 @@ export async function updateProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    barcode:
+      typeof formData.barcode === "string"
+        ? formData.barcode.trim() || null
+        : null,
     // sku is system-generated & locked (DB trigger) — never overwritten here.
   });
 

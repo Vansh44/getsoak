@@ -93,6 +93,7 @@ const EMPTY: ProductFormData = {
   allow_backorder: false,
   low_stock_threshold: null,
   sku: "",
+  barcode: "",
   tax_class_id: null,
 };
 
@@ -116,6 +117,7 @@ function toForm(product: Product): ProductFormData {
     allow_backorder: product.allow_backorder,
     low_stock_threshold: product.low_stock_threshold,
     sku: product.sku ?? "",
+    barcode: product.barcode ?? "",
     tax_class_id: product.tax_class_id,
     variants: (product.variants ?? []).map((v) => ({
       id: v.id, // preserve DB id for reconcile (stable variant ids)
@@ -125,6 +127,7 @@ function toForm(product: Product): ProductFormData {
       special_price: v.special_price ?? null,
       stock: v.stock,
       sku: v.sku ?? "",
+      barcode: v.barcode ?? "",
       images: v.images ?? (v.image_url ? [v.image_url] : []),
     })),
   };
@@ -398,6 +401,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
             special_price: null,
             stock: 0,
             sku: "",
+            barcode: "",
             images: [],
           },
         ],
@@ -854,6 +858,25 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                       <p className={hintClass}>Auto-generated &amp; locked.</p>
                     </div>
                     <div>
+                      <label className={labelClass}>Barcode</label>
+                      <input
+                        className={`${fieldClass} font-mono`}
+                        value={form.barcode ?? ""}
+                        placeholder="Scan or type the barcode"
+                        onChange={(e) => set("barcode", e.target.value)}
+                        // A USB/Bluetooth scanner is a keyboard: focus this
+                        // field, scan the item, and it fills — no typing.
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.preventDefault();
+                        }}
+                      />
+                      <p className={hintClass}>
+                        The supplier barcode on the packaging — what the
+                        register scans. Leave blank for products you don&apos;t
+                        scan.
+                      </p>
+                    </div>
+                    <div>
                       <label className={labelClass}>Stock</label>
                       <div className="flex min-h-[38px] items-center gap-2 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 text-sm">
                         {product ? (
@@ -950,12 +973,13 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
               ) : (
                 <div className="overflow-x-auto sm:overflow-visible">
                   <div className="min-w-[500px] space-y-2 sm:min-w-0">
-                    <div className="grid grid-cols-[1fr_72px_72px_60px_110px_72px] gap-2 px-1 text-[10px] uppercase tracking-wide text-[#9ca3af]">
+                    <div className="grid grid-cols-[1fr_72px_72px_60px_110px_120px_72px] gap-2 px-1 text-[10px] uppercase tracking-wide text-[#9ca3af]">
                       <span>Name</span>
                       <span>Base ₹</span>
                       <span>Sell ₹</span>
                       <span>Stock</span>
                       <span>SKU</span>
+                      <span>Barcode</span>
                       <span />
                     </div>
                     {form.variants.map((v, i) => (
@@ -963,7 +987,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                         key={i}
                         className="space-y-2 rounded-lg border border-[#f3f4f6] bg-[#fafafa] p-2"
                       >
-                        <div className="grid grid-cols-[1fr_72px_72px_60px_110px_72px] items-center gap-2">
+                        <div className="grid grid-cols-[1fr_72px_72px_60px_110px_120px_72px] items-center gap-2">
                           <input
                             className={fieldClass}
                             value={v.name}
@@ -997,6 +1021,21 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                             value={v.sku || "on save"}
                             readOnly
                             title="Auto-generated on save"
+                          />
+                          {/* Each variant carries its OWN supplier barcode —
+                              500ml and 1L are different codes on the shelf.
+                              Focus and scan to fill it. */}
+                          <input
+                            className={`${fieldClass} font-mono text-[11px]`}
+                            value={v.barcode ?? ""}
+                            placeholder="Scan"
+                            title="Supplier barcode — scan the item to fill"
+                            onChange={(e) =>
+                              updateVariant(i, "barcode", e.target.value)
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") e.preventDefault();
+                            }}
                           />
                           <div className="flex items-center justify-end gap-0.5">
                             <button

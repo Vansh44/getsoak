@@ -28,7 +28,7 @@ import {
   storeLocations,
   taxClasses,
 } from "@/drizzle/schema";
-import { resolvePosOperator, type PosOperator } from "@/lib/pos/operator";
+import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
@@ -926,4 +926,7 @@ export async function getPosReceipt(
   }
 }
 
-export type { PosOperator };
+// NOTE: do not re-export types from this file. In a "use server" module every
+// export becomes a server-action entry, so `export type { … }` fails the
+// production build ("Export X doesn't exist in target module") even though dev
+// and unit tests pass. Import PosOperator from @/lib/pos/operator instead.

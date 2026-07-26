@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Loader2,
@@ -12,6 +18,7 @@ import {
   Minus,
   X,
   ScanLine,
+  Camera,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -22,9 +29,11 @@ import {
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
 import { posLock } from "@/app/actions/pos-auth-actions";
+import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import { IdleLock } from "../idle-lock";
 import { TenderPanel } from "./tender-panel";
 import { ReceiptOverlay } from "./receipt-overlay";
+import { CameraScanner } from "./camera-scanner";
 
 export interface CartLine {
   key: string;
@@ -41,6 +50,9 @@ export interface CartLine {
 }
 
 const lineKey = (p: string, v: string | null) => `${p}:${v ?? ""}`;
+
+/** Camera support is fixed for the life of the page — nothing to subscribe to. */
+const subscribeNever = () => () => {};
 
 export function SellClient({
   config,
@@ -62,14 +74,27 @@ export function SellClient({
   const [saleId, setSaleId] = useState<string | null>(null);
   // Disambiguation when one barcode maps to several variants.
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  // Feature-detected on the CLIENT only — the server can't know whether this
+  // browser can scan, and rendering a button that does nothing is worse than
+  // hiding it. useSyncExternalStore (rather than an effect) gives the server a
+  // `false` snapshot, so hydration matches and no cascading render occurs;
+  // the capability never changes, hence the no-op subscribe.
+  const cameraSupported = useSyncExternalStore(
+    subscribeNever,
+    isCameraScanSupported,
+    () => false,
+  );
 
   // A hardware scanner is a keyboard: it "types" the barcode then hits Enter.
   // Keeping this input focused means a scan lands in the cart with no clicks —
   // the single biggest factor in per-sale time.
   const scanRef = useRef<HTMLInputElement>(null);
   const refocus = useCallback(() => {
-    if (!tendering && !choices) scanRef.current?.focus();
-  }, [tendering, choices]);
+    // Don't steal focus while a modal owns the screen — grabbing it back would
+    // fight the camera view and the tender inputs.
+    if (!tendering && !choices && !cameraOpen) scanRef.current?.focus();
+  }, [tendering, choices, cameraOpen]);
   useEffect(() => {
     refocus();
   }, [refocus, cart.length]);
@@ -223,25 +248,40 @@ export function SellClient({
       <div className="flex min-h-0 flex-1">
         {/* Catalog */}
         <div className="flex min-w-0 flex-1 flex-col p-3">
-          <div className="relative mb-3 shrink-0">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
-            <input
-              ref={scanRef}
-              value={query}
-              autoFocus
-              onChange={(e) => setQuery(e.target.value)}
-              onBlur={() => setTimeout(refocus, 80)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && query.trim()) {
-                  e.preventDefault();
-                  void runSearch(query.trim(), true);
-                }
-              }}
-              placeholder="Scan a barcode or search products…"
-              className="w-full rounded-xl border border-white/15 bg-white/5 py-3 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
-            />
-            {searching && (
-              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+          <div className="mb-3 flex shrink-0 gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+              <input
+                ref={scanRef}
+                value={query}
+                autoFocus
+                onChange={(e) => setQuery(e.target.value)}
+                onBlur={() => setTimeout(refocus, 80)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && query.trim()) {
+                    e.preventDefault();
+                    void runSearch(query.trim(), true);
+                  }
+                }}
+                placeholder="Scan a barcode or search products…"
+                className="w-full rounded-xl border border-white/15 bg-white/5 py-3 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+              />
+              {searching && (
+                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+              )}
+            </div>
+            {/* Only rendered where the browser can actually scan — a dead
+                button is worse than none. */}
+            {cameraSupported && (
+              <button
+                type="button"
+                onClick={() => setCameraOpen(true)}
+                title="Scan with the camera"
+                className="flex shrink-0 items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-medium transition-colors hover:bg-white/10"
+              >
+                <Camera className="h-5 w-5" strokeWidth={2} />
+                <span className="hidden sm:inline">Scan</span>
+              </button>
             )}
           </div>
 
@@ -439,6 +479,15 @@ export function SellClient({
             </div>
           </div>
         </div>
+      )}
+
+      {/* A camera scan takes the IDENTICAL path as a hardware scan, so
+          duplicate-barcode disambiguation and "not found" behave the same. */}
+      {cameraOpen && (
+        <CameraScanner
+          onScan={(code) => void runSearch(code, true)}
+          onClose={() => setCameraOpen(false)}
+        />
       )}
 
       {tendering && (
