@@ -1103,6 +1103,160 @@ group, span}` (span = columns of the 4-wide desktop grid),
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
 
+22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
+    An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
+    SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
+    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
+    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    location foundation, with ZERO changes to existing inventory/checkout code:**
+    - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
+      every store auto-gets one `is_default` "Main" location) +
+      `inventory_levels` (the per-location source of truth: `on_hand`/`reserved`
+      per (location, product, variant-or-null)). SQL: `supabase/pos_00_locations.sql`,
+      `pos_01_inventory_levels.sql`, `pos_02_rpc_location.sql` (run as `postgres`,
+      in order). `products.stock` / `product_variants.stock` become a
+      **trigger-maintained AGGREGATE** = `SUM(on_hand)` across locations
+      (`sync_stock_aggregate` trigger), so the storefront, `lib/inventory/status.ts`,
+      shop pages and the current inventory dashboard read them UNCHANGED. New
+      products/variants get a default-location level row via seed triggers; a
+      migration guard FAILS if the aggregate ever drifts after backfill.
+    - **RPCs gain a location.** `reserve_stock_at` / `release_stock_at` /
+      `adjust_stock_at(p_location, …)` operate on `inventory_levels`; the OLD
+      signatures (`reserve_stock`/`release_stock`/`adjust_stock`) are REPLACED with
+      thin wrappers delegating to the store's default location
+      (`pos_ensure_default_location`) — so `checkout-actions`, `order-actions` and
+      `inventory-actions` keep working with NO code change. `stock_movements`
+      gained `location_id`. This works because post-create stock writes ALREADY
+      flow only through those RPCs (the product editor never writes stock).
+    - **Plan + settings + enable flow.** `PLAN_LIMITS.posEnabled` (pro) +
+      `posLocationsIncluded` (2) in `lib/plans.ts`. Setting `pos.enabled`
+      (registry, section `pos`, `minPlan: pro`, `hidden` so it's driven by a
+      dedicated control, not the generic editor — new `SettingDef.hidden` flag).
+      New `pos` dashboard section (`permissions.ts`, group Workspace) rendered
+      with a **three-state sidebar** in `app/dashboard/layout.tsx`: free/basic →
+      "Included in Pro" (badge → `/dashboard/plans`); pro-not-enabled → "Enable
+      POS"; enabled → Overview + Locations children. `lib/pos/locations.ts`
+      (`getPosState`/`isPosEnabled`/`getStoreLocations`).
+      `app/actions/pos-location-actions.ts` (`enablePos`/`disablePos` +
+      location CRUD, gated `getManagerIdentity("pos")`, Pro-checked server-side,
+      location-capped; tested). Dashboard pages: `app/dashboard/pos/` (overview +
+      `locations/`).
+    - **Phase 1 (done) = the `/pos` app shell + staff accounts + device
+      authorization.** POS is served at **`{slug}.storemink.com/pos`** — a
+      SEPARATE app shell from `/dashboard` (outside the `(storefront)` group, so
+      it gets only the root layout + its own dark chrome).
+      - **Staff have real accounts, created by invitation.** An admin adds a
+        cashier/manager by **name + email + role + locations**
+        (`inviteStaff`); the staff member gets an emailed link (Resend, the
+        `inviteUser` pattern) to **`/pos/register?token=…`** and self-registers:
+        **password (typed twice, must match) → phone OTP (Firebase Phone auth,
+        the signup wizard's invisible-reCAPTCHA pattern) → their own 8-digit
+        PIN (typed twice)**. That creates a Firebase account whose uid is stored
+        on `pos_staff.user_id`, flips `status` invited→active, consumes the
+        single-use token, and sets a **`cashier`/`manager` role claim** — which
+        is what makes `proxy.ts` bounce them out of `/dashboard` to `/pos`. The
+        admin NEVER sets or sees a PIN.
+      - **Login at `/pos` is email + PIN or email + password** (two modes on one
+        screen). PIN → `posLoginWithPin` (server-side scrypt verify → signed
+        `pos_operator` cookie); password → Firebase `signInWithEmailAndPassword`
+        - `establishSession` (the standard `sm_session`).
+      - **Self-service reset** ("Forgot PIN or password?" on the login screen):
+        `requestPosCredentialReset` mails a single-use, 1-hour link to
+        `/pos/reset?token=…` (`reset_token`/`reset_expires_at`, added by
+        `supabase/pos_04_staff_reset.sql`). It is **enumeration-safe** — always
+        returns success and is rate-limited per IP AND per address, so only the
+        inbox differs. The reset page offers two modes: a new 8-digit PIN
+        (hashed server-side) or a new password (written to Identity Platform via
+        `updateAuthUser` — the token, not a session, is the authorization). Only
+        `active` staff can reset; someone still `invited` must use their
+        invitation link. Both staff emails share `lib/pos/staff-email.ts`
+        (branded Resend transport + dev console fallback + `posAbsoluteUrl`,
+        which builds links from the REQUEST host so they work in local dev).
+      - **`/pos/login`, `/pos/register` and `/pos/reset` are public** in
+        `proxy.ts` (`POS_PUBLIC_PATHS`) — a new or locked-out staff member has
+        no credential by definition, and the emailed token is the authorization.
+      - **Hardening (`supabase/pos_05_device_hardening.sql`).** Four invariants
+        the register depends on:
+        1. **The operator cookie is never trusted for authorisation.**
+           `resolvePosOperator` re-reads `pos_staff` on EVERY resolve (active,
+           registered, still a POS role, still assigned to the device's
+           location), so deactivating, deleting, demoting or unassigning a staff
+           member ends their session at once instead of when the token lapses.
+        2. **Device-token rotation + clone detection.** The `pos_device` cookie
+           embeds a `nonce` matched against `pos_devices.token_nonce`, rotated on
+           every operator sign-in. A cookie COPIED off a trusted device carries a
+           retired nonce, so `getAuthorizedDevice` revokes the device and logs
+           `device_clone_detected` (a signature alone can't catch a clone — the
+           clone's signature is valid). A 2-minute `prev_nonce` grace window
+           absorbs in-flight requests so a real shop is never locked out; devices
+           enrolled before rotation adopt their presented nonce.
+        3. **POS cookies are host-only and `SameSite=Strict`** — unlike
+           `sm_session`, which spans `.storemink.com` by design. A register
+           credential is never transmitted to other stores' subdomains, the
+           platform apex, or the help centre.
+        4. **Append-only audit trail** (`pos_audit_log`, admin-readable,
+           service-role writes) for device authorized/revoked, clone detected,
+           operator login + failed login, via `lib/pos/audit.ts` — always
+           best-effort, so a logging failure can never block a sale. Surfaced on
+           **`/dashboard/pos/devices`** (`listPosActivity`) next to a **Revoked
+           devices** list showing WHY each died — without that, a clone-detected
+           auto-revoke is an unexplainable outage.
+           Pairing codes are additionally rate-limited **per store**, not just per
+           IP, so a distributed attacker can't grind them, and
+           `PLAN_LIMITS.posDevicesPerLocation` (pro: 5) caps authorized devices
+           per location — enforced in `registerDevice` (the choke point both
+           authorization paths funnel through) and pre-checked in
+           `createPairingCode` so an admin isn't handed an unusable code.
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): a PIN operator's
+           register locks after `pos.idleLockMinutes` of inactivity (registry
+           setting, default 10, edited at `/dashboard/pos/settings`) with a 20s
+           countdown. Owners are exempt — this targets the
+           walked-away-from-a-shared-till risk. It is a physical-presence
+           measure, NOT an authorization boundary (a client bypass keeps the
+           cookie until it expires); the server boundary remains the device gate
+           - per-request `pos_staff` re-validation.
+      - **Device authorization is the security boundary** (a cashier must not be
+        able to sell from their personal phone). A browser becomes an authorized
+        POS device when the **owner** either taps "Authorize this device" while
+        signed in on it (`authorizeThisDevice`) or enters an
+        authorization code generated in the dashboard (`createPairingCode` →
+        `pairDevice`, single-use, 10-min TTL). It then holds a long-lived signed
+        **`pos_device`** cookie `{deviceId,storeId,locationId}`. **Staff
+        (cashier/manager) can ONLY resolve as an operator on an authorized,
+        non-revoked device** (`lib/pos/devices.ts` `getAuthorizedDevice`, checked
+        in `resolvePosOperator` for BOTH the PIN and password paths); owners are
+        not device-restricted. Revoking a device kills its access (and any
+        operator session — the operator token carries its `deviceId`) on the next
+        request. Known limits: it's per-browser-profile, so clearing site data
+        de-authorizes (owner re-authorizes in seconds).
+      - Both POS cookies are HMAC-signed with **`POS_SESSION_SECRET`** and
+        verified in the Node-runtime `proxy.ts` with NO DB call (verify returns
+        null — never throws — when the secret is unset, so /pos degrades to the
+        login gate instead of 500ing).
+      - Modules: `lib/pos/session.ts` (sign/verify both cookies),
+        `lib/pos/pin.ts` (scrypt, **exactly 8 digits**), `lib/pos/permissions.ts`
+        (`posCan` — cashier=sell, manager=+refund/inventory/shift, owner=all),
+        `lib/pos/devices.ts`, `lib/pos/operator.ts` (`resolvePosOperator`:
+        owner → PIN operator → staff Firebase session). SQL:
+        `supabase/pos_03_staff_devices.sql` — `pos_staff` (email, role,
+        `user_id`, scrypt `pin_hash`, `status`, single-use `invite_token`),
+        `pos_staff_locations` (managers are location-bound, auto-scoped at
+        login), `pos_devices` (revocable), `pos_pairing_codes`. Actions:
+        `pos-staff-actions.ts` (invite/resend/update/activate/delete +
+        `getInviteInfo`/`completeStaffRegistration`) and `pos-auth-actions.ts`
+        (`authorizeThisDevice`/`createPairingCode`/`listDevices`/`revokeDevice`;
+        `pairDevice`/`posLoginWithPin`/`posLock`, rate-limited) — both tested,
+        plus pure-module tests for session/pin/permissions. `/pos` routes:
+        `layout.tsx` (store + Pro + pos.enabled gate), `page.tsx` (operator gate
+        → register shell + the owner's "authorize this device" card),
+        `login/` (email + PIN pad / password), `register/` (the 3-step
+        self-registration wizard). Dashboard: `/dashboard/pos/staff` +
+        `/dashboard/pos/devices`.
+    - **Not yet built (Phase 2 = v1):** the sell path (`placePosSale` + product
+      grid/barcode/cart/tender), GST place-of-supply (CGST/SGST/IGST), and
+      thermal receipts — see `docs/pos-plan.md` Phase 2.
+
 ## 6. Commands
 
 ```bash
@@ -1222,6 +1376,10 @@ npm run format      # prettier --write
   only) is env **`RAZORPAY_KEY_ID`** / **`RAZORPAY_KEY_SECRET`**. Cron routes
   (`/api/cron/*`) require **`CRON_SECRET`** (Vercel Cron sends it as a Bearer
   header).
+- **POS** (§22): the `/pos` device + operator cookies are HMAC-signed with env
+  **`POS_SESSION_SECRET`** (any high-entropy string; `openssl rand -base64 32`).
+  Required for the register to work; when unset, cookie VERIFY returns null
+  (never throws) so /pos falls back to the login gate rather than 500ing.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&

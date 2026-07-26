@@ -15,6 +15,7 @@ import { wrapBrandedEmail } from "@/lib/email/layout";
 import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
 import { PLATFORM_URL } from "@/lib/site";
+import { getRequestOrigin } from "@/lib/request-url";
 import { randomInt } from "crypto";
 
 function generateTempPassword(): string {
@@ -156,7 +157,12 @@ export async function inviteUser(formData: FormData) {
   if (isResendAvailable) {
     try {
       const brand = await getStoreBrandById(storeId);
-      const appUrl = PLATFORM_URL;
+      // The invited admin belongs to the INVITER's store, and the inviter is on
+      // that store's host — so the request origin sends them to their own store
+      // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
+      // PLATFORM_URL (the apex) would land them on the platform operator console
+      // instead, and points at an unreachable host when developing locally.
+      const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
 
       const resend = new Resend(resendApiKey);
       await resend.emails.send({

@@ -1029,6 +1029,18 @@ export const orderItems = pgTable(
       .default(0)
       .notNull(),
     taxClassName: text("tax_class_name"),
+    // India GST split (pos_06). tax_amount stays the TOTAL for this line;
+    // these three are how it divides — cgst+sgst (intra-state) XOR igst.
+    taxCgst: numeric("tax_cgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxSgst: numeric("tax_sgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxIgst: numeric("tax_igst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_order_items_order_id").using(
@@ -1066,16 +1078,72 @@ export const orderItems = pgTable(
   ],
 );
 
+// Split tenders for one sale (pos_06). orders.payment_method/payment_status
+// remain the SUMMARY; this is the itemised breakdown (cash + card + …).
+// Writes go through placePosSale under the service role, like order_items.
+export const orderPayments = pgTable(
+  "order_payments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    orderId: uuid("order_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    method: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    tendered: numeric({ precision: 12, scale: 2, mode: "number" }),
+    changeDue: numeric("change_due", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    reference: text(),
+    capturedAt: timestamp("captured_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("order_payments_order_idx").using(
+      "btree",
+      table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "order_payments_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "order_payments_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "order_payments_method_check",
+      sql`method = ANY (ARRAY['cash'::text, 'card'::text, 'upi'::text, 'gift_card'::text, 'store_credit'::text, 'razorpay'::text])`,
+    ),
+    pgPolicy("Store admins read order_payments", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(order_payments.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
 export const orders = pgTable(
   "orders",
   {
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
-    customerId: text("customer_id").notNull(),
+    // Nullable since pos_06: a walk-in POS sale has no account and no
+    // delivery address. The customer-own RLS policy (customer_id = auth.uid())
+    // never matches NULL, so those orders stay admin-only.
+    customerId: text("customer_id"),
     status: text().default("pending").notNull(),
     paymentMethod: text("payment_method").default("cash_on_delivery").notNull(),
     paymentStatus: text("payment_status").default("pending").notNull(),
-    shippingAddress: jsonb("shipping_address").notNull(),
+    shippingAddress: jsonb("shipping_address"),
     billingAddress: jsonb("billing_address"),
     subtotal: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -1107,6 +1175,18 @@ export const orders = pgTable(
     taxInclusive: boolean("tax_inclusive").default(false).notNull(),
     razorpayOrderId: text("razorpay_order_id"),
     razorpayPaymentId: text("razorpay_payment_id"),
+    // POS Phase 2 (pos_06_sell_path.sql). In-person sales share this table,
+    // tagged sales_channel='pos'; customerId/shippingAddress are nullable above
+    // because a walk-in has neither.
+    salesChannel: text("sales_channel").default("online").notNull(),
+    locationId: uuid("location_id"),
+    deviceId: uuid("device_id"),
+    cashierId: uuid("cashier_id"),
+    cashierName: text("cashier_name"),
+    receiptNo: text("receipt_no"),
+    placeOfSupplyState: text("place_of_supply_state"),
+    supplierState: text("supplier_state"),
+    customerGstin: text("customer_gstin"),
   },
   (table) => [
     index("idx_orders_customer_id").using(
@@ -1353,6 +1433,7 @@ export const productVariants = pgTable(
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     variantNo: integer("variant_no").notNull(),
+    barcode: text(),
   },
   (table) => [
     index("idx_product_variants_store_id").using(
@@ -1460,6 +1541,10 @@ export const products = pgTable(
     skuNo: integer("sku_no").notNull(),
     variantSeq: integer("variant_seq").default(0).notNull(),
     taxClassId: uuid("tax_class_id"),
+    // pos_06: the SUPPLIER barcode a cashier scans — distinct from the
+    // system-generated Luhn `sku`, which is ours and immutable.
+    barcode: text(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_products_category").using(
@@ -1648,6 +1733,7 @@ export const stockMovements = pgTable(
     reason: text().notNull(),
     balanceAfter: integer("balance_after").notNull(),
     orderId: uuid("order_id"),
+    locationId: uuid("location_id"),
     note: text(),
     createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1686,6 +1772,11 @@ export const stockMovements = pgTable(
       foreignColumns: [productVariants.id],
       name: "stock_movements_variant_id_fkey",
     }).onDelete("set null"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_movements_location_id_fkey",
+    }).onDelete("set null"),
     pgPolicy("Store admins can read stock_movements", {
       as: "permissive",
       for: "select",
@@ -1717,6 +1808,10 @@ export const storeBillingSettings = pgTable(
       .defaultNow()
       .notNull(),
     updatedBy: text("updated_by"),
+    // pos_06 — India GST identity. The state code drives place-of-supply.
+    gstEnabled: boolean("gst_enabled").default(false).notNull(),
+    businessStateCode: text("business_state_code"),
+    legalName: text("legal_name"),
   },
   (table) => [
     foreignKey({
@@ -1740,6 +1835,348 @@ export const storeBillingSettings = pgTable(
       as: "permissive",
       for: "select",
       to: ["public"],
+    }),
+  ],
+);
+
+// POS Phase 0: physical/warehouse locations per store (supabase/pos_00_locations.sql).
+export const storeLocations = pgTable(
+  "store_locations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    name: text().notNull(),
+    type: text().default("shop").notNull(),
+    address: jsonb(),
+    gstin: text(),
+    stateCode: text("state_code"),
+    receiptPrefix: text("receipt_prefix"),
+    isDefault: boolean("is_default").default(false).notNull(),
+    active: boolean().default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("store_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.sortOrder.asc().nullsLast().op("int4_ops"),
+    ),
+    // At most one default location per store (partial unique index in SQL).
+    uniqueIndex("store_locations_one_default")
+      .using("btree", table.storeId.asc().nullsLast().op("uuid_ops"))
+      .where(sql`is_default`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_locations_type_check",
+      sql`type = ANY (ARRAY['shop'::text, 'warehouse'::text])`,
+    ),
+    pgPolicy("Store admins manage store_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// POS Phase 0: per-location stock — the source of truth; products.stock /
+// product_variants.stock are a trigger-maintained aggregate (SUM of on_hand).
+// Writes go only through the location-aware RPCs (supabase/pos_02_rpc_location.sql).
+// Note: the single-row-per-SKU-per-location UNIQUE index uses a COALESCE
+// expression on variant_id (see pos_01_inventory_levels.sql) — not modelled here.
+export const inventoryLevels = pgTable(
+  "inventory_levels",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    onHand: integer("on_hand").default(0).notNull(),
+    reserved: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("inventory_levels_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_product_idx").using(
+      "btree",
+      table.productId.asc().nullsLast().op("uuid_ops"),
+      table.variantId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_location_idx").using(
+      "btree",
+      table.locationId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "inventory_levels_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "inventory_levels_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId],
+      foreignColumns: [products.id],
+      name: "inventory_levels_product_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.variantId],
+      foreignColumns: [productVariants.id],
+      name: "inventory_levels_variant_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read inventory_levels", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(inventory_levels.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// POS Phase 1: in-store operators (cashier/manager). PIN-authenticated; NOT
+// dashboard admins. pin_hash is sensitive (scrypt) — admin-only via RLS.
+export const posStaff = pgTable(
+  "pos_staff",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    userId: text("user_id"),
+    name: text().notNull(),
+    email: text().notNull(),
+    role: text().default("cashier").notNull(),
+    pinHash: text("pin_hash"),
+    status: text().default("invited").notNull(),
+    inviteToken: text("invite_token"),
+    inviteExpiresAt: timestamp("invite_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resetToken: text("reset_token"),
+    resetExpiresAt: timestamp("reset_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    active: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_staff_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_staff_role_check",
+      sql`role = ANY (ARRAY['cashier'::text, 'manager'::text])`,
+    ),
+    pgPolicy("Store admins manage pos_staff", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posStaffLocations = pgTable(
+  "pos_staff_locations",
+  {
+    staffId: uuid("staff_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+  },
+  (table) => [
+    index("pos_staff_locations_staff_idx").using(
+      "btree",
+      table.staffId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.staffId],
+      foreignColumns: [posStaff.id],
+      name: "pos_staff_locations_staff_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_staff_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.staffId, table.locationId],
+      name: "pos_staff_locations_pkey",
+    }),
+    pgPolicy("Store admins manage pos_staff_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// A register paired to a location (a signed pos_device cookie references one).
+export const posDevices = pgTable(
+  "pos_devices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    label: text().default("").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+    lastSeenAt: timestamp("last_seen_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    // Rotation state for clone detection (pos_05_device_hardening.sql).
+    tokenNonce: text("token_nonce"),
+    prevNonce: text("prev_nonce"),
+    prevNonceUntil: timestamp("prev_nonce_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    revokedReason: text("revoked_reason"),
+    revokedBy: text("revoked_by"),
+    authorizedBy: text("authorized_by"),
+    lastIp: text("last_ip"),
+  },
+  (table) => [
+    index("pos_devices_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_devices_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_devices_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_devices", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// Append-only POS security trail (pos_05_device_hardening.sql). Admin-readable;
+// written only via the service role.
+export const posAuditLog = pgTable(
+  "pos_audit_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    event: text().notNull(),
+    // Deliberately no FK — the trail must outlive the device/staff it describes.
+    deviceId: uuid("device_id"),
+    staffId: uuid("staff_id"),
+    locationId: uuid("location_id"),
+    actor: text(),
+    ip: text(),
+    detail: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_audit_log_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_audit_log_store_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read pos_audit_log", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_audit_log.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posPairingCodes = pgTable(
+  "pos_pairing_codes",
+  {
+    code: text().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_pairing_codes_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_pairing_codes_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_pairing_codes_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_pairing_codes", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
     }),
   ],
 );

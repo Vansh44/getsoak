@@ -11,6 +11,7 @@ import { getViewerContext } from "./lib/access";
 import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
 import { getLowStockAlertCount } from "./inventory/data";
+import { getPosState } from "@/lib/pos/locations";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
 import {
@@ -129,6 +130,9 @@ export default async function DashboardLayout({
   const planId = effectivePlan(store);
   const planName = PLAN_META[planId].name;
 
+  // POS sidebar three-state: "Included in Pro" (upgrade) → "Enable POS" → live.
+  const posState = getPosState(store);
+
   // Build the sidebar from the permission catalog: a section appears only when
   // the viewer can view it. The Dashboard home is always shown so everyone has
   // a landing page. Empty groups are dropped. The enquiries item gets a live
@@ -159,6 +163,21 @@ export default async function DashboardLayout({
         const rest = { ...s };
         delete rest.badge;
         delete rest.badgeTone;
+        return rest;
+      }
+      if (s.key === "pos") {
+        const rest = { ...s };
+        if (!posState.posAvailable) {
+          // free / basic → "Included in Pro" upgrade nudge; no sub-pages.
+          rest.badge = "Pro";
+          rest.badgeTone = "accent" as const;
+          delete rest.children;
+        } else if (!posState.posEnabled) {
+          // pro, not switched on → overview shows the Enable POS screen.
+          delete rest.badge;
+          delete rest.badgeTone;
+          delete rest.children;
+        }
         return rest;
       }
       return s;
