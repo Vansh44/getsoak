@@ -2,10 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { Bell, Search, Store, Menu, MessageSquare } from "lucide-react";
+import { Search, Store, Menu, MessageSquare } from "lucide-react";
 import { TopbarProfile, formatRole } from "./topbar-profile";
 import { useMobileNav } from "./dashboard-mobile-nav";
 import { useChat } from "./chat-context";
+import { NotificationBell } from "./components/notification-bell";
 
 // Plan pill styling on the dark topbar — neutral for free, brand-tinted as the
 // plan climbs, mirroring the console's plan colours.
@@ -135,14 +136,7 @@ export function DashboardTopbar({
         >
           <MessageSquare className="h-[18px] w-[18px]" />
         </button>
-        <button
-          type="button"
-          className="relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0"
-          aria-label="Notifications"
-        >
-          <Bell className="h-[18px] w-[18px]" />
-          <span className="absolute right-[5px] top-[4px] h-2 w-2 rounded-full bg-red-500 border border-slate-800" />
-        </button>
+        <NotificationBell />
         <div className="shrink-0 ml-1">
           <TopbarProfile
             email={email}

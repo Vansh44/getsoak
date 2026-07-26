@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { getStoreUrl } from "@/lib/site";
 import { pingIndexNow } from "@/lib/seo/search-engines";
 import { TAGS } from "@/lib/storefront/tags";
+import { emitEvent } from "@/lib/notifications/record";
 import { sanitizeBlogContent } from "@/lib/sanitize";
 import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import { isUniqueViolation, dbErrorMessage } from "@/lib/db/errors";
@@ -852,6 +853,21 @@ export async function submitCustomerBlog(
         console.error("submitCustomerBlog promote error:", promoteError);
       }
     }
+
+    // Notify the store: a submission that needs approval is work waiting in a
+    // queue; a direct publish is just news. Either way the shopper's post is
+    // now the store's responsibility.
+    emitEvent({
+      type: requireApproval ? "blog.submitted" : "blog.published",
+      storeId,
+      actor: { type: "customer", id: user.id, label: authorName || null },
+      subject: {
+        type: "blog",
+        id: (inserted?.id as string) ?? null,
+        label: formData.title,
+      },
+      payload: { slug },
+    });
 
     revalidatePath("/dashboard/blogs");
     return { success: true, data: inserted };

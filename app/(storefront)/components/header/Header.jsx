@@ -16,13 +16,16 @@ import {
   FileText,
   MessageSquare,
   LogOut,
+  Bell,
   ChevronRight,
 } from "lucide-react";
+import { getMyCustomerUnreadCount } from "@/app/actions/customer-notification-actions";
 
 export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [customerUnread, setCustomerUnread] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const profileRef = useRef(null);
@@ -33,6 +36,33 @@ export default function Header() {
   const { header: navLinks } = useMenus();
 
   const isLoggedIn = !!user && !!customer;
+
+  // Unread badge for the shopper's notification centre. Polls only while
+  // signed in AND the tab is visible — the same shape as the dashboard bell
+  // (Supabase Realtime went with the Cloud SQL migration, so there is no push).
+  useEffect(() => {
+    // Signed out: nothing to poll. The badge is derived from isLoggedIn at
+    // render time rather than being zeroed here, so the effect never sets
+    // state synchronously.
+    if (!isLoggedIn) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const n = await getMyCustomerUnreadCount();
+        if (!cancelled) setCustomerUnread(n);
+      } catch {
+        // A failed poll isn't worth surfacing to a shopper.
+      }
+    };
+    void check();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void check();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isLoggedIn]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
@@ -254,6 +284,41 @@ export default function Header() {
                   My Profile
                   <ChevronRight size={16} className={styles.profileItemArrow} />
                 </Link>
+                {isLoggedIn && (
+                  <>
+                    <Link
+                      href="/orders"
+                      className={styles.profileDropdownItem}
+                      role="menuitem"
+                      onClick={() => setIsProfileOpen(false)}
+                    >
+                      <Package size={18} strokeWidth={1.75} />
+                      My Orders
+                      <ChevronRight
+                        size={16}
+                        className={styles.profileItemArrow}
+                      />
+                    </Link>
+                    <Link
+                      href="/notifications"
+                      className={styles.profileDropdownItem}
+                      role="menuitem"
+                      onClick={() => setIsProfileOpen(false)}
+                    >
+                      <Bell size={18} strokeWidth={1.75} />
+                      Notifications
+                      {isLoggedIn && customerUnread > 0 && (
+                        <span className={styles.profileItemBadge}>
+                          {customerUnread > 9 ? "9+" : customerUnread}
+                        </span>
+                      )}
+                      <ChevronRight
+                        size={16}
+                        className={styles.profileItemArrow}
+                      />
+                    </Link>
+                  </>
+                )}
                 <Link
                   href="/track-order"
                   className={styles.profileDropdownItem}

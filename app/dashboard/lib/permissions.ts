@@ -255,6 +255,14 @@ export const SECTIONS: DashboardSection[] = [
     actions: ["view", "manage"],
   },
   {
+    key: "notifications",
+    label: "Notifications",
+    href: "/dashboard/settings/notifications",
+    icon: "notifications",
+    group: "Administration",
+    actions: ["view", "manage"],
+  },
+  {
     key: "settings",
     label: "Settings",
     href: "/dashboard/settings",
@@ -266,6 +274,11 @@ export const SECTIONS: DashboardSection[] = [
         label: "Account",
         href: "/dashboard/settings/account",
         icon: "settings",
+      },
+      {
+        label: "Notifications",
+        href: "/dashboard/settings/notifications",
+        icon: "notifications",
       },
       {
         label: "Domain",

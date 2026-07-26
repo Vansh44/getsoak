@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
   LayoutGrid,
   Package,
   ShoppingBag,
@@ -59,6 +60,7 @@ export const navIcons = {
   media: Images,
   roles: KeyRound,
   activity: History,
+  notifications: Bell,
   settings: Settings,
   globe: Globe,
   rich_text: Type,

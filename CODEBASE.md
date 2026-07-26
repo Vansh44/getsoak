@@ -104,7 +104,15 @@ wholesip/
 │   │   │   ├── blogs/         #   blog listing, [slug] detail (comments/reactions),
 │   │   │   │                  #   write/ (TipTap customer blog editor), my-submissions/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
-│   │   │   ├── profile/       #   customer profile (personal info + address-book card)
+│   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
+│   │   │   │                  #   [id] detail (status timeline, items, totals,
+│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   customer_id = auth.uid()) AND host store id
+│   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
+│   │   │   │                  #   the customer rows the fan-out has always
+│   │   │   │                  #   written, finally rendered
+│   │   │   ├── profile/       #   customer profile (personal info + address-book
+│   │   │   │                  #   card + quick links to orders/notifications)
 │   │   │   └── [pageSlug]/    #   ★ ALL content pages from store_pages (see §11): merchant
 │   │   │                      #   custom pages AND the former hardcoded static pages
 │   │   │                      #   (our-story, faqs, …) — retired in Phase 4b, now editable
@@ -181,7 +189,12 @@ wholesip/
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
-│   │   └── settings/          # account/ + domain/ (custom-domain connect + verify);
+│   │   ├── activity/          # ★ Activity & audit trail (§22): the store's
+│   │   │                      # activity_events feed — filters by category/date,
+│   │   │                      # day-grouped. Fills the long-dead `activity` nav link
+│   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
+│   │                          # list → [key] detail with General + per-channel
+│   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
 │   │                          # (e.g. blogs → blogs/settings — see convention #9)
 │   │
@@ -237,6 +250,19 @@ wholesip/
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
+│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # RLS alone would show an order placed on a
+│   │   │                      # DIFFERENT store while browsing this one.
+│   │   ├── customer-notification-actions.ts # ★ The shopper's notification
+│   │   │                      # centre (§22): list/unread/mark-read over the
+│   │   │                      # same notifications table the staff bell uses,
+│   │   │                      # scoped to recipient_type 'customer' + host store
+│   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
+│   │   │                      # (the bell polls it), mark read/all-read/archive,
+│   │   │                      # activity feed, preference get/save, pruneNotifications.
+│   │   │                      # Scope = HOST-derived (store, or platform when
+│   │   │                      # storemink.com) — never getCurrentStoreId()'s fallback.
 │   │   ├── address-actions.ts # ★ Customer saved-address book (own-row RLS, tested):
 │   │   │                      # getMyAddresses, saveAddress (checkout dedup+default),
 │   │   │                      # upsertAddress (profile add/edit), setDefaultAddress,
@@ -245,7 +271,9 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
-│       ├── cron/send-emails/  # Daily email campaign worker (Vercel cron)
+│       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
+│       │                      # cron): coupon campaigns + notification emails
+│       │                      # (§22). Self-chains while either has work left
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
@@ -261,6 +289,20 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
+│   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
+│   │                          # every event, its audiences + default channels),
+│   │                          # render.ts (audience-aware copy, pure), record.ts
+│   │                          # (emitEvent/recordEvent — the ONE write path, service
+│   │                          # scope, deferred with after(), never throws),
+│   │                          # recipients.ts (permission-derived routing),
+│   │                          # digest.ts (clock-aligned send windows),
+│   │                          # routing.ts (per-event recipient rules; NARROWS
+│   │                          # the permission set, never widens),
+│   │                          # channels.ts (email/web live; sms/push/whatsapp
+│   │                          # declared but LOCKED — no provider), config.ts
+│   │                          # (registry ← platform definition ← store
+│   │                          # settings), variables.ts + template.ts (merchant
+│   │                          # {{token}} copy, validated at save). Tested.
 │   ├── settings/              # ★ Feature-settings framework (see convention #9):
 │   │   ├── registry.ts        #   catalog: every per-store toggle (key, default, plan gate)
 │   │   └── resolve.ts         #   getStoreSettings()/getStoreSetting() for the host store
@@ -348,7 +390,11 @@ wholesip/
 │   │                          # after() on store create + publish. Best-effort, dormant
 │   │                          # until env is set. IndexNow key: public/<key>.txt.
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
-│   │                          # trigger-worker, blog/enquiry notifications
+│   │                          # trigger-worker, blog/enquiry notifications.
+│   │                          # ★ notification-emails.ts (§22: single + digest
+│   │                          # templates, pure/escaped) + notification-worker.ts
+│   │                          # (claims notification_email_queue, GROUPS by
+│   │                          # recipient into one digest, retries with backoff)
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
 │   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
 │   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
@@ -400,6 +446,20 @@ wholesip/
 │   │                          # reserve/release (enforces max_uses under concurrency)
 │   ├── blog_taxonomy.sql      # per-store blog_categories + blog_tags (+ RLS + seed)
 │   ├── store_menus.sql        # ★ per-store header/footer nav (+ RLS + WholeSip seed) — §11
+│   ├── notifications_01_schema.sql  # ★ the event spine (§22): activity_events
+│   │                          # (append-only audit) + notifications (per-recipient
+│   │                          # inbox, UNIQUE on event+recipient) + notification_
+│   │                          # preferences (store defaults ← user overrides). READ-
+│   │                          # ONLY RLS by design — every write is service-role
+│   │                          # (no client can forge an audit row or push a bell)
+│   ├── notifications_03_console.sql  # ★ §22 console: notification_definitions
+│   │                          # (platform-global, operator-managed) +
+│   │                          # notification_settings (per store: channels,
+│   │                          # recipients, templates, digest, on/off)
+│   ├── notifications_02_email_queue.sql  # ★ §22 email channel:
+│   │                          # notification_email_queue + claim/requeue RPCs
+│   │                          # (FOR UPDATE SKIP LOCKED, the email_campaigns
+│   │                          # pattern). Worker-only: RLS on, NO policies
 │   ├── media_assets.sql       # ★ per-store Media Library table (RLS is_store_admin; NOT
 │   │                          # public — object URLs are public, the listing is admin-only)
 │   ├── invoicing.sql          # ★ tax_classes + products.tax_class_id + order_items tax
@@ -1110,6 +1170,154 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
+
+22. **Notifications = one event log + registry-driven fan-out.**
+    **📖 Full guide: `docs/notifications.md`** — the mental model, where each
+    decision lives, how to add one, and where to look when something's wrong.
+    The system has two halves, and keeping them apart is what makes "notify on
+    every activity" survivable at scale: - **EVERY** action emits an EVENT into the append-only `activity_events`
+    table. That is the audit trail, complete by construction, rendered at
+    **`/dashboard/activity`** (permission section `activity` — a nav link that
+    had pointed at a non-existent page since roles shipped). - Only events with a non-empty `audiences` entry are FANNED OUT into
+    per-recipient rows in `notifications` (the bell inbox). An event with
+    `audiences: {}` is **audit-only**: visible in the feed, silent in the bell.
+    That is how a busy store gets a full history without 400 badges a day. - **THE CONSOLE (Settings → Notifications).** One row per notification →
+    a detail page with General + a tab per channel, gated on the
+    **`notifications` permission section** (superadmin by default; an owner
+    grants it to any role from Roles & Permissions, which renders SECTIONS so
+    it appears with no extra wiring). Configuration resolves in THREE layers,
+    each with one owner — the settings-registry shape (convention #9), so an
+    empty database behaves exactly like the code defaults:
+    **code registry** (engineering: what can be emitted, and every default) ←
+    **`notification_definitions`** (StoreMink operators: renames,
+    recategorisation, and rows registered ahead of the code that fires them —
+    flagged "No trigger" in the list) ← **`notification_settings`** (the
+    merchant: channels, recipients, copy, digest, on/off). Switching a
+    notification OFF stops it notifying but never stops it being AUDITED.
+    Personal opt-outs moved to `settings/notifications/me` — the console is the
+    store's configuration, that page is one person saying "not me".
+
+- **ONE EVENT, TWO AUDIENCES — the organising idea.** "An order was placed"
+  notifies the merchant's TEAM ("New order ORD10010004 · ₹1,240 · from Priya
+  S.") and the CUSTOMER ("Thanks for your order"). They share a trigger and
+  nothing else: different wording, different channels, different recipients
+  (many vs exactly one), different places to read it. So configuration is
+  **per audience** — `notification_settings.channels`/`templates` are keyed
+  `{team, customer}`, and `lib/notifications/config.ts` resolves each
+  separately. Turning off team email must not stop a shopper's confirmation;
+  that was once a bug and is now a regression test. The console is organised
+  the same way (audience first, then channel), because "who is this for" is
+  the question a merchant is actually answering — the earlier flat version
+  made customer notifications invisible and their copy uneditable.
+  A legacy flat `{"email": …}` map is read as the team's.
+  - **Channels** (`channels.ts`): email and web (the bell) deliver today; sms,
+    push and whatsapp are declared and rendered as LOCKED panels. `available:
+false` is enforced in the save action, not just greyed out — a channel with
+    no provider must never accept a "yes" it can't honour.
+- **Merchant templates** (`variables.ts` + `template.ts`): per-channel
+  subject/body with `{{token}}` substitution. Deliberately NOT a template
+  language — no conditionals, loops or expressions. Three rules: values are
+  ESCAPED for the target format (they are DB-derived names going into HTML);
+  unknown tokens are REJECTED AT SAVE TIME, so a merchant learns from the
+  editor rather than from a customer; a missing value at send time renders
+  EMPTY, never as the literal `{{token}}`. The variable list per event is
+  derived from what emitters actually pass — a variable nobody provides is
+  not offered. Templates apply to STAFF copy only: a shopper's order
+  confirmation keeps the platform's tested wording, because a half-finished
+  template there is a customer-facing failure. A blank field falls through to
+  the built-in copy, so partial edits are always safe.
+- **`lib/notifications/events.ts` is the registry** (pure, in the style of
+  `permissions.ts` / the settings registry): `{key, label, group, section,
+severity, audiences, configurable}`. **Adding a notification is ONE entry
+  here** — routing, the preferences matrix, and the settings UI all derive
+  from it. `configurable: false` marks the events an owner must not be able
+  to go blind on (role changes, failed billing, password changes); overrides
+  on those are rejected server-side, not just disabled in the UI. - **Routing derives from the permission map, then the store narrows it.**
+  The eligible set for `store-admins` is exactly the staff who may `view` the
+  event's `section` (suspended admins skipped), so a content editor is never
+  paged about payments and there is no second recipient list to drift. On top
+  of that, a superadmin sets a per-event **routing rule**
+  (`lib/notifications/routing.ts`, columns on the store-scope preference row —
+  `supabase/notifications_03_routing.sql`): `permission` (everyone eligible,
+  the default) / `roles` / `admins`. **Targeting only ever NARROWS** — naming
+  someone who can't view the section does NOT start sending it to them,
+  because a notification's copy is a preview of the thing itself ("New order
+  ORD10010004 · ₹1,240 · from Priya S.") and must not become a side channel
+  around the dashboard's access rules. The picker greys such a pick out and
+  names the fix (their role) instead of dropping it silently. An empty
+  selection falls back to "everyone eligible" rather than routing to nobody.
+  Routing is superadmin-only in the action AND in the DB CHECK (routing
+  columns are valid only on `scope = 'store'` rows) — a personal preference
+  can say "not me", never "them instead". - **`recordEvent`/`emitEvent` (`lib/notifications/record.ts`) is the ONE
+  write path** — call sites never touch the notifications table. Three rules:
+  (1) it must never break the thing it reports on (`emitEvent` defers via
+  `after()`, everything is wrapped + logged, failures return null);
+  (2) writes are service-role, after the calling action has already
+  authorised the actor — the tables have **no client INSERT policy** by
+  design, so a customer can't forge an audit row or push into an admin's
+  bell (the orders trust model, convention #12); (3) fan-out is idempotent
+  (`UNIQUE (event_id, recipient_id)` + `onConflictDoNothing`). - **Preference resolution**: registry default ← store default (`scope:
+'store'`, superadmin-editable) ← the recipient's own override (`scope:
+'user'`). A NULL channel column means "no opinion at this level", so a store
+  default never freezes a staff member's personal choice. **WHOSE preferences
+  apply depends on the audience**: store default + own override for
+  `store-admins`; own override only for `operators` (a store's settings have
+  no business governing platform mail); and **NEITHER for `customer`** —
+  order confirmations are transactional mail to the shopper and must not be
+  switchable from a staff page that never mentions them. (Before this was
+  fixed, turning off "New order" email for the team silently stopped shoppers
+  receiving their confirmations.)
+  **One person, one notification**: recipients are deduped by id, so an owner
+  who orders from their own store — staff AND customer — gets the admin copy
+  once, not two. Edited at
+  **`/dashboard/settings/notifications`** — notifications are cross-cutting,
+  so unlike per-feature settings (convention #9) they live under Settings. - **Operators are keyed by lowercased EMAIL**, not uid: `platform_admins` is
+  an email allowlist with no uid column. The notifications RLS policy
+  branches on `recipient_type = 'operator'` → `auth.email()`, which the
+  user-scoped GUC already sets, keeping ONE inbox for all three recipient
+  types. Platform events carry `store_id = NULL` and reach operators only. - **Scope is HOST-derived** (`currentScope()` in `notification-actions.ts`):
+  the store for a store host, PLATFORM for storemink.com. Deliberately NOT
+  `getCurrentStoreId()`, whose never-null fallback would show the WholeSip
+  store's notifications on the platform console. - **BOTH audiences now have a surface.** The spine always wrote `customer`
+  rows; until the storefront pages existed they were reachable only by email.
+  Staff read theirs in the dashboard bell + `/dashboard/activity`; shoppers
+  read theirs at **`/notifications`**, with their orders at **`/orders`** —
+  which is where the customer-facing notification links point. Both storefront
+  pages guard the host with `requireStorefrontStoreId()` and scope every query
+  to the host store as well as the RLS owner check, so one person shopping at
+  two StoreMink stores never sees store A's data on store B. The header shows
+  an unread badge, polled on the same visibility-gated interval as the
+  dashboard bell.
+  - **In-app delivery is POLLING, not push** (`notification-bell.tsx`):
+    Supabase Realtime went with the Cloud SQL migration and plain Postgres
+    can't push to a browser, so the badge polls a partial-index count every
+    45 s, only while the tab is visible — the `RealtimeRefresher` pattern. A
+    LISTEN/NOTIFY → SSE service is the upgrade path. - **Email is a QUEUE, never an inline send** (`notification_email_queue`,
+    `supabase/notifications_02_email_queue.sql`). The fan-out only enqueues;
+    `lib/email/notification-worker.ts` drains it from `/api/cron/send-emails`,
+    alongside the coupon campaign queue. A Resend round-trip must never sit on
+    a checkout's code path, where a third-party outage could slow or fail a
+    sale. The queue mirrors the campaign queue's claim/requeue RPCs (`FOR
+UPDATE SKIP LOCKED`), is service-role only (RLS on, NO policies — the rows
+    hold email addresses), and is idempotent on `(event_id, recipient_id)`.
+    Sends retry with backoff (5/15/45 min, 3 attempts) rather than failing on
+    one bad minute at Resend. - **Digests are what make "notify on everything" survivable.**
+    `lib/notifications/digest.ts` dates each row to the END of its window —
+    CLOCK-ALIGNED, not `now + 1h`, so everything in one window shares a send
+    time and leaves as ONE email (a rolling window silently degrades back to
+    one email per event). The worker groups claimed rows by (store, recipient):
+    one row → a single email, many → a digest. `DAILY_DIGEST_HOUR_UTC` is 23:00
+    **on purpose** — a row is only sent by the next worker run after it comes
+    due, and the cron heartbeat is 00:00 UTC, so a later slot would wait a
+    further day. **Move it if the cron moves.** Hourly digests are best-effort
+    until the worker can run hourly (free with Cloud Scheduler at the Cloud Run
+    cutover); in practice most runs are triggered by an instant email being
+    enqueued, which drains every due row. `recordEvent` kicks the worker only
+    AFTER its transaction commits — a kick inside it would claim an empty queue. - **Every notification email carries a "why am I getting this" footer**
+    linking to the preferences page. Titles/bodies are DB-derived (customer and
+    product names), so every interpolation is escaped, and link paths are
+    absolutised against the store's own origin (custom domain if set). - **Retention**: `pruneNotifications()` (inbox 90 d, events 365 d) — an
+    inbox that grows forever is a slow outage.
 
 ## 6. Commands
 

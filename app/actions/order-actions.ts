@@ -19,6 +19,7 @@ import {
   DASHBOARD_PAGE_SIZE,
   sanitizeSearch,
 } from "@/app/dashboard/lib/list-params";
+import { emitEvent } from "@/lib/notifications/record";
 
 // Allowlists — order/payment state is a closed set, so never trust an arbitrary
 // string from the client into the DB (keeps the status column clean + prevents
@@ -332,16 +333,35 @@ export async function updateOrderStatus(
     updateData.paymentStatus = paymentStatus;
   }
 
+  let updated: { order_ref: string; customer_id: string }[];
   try {
-    await withUser(admin, (db) =>
+    updated = await withUser(admin, (db) =>
       db
         .update(orders)
         .set(updateData)
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId))),
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        // Returned so the event below can name the order and reach its owner
+        // — the shopper is told about their own order, not just the staff.
+        .returning({
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+        }),
     );
   } catch (err) {
     console.error("Error updating order status:", err);
     return { error: dbErrorMessage(err, "Failed to update order status.") };
+  }
+
+  const row = updated[0];
+  if (row) {
+    emitEvent({
+      type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "order", id: orderId, label: row.order_ref },
+      customerId: row.customer_id,
+      payload: { status, ...(paymentStatus ? { paymentStatus } : {}) },
+    });
   }
 
   revalidatePath("/dashboard/orders");

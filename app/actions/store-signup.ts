@@ -10,6 +10,7 @@ import { getServerUser } from "@/lib/auth/server-user";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { ROOT_DOMAIN } from "@/lib/store/host";
 import { slugify } from "@/lib/slug";
+import { emitEvent } from "@/lib/notifications/record";
 import { applyTheme } from "@/lib/themes/apply";
 import { DEFAULT_THEME_ID } from "@/lib/themes/meta";
 import { submitSitemapToGoogle, pingIndexNow } from "@/lib/seo/search-engines";
@@ -342,6 +343,16 @@ export async function createStore(
       submitSitemapToGoogle(`${storeUrl}/sitemap.xml`),
       pingIndexNow([`${storeUrl}/`]),
     ]);
+  });
+
+  // Platform-level event (store_id NULL): this is news for StoreMink
+  // operators, not for the merchant's own dashboard.
+  emitEvent({
+    type: "platform.store_created",
+    storeId: null,
+    actor: { type: "admin", id: user.id, label: user.email ?? null },
+    subject: { type: "store", id: store.id, label: rawName.trim() },
+    payload: { slug: store.slug, template },
   });
 
   return { slug: store.slug, storeId: store.id };

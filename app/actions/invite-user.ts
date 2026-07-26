@@ -2,6 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { getServerUser } from "@/lib/auth/server-user";
+import { emitEvent } from "@/lib/notifications/record";
 import {
   createAuthUser,
   deleteAuthUser,
@@ -252,6 +253,16 @@ export async function inviteUser(formData: FormData) {
     console.log(`Temporary Password: ${tempPassword}`);
     console.log("=".repeat(60) + "\n");
   }
+
+  // Team changes are always-on notifications (registry: configurable false) —
+  // an owner must never be able to go blind on who gained dashboard access.
+  emitEvent({
+    type: "admin.invited",
+    storeId,
+    actor: { type: "admin", id: caller.id, label: caller.email },
+    subject: { type: "admin", id: normalizedEmail, label: normalizedEmail },
+    payload: { role },
+  });
 
   return { success: true };
 }

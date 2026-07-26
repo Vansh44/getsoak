@@ -26,6 +26,7 @@ import {
   rzpFetchOrderPayments,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
+import { emitEvent } from "@/lib/notifications/record";
 import {
   rowToBillingSettings,
   rowToTaxClass,
@@ -962,6 +963,33 @@ export async function placeOrder(
   }
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";
+
+  // The order exists and its items are saved — from here it is a real order, so
+  // record it. Emitted for BOTH payment methods (an unpaid razorpay order is
+  // still a placed order, exactly as the dashboard list shows it); the separate
+  // order.payment_received fires when the money actually lands. emitEvent
+  // defers via after(), so nothing below waits on it and a bookkeeping failure
+  // can never fail a checkout that already succeeded.
+  emitEvent({
+    type: "order.placed",
+    storeId,
+    actor: {
+      type: "customer",
+      id: user.id,
+      label:
+        [shippingAddress.firstName, shippingAddress.lastName]
+          .filter(Boolean)
+          .join(" ") || null,
+    },
+    subject: { type: "order", id: order.id, label: orderRef },
+    customerId: user.id,
+    payload: {
+      total,
+      currency: "INR",
+      items: orderItemsToInsert.length,
+      paymentMethod,
+    },
+  });
 
   // 6. Online payment: create the Razorpay Order for the SERVER-computed total
   //    (never the client's) and pin its id to our order. Any failure here

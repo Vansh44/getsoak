@@ -4,6 +4,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeDbMock, sqlParamValues } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// Activity/notification bookkeeping is deferred with after(), so in a real
+// request it runs AFTER the action returns and never touches the action's own
+// DB scope. No-op it here so these assertions see only the action's queries.
+vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),
   getManagerIdentity: vi.fn(),

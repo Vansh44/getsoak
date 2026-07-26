@@ -16,6 +16,7 @@ import {
   getManagerIdentity,
   getActingStoreId,
 } from "@/app/dashboard/lib/access";
+import { emitEvent } from "@/lib/notifications/record";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { getStoreUrl } from "@/lib/site";
 import { pingIndexNow } from "@/lib/seo/search-engines";
@@ -428,6 +429,17 @@ export async function createProduct(
     }
     revalidateProduct(slug);
     await notifyProductPublished(slug, formData.status === "published");
+    emitEvent({
+      type: "product.created",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: {
+        type: "product",
+        id: inserted.id as string,
+        label: formData.name,
+      },
+      payload: { status: formData.status },
+    });
     return { success: true, data: inserted };
   }
 
@@ -550,10 +562,17 @@ export async function deleteProduct(id: string): Promise<ActionResult> {
   // Collect the product's images before deleting (variants cascade in the DB).
   const imageUrls = await fetchProductImageUrls(admin, id);
 
+  let deletedName: string | null = null;
   try {
-    await withUser(admin, (db) =>
-      db.delete(products).where(eq(products.id, id)),
+    const removed = await withUser(admin, (db) =>
+      db
+        .delete(products)
+        .where(eq(products.id, id))
+        // Returned for the activity log: after the row is gone there is no
+        // way to say WHICH product was deleted.
+        .returning({ name: products.name }),
     );
+    deletedName = removed[0]?.name ?? null;
   } catch (err) {
     console.error("deleteProduct error:", err);
     return { error: dbErrorMessage(err, "Failed to delete product.") };
@@ -561,6 +580,13 @@ export async function deleteProduct(id: string): Promise<ActionResult> {
 
   // Files won't cascade — remove them from storage too.
   await deleteStorageUrls(imageUrls);
+
+  emitEvent({
+    type: "product.deleted",
+    storeId: await getActingStoreId(),
+    actor: { type: "admin", id: admin.uid, label: admin.email },
+    subject: { type: "product", id, label: deletedName },
+  });
 
   revalidateProduct();
   return { success: true };
