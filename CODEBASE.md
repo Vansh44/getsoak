@@ -1253,9 +1253,56 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `login/` (email + PIN pad / password), `register/` (the 3-step
         self-registration wizard). Dashboard: `/dashboard/pos/staff` +
         `/dashboard/pos/devices`.
-    - **Not yet built (Phase 2 = v1):** the sell path (`placePosSale` + product
-      grid/barcode/cart/tender), GST place-of-supply (CGST/SGST/IGST), and
-      thermal receipts — see `docs/pos-plan.md` Phase 2.
+    - **Phase 2 (v1, done) = the register.** `app/actions/pos-sale-actions.ts`
+      is the sell path's trust boundary and mirrors `placeOrder` (§12) step for
+      step: operator resolved server-side, prices RE-READ from the DB, discount
+      re-derived and capped (manager PIN above the cap via `verifyManagerPin`),
+      tax recomputed, stock reserved atomically **at the register's location**
+      (`reserve_stock_at`), service-role writes last, and a reverse rollback
+      chain on any failure. `getRegisterConfig` opens the register;
+      `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
+        AMOUNT (not the rate) so it can never disagree with `computeTax`'s
+        rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
+        inter-state ⇒ IGST; unknown data defaults to INTRA. Snapshotted per line
+        (`order_items.tax_cgst/tax_sgst/tax_igst`).
+      - **Thermal receipt**: `lib/pos/receipt.ts` (pure `buildReceiptModel` off
+        the order snapshot) + `components/pos/thermal-receipt.tsx` + its CSS —
+        a 80mm roll format, deliberately NOT the A4 invoice of §17.
+      - **Barcode scanning, three engines behind one seam**
+        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so a
+        focused hidden input + its trailing Enter is the default and needs no
+        permission; on mobile the camera uses the native `BarcodeDetector`, and
+        `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
+        SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
+        entered in the product editor. StoreMink never prints its own.
+      - **★ Local catalog cache — the "<50 ms, zero network" promise
+        (docs/pos-plan.md §10).** `lib/pos/catalog-index.ts` is the PURE
+        matching core (`buildIndex`/`scanLocal`/`searchLocal`/
+        `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
+        per **store+location** (stock is per-location and a browser can be
+        shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
+        the full catalog in the background via `getCatalogSnapshot` (keyset
+        paging over `products.id`, 300 products/page — pages stay stable while
+        the catalog is edited, and a product's variants can't split at a seam).
+        Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
+        keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
+        search is a plain linear scan rather than an inverted index that would
+        need invalidating on every sync. Three rules keep it honest: a local
+        MISS falls through to `lookupProducts` (a product created since the last
+        sync must stay sellable); nothing cached is authoritative (the server
+        re-prices and re-reserves, so staleness is a display bug at worst, never
+        a wrong charge or an oversell); and **every IndexedDB call degrades to a
+        no-op** when the API is missing or throws (private-mode Safari, kiosk
+        profiles, quota) so the register just falls back to the server. Sales
+        decrement the cache immediately (`applySold`); a 5-min interval
+        re-syncs, and the header chip shows the cached count + a manual refresh.
+    - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
+      inventory (4), returns/store credit (5), Twilio receipts (6), metered
+      extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
+      Customer attach is wired server-side (`placePosSale` accepts
+      `customerId`/`customerGstin`) but has no register UI yet.
+      See `docs/pos-plan.md`.
 
 ## 6. Commands
 

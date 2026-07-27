@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -20,6 +21,7 @@ import {
   ScanLine,
   Camera,
   Package,
+  Database,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -31,6 +33,8 @@ import {
 } from "@/app/actions/pos-sale-actions";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
+import { useCatalog } from "@/lib/pos/use-catalog";
+import { itemKey } from "@/lib/pos/catalog-index";
 import { IdleLock } from "../idle-lock";
 import { TenderPanel } from "./tender-panel";
 import { ReceiptOverlay } from "./receipt-overlay";
@@ -65,7 +69,13 @@ export function SellClient({
   initialItems: PosCatalogItem[];
 }) {
   const router = useRouter();
-  const [items, setItems] = useState<PosCatalogItem[]>(initialItems);
+  // The local catalog: IndexedDB-backed, background-synced, seeded with the
+  // server-rendered first page so the grid is populated before it warms up.
+  const catalog = useCatalog(config.storeId, config.locationId, initialItems);
+  // Grid contents from the SERVER fallback only. Once the cache is warm the
+  // grid is derived from (query, index) during render — see `items` below.
+  const [serverItems, setServerItems] =
+    useState<PosCatalogItem[]>(initialItems);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -143,48 +153,75 @@ export function SellClient({
     });
   }, []);
 
-  const runSearch = useCallback(
-    async (q: string, fromScan: boolean) => {
+  /** One scanned/typed code resolved to zero, one, or several SKUs. */
+  const resolveScan = useCallback(
+    (found: PosCatalogItem[]): boolean => {
+      if (found.length === 1) {
+        addItem(found[0]);
+        setQuery("");
+        return true;
+      }
+      if (found.length > 1) {
+        // Several SKUs share this code — make the cashier pick rather than
+        // guessing (mislabelled supplier barcodes are common).
+        setChoices(found);
+        setQuery("");
+        return true;
+      }
+      return false;
+    },
+    [addItem],
+  );
+
+  // Enter (or a hardware scanner's trailing Enter) = a scan.
+  const runScan = useCallback(
+    async (code: string) => {
+      setError(null);
+      // Local first: this is the path that makes a scan land in the cart in
+      // <50 ms with no network at all.
+      if (catalog.ready && resolveScan(catalog.scan(code))) return;
+
+      // A local MISS is not an answer — the product may have been created
+      // since the last sync. Ask the server before telling the cashier no.
       setSearching(true);
-      // Only a scan resets the message. A browse refresh must NOT, or the
-      // "out of stock" it just raised would vanish before it can be read
-      // (clearing the query after a scan re-triggers this very function).
-      if (fromScan) setError(null);
-      const res = await lookupProducts(q);
+      const res = await lookupProducts(code);
       setSearching(false);
       if (res.error) {
         setError(res.error);
         return;
       }
-      if (fromScan) {
-        if (res.items.length === 1) {
-          addItem(res.items[0]);
-          setQuery("");
-          return;
-        }
-        if (res.items.length === 0) {
-          setError(`Nothing found for "${q}".`);
-          return;
-        }
-        // Several SKUs share this code — make the cashier pick rather than
-        // guessing (mislabelled supplier barcodes are common).
-        setChoices(res.items);
-        return;
-      }
-      setItems(res.items);
+      if (!resolveScan(res.items)) setError(`Nothing found for "${code}".`);
     },
-    [addItem],
+    [catalog, resolveScan],
   );
 
-  // Debounced browse-as-you-type; Enter is treated as a scan.
+  // Browse-as-you-type. Against the local index the grid is DERIVED, not
+  // stored: recomputing during render costs ~1 ms at a few thousand SKUs and
+  // removes any chance of the grid disagreeing with the index. catalog.version
+  // is the dependency that picks up a sync or a post-sale stock decrement.
+  const trimmedQuery = query.trim();
+  const items = useMemo(
+    () => (catalog.ready ? catalog.search(trimmedQuery) : serverItems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog.ready, catalog.version, catalog.search, trimmedQuery, serverItems],
+  );
+
+  // The server path exists only until the cache warms up (and on a device
+  // where IndexedDB is unavailable, where it stays the permanent path).
   useEffect(() => {
-    if (!query) {
-      const t = setTimeout(() => void runSearch("", false), 150);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => void runSearch(query, false), 220);
+    if (catalog.ready) return;
+    const t = setTimeout(
+      async () => {
+        setSearching(true);
+        const res = await lookupProducts(trimmedQuery);
+        setSearching(false);
+        if (res.error) setError(res.error);
+        else setServerItems(res.items);
+      },
+      trimmedQuery ? 220 : 150,
+    );
     return () => clearTimeout(t);
-  }, [query, runSearch]);
+  }, [trimmedQuery, catalog.ready]);
 
   const setQty = (key: string, delta: number) =>
     setCart((c) =>
@@ -218,6 +255,9 @@ export function SellClient({
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
     }
+    // Reflect the sale in the local catalog at once — the next scan of the
+    // same SKU shows the new on-hand without waiting for the 5-min sync.
+    catalog.applySold(new Map(cart.map((l) => [itemKey(l), l.quantity])));
     setCart([]);
     setDiscount(0);
     setTendering(false);
@@ -236,6 +276,26 @@ export function SellClient({
           Register
         </div>
         <div className="flex items-center gap-3 text-sm">
+          {/* Cache state, deliberately quiet. A cashier only needs it when
+              something looks wrong — hence the click-to-refresh. */}
+          <button
+            type="button"
+            onClick={catalog.resync}
+            disabled={catalog.syncing}
+            title={
+              catalog.ready
+                ? `${catalog.count} products cached on this device. Click to refresh.`
+                : "Loading the catalog…"
+            }
+            className="hidden items-center gap-1.5 rounded-lg px-2 py-1 text-white/40 transition-colors hover:bg-white/10 hover:text-white/70 disabled:opacity-60 sm:inline-flex"
+          >
+            {catalog.syncing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Database className="h-3.5 w-3.5" strokeWidth={2} />
+            )}
+            {catalog.ready ? catalog.count : "…"}
+          </button>
           <span className="flex items-center gap-1.5 text-white/70">
             <MapPin className="h-4 w-4" strokeWidth={2} />
             {config.locationName}
@@ -276,7 +336,7 @@ export function SellClient({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && query.trim()) {
                     e.preventDefault();
-                    void runSearch(query.trim(), true);
+                    void runScan(query.trim());
                   }
                 }}
                 placeholder="Scan a barcode or search products…"
@@ -518,7 +578,7 @@ export function SellClient({
           duplicate-barcode disambiguation and "not found" behave the same. */}
       {cameraOpen && (
         <CameraScanner
-          onScan={(code) => void runSearch(code, true)}
+          onScan={(code) => void runScan(code)}
           onClose={() => setCameraOpen(false)}
         />
       )}

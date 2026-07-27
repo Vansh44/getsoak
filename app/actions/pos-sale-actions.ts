@@ -14,7 +14,7 @@
 // There is no cross-statement transaction over the pool, hence the manual
 // rollback chain — the same discipline placeOrder uses.
 
-import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -118,6 +118,10 @@ const BILLING_COLS = {
 // ---- Register config -------------------------------------------------------
 
 export interface RegisterConfig {
+  /** Scope the client-side catalog cache — one cached catalog per register,
+   *  since stock is per-location and a browser can be shared between stores. */
+  storeId: string;
+  locationId: string;
   locationName: string;
   operatorName: string;
   role: string;
@@ -159,6 +163,8 @@ export async function getRegisterConfig(): Promise<
   ]);
 
   return {
+    storeId: op.storeId,
+    locationId: op.locationId,
     locationName: locRows[0]?.name ?? "Location",
     operatorName: op.name,
     role: op.role,
@@ -190,11 +196,99 @@ export interface PosCatalogItem {
   allowBackorder: boolean;
 }
 
+// The sellable-catalog projection, shared by the interactive lookup and the
+// full snapshot the client caches, so the two can never disagree about what a
+// SKU costs or how much of it is on hand.
+const CATALOG_COLS = {
+  product_id: products.id,
+  variant_id: productVariants.id,
+  name: products.name,
+  variant_name: productVariants.name,
+  p_sku: products.sku,
+  v_sku: productVariants.sku,
+  p_barcode: products.barcode,
+  v_barcode: productVariants.barcode,
+  p_price: products.sellingPrice,
+  v_price: productVariants.sellingPrice,
+  v_special: productVariants.specialPrice,
+  p_image: products.imageUrl,
+  v_image: productVariants.imageUrl,
+  p_track: products.trackInventory,
+  v_track: productVariants.trackInventory,
+  p_backorder: products.allowBackorder,
+  v_backorder: productVariants.allowBackorder,
+  p_stock: products.stock,
+  v_stock: productVariants.stock,
+  // Stock AT THIS REGISTER'S LOCATION. products.stock is the aggregate across
+  // every location, so a two-location store would otherwise show (and let a
+  // cashier ring up) stock sitting in the other shop.
+  loc_stock: inventoryLevels.onHand,
+};
+
+/** Mirrors CATALOG_COLS. Written out rather than inferred so a schema change
+ *  that alters a column's nullability fails HERE, at the mapper, instead of
+ *  silently producing a NaN price or a null name on the register. */
+interface CatalogRow {
+  product_id: string;
+  variant_id: string | null;
+  name: string;
+  variant_name: string | null;
+  p_sku: string | null;
+  v_sku: string | null;
+  p_barcode: string | null;
+  v_barcode: string | null;
+  p_price: number | null;
+  v_price: number | null;
+  v_special: number | null;
+  p_image: string | null;
+  v_image: string | null;
+  p_track: boolean | null;
+  v_track: boolean | null;
+  p_backorder: boolean | null;
+  v_backorder: boolean | null;
+  p_stock: number | null;
+  v_stock: number | null;
+  loc_stock: number | null;
+}
+
+function mapCatalogRow(r: CatalogRow): PosCatalogItem {
+  const isVariant = !!r.variant_id;
+  // Only variants carry a special price; a product's selling price is final.
+  const special = isVariant ? r.v_special : null;
+  const base = (isVariant ? r.v_price : r.p_price) ?? 0;
+  return {
+    productId: r.product_id,
+    variantId: r.variant_id,
+    name: r.name,
+    variantName: r.variant_name,
+    sku: (isVariant ? r.v_sku : r.p_sku) ?? null,
+    barcode: (isVariant ? r.v_barcode : r.p_barcode) ?? null,
+    price: special && special > 0 ? special : base,
+    // A variant with no image of its own falls back to the product's.
+    image: (isVariant ? r.v_image : r.p_image) ?? r.p_image ?? null,
+    stock: r.loc_stock ?? (isVariant ? (r.v_stock ?? 0) : (r.p_stock ?? 0)),
+    trackInventory: isVariant ? !!r.v_track : !!r.p_track,
+    allowBackorder: isVariant ? !!r.v_backorder : !!r.p_backorder,
+  };
+}
+
+/** Join every sellable SKU to its on-hand level at the operator's location. */
+const locationStockJoin = (locationId: string) =>
+  and(
+    eq(inventoryLevels.productId, products.id),
+    eq(inventoryLevels.locationId, locationId),
+    sql`${inventoryLevels.variantId} is not distinct from ${productVariants.id}`,
+  );
+
 /**
  * Search the catalog for the register: an exact barcode/SKU hit first (a scan),
  * otherwise a name match. Returns MULTIPLE rows when one barcode maps to
  * several variants so the register can disambiguate rather than guessing —
  * mislabelled supplier barcodes are common in retail.
+ *
+ * This is the FALLBACK path once the client-side catalog cache is warm
+ * (lib/pos/use-catalog.ts) — it still runs for cache misses, which is what
+ * lets a product added since the last sync be sold immediately.
  */
 export async function lookupProducts(
   query: string,
@@ -213,41 +307,10 @@ export async function lookupProducts(
       // One query over the variant-aware catalog: every sellable SKU is either
       // a variant row or a variant-less product row.
       return db
-        .select({
-          product_id: products.id,
-          variant_id: productVariants.id,
-          name: products.name,
-          variant_name: productVariants.name,
-          p_sku: products.sku,
-          v_sku: productVariants.sku,
-          p_barcode: products.barcode,
-          v_barcode: productVariants.barcode,
-          p_price: products.sellingPrice,
-          v_price: productVariants.sellingPrice,
-          v_special: productVariants.specialPrice,
-          p_image: products.imageUrl,
-          v_image: productVariants.imageUrl,
-          p_track: products.trackInventory,
-          v_track: productVariants.trackInventory,
-          p_backorder: products.allowBackorder,
-          v_backorder: productVariants.allowBackorder,
-          p_stock: products.stock,
-          v_stock: productVariants.stock,
-          // Stock AT THIS REGISTER'S LOCATION. products.stock is the aggregate
-          // across every location, so a two-location store would otherwise show
-          // (and let a cashier ring up) stock sitting in the other shop.
-          loc_stock: inventoryLevels.onHand,
-        })
+        .select(CATALOG_COLS)
         .from(products)
         .leftJoin(productVariants, eq(productVariants.productId, products.id))
-        .leftJoin(
-          inventoryLevels,
-          and(
-            eq(inventoryLevels.productId, products.id),
-            eq(inventoryLevels.locationId, op.locationId),
-            sql`${inventoryLevels.variantId} is not distinct from ${productVariants.id}`,
-          ),
-        )
+        .leftJoin(inventoryLevels, locationStockJoin(op.locationId))
         .where(
           and(
             eq(products.storeId, op.storeId),
@@ -266,25 +329,7 @@ export async function lookupProducts(
         .limit(safeLimit);
     });
 
-    const items: PosCatalogItem[] = rows.map((r) => {
-      const isVariant = !!r.variant_id;
-      // Only variants carry a special price; a product's selling price is final.
-      const special = isVariant ? r.v_special : null;
-      const base = isVariant ? (r.v_price ?? 0) : (r.p_price ?? 0);
-      return {
-        productId: r.product_id,
-        variantId: r.variant_id,
-        name: r.name,
-        variantName: r.variant_name,
-        sku: (isVariant ? r.v_sku : r.p_sku) ?? null,
-        barcode: (isVariant ? r.v_barcode : r.p_barcode) ?? null,
-        price: special && special > 0 ? special : base,
-        image: (isVariant ? r.v_image : r.p_image) ?? r.p_image ?? null,
-        stock: r.loc_stock ?? (isVariant ? (r.v_stock ?? 0) : (r.p_stock ?? 0)),
-        trackInventory: isVariant ? !!r.v_track : !!r.p_track,
-        allowBackorder: isVariant ? !!r.v_backorder : !!r.p_backorder,
-      };
-    });
+    const items: PosCatalogItem[] = rows.map(mapCatalogRow);
 
     // An exact barcode/SKU scan should win over fuzzy name matches.
     if (q) {
@@ -294,6 +339,91 @@ export async function lookupProducts(
     return { items };
   } catch (err) {
     return { items: [], error: dbErrorMessage(err, "Couldn't load products.") };
+  }
+}
+
+// ---- Catalog snapshot (client-side cache) ----------------------------------
+
+/** Products per page. Paged so a large catalog streams in the background
+ *  instead of arriving as one payload that stalls the register's first paint. */
+const CATALOG_PAGE_PRODUCTS = 300;
+
+export interface CatalogPage {
+  items: PosCatalogItem[];
+  /** Pass back to continue; null when the catalog is fully drained. */
+  nextCursor: string | null;
+  error?: string;
+}
+
+/**
+ * A page of the FULL sellable catalog for the operator's location, for the
+ * client-side cache (lib/pos/use-catalog.ts) that makes search and scan
+ * resolve locally with no network — docs/pos-plan.md §10.
+ *
+ * Paging is keyset over `products.id` (not OFFSET), so pages stay stable and
+ * cheap while the catalog is being edited underneath the sync. Whole products
+ * are fetched per page — the page size counts products, not joined rows, so a
+ * product with 40 variants can never be split across a page boundary and lose
+ * variants at the seam.
+ */
+export async function getCatalogSnapshot(
+  cursor?: string | null,
+): Promise<CatalogPage> {
+  const op = await resolvePosOperator();
+  if (!op) return { items: [], nextCursor: null, error: "Not signed in." };
+  if (!posCan(op.role, "sell"))
+    return { items: [], nextCursor: null, error: "Not allowed." };
+
+  const after = typeof cursor === "string" && cursor ? cursor : null;
+
+  try {
+    const rows = await withService(async (db) => {
+      // 1. The page of product ids...
+      const page = await db
+        .select({ id: products.id })
+        .from(products)
+        .where(
+          and(
+            eq(products.storeId, op.storeId),
+            eq(products.status, "published"),
+            after ? gt(products.id, after) : undefined,
+          ),
+        )
+        .orderBy(products.id)
+        .limit(CATALOG_PAGE_PRODUCTS);
+      if (page.length === 0) return [];
+
+      // 2. ...then every sellable SKU within it.
+      return db
+        .select(CATALOG_COLS)
+        .from(products)
+        .leftJoin(productVariants, eq(productVariants.productId, products.id))
+        .leftJoin(inventoryLevels, locationStockJoin(op.locationId))
+        .where(
+          inArray(
+            products.id,
+            page.map((p) => p.id),
+          ),
+        )
+        .orderBy(products.id);
+    });
+
+    const items = rows.map(mapCatalogRow);
+    // A short page means the catalog is drained. Cursor is the last product id
+    // of the page, which the ORDER BY guarantees is its maximum.
+    const productIds = new Set(items.map((i) => i.productId));
+    const nextCursor =
+      productIds.size < CATALOG_PAGE_PRODUCTS
+        ? null
+        : (items[items.length - 1]?.productId ?? null);
+
+    return { items, nextCursor };
+  } catch (err) {
+    return {
+      items: [],
+      nextCursor: null,
+      error: dbErrorMessage(err, "Couldn't load the catalog."),
+    };
   }
 }
 

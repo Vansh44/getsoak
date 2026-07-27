@@ -24,9 +24,10 @@ vi.mock("@/lib/db/client", () => ({
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
 
+import { withService } from "@/lib/db/client";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import { placePosSale } from "./pos-sale-actions";
+import { getCatalogSnapshot, placePosSale } from "./pos-sale-actions";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -273,5 +274,121 @@ describe("placePosSale — stock", () => {
     expect(r.error).toMatch(/not enough stock/i);
     // The order row that was created first is deleted again.
     expect(dbHolder.current.calls.delete).toHaveLength(1);
+  });
+});
+
+describe("getCatalogSnapshot", () => {
+  // Two reads per page: the page of product ids, then their sellable SKUs.
+  const page = (ids: string[], rows: any[]) => [
+    ids.map((id) => ({ id })),
+    rows,
+  ];
+  const row = (over: any = {}) => ({
+    product_id: "p1",
+    variant_id: null,
+    name: "Cold Brew",
+    variant_name: null,
+    p_sku: "SKU1",
+    v_sku: null,
+    p_barcode: "890123",
+    v_barcode: null,
+    p_price: 100,
+    v_price: null,
+    v_special: null,
+    p_image: "https://img/x.webp",
+    v_image: null,
+    p_track: true,
+    v_track: null,
+    p_backorder: false,
+    v_backorder: null,
+    p_stock: 999,
+    v_stock: null,
+    loc_stock: 4,
+    ...over,
+  });
+
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    const r = await getCatalogSnapshot();
+    expect(r.error).toMatch(/signed in/i);
+    expect(r.items).toEqual([]);
+  });
+
+  it("refuses a role that can't sell", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue({
+      ...CASHIER,
+      role: "nobody",
+    } as any);
+    expect((await getCatalogSnapshot()).error).toMatch(/not allowed/i);
+  });
+
+  // The whole point of the cache: it must carry stock for THIS register's
+  // location, not the cross-location aggregate in products.stock.
+  it("reports stock at the operator's location, not the aggregate", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: page(["p1"], [row()]) });
+    const r = await getCatalogSnapshot();
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]).toMatchObject({
+      productId: "p1",
+      barcode: "890123",
+      price: 100,
+      image: "https://img/x.webp",
+      stock: 4,
+    });
+  });
+
+  it("prefers a variant's special price and falls back to the product image", () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: page(
+        ["p1"],
+        [
+          row({
+            variant_id: "v1",
+            variant_name: "Large",
+            v_price: 150,
+            v_special: 120,
+            v_image: null,
+            v_track: true,
+            loc_stock: 2,
+          }),
+        ],
+      ),
+    });
+    return getCatalogSnapshot().then((r) => {
+      expect(r.items[0]).toMatchObject({
+        variantId: "v1",
+        price: 120,
+        image: "https://img/x.webp",
+        stock: 2,
+      });
+    });
+  });
+
+  it("ends paging with a null cursor on a short page", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: page(["p1"], [row()]) });
+    expect((await getCatalogSnapshot()).nextCursor).toBeNull();
+  });
+
+  it("returns an empty page (not an error) once the catalog is drained", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    const r = await getCatalogSnapshot("p-last");
+    expect(r).toMatchObject({ items: [], nextCursor: null });
+    expect(r.error).toBeUndefined();
+  });
+
+  // Keyset paging, not OFFSET — pages stay stable while the catalog is edited.
+  it("pages forward from the cursor", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: page(["p2"], [row()]) });
+    await getCatalogSnapshot("p1");
+    expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/>/);
+  });
+
+  // An empty catalog and an unreachable database look identical to the
+  // register otherwise — and one of them must not silently blank the grid.
+  it("surfaces a DB failure instead of reporting an empty catalog", async () => {
+    vi.mocked(withService).mockRejectedValueOnce(new Error("connection reset"));
+    const r = await getCatalogSnapshot();
+    expect(r.error).toBeTruthy();
+    expect(r.items).toEqual([]);
   });
 });
