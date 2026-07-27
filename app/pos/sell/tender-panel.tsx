@@ -6,10 +6,14 @@ import type {
   PosTender,
   PosTenderMethod,
 } from "@/app/actions/pos-sale-actions";
+import { changeDue, coversTotal } from "@/lib/pos/totals";
 
 // Taking payment. The client proposes tenders; placePosSale re-derives the
-// total, validates coverage, and computes change server-side — the figures here
-// are only to guide the cashier's hands.
+// total, validates coverage, and computes change server-side — but the figures
+// here now come from the SAME pure helper (lib/pos/totals.ts) working off the
+// SAME tax-inclusive total, so what the cashier is shown is what gets charged.
+// Before that, `total` was the pre-tax subtotal: the panel would say "Paid in
+// full ₹238" and the server would answer "the payment doesn't cover the total".
 
 const METHODS: { id: PosTenderMethod; label: string }[] = [
   { id: "cash", label: "Cash" },
@@ -53,12 +57,9 @@ export function TenderPanel({
   const [pin, setPin] = useState("");
 
   const paid = taken.reduce((s, t) => s + t.amount, 0);
-  const remaining = Math.max(0, Math.round((total - paid) * 100) / 100);
+  const remaining = changeDue(total, paid);
   const entered = Number(amount) || 0;
-  const change =
-    method === "cash" && entered > remaining
-      ? Math.round((entered - remaining) * 100) / 100
-      : 0;
+  const change = method === "cash" ? changeDue(entered, remaining) : 0;
 
   const addTender = (value: number) => {
     if (value <= 0) return;
@@ -104,7 +105,10 @@ export function TenderPanel({
     await finish(true);
   };
 
-  const covered = paid >= total;
+  // Compared in PAISE via the same helper placePosSale uses. A float compare
+  // could call an exactly-covering payment short by a fraction of a paisa and
+  // refuse a sale the server would have accepted.
+  const covered = coversTotal(paid, total);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

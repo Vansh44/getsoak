@@ -15,7 +15,9 @@ export type PosCapability =
   | "adjust_inventory"
   | "open_close_shift"
   | "cash_drop"
-  | "manage_staff";
+  | "manage_staff"
+  /** Arrange which products appear on the register grid, and in what order. */
+  | "edit_layout";
 
 const CAPS: Record<PosRole, PosCapability[]> = {
   cashier: ["sell"],
@@ -27,6 +29,7 @@ const CAPS: Record<PosRole, PosCapability[]> = {
     "adjust_inventory",
     "open_close_shift",
     "cash_drop",
+    "edit_layout",
   ],
 };
 

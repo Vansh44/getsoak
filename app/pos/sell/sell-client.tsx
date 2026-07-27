@@ -24,6 +24,7 @@ import {
   Database,
   UserPlus,
   UserRound,
+  LayoutGrid,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -38,11 +39,24 @@ import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import { useCatalog } from "@/lib/pos/use-catalog";
-import { itemKey } from "@/lib/pos/catalog-index";
+import {
+  applyLayout,
+  isOutOfStock,
+  itemKey,
+  layoutCoverage,
+  type LayoutEntry,
+} from "@/lib/pos/catalog-index";
+import {
+  getPosLayout,
+  resetPosLayout,
+  savePosLayout,
+} from "@/app/actions/pos-layout-actions";
+import { LayoutEditMode } from "./layout-editor";
 import { IdleLock } from "../idle-lock";
 import { TenderPanel } from "./tender-panel";
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
+import { posTotals } from "@/lib/pos/totals";
 
 export interface CartLine {
   key: string;
@@ -59,6 +73,9 @@ export interface CartLine {
   stock: number | null;
   trackInventory: boolean;
   allowBackorder: boolean;
+  /** Resolved to a rate via config.taxRates so the screen can quote the
+   *  tax-inclusive total (see lib/pos/totals.ts). */
+  taxClassId: string | null;
 }
 
 const lineKey = (p: string, v: string | null) => `${p}:${v ?? ""}`;
@@ -97,6 +114,11 @@ export function SellClient({
   const [customer, setCustomer] = useState<PosCustomer | null>(null);
   const [gstin, setGstin] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
+  // Manager-arranged till grid. Empty = not configured = show everything.
+  const [layout, setLayout] = useState<LayoutEntry[]>([]);
+  const [canEditLayout, setCanEditLayout] = useState(false);
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  const [savingLayout, setSavingLayout] = useState(false);
   // Feature-detected on the CLIENT only — the server can't know whether this
   // browser can scan, and rendering a button that does nothing is worse than
   // hiding it. useSyncExternalStore (rather than an effect) gives the server a
@@ -108,6 +130,22 @@ export function SellClient({
     () => false,
   );
 
+  // Load the till arrangement once. A failure is non-fatal: getPosLayout
+  // returns an empty layout, and the register shows the whole catalogue rather
+  // than an empty grid.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await getPosLayout();
+      if (cancelled) return;
+      setLayout(res.items);
+      setCanEditLayout(res.canEdit);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // A hardware scanner is a keyboard: it "types" the barcode then hits Enter.
   // Keeping this input focused means a scan lands in the cart with no clicks —
   // the single biggest factor in per-sale time.
@@ -115,8 +153,9 @@ export function SellClient({
   const refocus = useCallback(() => {
     // Don't steal focus while a modal owns the screen — grabbing it back would
     // fight the camera view and the tender inputs.
-    if (!tendering && !choices && !cameraOpen) scanRef.current?.focus();
-  }, [tendering, choices, cameraOpen]);
+    if (!tendering && !choices && !cameraOpen && !layoutOpen)
+      scanRef.current?.focus();
+  }, [tendering, choices, cameraOpen, layoutOpen]);
   useEffect(() => {
     refocus();
   }, [refocus, cart.length]);
@@ -155,6 +194,7 @@ export function SellClient({
           name: it.name,
           variantName: it.variantName,
           unitPrice: it.price,
+          taxClassId: it.taxClassId ?? null,
           quantity: 1,
           lineDiscount: 0,
           stock: it.stock,
@@ -212,10 +252,35 @@ export function SellClient({
   // removes any chance of the grid disagreeing with the index. catalog.version
   // is the dependency that picks up a sync or a post-sale stock decrement.
   const trimmedQuery = query.trim();
-  const items = useMemo(
-    () => (catalog.ready ? catalog.search(trimmedQuery) : serverItems),
+  const items = useMemo(() => {
+    // Searching ALWAYS spans the whole catalogue. The layout decides what the
+    // IDLE grid shows; it must never decide what can be found and sold, or the
+    // products a manager left off the till could never be rung up at all.
+    if (trimmedQuery) {
+      if (catalog.ready) return catalog.search(trimmedQuery);
+      // The server path has no index to order it, so apply the same rule here —
+      // otherwise the grid would reshuffle the moment the cache warms up.
+      return [
+        ...serverItems.filter((i) => !isOutOfStock(i)),
+        ...serverItems.filter(isOutOfStock),
+      ];
+    }
+    return applyLayout(catalog.ready ? catalog.all() : serverItems, layout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [catalog.ready, catalog.version, catalog.search, trimmedQuery, serverItems],
+  }, [
+    catalog.ready,
+    catalog.version,
+    catalog.search,
+    catalog.all,
+    trimmedQuery,
+    serverItems,
+    layout,
+  ]);
+
+  const coverage = useMemo(
+    () => layoutCoverage(catalog.ready ? catalog.all() : serverItems, layout),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog.ready, catalog.version, catalog.all, serverItems, layout],
   );
 
   // The server path exists only until the cache warms up (and on a device
@@ -263,16 +328,30 @@ export function SellClient({
       }),
     );
 
-  const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-  const lineDiscountTotal = cart.reduce((s, l) => s + l.lineDiscount, 0);
-  // The order-level discount applies to what's left after line markdowns —
-  // the same order placePosSale uses, so the screen matches the bill.
-  const cappedDiscount = Math.min(
-    Math.max(0, discount),
-    Math.max(0, subtotal - lineDiscountTotal),
-  );
-  // Display-only estimate; placePosSale recomputes tax authoritatively.
-  const estTotal = Math.max(0, subtotal - lineDiscountTotal - cappedDiscount);
+  // A product with no class of its own falls back to the store default —
+  // mirroring how placePosSale resolves the rate.
+  const rateForClass = (id: string | null) => {
+    const cls = id ?? config.defaultTaxClassId;
+    return cls ? (config.taxRates[cls] ?? 0) : 0;
+  };
+
+  // The SAME pure helper placePosSale charges with — including tax. Quoting the
+  // pre-tax subtotal here (as this screen used to) meant the cashier promised
+  // the customer one number and the till charged another, so the change handed
+  // back was wrong by exactly the tax.
+  const totals = posTotals({
+    lines: cart.map((l) => ({
+      gross: l.unitPrice * l.quantity,
+      lineDiscount: l.lineDiscount,
+      rate: rateForClass(l.taxClassId),
+    })),
+    requestedOrderDiscount: discount,
+    pricesIncludeTax: config.pricesIncludeTax,
+    taxEnabled: config.taxEnabled,
+  });
+  const { subtotal, lineDiscountTotal, tax } = totals;
+  const cappedDiscount = totals.orderDiscount;
+  const estTotal = totals.total;
 
   const completeSale = async (
     tenders: PosTender[],
@@ -339,6 +418,24 @@ export function SellClient({
             )}
             {catalog.ready ? catalog.count : "…"}
           </button>
+          {/* "12 of 20" — a manager can see at a glance that eight products
+              are reachable only by search or scan. Hidden until configured,
+              since "20 of 20" is noise. */}
+          {coverage.configured && (
+            <span className="hidden text-white/40 sm:inline">
+              {coverage.shown} of {coverage.total} products
+            </span>
+          )}
+          {canEditLayout && (
+            <button
+              type="button"
+              onClick={() => setLayoutOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+            >
+              <LayoutGrid className="h-4 w-4" strokeWidth={2} />
+              <span className="hidden sm:inline">Edit layout</span>
+            </button>
+          )}
           <span className="flex items-center gap-1.5 text-white/70">
             <MapPin className="h-4 w-4" strokeWidth={2} />
             {config.locationName}
@@ -364,108 +461,143 @@ export function SellClient({
       <div className="flex min-h-0 flex-1">
         {/* Catalog */}
         <div className="flex min-w-0 flex-1 flex-col p-3">
-          <div className="mb-3 flex shrink-0 gap-2">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
-              <input
-                ref={scanRef}
-                value={query}
-                autoFocus
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setError(null);
-                }}
-                onBlur={() => setTimeout(refocus, 80)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && query.trim()) {
-                    e.preventDefault();
-                    void runScan(query.trim());
-                  }
-                }}
-                placeholder="Scan a barcode or search products…"
-                className="w-full rounded-xl border border-white/15 bg-white/5 py-3 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
-              />
-              {searching && (
-                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
-              )}
-            </div>
-            {/* Only rendered where the browser can actually scan — a dead
-                button is worse than none. */}
-            {cameraSupported && (
-              <button
-                type="button"
-                onClick={() => setCameraOpen(true)}
-                title="Scan with the camera"
-                className="flex shrink-0 items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-medium transition-colors hover:bg-white/10"
-              >
-                <Camera className="h-5 w-5" strokeWidth={2} />
-                <span className="hidden sm:inline">Scan</span>
-              </button>
-            )}
-          </div>
-
-          {error && (
-            <div className="mb-3 shrink-0 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
-              {error}
-            </div>
-          )}
-
-          <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
-            {items.map((it) => {
-              const out =
-                it.trackInventory && !it.allowBackorder && (it.stock ?? 0) <= 0;
-              return (
-                <button
-                  key={lineKey(it.productId, it.variantId)}
-                  type="button"
-                  disabled={out}
-                  onClick={() => addItem(it)}
-                  className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-2 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
-                >
-                  {/* Photos make the grid scannable by eye for items without a
-                      barcode (loose produce, bakery). */}
-                  <div className="mb-2 aspect-square w-full overflow-hidden rounded-lg bg-white/5">
-                    {it.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={it.image}
-                        alt=""
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-white/20">
-                        <Package className="h-8 w-8" strokeWidth={1.5} />
-                      </div>
-                    )}
-                  </div>
-                  <span className="line-clamp-2 text-sm font-medium">
-                    {it.name}
-                  </span>
-                  {it.variantName && (
-                    <span className="text-xs text-white/50">
-                      {it.variantName}
-                    </span>
+          {layoutOpen ? (
+            <LayoutEditMode
+              catalog={catalog.ready ? catalog.all() : serverItems}
+              initial={layout}
+              saving={savingLayout}
+              onClose={() => setLayoutOpen(false)}
+              onSave={async (next) => {
+                setSavingLayout(true);
+                const res = await savePosLayout(next);
+                setSavingLayout(false);
+                if (res.error) {
+                  setError(res.error);
+                  return;
+                }
+                setLayout(next);
+                setLayoutOpen(false);
+              }}
+              onReset={async () => {
+                setSavingLayout(true);
+                const res = await resetPosLayout();
+                setSavingLayout(false);
+                if (res.error) {
+                  setError(res.error);
+                  return;
+                }
+                setLayout([]);
+                setLayoutOpen(false);
+              }}
+            />
+          ) : (
+            <>
+              <div className="mb-3 flex shrink-0 gap-2">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+                  <input
+                    ref={scanRef}
+                    value={query}
+                    autoFocus
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setError(null);
+                    }}
+                    onBlur={() => setTimeout(refocus, 80)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && query.trim()) {
+                        e.preventDefault();
+                        void runScan(query.trim());
+                      }
+                    }}
+                    placeholder="Scan a barcode or search products…"
+                    className="w-full rounded-xl border border-white/15 bg-white/5 py-3 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                  />
+                  {searching && (
+                    <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
                   )}
-                  <span className="mt-auto pt-2 font-semibold">
-                    ₹{it.price.toLocaleString("en-IN")}
-                  </span>
-                  <span className="text-[11px] text-white/40">
-                    {out
-                      ? "Out of stock"
-                      : it.trackInventory
-                        ? `${it.stock} in stock`
-                        : ""}
-                  </span>
-                </button>
-              );
-            })}
-            {items.length === 0 && !searching && (
-              <p className="col-span-full py-10 text-center text-sm text-white/40">
-                No products match.
-              </p>
-            )}
-          </div>
+                </div>
+                {/* Only rendered where the browser can actually scan — a dead
+                button is worse than none. */}
+                {cameraSupported && (
+                  <button
+                    type="button"
+                    onClick={() => setCameraOpen(true)}
+                    title="Scan with the camera"
+                    className="flex shrink-0 items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-medium transition-colors hover:bg-white/10"
+                  >
+                    <Camera className="h-5 w-5" strokeWidth={2} />
+                    <span className="hidden sm:inline">Scan</span>
+                  </button>
+                )}
+              </div>
+
+              {error && (
+                <div className="mb-3 shrink-0 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+                  {error}
+                </div>
+              )}
+
+              <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                {items.map((it) => {
+                  const out = isOutOfStock(it);
+                  return (
+                    <button
+                      key={lineKey(it.productId, it.variantId)}
+                      type="button"
+                      disabled={out}
+                      onClick={() => addItem(it)}
+                      className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-2 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
+                    >
+                      {/* Photos make the grid scannable by eye for items without a
+                      barcode (loose produce, bakery). A FIXED short height, not
+                      aspect-square: on a wide till screen a square tile grew to
+                      ~350px and pushed the price below the fold, so the cashier
+                      scrolled to find what should be one tap away. */}
+                      <div className="mb-2 h-24 w-full overflow-hidden rounded-lg bg-white/5 sm:h-28">
+                        {it.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={it.image}
+                            alt=""
+                            loading="lazy"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-white/20">
+                            <Package className="h-8 w-8" strokeWidth={1.5} />
+                          </div>
+                        )}
+                      </div>
+                      <span className="line-clamp-2 text-sm font-medium">
+                        {it.name}
+                      </span>
+                      {it.variantName && (
+                        <span className="text-xs text-white/50">
+                          {it.variantName}
+                        </span>
+                      )}
+                      <span className="mt-auto pt-2 font-semibold">
+                        ₹{it.price.toLocaleString("en-IN")}
+                      </span>
+                      <span className="text-[11px] text-white/40">
+                        {out
+                          ? "Out of stock"
+                          : it.trackInventory
+                            ? `${it.stock} in stock`
+                            : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+                {items.length === 0 && !searching && (
+                  <p className="col-span-full py-10 text-center text-sm text-white/40">
+                    No products match.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Cart */}
@@ -617,13 +749,18 @@ export function SellClient({
                 className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
               />
             </label>
+            {tax > 0 && (
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="text-white/60">
+                  Tax{config.pricesIncludeTax ? " (included)" : ""}
+                </span>
+                <span>₹{tax.toLocaleString("en-IN")}</span>
+              </div>
+            )}
             <div className="mb-3 flex items-center justify-between text-lg font-bold">
               <span>Total</span>
               <span>₹{estTotal.toLocaleString("en-IN")}</span>
             </div>
-            <p className="mb-2 text-[11px] text-white/40">
-              Tax is calculated on the server when the sale completes.
-            </p>
             <button
               type="button"
               disabled={cart.length === 0}

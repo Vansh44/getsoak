@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
+│   │                          # per location (no row = show the whole catalogue)
 │   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
 │   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
@@ -1370,6 +1372,24 @@ group, span}` (span = columns of the 4-wide desktop grid),
       (`reserve_stock_at`), service-role writes last, and a reverse rollback
       chain on any failure. `getRegisterConfig` opens the register;
       `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **★ ONE total, shared by the screen and the sale** (`lib/pos/totals.ts`,
+        pure + tested). `posTotals` owns subtotal → line markdowns → capped
+        order discount → tax → total, and BOTH `placePosSale` and the sell
+        screen call it. The screen used to quote the PRE-TAX subtotal ("tax is
+        calculated on the server when the sale completes") while the server
+        charged the tax-inclusive total: a ₹238 cart on a 5% class was quoted
+        ₹238, rung up at ₹249.90, and ₹300 cash returned ₹50.10 instead of the
+        ₹62 promised — and tendering the quoted ₹238 was refused as "the payment
+        doesn't cover the total" by the same panel that said "Paid in full
+        ₹238". Rates reach the client via `RegisterConfig.taxRates` (class id →
+        rate) + `PosCatalogItem.taxClassId`, resolved with the store's
+        `defaultTaxClassId` exactly as the server resolves it — no round trip,
+        so the POS zero-network promise holds. Rates ride in the CONFIG, not the
+        cached catalog, because the catalog persists in IndexedDB and a stale
+        rate would misquote a customer; the catalog cache key now carries a
+        `SCHEMA_VERSION` so an older CatalogItem shape is re-synced rather than
+        served. Money is compared in PAISE (`coversTotal`/`changeDue`) — a
+        rupee-float compare can refuse an exactly-covering payment.
       - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
         AMOUNT (not the rate) so it can never disagree with `computeTax`'s
         rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
@@ -1448,6 +1468,27 @@ group, span}` (span = columns of the 4-wide desktop grid),
         stock and the default gained one it never had, silently, compounding
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
+      - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
+        to the end of the register grid — `isOutOfStock` in
+        `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
+        state and the ordering must agree), and `buildIndex` precomputes an
+        `ordered` array so the empty-query slice can't fill the first screen
+        with things nobody can sell. **`applyLayout`** then lets a manager or
+        owner (`edit_layout` capability, so never a cashier) choose exactly
+        which products the till shows and in what order — `/pos/sell` →
+        "Edit layout" (`layout-editor.tsx`: searchable catalogue on the left,
+        dnd-kit sortable grid on the right), stored per LOCATION in
+        `pos_layouts` (`supabase/pos_09_register_layout.sql`,
+        `app/actions/pos-layout-actions.ts`). Three rules: **no row = show the
+        whole catalogue**, so the feature could not blank a register that
+        predates it and a failed read degrades to everything rather than an
+        empty till; the sold-out shift is computed at RENDER, never written
+        back, so a restock returns a product to its chosen slot with no edit;
+        and **search always spans the whole catalogue** — the layout decides
+        what the IDLE grid shows, never what can be found and sold, or the
+        products left off would be unsellable. Entries are not FK-checked, so
+        a deleted product silently drops its tile; the header shows
+        "12 of 20 products" once configured.
     - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
       inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
       writes to the DEFAULT location, so a multi-location store cannot yet
@@ -1583,6 +1624,18 @@ npm run format      # prettier --write
   **`POS_SESSION_SECRET`** (any high-entropy string; `openssl rand -base64 32`).
   Required for the register to work; when unset, cookie VERIFY returns null
   (never throws) so /pos falls back to the login gate rather than 500ing.
+  **That graceful degradation covers VERIFY only — MINTING a cookie cannot
+  degrade**, so with the secret absent `authorizeThisDevice` / `pairDevice` /
+  `posLoginWithPin` are dead. They now check `posSessionConfigured()` and return
+  `POS_SECRET_MISSING_ERROR` instead of throwing a raw 500 (staging ran without
+  the secret until 2026-07-27 — it was never added to `cloudbuild.yaml` — and
+  every "Authorize this device" click 500'd). `registerDevice` also SIGNS BEFORE
+  IT INSERTS: insert-then-sign left an orphan `pos_devices` row per failure, and
+  those rows count against `PLAN_LIMITS.posDevicesPerLocation`, so a broken
+  deployment eventually reported a bogus "already has 5 authorized devices".
+  Deploy wiring is per-env (`_POS_SESSION_SECRET_SECRET` → the
+  `POS_SESSION_SECRET_STAGING`/`_PROD` Secret Manager entries) — see
+  `docs/gcp-ci-cd.md`.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&
