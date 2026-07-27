@@ -427,33 +427,50 @@ export async function pairDevice(
 export interface PinLoginResult {
   success?: boolean;
   error?: string;
+  /** Credentials were correct, but this browser isn't an authorized device yet
+   *  — the client then asks for a pairing code rather than dead-ending. */
+  needsPairing?: boolean;
   operator?: { name: string; role: "cashier" | "manager" };
 }
 
+/**
+ * Sign a staff member in at the register.
+ *
+ * ORDER MATTERS: credentials are checked BEFORE the device. A cashier arriving
+ * at work should be able to type their email and PIN and be told what to do
+ * next — leading with "this device isn't set up" gives them a wall with no
+ * route through it. Verifying first lets us answer precisely: wrong PIN, or
+ * right PIN on a device that still needs pairing.
+ *
+ * This does NOT weaken the device lock. Correct credentials on an unauthorized
+ * device still mint NO operator session; the caller must supply a pairing code
+ * (which only an owner can generate) before anything can be sold.
+ */
 export async function posLoginWithPin(
   rawEmail: string,
   pin: string,
 ): Promise<PinLoginResult> {
   const storeId = await getCurrentStoreId();
 
-  // Staff are device-locked: only on an authorized device.
-  const device = await getAuthorizedDevice(storeId);
-  if (!device) {
-    return { error: "This device isn't set up for POS. Ask the store owner." };
-  }
-
-  const { allowed } = await rateLimit(`pos-pin:${device.deviceId}`, {
-    max: 8,
-    windowSeconds: 60,
-  });
-  if (!allowed) return { error: "Too many attempts. Please wait a moment." };
-
   const email =
     typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
   if (!email.includes("@")) return { error: "Enter your email." };
   if (!isValidPinFormat(pin)) return { error: "Enter your 8-digit PIN." };
 
-  // Login is by email (unique per store), scoped to the device's location.
+  // Throttled per email + IP: there may be no device yet to key on.
+  const ip = clientIp(await headers());
+  const [byEmail, byIp] = await Promise.all([
+    rateLimit(`pos-pin-email:${storeId}:${email}`, {
+      max: 8,
+      windowSeconds: 60,
+    }),
+    rateLimit(`pos-pin-ip:${ip}`, { max: 20, windowSeconds: 60 }),
+  ]);
+  if (!byEmail.allowed || !byIp.allowed) {
+    return { error: "Too many attempts. Please wait a moment." };
+  }
+
+  // 1. Verify WHO they are (login is by email, unique per store).
   let staff:
     | { id: string; name: string; role: string; pin_hash: string | null }
     | undefined;
@@ -467,13 +484,6 @@ export async function posLoginWithPin(
           pin_hash: posStaff.pinHash,
         })
         .from(posStaff)
-        .innerJoin(
-          posStaffLocations,
-          and(
-            eq(posStaffLocations.staffId, posStaff.id),
-            eq(posStaffLocations.locationId, device.locationId),
-          ),
-        )
         .where(
           and(
             eq(posStaff.storeId, storeId),
@@ -493,12 +503,51 @@ export async function posLoginWithPin(
     await posAudit({
       storeId,
       event: "operator_login_failed",
-      deviceId: device.deviceId,
-      locationId: device.locationId,
       actor: email,
       detail: "Incorrect email or PIN",
     });
-    return { error: "Incorrect email or PIN for this location." };
+    return { error: "Incorrect email or PIN." };
+  }
+
+  // 2. Only now check the device. Credentials are good, so we can guide them.
+  const device = await getAuthorizedDevice(storeId);
+  if (!device) {
+    return {
+      needsPairing: true,
+      error:
+        "This device isn't set up for the register yet. Enter a pairing code from Dashboard → POS → Devices.",
+    };
+  }
+
+  // 3. Managers/cashiers are location-bound — the device decides which counter.
+  let assigned = false;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ staff_id: posStaffLocations.staffId })
+        .from(posStaffLocations)
+        .where(
+          and(
+            eq(posStaffLocations.staffId, staff!.id),
+            eq(posStaffLocations.locationId, device.locationId),
+          ),
+        )
+        .limit(1),
+    );
+    assigned = !!rows[0];
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't sign in.") };
+  }
+  if (!assigned) {
+    await posAudit({
+      storeId,
+      event: "operator_login_failed",
+      deviceId: device.deviceId,
+      locationId: device.locationId,
+      actor: email,
+      detail: "Not assigned to this location",
+    });
+    return { error: "You're not assigned to this location." };
   }
 
   const jar = await cookies();

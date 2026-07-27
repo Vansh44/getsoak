@@ -206,15 +206,32 @@ describe("posLoginWithPin", () => {
     role: "cashier",
     pin_hash: hashPin("12345678"),
   };
+  // Reads in order: 1 staff-by-email, then (device permitting) 2 the
+  // location-assignment check.
+  const seed = (rows: any[][]) =>
+    (dbHolder.current = makeDbMock({ selectQueue: rows }));
 
   // THE device-restriction guarantee: correct credentials on an unauthorized
-  // device (e.g. the cashier's personal phone) must NOT sign them in.
+  // device (e.g. the cashier's personal phone) must NOT sign them in. They are
+  // now TOLD what to do rather than blocked before typing — but no operator
+  // session is minted, so nothing can be sold.
   it("refuses on an unauthorized device even with the right credentials", async () => {
     vi.mocked(getAuthorizedDevice).mockResolvedValue(null);
-    dbHolder.current = makeDbMock({ selectQueue: [[staffRow]] });
+    seed([[staffRow]]);
     const r = await posLoginWithPin("p@x.com", "12345678");
-    expect(r.error).toMatch(/isn't set up for pos/i);
+    expect(r.needsPairing).toBe(true);
+    expect(r.success).toBeUndefined();
     expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
+  });
+
+  // Credentials are checked BEFORE the device, so a bad PIN on an unpaired
+  // device is still reported as a bad PIN — never as "pair this device".
+  it("reports a wrong PIN even when the device is unauthorized", async () => {
+    vi.mocked(getAuthorizedDevice).mockResolvedValue(null);
+    seed([[{ ...staffRow, pin_hash: hashPin("99999999") }]]);
+    const r = await posLoginWithPin("p@x.com", "12345678");
+    expect(r.error).toMatch(/incorrect email or pin/i);
+    expect(r.needsPairing).toBeUndefined();
   });
 
   it("validates the email and PIN format", async () => {
@@ -227,7 +244,7 @@ describe("posLoginWithPin", () => {
 
   it("signs in on an authorized device and binds the session to it", async () => {
     vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
-    dbHolder.current = makeDbMock({ selectQueue: [[staffRow]] });
+    seed([[staffRow], [{ staff_id: "st1" }]]);
 
     const r = await posLoginWithPin(" P@X.com ", "12345678");
     expect(r.success).toBe(true);
@@ -244,24 +261,31 @@ describe("posLoginWithPin", () => {
     );
   });
 
+  // A manager for Delhi must not be able to ring sales on the Mumbai till.
+  it("refuses staff who aren't assigned to this device's location", async () => {
+    vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
+    seed([[staffRow], []]);
+    const r = await posLoginWithPin("p@x.com", "12345678");
+    expect(r.error).toMatch(/not assigned to this location/i);
+    expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
+  });
+
   it("rejects a wrong PIN", async () => {
     vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
-    dbHolder.current = makeDbMock({
-      selectQueue: [[{ ...staffRow, pin_hash: hashPin("99999999") }]],
-    });
+    seed([[{ ...staffRow, pin_hash: hashPin("99999999") }]]);
     const r = await posLoginWithPin("p@x.com", "12345678");
     expect(r.error).toMatch(/incorrect email or pin/i);
     expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
   });
 
-  it("rejects an unknown email / staff not assigned to this location", async () => {
+  it("rejects an unknown email", async () => {
     vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
-    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    seed([[]]);
     const r = await posLoginWithPin("ghost@x.com", "12345678");
     expect(r.error).toMatch(/incorrect email or pin/i);
   });
 
-  it("throttles repeated attempts per device", async () => {
+  it("throttles repeated attempts", async () => {
     vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
     vi.mocked(rateLimit).mockResolvedValue({ allowed: false });
     expect((await posLoginWithPin("p@x.com", "12345678")).error).toMatch(

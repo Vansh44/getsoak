@@ -66,8 +66,18 @@ export function ThermalReceipt({ receipt }: { receipt: ReceiptModel }) {
               {l.quantity} × {money(l.unitPrice)}
               {l.hsnCode ? `  HSN ${l.hsnCode}` : ""}
             </span>
-            <span>{money(l.total)}</span>
+            <span>{money(l.quantity * l.unitPrice)}</span>
           </div>
+          {/* Without this the line reads "2 × 100 ... 170" and the customer
+              is left to work out where the ₹30 went. */}
+          {l.lineDiscount > 0 && (
+            <div className="tr-row">
+              <span className="tr-muted">Less</span>
+              <span>
+                −{money(l.lineDiscount)} = {money(l.total)}
+              </span>
+            </div>
+          )}
         </div>
       ))}
 

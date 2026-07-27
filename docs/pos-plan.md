@@ -481,7 +481,10 @@ variant disambiguation, `placePosSale`, `verifyManagerPin`); `lib/billing/gst.ts
 `lib/pos/receipt.ts` + `components/pos/ThermalReceipt.tsx`; the register UI
 (product grid + search + barcode, cart, line/order discounts + reason codes,
 customer attach optional, tender modal with split + cash change + external-card +
-optional Razorpay QR, receipt print). Catalog IndexedDB preload.
+optional Razorpay QR, receipt print). Catalog IndexedDB preload — **DONE**
+(`lib/pos/catalog-index.ts` + `catalog-store.ts` + `use-catalog.ts`, fed by
+`getCatalogSnapshot`; measured ~0.001 ms per scan and 1.4–5.3 ms per keystroke
+at 1k–20k SKUs, so §10's <50 ms target is met with room to spare).
 Tests: `pos-sale-actions.test.ts` at `checkout-actions.test.ts` rigor —
 price tampering, discount-cap + manager approval, GST split reconciliation,
 reserve-at-location, split-tender totalling, rollback paths, POS-order RLS

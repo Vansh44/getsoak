@@ -1029,6 +1029,16 @@ export const orderItems = pgTable(
       .default(0)
       .notNull(),
     taxClassName: text("tax_class_name"),
+    // Per-line markdown (supabase/pos_07_line_discount.sql). `total` is
+    // already net of it — this records WHY the line is cheaper, so the
+    // receipt adds up and markdowns stay auditable.
+    lineDiscount: numeric("line_discount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
     // India GST split (pos_06). tax_amount stays the TOTAL for this line;
     // these three are how it divides — cgst+sgst (intra-state) XOR igst.
     taxCgst: numeric("tax_cgst", { precision: 12, scale: 2, mode: "number" })

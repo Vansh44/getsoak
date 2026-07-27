@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -19,17 +20,25 @@ import {
   X,
   ScanLine,
   Camera,
+  Package,
+  Database,
+  UserPlus,
+  UserRound,
 } from "lucide-react";
 import {
   lookupProducts,
   placePosSale,
   verifyManagerPin,
   type PosCatalogItem,
+  type PosCustomer,
   type PosTender,
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
+import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
+import { useCatalog } from "@/lib/pos/use-catalog";
+import { itemKey } from "@/lib/pos/catalog-index";
 import { IdleLock } from "../idle-lock";
 import { TenderPanel } from "./tender-panel";
 import { ReceiptOverlay } from "./receipt-overlay";
@@ -43,6 +52,9 @@ export interface CartLine {
   variantName: string | null;
   unitPrice: number;
   quantity: number;
+  /** Markdown on this line only, in rupees — for one damaged/expiring unit.
+   *  Re-derived and capped server-side; this is a display value. */
+  lineDiscount: number;
   /** Live stock at this location; null = untracked. */
   stock: number | null;
   trackInventory: boolean;
@@ -64,7 +76,13 @@ export function SellClient({
   initialItems: PosCatalogItem[];
 }) {
   const router = useRouter();
-  const [items, setItems] = useState<PosCatalogItem[]>(initialItems);
+  // The local catalog: IndexedDB-backed, background-synced, seeded with the
+  // server-rendered first page so the grid is populated before it warms up.
+  const catalog = useCatalog(config.storeId, config.locationId, initialItems);
+  // Grid contents from the SERVER fallback only. Once the cache is warm the
+  // grid is derived from (query, index) during render — see `items` below.
+  const [serverItems, setServerItems] =
+    useState<PosCatalogItem[]>(initialItems);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -75,6 +93,10 @@ export function SellClient({
   // Disambiguation when one barcode maps to several variants.
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // Customer attach (optional) + the B2B GSTIN that prints on the invoice.
+  const [customer, setCustomer] = useState<PosCustomer | null>(null);
+  const [gstin, setGstin] = useState("");
+  const [customerOpen, setCustomerOpen] = useState(false);
   // Feature-detected on the CLIENT only — the server can't know whether this
   // browser can scan, and rendering a button that does nothing is worse than
   // hiding it. useSyncExternalStore (rather than an effect) gives the server a
@@ -100,21 +122,30 @@ export function SellClient({
   }, [refocus, cart.length]);
 
   const addItem = useCallback((it: PosCatalogItem) => {
+    const label = it.variantName ? `${it.name} (${it.variantName})` : it.name;
+    // Clamp to stock at THIS location unless the SKU is untracked or
+    // backorderable. The server re-checks; this only avoids ringing up what
+    // can't be sold. Every rejection MUST say why — silently doing nothing
+    // after a scan looks like the scanner is broken.
+    const cap =
+      it.trackInventory && !it.allowBackorder ? (it.stock ?? 0) : Infinity;
+    if (cap < 1) {
+      setError(`${label} is out of stock at this location.`);
+      return;
+    }
     setError(null);
     setCart((c) => {
       const key = lineKey(it.productId, it.variantId);
       const found = c.find((l) => l.key === key);
-      // Clamp to live stock unless the SKU is untracked or backorderable —
-      // the server re-checks, this just avoids ringing what can't be sold.
-      const cap =
-        it.trackInventory && !it.allowBackorder ? (it.stock ?? 0) : Infinity;
       if (found) {
-        if (found.quantity + 1 > cap) return c;
+        if (found.quantity + 1 > cap) {
+          setError(`Only ${cap} of ${label} left at this location.`);
+          return c;
+        }
         return c.map((l) =>
           l.key === key ? { ...l, quantity: l.quantity + 1 } : l,
         );
       }
-      if (cap < 1) return c;
       return [
         ...c,
         {
@@ -125,6 +156,7 @@ export function SellClient({
           variantName: it.variantName,
           unitPrice: it.price,
           quantity: 1,
+          lineDiscount: 0,
           stock: it.stock,
           trackInventory: it.trackInventory,
           allowBackorder: it.allowBackorder,
@@ -133,45 +165,92 @@ export function SellClient({
     });
   }, []);
 
-  const runSearch = useCallback(
-    async (q: string, fromScan: boolean) => {
-      setSearching(true);
+  /** One scanned/typed code resolved to zero, one, or several SKUs. */
+  const resolveScan = useCallback(
+    (found: PosCatalogItem[]): boolean => {
+      if (found.length === 1) {
+        addItem(found[0]);
+        setQuery("");
+        return true;
+      }
+      if (found.length > 1) {
+        // Several SKUs share this code — make the cashier pick rather than
+        // guessing (mislabelled supplier barcodes are common).
+        setChoices(found);
+        setQuery("");
+        return true;
+      }
+      return false;
+    },
+    [addItem],
+  );
+
+  // Enter (or a hardware scanner's trailing Enter) = a scan.
+  const runScan = useCallback(
+    async (code: string) => {
       setError(null);
-      const res = await lookupProducts(q);
+      // Local first: this is the path that makes a scan land in the cart in
+      // <50 ms with no network at all.
+      if (catalog.ready && resolveScan(catalog.scan(code))) return;
+
+      // A local MISS is not an answer — the product may have been created
+      // since the last sync. Ask the server before telling the cashier no.
+      setSearching(true);
+      const res = await lookupProducts(code);
       setSearching(false);
       if (res.error) {
         setError(res.error);
         return;
       }
-      if (fromScan) {
-        if (res.items.length === 1) {
-          addItem(res.items[0]);
-          setQuery("");
-          return;
-        }
-        if (res.items.length === 0) {
-          setError(`Nothing found for "${q}".`);
-          return;
-        }
-        // Several SKUs share this code — make the cashier pick rather than
-        // guessing (mislabelled supplier barcodes are common).
-        setChoices(res.items);
-        return;
-      }
-      setItems(res.items);
+      if (!resolveScan(res.items)) setError(`Nothing found for "${code}".`);
     },
-    [addItem],
+    [catalog, resolveScan],
   );
 
-  // Debounced browse-as-you-type; Enter is treated as a scan.
+  // Browse-as-you-type. Against the local index the grid is DERIVED, not
+  // stored: recomputing during render costs ~1 ms at a few thousand SKUs and
+  // removes any chance of the grid disagreeing with the index. catalog.version
+  // is the dependency that picks up a sync or a post-sale stock decrement.
+  const trimmedQuery = query.trim();
+  const items = useMemo(
+    () => (catalog.ready ? catalog.search(trimmedQuery) : serverItems),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [catalog.ready, catalog.version, catalog.search, trimmedQuery, serverItems],
+  );
+
+  // The server path exists only until the cache warms up (and on a device
+  // where IndexedDB is unavailable, where it stays the permanent path).
   useEffect(() => {
-    if (!query) {
-      const t = setTimeout(() => void runSearch("", false), 150);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => void runSearch(query, false), 220);
+    if (catalog.ready) return;
+    const t = setTimeout(
+      async () => {
+        setSearching(true);
+        const res = await lookupProducts(trimmedQuery);
+        setSearching(false);
+        if (res.error) setError(res.error);
+        else setServerItems(res.items);
+      },
+      trimmedQuery ? 220 : 150,
+    );
     return () => clearTimeout(t);
-  }, [query, runSearch]);
+  }, [trimmedQuery, catalog.ready]);
+
+  const setLineDiscount = (key: string, value: number) =>
+    setCart((c) =>
+      c.map((l) =>
+        l.key === key
+          ? // Never let a markdown exceed the line — the server caps it too,
+            // but a negative line total on screen is just wrong.
+            {
+              ...l,
+              lineDiscount: Math.min(
+                Math.max(0, value),
+                l.unitPrice * l.quantity,
+              ),
+            }
+          : l,
+      ),
+    );
 
   const setQty = (key: string, delta: number) =>
     setCart((c) =>
@@ -185,9 +264,15 @@ export function SellClient({
     );
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-  const cappedDiscount = Math.min(Math.max(0, discount), subtotal);
+  const lineDiscountTotal = cart.reduce((s, l) => s + l.lineDiscount, 0);
+  // The order-level discount applies to what's left after line markdowns —
+  // the same order placePosSale uses, so the screen matches the bill.
+  const cappedDiscount = Math.min(
+    Math.max(0, discount),
+    Math.max(0, subtotal - lineDiscountTotal),
+  );
   // Display-only estimate; placePosSale recomputes tax authoritatively.
-  const estTotal = Math.max(0, subtotal - cappedDiscount);
+  const estTotal = Math.max(0, subtotal - lineDiscountTotal - cappedDiscount);
 
   const completeSale = async (
     tenders: PosTender[],
@@ -198,15 +283,26 @@ export function SellClient({
         productId: l.productId,
         variantId: l.variantId,
         quantity: l.quantity,
+        lineDiscount: l.lineDiscount || undefined,
       })),
       tenders,
-      { orderDiscount: cappedDiscount, managerApproved },
+      {
+        orderDiscount: cappedDiscount,
+        managerApproved,
+        customerId: customer?.id ?? null,
+        customerGstin: gstin.trim() || null,
+      },
     );
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
     }
+    // Reflect the sale in the local catalog at once — the next scan of the
+    // same SKU shows the new on-hand without waiting for the 5-min sync.
+    catalog.applySold(new Map(cart.map((l) => [itemKey(l), l.quantity])));
     setCart([]);
     setDiscount(0);
+    setCustomer(null);
+    setGstin("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
     router.refresh();
@@ -223,6 +319,26 @@ export function SellClient({
           Register
         </div>
         <div className="flex items-center gap-3 text-sm">
+          {/* Cache state, deliberately quiet. A cashier only needs it when
+              something looks wrong — hence the click-to-refresh. */}
+          <button
+            type="button"
+            onClick={catalog.resync}
+            disabled={catalog.syncing}
+            title={
+              catalog.ready
+                ? `${catalog.count} products cached on this device. Click to refresh.`
+                : "Loading the catalog…"
+            }
+            className="hidden items-center gap-1.5 rounded-lg px-2 py-1 text-white/40 transition-colors hover:bg-white/10 hover:text-white/70 disabled:opacity-60 sm:inline-flex"
+          >
+            {catalog.syncing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Database className="h-3.5 w-3.5" strokeWidth={2} />
+            )}
+            {catalog.ready ? catalog.count : "…"}
+          </button>
           <span className="flex items-center gap-1.5 text-white/70">
             <MapPin className="h-4 w-4" strokeWidth={2} />
             {config.locationName}
@@ -255,12 +371,15 @@ export function SellClient({
                 ref={scanRef}
                 value={query}
                 autoFocus
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setError(null);
+                }}
                 onBlur={() => setTimeout(refocus, 80)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && query.trim()) {
                     e.preventDefault();
-                    void runSearch(query.trim(), true);
+                    void runScan(query.trim());
                   }
                 }}
                 placeholder="Scan a barcode or search products…"
@@ -301,8 +420,25 @@ export function SellClient({
                   type="button"
                   disabled={out}
                   onClick={() => addItem(it)}
-                  className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-3 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
+                  className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-2 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
                 >
+                  {/* Photos make the grid scannable by eye for items without a
+                      barcode (loose produce, bakery). */}
+                  <div className="mb-2 aspect-square w-full overflow-hidden rounded-lg bg-white/5">
+                    {it.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={it.image}
+                        alt=""
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-white/20">
+                        <Package className="h-8 w-8" strokeWidth={1.5} />
+                      </div>
+                    )}
+                  </div>
                   <span className="line-clamp-2 text-sm font-medium">
                     {it.name}
                   </span>
@@ -389,9 +525,43 @@ export function SellClient({
                         <Plus className="h-4 w-4" />
                       </button>
                     </div>
-                    <span className="font-semibold">
+                    <span
+                      className={
+                        l.lineDiscount > 0
+                          ? "text-sm text-white/40 line-through"
+                          : "font-semibold"
+                      }
+                    >
                       ₹{(l.unitPrice * l.quantity).toLocaleString("en-IN")}
                     </span>
+                  </div>
+                  {/* Per-line markdown — for the one damaged or expiring unit,
+                      as opposed to a discount across the whole sale. */}
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                    <label className="flex items-center gap-1.5 text-white/50">
+                      Less ₹
+                      <input
+                        value={l.lineDiscount || ""}
+                        inputMode="numeric"
+                        onChange={(e) =>
+                          setLineDiscount(
+                            l.key,
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                        placeholder="0"
+                        className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
+                      />
+                    </label>
+                    {l.lineDiscount > 0 && (
+                      <span className="font-semibold text-white">
+                        ₹
+                        {(
+                          l.unitPrice * l.quantity -
+                          l.lineDiscount
+                        ).toLocaleString("en-IN")}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))
@@ -399,10 +569,42 @@ export function SellClient({
           </div>
 
           <div className="shrink-0 border-t border-white/10 p-3">
+            {/* Optional: a sale completes fine without a customer. */}
+            <button
+              type="button"
+              onClick={() => setCustomerOpen(true)}
+              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm transition-colors hover:bg-white/10"
+            >
+              {customer ? (
+                <>
+                  <UserRound className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {customer.name}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="h-4 w-4 shrink-0 text-white/40" />
+                  <span className="flex-1 text-white/50">Add customer</span>
+                </>
+              )}
+              {gstin && (
+                <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] tracking-wide text-white/60">
+                  GST
+                </span>
+              )}
+            </button>
+
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="text-white/60">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>
             </div>
+            {lineDiscountTotal > 0 && (
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="text-white/60">Line discounts</span>
+                <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
+              </div>
+            )}
             <label className="mb-2 flex items-center justify-between gap-2 text-sm">
               <span className="text-white/60">Discount ₹</span>
               <input
@@ -485,8 +687,19 @@ export function SellClient({
           duplicate-barcode disambiguation and "not found" behave the same. */}
       {cameraOpen && (
         <CameraScanner
-          onScan={(code) => void runSearch(code, true)}
+          onScan={(code) => void runScan(code)}
           onClose={() => setCameraOpen(false)}
+        />
+      )}
+
+      {customerOpen && (
+        <CustomerPanel
+          customer={customer}
+          gstin={gstin}
+          gstEnabled={config.gstEnabled}
+          onPick={setCustomer}
+          onGstin={setGstin}
+          onClose={() => setCustomerOpen(false)}
         />
       )}
 

@@ -394,6 +394,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
+│   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
 │   ├── customer_addresses.sql # ★ saved shipping addresses (own-row RLS) — checkout book
 │   ├── coupon_usage_rpc.sql   # ★ increment_/decrement_coupon_usage: atomic used_count
@@ -763,6 +765,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       order row is deleted (best-effort rollback — no cross-statement txn over
       PostgREST). **If you ever move checkout off the service-role client, add a
       customer INSERT policy first** (see the note in `orders_table.sql`).
+    - **Customer order reads are store-scoped in the DB**
+      (`supabase/pos_08_customer_order_store_scope.sql`). The customer SELECT
+      policies on `orders`/`order_items` were `customer_id = auth.uid()` with
+      NO store predicate — and a Firebase uid is global, so any order anywhere
+      carrying that uid was readable. They now also require
+      `store_id = auth_customer_store_id()` (a SECURITY DEFINER helper; a uid
+      maps to exactly one store because `users.id` is the PK, so no request
+      context is needed). This is defence in depth for the rule above — **an
+      unvalidated `customer_id` write is what makes it exploitable**, which is
+      exactly the bug `placePosSale` had (§22). The migration ends with a guard
+      that FAILS if any policy on those tables keys off `customer_id` without
+      the store scope.
     - **Dashboard reads/writes**: `order-actions.ts` gates on
       `getManagerIdentity("orders")`, scopes every query by `store_id`, paginates
       `getOrders`, and allowlists `status`/`payment_status` in `updateOrderStatus`.
@@ -1253,9 +1267,77 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `login/` (email + PIN pad / password), `register/` (the 3-step
         self-registration wizard). Dashboard: `/dashboard/pos/staff` +
         `/dashboard/pos/devices`.
-    - **Not yet built (Phase 2 = v1):** the sell path (`placePosSale` + product
-      grid/barcode/cart/tender), GST place-of-supply (CGST/SGST/IGST), and
-      thermal receipts — see `docs/pos-plan.md` Phase 2.
+    - **Phase 2 (v1, done) = the register.** `app/actions/pos-sale-actions.ts`
+      is the sell path's trust boundary and mirrors `placeOrder` (§12) step for
+      step: operator resolved server-side, prices RE-READ from the DB, discount
+      re-derived and capped (manager PIN above the cap via `verifyManagerPin`),
+      tax recomputed, stock reserved atomically **at the register's location**
+      (`reserve_stock_at`), service-role writes last, and a reverse rollback
+      chain on any failure. `getRegisterConfig` opens the register;
+      `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
+        AMOUNT (not the rate) so it can never disagree with `computeTax`'s
+        rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
+        inter-state ⇒ IGST; unknown data defaults to INTRA. Snapshotted per line
+        (`order_items.tax_cgst/tax_sgst/tax_igst`).
+      - **Thermal receipt**: `lib/pos/receipt.ts` (pure `buildReceiptModel` off
+        the order snapshot) + `components/pos/thermal-receipt.tsx` + its CSS —
+        a 80mm roll format, deliberately NOT the A4 invoice of §17.
+      - **Barcode scanning, three engines behind one seam**
+        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so a
+        focused hidden input + its trailing Enter is the default and needs no
+        permission; on mobile the camera uses the native `BarcodeDetector`, and
+        `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
+        SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
+        entered in the product editor. StoreMink never prints its own.
+      - **★ Local catalog cache — the "<50 ms, zero network" promise
+        (docs/pos-plan.md §10).** `lib/pos/catalog-index.ts` is the PURE
+        matching core (`buildIndex`/`scanLocal`/`searchLocal`/
+        `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
+        per **store+location** (stock is per-location and a browser can be
+        shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
+        the full catalog in the background via `getCatalogSnapshot` (keyset
+        paging over `products.id`, 300 products/page — pages stay stable while
+        the catalog is edited, and a product's variants can't split at a seam).
+        Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
+        keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
+        search is a plain linear scan rather than an inverted index that would
+        need invalidating on every sync. Three rules keep it honest: a local
+        MISS falls through to `lookupProducts` (a product created since the last
+        sync must stay sellable); nothing cached is authoritative (the server
+        re-prices and re-reserves, so staleness is a display bug at worst, never
+        a wrong charge or an oversell); and **every IndexedDB call degrades to a
+        no-op** when the API is missing or throws (private-mode Safari, kiosk
+        profiles, quota) so the register just falls back to the server. Sales
+        decrement the cache immediately (`applySold`); a 5-min interval
+        re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
+        finds an EXISTING customer of the store (phone/name/email, 2-char
+        floor, store-scoped) to attach to a sale; the register cannot CREATE
+        one, because `users.id` IS the Firebase uid and `(phone, store_id)` is
+        unique — a till-invented row would collide with, and break, that same
+        person's later online signup. Walk-in capture needs a claim/merge
+        story and belongs with the CRM phase. `placePosSale` **verifies the
+        customer belongs to this store** before writing (without it a sale
+        could be filed against another store's customer, who holds RLS SELECT
+        on their own orders and would see a foreign order in their history)
+        and **format-validates the GSTIN** (`isValidGstinFormat`, normalised
+        upper-case) since it prints on the invoice. The GSTIN is independent
+        of the attach — a business buyer needs no account to get it on the
+        bill. **Per-line discounts** mark down ONE line (a damaged tin) as
+        opposed to the whole sale: capped server-side at the line's own gross,
+        counted toward the manager-approval cap together with the order-level
+        discount (so a cashier can't stay under it by splitting the giveaway),
+        and persisted in `order_items.line_discount`
+        (`supabase/pos_07_line_discount.sql`) — `total` stays net of it, so
+        existing readers are unaffected, and the thermal receipt prints
+        "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
+        doesn't add up. Recording it also makes markdowns auditable per
+        cashier, which is the point of the cap.
+    - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
+      inventory (4), returns/store credit (5), Twilio receipts (6), metered
+      extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
+      See `docs/pos-plan.md`.
 
 ## 6. Commands
 

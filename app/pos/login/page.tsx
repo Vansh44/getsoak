@@ -19,7 +19,5 @@ export default async function PosLoginPage() {
       locations.find((l) => l.id === device.locationId)?.name ?? null;
   }
 
-  return (
-    <PosLoginClient deviceAuthorized={!!device} locationName={locationName} />
-  );
+  return <PosLoginClient locationName={locationName} />;
 }
