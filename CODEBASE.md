@@ -394,6 +394,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
+│   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
 │   ├── customer_addresses.sql # ★ saved shipping addresses (own-row RLS) — checkout book
 │   ├── coupon_usage_rpc.sql   # ★ increment_/decrement_coupon_usage: atomic used_count
@@ -763,6 +765,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       order row is deleted (best-effort rollback — no cross-statement txn over
       PostgREST). **If you ever move checkout off the service-role client, add a
       customer INSERT policy first** (see the note in `orders_table.sql`).
+    - **Customer order reads are store-scoped in the DB**
+      (`supabase/pos_08_customer_order_store_scope.sql`). The customer SELECT
+      policies on `orders`/`order_items` were `customer_id = auth.uid()` with
+      NO store predicate — and a Firebase uid is global, so any order anywhere
+      carrying that uid was readable. They now also require
+      `store_id = auth_customer_store_id()` (a SECURITY DEFINER helper; a uid
+      maps to exactly one store because `users.id` is the PK, so no request
+      context is needed). This is defence in depth for the rule above — **an
+      unvalidated `customer_id` write is what makes it exploitable**, which is
+      exactly the bug `placePosSale` had (§22). The migration ends with a guard
+      that FAILS if any policy on those tables keys off `customer_id` without
+      the store scope.
     - **Dashboard reads/writes**: `order-actions.ts` gates on
       `getManagerIdentity("orders")`, scopes every query by `store_id`, paginates
       `getOrders`, and allowlists `status`/`payment_status` in `updateOrderStatus`.
