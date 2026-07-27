@@ -1297,11 +1297,32 @@ group, span}` (span = columns of the 4-wide desktop grid),
         profiles, quota) so the register just falls back to the server. Sales
         decrement the cache immediately (`applySold`); a 5-min interval
         re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
+        finds an EXISTING customer of the store (phone/name/email, 2-char
+        floor, store-scoped) to attach to a sale; the register cannot CREATE
+        one, because `users.id` IS the Firebase uid and `(phone, store_id)` is
+        unique — a till-invented row would collide with, and break, that same
+        person's later online signup. Walk-in capture needs a claim/merge
+        story and belongs with the CRM phase. `placePosSale` **verifies the
+        customer belongs to this store** before writing (without it a sale
+        could be filed against another store's customer, who holds RLS SELECT
+        on their own orders and would see a foreign order in their history)
+        and **format-validates the GSTIN** (`isValidGstinFormat`, normalised
+        upper-case) since it prints on the invoice. The GSTIN is independent
+        of the attach — a business buyer needs no account to get it on the
+        bill. **Per-line discounts** mark down ONE line (a damaged tin) as
+        opposed to the whole sale: capped server-side at the line's own gross,
+        counted toward the manager-approval cap together with the order-level
+        discount (so a cashier can't stay under it by splitting the giveaway),
+        and persisted in `order_items.line_discount`
+        (`supabase/pos_07_line_discount.sql`) — `total` stays net of it, so
+        existing readers are unaffected, and the thermal receipt prints
+        "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
+        doesn't add up. Recording it also makes markdowns auditable per
+        cashier, which is the point of the cap.
     - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
       inventory (4), returns/store credit (5), Twilio receipts (6), metered
       extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
-      Customer attach is wired server-side (`placePosSale` accepts
-      `customerId`/`customerGstin`) but has no register UI yet.
       See `docs/pos-plan.md`.
 
 ## 6. Commands

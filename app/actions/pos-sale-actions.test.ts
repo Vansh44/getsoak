@@ -27,7 +27,11 @@ vi.mock("@/lib/db/client", () => ({
 import { withService } from "@/lib/db/client";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import { getCatalogSnapshot, placePosSale } from "./pos-sale-actions";
+import {
+  getCatalogSnapshot,
+  placePosSale,
+  searchPosCustomers,
+} from "./pos-sale-actions";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -390,5 +394,180 @@ describe("getCatalogSnapshot", () => {
     const r = await getCatalogSnapshot();
     expect(r.error).toBeTruthy();
     expect(r.items).toEqual([]);
+  });
+});
+
+describe("placePosSale — customer attach", () => {
+  // With a customerId the ownership lookup runs FIRST, ahead of the pricing
+  // reads, so the queue gains a leading row.
+  const seedWithCustomer = (owner: any[]) =>
+    (dbHolder.current = makeDbMock({
+      selectQueue: [
+        owner, // 0 users (ownership check)
+        [PRODUCT],
+        [BILLING],
+        [TAX_CLASS],
+        [{ state_code: "07" }],
+        [{ prefix: "DEL" }],
+      ],
+      executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
+      returning: [{ id: "o1", order_ref: "ORD100110006" }],
+    }));
+
+  it("attaches a customer who belongs to this store", async () => {
+    seedWithCustomer([{ id: "cust-1" }]);
+    const r = await placePosSale([line], cash, { customerId: "cust-1" });
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].customerId).toBe("cust-1");
+  });
+
+  // THE tenant-isolation guarantee. Without the ownership check the sale would
+  // be filed against another store's customer, who holds RLS SELECT on their
+  // own orders and would then see a foreign order in their history.
+  it("refuses a customer id belonging to another store", async () => {
+    seedWithCustomer([]); // no row matches (id AND store_id)
+    const r = await placePosSale([line], cash, { customerId: "other-store" });
+    expect(r.error).toMatch(/isn't in this store/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("treats a blank customer id as a walk-in", async () => {
+    const r = await placePosSale([line], cash, { customerId: "   " });
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].customerId).toBeNull();
+  });
+});
+
+describe("placePosSale — GSTIN", () => {
+  it("normalises a valid GSTIN to upper case", async () => {
+    const r = await placePosSale([line], cash, {
+      customerGstin: " 22aaaaa0000a1z5 ",
+    });
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].customerGstin).toBe(
+      "22AAAAA0000A1Z5",
+    );
+  });
+
+  // It prints on the customer's invoice, so a malformed one is rejected at the
+  // boundary rather than immortalised on a document.
+  it("rejects a malformed GSTIN before writing anything", async () => {
+    const r = await placePosSale([line], cash, {
+      customerGstin: "NOT-A-GSTIN",
+    });
+    expect(r.error).toMatch(/gstin/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("treats a blank GSTIN as absent", async () => {
+    const r = await placePosSale([line], cash, { customerGstin: "  " });
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].customerGstin).toBeNull();
+  });
+});
+
+describe("placePosSale — line discounts", () => {
+  const twoOf = { productId: "p1", variantId: null, quantity: 2 };
+
+  it("reduces the line amount and the order total", async () => {
+    // 2 x ₹100 = ₹200, less ₹30 = ₹170, +18% = ₹200.60 -> 201
+    const r = await placePosSale(
+      [{ ...twoOf, lineDiscount: 30 }],
+      [{ method: "cash", amount: 201, tendered: 201 }],
+      { managerApproved: true }, // 15% is over the 10% cap
+    );
+    expect(r.success).toBe(true);
+    const order = dbHolder.current.calls.values[0];
+    expect(order.subtotal).toBe(200);
+    expect(order.discount).toBe(30);
+    const items = dbHolder.current.calls.values[1];
+    expect(items[0].lineDiscount).toBe(30);
+    expect(items[0].total).toBe(170);
+  });
+
+  // A markdown larger than the line would otherwise make the line negative and
+  // quietly discount the rest of the sale.
+  it("caps a line discount at the line's own value", async () => {
+    const r = await placePosSale(
+      [{ ...twoOf, lineDiscount: 9999 }],
+      [{ method: "cash", amount: 1, tendered: 1 }],
+      { managerApproved: true },
+    );
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].discount).toBe(200);
+    expect(dbHolder.current.calls.values[1][0].total).toBe(0);
+  });
+
+  // The cap is on TOTAL generosity — line and order discounts together — so a
+  // cashier can't stay under it by splitting the giveaway across both.
+  it("counts line discounts toward the manager-approval cap", async () => {
+    const r = await placePosSale(
+      [{ ...twoOf, lineDiscount: 50 }], // 25% of ₹200; cap is 10%
+      [{ method: "cash", amount: 1 }],
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("ignores a negative or non-numeric line discount", async () => {
+    const r = await placePosSale(
+      [{ ...twoOf, lineDiscount: -50 }],
+      [{ method: "cash", amount: 236, tendered: 236 }],
+    );
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].discount).toBe(0);
+  });
+});
+
+describe("searchPosCustomers", () => {
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    expect((await searchPosCustomers("ravi")).error).toMatch(/signed in/i);
+  });
+
+  // A one-character search would stream a large slice of the customer list to
+  // a shared till for no benefit.
+  it("returns nothing below the 2-character floor without querying", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[{ id: "c1" }]] });
+    const r = await searchPosCustomers("r");
+    expect(r.customers).toEqual([]);
+    expect(dbHolder.current.calls.where).toHaveLength(0);
+  });
+
+  // sqlText renders operators without column names, so this asserts the
+  // SHAPE: an equality (the store scope) AND-ed ahead of the name/phone/email
+  // OR group. Drop the store scope and the leading `=` disappears.
+  it("scopes the search to the operator's store", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    await searchPosCustomers("ravi");
+    expect(sqlText(dbHolder.current.calls.where[0])).toMatch(
+      /^\( = {2}and \( ilike( {2}or {2}ilike)+ \)\)$/,
+    );
+  });
+
+  it("builds a display name and falls back to the phone", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "c1",
+            phone: "9876543210",
+            email: "r@x.com",
+            first_name: "Ravi",
+            last_name: "Kumar",
+          },
+          {
+            id: "c2",
+            phone: "9000000000",
+            email: null,
+            first_name: "",
+            last_name: null,
+          },
+        ],
+      ],
+    });
+    const r = await searchPosCustomers("ravi");
+    expect(r.customers[0]).toMatchObject({ name: "Ravi Kumar", id: "c1" });
+    expect(r.customers[1].name).toBe("9000000000");
   });
 });

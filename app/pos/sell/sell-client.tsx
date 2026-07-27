@@ -22,15 +22,19 @@ import {
   Camera,
   Package,
   Database,
+  UserPlus,
+  UserRound,
 } from "lucide-react";
 import {
   lookupProducts,
   placePosSale,
   verifyManagerPin,
   type PosCatalogItem,
+  type PosCustomer,
   type PosTender,
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
+import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import { useCatalog } from "@/lib/pos/use-catalog";
@@ -48,6 +52,9 @@ export interface CartLine {
   variantName: string | null;
   unitPrice: number;
   quantity: number;
+  /** Markdown on this line only, in rupees — for one damaged/expiring unit.
+   *  Re-derived and capped server-side; this is a display value. */
+  lineDiscount: number;
   /** Live stock at this location; null = untracked. */
   stock: number | null;
   trackInventory: boolean;
@@ -86,6 +93,10 @@ export function SellClient({
   // Disambiguation when one barcode maps to several variants.
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // Customer attach (optional) + the B2B GSTIN that prints on the invoice.
+  const [customer, setCustomer] = useState<PosCustomer | null>(null);
+  const [gstin, setGstin] = useState("");
+  const [customerOpen, setCustomerOpen] = useState(false);
   // Feature-detected on the CLIENT only — the server can't know whether this
   // browser can scan, and rendering a button that does nothing is worse than
   // hiding it. useSyncExternalStore (rather than an effect) gives the server a
@@ -145,6 +156,7 @@ export function SellClient({
           variantName: it.variantName,
           unitPrice: it.price,
           quantity: 1,
+          lineDiscount: 0,
           stock: it.stock,
           trackInventory: it.trackInventory,
           allowBackorder: it.allowBackorder,
@@ -223,6 +235,23 @@ export function SellClient({
     return () => clearTimeout(t);
   }, [trimmedQuery, catalog.ready]);
 
+  const setLineDiscount = (key: string, value: number) =>
+    setCart((c) =>
+      c.map((l) =>
+        l.key === key
+          ? // Never let a markdown exceed the line — the server caps it too,
+            // but a negative line total on screen is just wrong.
+            {
+              ...l,
+              lineDiscount: Math.min(
+                Math.max(0, value),
+                l.unitPrice * l.quantity,
+              ),
+            }
+          : l,
+      ),
+    );
+
   const setQty = (key: string, delta: number) =>
     setCart((c) =>
       c.flatMap((l) => {
@@ -235,9 +264,15 @@ export function SellClient({
     );
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-  const cappedDiscount = Math.min(Math.max(0, discount), subtotal);
+  const lineDiscountTotal = cart.reduce((s, l) => s + l.lineDiscount, 0);
+  // The order-level discount applies to what's left after line markdowns —
+  // the same order placePosSale uses, so the screen matches the bill.
+  const cappedDiscount = Math.min(
+    Math.max(0, discount),
+    Math.max(0, subtotal - lineDiscountTotal),
+  );
   // Display-only estimate; placePosSale recomputes tax authoritatively.
-  const estTotal = Math.max(0, subtotal - cappedDiscount);
+  const estTotal = Math.max(0, subtotal - lineDiscountTotal - cappedDiscount);
 
   const completeSale = async (
     tenders: PosTender[],
@@ -248,9 +283,15 @@ export function SellClient({
         productId: l.productId,
         variantId: l.variantId,
         quantity: l.quantity,
+        lineDiscount: l.lineDiscount || undefined,
       })),
       tenders,
-      { orderDiscount: cappedDiscount, managerApproved },
+      {
+        orderDiscount: cappedDiscount,
+        managerApproved,
+        customerId: customer?.id ?? null,
+        customerGstin: gstin.trim() || null,
+      },
     );
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
@@ -260,6 +301,8 @@ export function SellClient({
     catalog.applySold(new Map(cart.map((l) => [itemKey(l), l.quantity])));
     setCart([]);
     setDiscount(0);
+    setCustomer(null);
+    setGstin("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
     router.refresh();
@@ -482,9 +525,43 @@ export function SellClient({
                         <Plus className="h-4 w-4" />
                       </button>
                     </div>
-                    <span className="font-semibold">
+                    <span
+                      className={
+                        l.lineDiscount > 0
+                          ? "text-sm text-white/40 line-through"
+                          : "font-semibold"
+                      }
+                    >
                       ₹{(l.unitPrice * l.quantity).toLocaleString("en-IN")}
                     </span>
+                  </div>
+                  {/* Per-line markdown — for the one damaged or expiring unit,
+                      as opposed to a discount across the whole sale. */}
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                    <label className="flex items-center gap-1.5 text-white/50">
+                      Less ₹
+                      <input
+                        value={l.lineDiscount || ""}
+                        inputMode="numeric"
+                        onChange={(e) =>
+                          setLineDiscount(
+                            l.key,
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                        placeholder="0"
+                        className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
+                      />
+                    </label>
+                    {l.lineDiscount > 0 && (
+                      <span className="font-semibold text-white">
+                        ₹
+                        {(
+                          l.unitPrice * l.quantity -
+                          l.lineDiscount
+                        ).toLocaleString("en-IN")}
+                      </span>
+                    )}
                   </div>
                 </div>
               ))
@@ -492,10 +569,42 @@ export function SellClient({
           </div>
 
           <div className="shrink-0 border-t border-white/10 p-3">
+            {/* Optional: a sale completes fine without a customer. */}
+            <button
+              type="button"
+              onClick={() => setCustomerOpen(true)}
+              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm transition-colors hover:bg-white/10"
+            >
+              {customer ? (
+                <>
+                  <UserRound className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {customer.name}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="h-4 w-4 shrink-0 text-white/40" />
+                  <span className="flex-1 text-white/50">Add customer</span>
+                </>
+              )}
+              {gstin && (
+                <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] tracking-wide text-white/60">
+                  GST
+                </span>
+              )}
+            </button>
+
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="text-white/60">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>
             </div>
+            {lineDiscountTotal > 0 && (
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="text-white/60">Line discounts</span>
+                <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
+              </div>
+            )}
             <label className="mb-2 flex items-center justify-between gap-2 text-sm">
               <span className="text-white/60">Discount ₹</span>
               <input
@@ -580,6 +689,17 @@ export function SellClient({
         <CameraScanner
           onScan={(code) => void runScan(code)}
           onClose={() => setCameraOpen(false)}
+        />
+      )}
+
+      {customerOpen && (
+        <CustomerPanel
+          customer={customer}
+          gstin={gstin}
+          gstEnabled={config.gstEnabled}
+          onPick={setCustomer}
+          onGstin={setGstin}
+          onClose={() => setCustomerOpen(false)}
         />
       )}
 

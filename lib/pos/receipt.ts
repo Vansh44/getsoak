@@ -17,6 +17,9 @@ export interface ReceiptLine {
   hsnCode: string | null;
   quantity: number;
   unitPrice: number;
+  /** Markdown applied to this line; 0 when there was none. Printed so the
+   *  line's arithmetic reads correctly on the customer's receipt. */
+  lineDiscount: number;
   /** Line total after any line discount (what the customer is charged). */
   total: number;
 }
@@ -86,6 +89,7 @@ export interface ReceiptSource {
     quantity: number;
     price: number;
     total: number;
+    line_discount?: number;
     tax_rate: number;
     tax_class_name: string | null;
     tax_amount: number;
@@ -162,6 +166,7 @@ export function buildReceiptModel(src: ReceiptSource): ReceiptModel {
       hsnCode: i.hsn_code,
       quantity: i.quantity,
       unitPrice: i.price,
+      lineDiscount: i.line_discount ?? 0,
       total: i.total,
     })),
     subtotal: src.order.subtotal,

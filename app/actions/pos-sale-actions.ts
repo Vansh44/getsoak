@@ -28,13 +28,14 @@ import {
   storeBillingSettings,
   storeLocations,
   taxClasses,
+  users,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { computeTax } from "@/lib/billing/tax";
-import { isIntraState, splitGst } from "@/lib/billing/gst";
+import { isIntraState, isValidGstinFormat, splitGst } from "@/lib/billing/gst";
 import { rowToBillingSettings, rowToTaxClass } from "@/lib/billing/types";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { rateLimit } from "@/lib/rate-limit";
@@ -427,6 +428,82 @@ export async function getCatalogSnapshot(
   }
 }
 
+// ---- Customer attach -------------------------------------------------------
+
+export interface PosCustomer {
+  id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+}
+
+/**
+ * Find an existing customer of THIS store to attach to a sale — by phone, name
+ * or email. Store-scoped, so one store's register can never surface another
+ * store's customer list.
+ *
+ * Only customers who already exist are searchable. The register deliberately
+ * cannot CREATE one: `users.id` is the Firebase uid and `(phone, store_id)` is
+ * unique, so a till-invented row would collide with — and break — that same
+ * person's later online signup. Walk-in capture needs a claim/merge story and
+ * belongs with the CRM phase (docs/pos-plan.md Phase 5+).
+ */
+export async function searchPosCustomers(
+  query: string,
+): Promise<{ customers: PosCustomer[]; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { customers: [], error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { customers: [], error: "Not allowed." };
+
+  const q = typeof query === "string" ? query.trim().slice(0, 60) : "";
+  // Two characters is the floor: a one-character search would stream a large
+  // slice of the customer list to the till for nothing.
+  if (q.length < 2) return { customers: [] };
+
+  try {
+    const pattern = `%${q.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: users.id,
+          phone: users.phone,
+          email: users.email,
+          first_name: users.firstName,
+          last_name: users.lastName,
+        })
+        .from(users)
+        .where(
+          and(
+            eq(users.storeId, op.storeId),
+            or(
+              ilike(users.phone, pattern),
+              ilike(users.firstName, pattern),
+              ilike(users.lastName, pattern),
+              ilike(users.email, pattern),
+            ),
+          ),
+        )
+        .limit(10),
+    );
+
+    return {
+      customers: rows.map((r) => ({
+        id: r.id,
+        name:
+          [r.first_name, r.last_name].filter(Boolean).join(" ").trim() ||
+          r.phone,
+        phone: r.phone,
+        email: r.email,
+      })),
+    };
+  } catch (err) {
+    return {
+      customers: [],
+      error: dbErrorMessage(err, "Couldn't search customers."),
+    };
+  }
+}
+
 // ---- Manager approval ------------------------------------------------------
 
 /**
@@ -546,6 +623,39 @@ export async function placePosSale(
     }
     if (!Number.isFinite(t.amount) || t.amount <= 0) {
       return { error: "Invalid payment amount." };
+    }
+  }
+
+  // A GSTIN prints on the customer's invoice, so it is validated rather than
+  // trusted: normalised, format-checked, and length-capped.
+  let customerGstin: string | null = null;
+  if (typeof opts.customerGstin === "string" && opts.customerGstin.trim()) {
+    customerGstin = opts.customerGstin.trim().toUpperCase().slice(0, 15);
+    if (!isValidGstinFormat(customerGstin)) {
+      return { error: "That GSTIN doesn't look valid." };
+    }
+  }
+
+  // The attached customer MUST belong to this store. Without this check the
+  // client could name any customer id and file the sale against another
+  // store's customer — who would then see a foreign order in their history
+  // (customers hold RLS SELECT on their own orders).
+  let customerId: string | null = null;
+  if (typeof opts.customerId === "string" && opts.customerId.trim()) {
+    const wanted = opts.customerId.trim();
+    try {
+      const owned = await withService((db) =>
+        db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.id, wanted), eq(users.storeId, op.storeId)))
+          .limit(1),
+      );
+      if (owned.length === 0)
+        return { error: "That customer isn't in this store." };
+      customerId = owned[0].id;
+    } catch (err) {
+      return { error: dbErrorMessage(err, "Couldn't verify the customer.") };
     }
   }
 
@@ -807,7 +917,7 @@ export async function placePosSale(
         .values({
           id: orderId,
           storeId: op.storeId,
-          customerId: opts.customerId ?? null,
+          customerId,
           status: "completed",
           paymentMethod: tenders.length === 1 ? tenders[0].method : "split",
           paymentStatus: "paid",
@@ -829,7 +939,7 @@ export async function placePosSale(
           receiptNo,
           supplierState,
           placeOfSupplyState: placeOfSupply,
-          customerGstin: opts.customerGstin ?? null,
+          customerGstin,
         } as typeof orders.$inferInsert)
         .returning({ id: orders.id, order_ref: orders.orderRef }),
     );
@@ -893,6 +1003,7 @@ export async function placePosSale(
             price: l.unit_price,
             quantity: l.quantity,
             total: l.amount,
+            lineDiscount: l.line_discount,
             taxRate: l.tax_rate,
             taxAmount: lineTax,
             taxClassName: l.tax_class_name,
@@ -994,6 +1105,7 @@ export async function getPosReceipt(
           quantity: orderItems.quantity,
           price: orderItems.price,
           total: orderItems.total,
+          line_discount: orderItems.lineDiscount,
           tax_rate: orderItems.taxRate,
           tax_class_name: orderItems.taxClassName,
           tax_amount: orderItems.taxAmount,
