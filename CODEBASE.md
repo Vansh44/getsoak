@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
+│   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
 │   ├── customer_addresses.sql # ★ saved shipping addresses (own-row RLS) — checkout book
 │   ├── coupon_usage_rpc.sql   # ★ increment_/decrement_coupon_usage: atomic used_count
@@ -850,6 +852,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       order row is deleted (best-effort rollback — no cross-statement txn over
       PostgREST). **If you ever move checkout off the service-role client, add a
       customer INSERT policy first** (see the note in `orders_table.sql`).
+    - **Customer order reads are store-scoped in the DB**
+      (`supabase/pos_08_customer_order_store_scope.sql`). The customer SELECT
+      policies on `orders`/`order_items` were `customer_id = auth.uid()` with
+      NO store predicate — and a Firebase uid is global, so any order anywhere
+      carrying that uid was readable. They now also require
+      `store_id = auth_customer_store_id()` (a SECURITY DEFINER helper; a uid
+      maps to exactly one store because `users.id` is the PK, so no request
+      context is needed). This is defence in depth for the rule above — **an
+      unvalidated `customer_id` write is what makes it exploitable**, which is
+      exactly the bug `placePosSale` had (§22). The migration ends with a guard
+      that FAILS if any policy on those tables keys off `customer_id` without
+      the store scope.
     - **Dashboard reads/writes**: `order-actions.ts` gates on
       `getManagerIdentity("orders")`, scopes every query by `store_id`, paginates
       `getOrders`, and allowlists `status`/`payment_status` in `updateOrderStatus`.
@@ -1198,300 +1212,227 @@ group, span}` (span = columns of the 4-wide desktop grid),
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
 
-22. **Notifications = one event log + registry-driven fan-out.**
-    **📖 Full guide: `docs/notifications.md`** — the mental model, where each
-    decision lives, how to add one, and where to look when something's wrong.
-    The system has two halves, and keeping them apart is what makes "notify on
-    every activity" survivable at scale: - **EVERY** action emits an EVENT into the append-only `activity_events`
-    table. That is the audit trail, complete by construction, rendered at
-    **`/dashboard/activity`** (permission section `activity` — a nav link that
-    had pointed at a non-existent page since roles shipped). - Only events with a non-empty `audiences` entry are FANNED OUT into
-    per-recipient rows in `notifications` (the bell inbox). An event with
-    `audiences: {}` is **audit-only**: visible in the feed, silent in the bell.
-    That is how a busy store gets a full history without 400 badges a day. - **THE CONSOLE (Settings → Notifications).** The landing page leads with the
-    TWO JOBS a merchant actually arrives with — **Customer emails** ("what does
-    my shopper receive?") and **Team alerts** ("who gets told?") — the split
-    Shopify's admin uses, and for the same reason: a 27-row grid answers a
-    question nobody asked. The full filterable matrix lives one click away at
-    `/all`, so power is available without being the first thing you meet. Each
-    list is shaped to its job: customer rows lead with the message (there is
-    only ever one recipient), team rows lead with the recipients. A notification
-    reaching both audiences appears in both sections, showing only that
-    audience's config. The editor adds two affordances worth copying from
-    Shopify: **Send test to me** (a real email to the signed-in admin, rate
-    limited, `[Test]`-prefixed) and an explicit **Revert to default** per field
-    instead of the undiscoverable "clear the box".
-    The landing page switches between the two with TABS, and a row's link
-    carries `?audience=`, so opening an email from "Customer emails" lands in
-    the customer context with no audience switcher — that question was answered
-    by choosing the tab. Arriving from `/all` (no param) shows both.
-    Detail pages are addressed by a DOT-FREE slug (`order-placed`) — see the
-    proxy note in `lib/notifications/events.ts`. Gated on the
-    **`notifications` permission section** (superadmin by default; an owner
-    grants it to any role from Roles & Permissions, which renders SECTIONS so
-    it appears with no extra wiring). Configuration resolves in THREE layers,
-    each with one owner — the settings-registry shape (convention #9), so an
-    empty database behaves exactly like the code defaults:
-    **code registry** (engineering: what can be emitted, and every default) ←
-    **`notification_definitions`** (StoreMink operators: renames,
-    recategorisation, and rows registered ahead of the code that fires them —
-    flagged "No trigger" in the list) ← **`notification_settings`** (the
-    merchant: channels, recipients, copy, digest, on/off). Switching a
-    notification OFF stops it notifying but never stops it being AUDITED.
-    Personal opt-outs moved to `settings/notifications/me` — the console is the
-    store's configuration, that page is one person saying "not me".
-
-- **ONE EVENT, TWO AUDIENCES — the organising idea.** "An order was placed"
-  notifies the merchant's TEAM ("New order ORD10010004 · ₹1,240 · from Priya
-  S.") and the CUSTOMER ("Thanks for your order"). They share a trigger and
-  nothing else: different wording, different channels, different recipients
-  (many vs exactly one), different places to read it. So configuration is
-  **per audience** — `notification_settings.channels`/`templates` are keyed
-  `{team, customer}`, and `lib/notifications/config.ts` resolves each
-  separately. Turning off team email must not stop a shopper's confirmation;
-  that was once a bug and is now a regression test. The console is organised
-  the same way (audience first, then channel), because "who is this for" is
-  the question a merchant is actually answering — the earlier flat version
-  made customer notifications invisible and their copy uneditable.
-  A legacy flat `{"email": …}` map is read as the team's.
-  - **Channels** (`channels.ts`): email and web (the bell) deliver today; sms,
-    push and whatsapp are declared and rendered as LOCKED panels. `available:
-false` is enforced in the save action, not just greyed out — a channel with
-    no provider must never accept a "yes" it can't honour.
-- **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): every
-  store's notification emails use the same neutral palette (white card on light
-  grey, near-black text, one dark button) — the store's LOGO and NAME are the
-  only per-store elements. The storefront accent is deliberately NOT used:
-  pushed into an email it has to survive colour-managed clients, dark mode, and
-  a button that must stay legible at any hue, and the failure mode is a customer
-  receiving something that looks broken. Shopify's transactional mail is
-  near-monochrome for the same reason. **EVERY email type goes through this one
-  shell** — notifications, coupon campaigns, blog/enquiry notifications,
-  billing and operator OTP (the last five via `wrapBrandedEmail` in `layout.ts`,
-  now a thin adapter over `emailShell`), so the look changes in one place.
-  `escapeHtml` lives here too, at the bottom of the email layer, and
-  `coupon-campaign` re-exports it for existing callers. Bodies are
-  HTML over a small tag vocabulary (`<p>`, `<ul>/<li>`, `<strong>`, `<a>`) whose
-  styles `inlineEmailStyles` inlines at send time, because clients ignore
-  `<style>`. The TITLE is escaped there; the BODY is trusted HTML by then —
-  sanitised at save, with every `{{value}}` escaped during substitution.
-- **Merchant templates** (`variables.ts` + `template.ts`): per-channel
-  subject/body with `{{token}}` substitution. Deliberately NOT a template
-  language — no conditionals, loops or expressions. Three rules: values are
-  ESCAPED for the target format (they are DB-derived names going into HTML);
-  unknown tokens are REJECTED AT SAVE TIME, so a merchant learns from the
-  editor rather than from a customer; a missing value at send time renders
-  EMPTY, never as the literal `{{token}}`. The variable list per event is
-  derived from what emitters actually pass — a variable nobody provides is
-  not offered. Templates apply to STAFF copy only: a shopper's order
-  confirmation keeps the platform's tested wording, because a half-finished
-  template there is a customer-facing failure. A blank field falls through to
-  the built-in copy, so partial edits are always safe.
-- **`lib/notifications/events.ts` is the registry** (pure, in the style of
-  `permissions.ts` / the settings registry): `{key, label, group, section,
-severity, audiences, configurable}`. **Adding a notification is ONE entry
-  here** — routing, the preferences matrix, and the settings UI all derive
-  from it. `configurable: false` marks the events an owner must not be able
-  to go blind on (role changes, failed billing, password changes); overrides
-  on those are rejected server-side, not just disabled in the UI. - **Routing derives from the permission map, then the store narrows it.**
-  The eligible set for `store-admins` is exactly the staff who may `view` the
-  event's `section` (suspended admins skipped), so a content editor is never
-  paged about payments and there is no second recipient list to drift. On top
-  of that, a superadmin sets a per-event **routing rule**
-  (`lib/notifications/routing.ts`, columns on the store-scope preference row —
-  `supabase/notifications_03_routing.sql`): `permission` (everyone eligible,
-  the default) / `roles` / `admins`. **Targeting only ever NARROWS** — naming
-  someone who can't view the section does NOT start sending it to them,
-  because a notification's copy is a preview of the thing itself ("New order
-  ORD10010004 · ₹1,240 · from Priya S.") and must not become a side channel
-  around the dashboard's access rules. The picker greys such a pick out and
-  names the fix (their role) instead of dropping it silently. An empty
-  selection falls back to "everyone eligible" rather than routing to nobody.
-  Routing is superadmin-only in the action AND in the DB CHECK (routing
-  columns are valid only on `scope = 'store'` rows) — a personal preference
-  can say "not me", never "them instead". - **`recordEvent`/`emitEvent` (`lib/notifications/record.ts`) is the ONE
-  write path** — call sites never touch the notifications table. Three rules:
-  (1) it must never break the thing it reports on (`emitEvent` defers via
-  `after()`, everything is wrapped + logged, failures return null);
-  (2) writes are service-role, after the calling action has already
-  authorised the actor — the tables have **no client INSERT policy** by
-  design, so a customer can't forge an audit row or push into an admin's
-  bell (the orders trust model, convention #12); (3) fan-out is idempotent
-  (`UNIQUE (event_id, recipient_id)` + `onConflictDoNothing`). - **Preference resolution**: registry default ← store default (`scope:
-'store'`, superadmin-editable) ← the recipient's own override (`scope:
-'user'`). A NULL channel column means "no opinion at this level", so a store
-  default never freezes a staff member's personal choice. **WHOSE preferences
-  apply depends on the audience**: store default + own override for
-  `store-admins`; own override only for `operators` (a store's settings have
-  no business governing platform mail); and **NEITHER for `customer`** —
-  order confirmations are transactional mail to the shopper and must not be
-  switchable from a staff page that never mentions them. (Before this was
-  fixed, turning off "New order" email for the team silently stopped shoppers
-  receiving their confirmations.)
-  **One person, one notification**: recipients are deduped by id, so an owner
-  who orders from their own store — staff AND customer — gets the admin copy
-  once, not two. Edited at
-  **`/dashboard/settings/notifications`** — notifications are cross-cutting,
-  so unlike per-feature settings (convention #9) they live under Settings. - **Operators are keyed by lowercased EMAIL**, not uid: `platform_admins` is
-  an email allowlist with no uid column. The notifications RLS policy
-  branches on `recipient_type = 'operator'` → `auth.email()`, which the
-  user-scoped GUC already sets, keeping ONE inbox for all three recipient
-  types. Platform events carry `store_id = NULL` and reach operators only. - **Scope is HOST-derived** (`currentScope()` in `notification-actions.ts`):
-  the store for a store host, PLATFORM for storemink.com. Deliberately NOT
-  `getCurrentStoreId()`, whose never-null fallback would show the WholeSip
-  store's notifications on the platform console. - **BOTH audiences now have a surface.** The spine always wrote `customer`
-  rows; until the storefront pages existed they were reachable only by email.
-  Staff read theirs in the dashboard bell + `/dashboard/activity`; shoppers
-  read theirs at **`/notifications`**, with their orders at **`/orders`** —
-  which is where the customer-facing notification links point. Both storefront
-  pages guard the host with `requireStorefrontStoreId()` and scope every query
-  to the host store as well as the RLS owner check, so one person shopping at
-  two StoreMink stores never sees store A's data on store B. The header shows
-  an unread badge, polled on the same visibility-gated interval as the
-  dashboard bell.
-  - **In-app delivery is POLLING, not push** (`notification-bell.tsx`):
-    Supabase Realtime went with the Cloud SQL migration and plain Postgres
-    can't push to a browser, so the badge polls a partial-index count every
-    45 s, only while the tab is visible — the `RealtimeRefresher` pattern. A
-    LISTEN/NOTIFY → SSE service is the upgrade path. - **Email is a QUEUE, never an inline send** (`notification_email_queue`,
-    `supabase/notifications_02_email_queue.sql`). The fan-out only enqueues;
-    `lib/email/notification-worker.ts` drains it from `/api/cron/send-emails`,
-    alongside the coupon campaign queue. A Resend round-trip must never sit on
-    a checkout's code path, where a third-party outage could slow or fail a
-    sale. The queue mirrors the campaign queue's claim/requeue RPCs (`FOR
-UPDATE SKIP LOCKED`), is service-role only (RLS on, NO policies — the rows
-    hold email addresses), and is idempotent on `(event_id, recipient_id)`.
-    Sends retry with backoff (5/15/45 min, 3 attempts) rather than failing on
-    one bad minute at Resend. - **"Instant" rests entirely on the worker KICK, so it must not be
-    config-fragile.** The cron heartbeat is DAILY (Vercel Hobby caps crons at
-    one/day), so if `triggerEmailWorker` doesn't land, an order confirmation
-    waits up to 24 h — silently, since the row is queued and nothing errors. It
-    used to read `NEXT_PUBLIC_APP_URL` directly and give up when unset, which
-    silently cost instant email on any host that hadn't set that one variable
-    (Cloud Run sets no `VERCEL_URL` either). It now uses **`PLATFORM_URL`**,
-    whose fallback chain is `NEXT_PUBLIC_APP_URL → VERCEL_URL →
-https://{ROOT_DOMAIN}`; only `CRON_SECRET` is genuinely required (without it
-    the route 401s). `PLATFORM_URL` moved to **`lib/store/host.ts`** (pure, no
-    DB imports) and is re-exported from `lib/site.ts`, so enqueueing mail no
-    longer drags the store resolver — and its cache deps — into the bundle.
-    Tested. - **EMAIL LOGS — every message, one table, one way out.** `/dashboard/activity/
-email-logs` (a child of Activity Logs, same `activity` permission — it's the
-    same class of data, so splitting the permission would only invent a
-    distinction an owner doesn't want). Columns match the job: To / From / Type
-    / Provider / Status / Sent at, filterable by status, type, date and
-    recipient; a row opens the rendered body in a **sandboxed iframe with no
-    `allow-same-origin` and no `allow-scripts`** (the builder's custom-code
-    rule — a stored body is authored HTML and the session cookie spans
-    `.storemink.com`). Backed by `supabase/email_logs.sql`, service-role only,
-    pruned at 90 days by `pruneNotifications` (it stores BODIES, so it's the
-    heaviest of the three logs). - **THE POINT IS THAT IT'S COMPLETE.** There were EIGHT independent
-    `resend.emails.send` call sites and none recorded anything — OTP mail left
-    no trace at all. All of them now go through **`lib/email/send.ts`
-    `sendEmail()`**, which sends AND logs, never throws into the caller (mail is
-    a side effect of someone else's action), and logs failures as readily as
-    successes. The two BATCH workers can't use the single-message path without
-    giving up batching, so they call `sendEmailBatch` + `logEmail` explicitly —
-    and **`send-coverage.test.ts` FAILS if a `.emails.send(` appears anywhere
-    else**, because a log with a hole invites the wrong conclusion ("it was
-    never sent"). `emailConfigured()` exists so a caller that only wants to know
-    whether mail is set up doesn't build a client and look like a sender. - **CREDENTIALS ARE REDACTED AT WRITE TIME — with ONE deliberate exception.**
-    `lib/email/mailers.ts` is the catalog of every mail TYPE (label +
-    description, feeding the log's filter) and marks the credential-carrying
-    ones `sensitive`: `password_reset` (the link IS the credential) and
-    `staff_invite` (a plaintext temporary password). For those the writer stores
-    a placeholder subject and NO body — a log store staff can read must not
-    become a way to take over an account. Everything a log is for — who, when,
-    did it send — is untouched. **`operator_otp` is deliberately NOT redacted**
-    (owner's decision, 2026-07-27): the sign-in code is stored in full so a
-    login that "never arrived" can be checked against the log. The exposure is
-    bounded — operator OTP is PLATFORM mail (`store_id NULL`), so it appears
-    only on the storemink.com console and never in a merchant's log — but a
-    StoreMink operator can read another operator's live code for its 10-minute
-    window, and the row itself is kept 90 days. Flipping `sensitive: true` on
-    that one entry reverses it. Both behaviours are pinned by tests. - **SENDING ≠ DELIVERY — bounces suppress, failures are visible.** Resend
-    accepting a message says nothing about it arriving, and that gap is where
-    mail died quietly. Two halves: (1) **`/api/webhooks/resend`** (Svix
-    signature verified in `lib/email/webhook-signature.ts` — hand-rolled like
-    the Razorpay HMAC, no SDK; the endpoint decides whether we STOP mailing an
-    address, so unsigned it would let anyone cut off a store's whole list)
-    writes permanent failures into **`email_suppressions`**
-    (`supabase/notifications_05_suppressions.sql`), and BOTH workers filter
-    against it via `lib/email/suppression.ts` before sending — one lookup per
-    run, failing OPEN so a DB hiccup can't silently stop a store's order
-    confirmations. That table is **GLOBAL, no `store_id`** — the only one in
-    §22 that isn't tenant-scoped, on purpose: a hard bounce bounces for
-    everyone, and since every store shares one verified sending domain by
-    default (`lib/email/sender.ts`), the reputation it burns is the platform's.
-    ONLY PERMANENT signals suppress — a soft bounce (full mailbox,
-    greylisting) fixes itself and the queue's retry already covers it, so
-    suppressing on one would cut a real customer off for good; an unknown
-    bounce sub-type is treated as soft. Needs **`RESEND_WEBHOOK_SECRET`** +
-    the endpoint registered in the Resend dashboard (email.bounced +
-    email.complained). (2) A row that exhausts its retries was marked `failed`
-    with NO surface anywhere a person looks — discoverable only by noticing
-    the silence, which nobody does. `getDeliveryHealth` +
-    `retryFailedEmail` (notification-actions, `notifications` section) feed a
-    panel on the notifications page that renders ONLY when mail failed in the
-    last 7 days; a suppressed address shows "Address unusable" rather than
-    offering a retry that cannot succeed. - **A BATCH ERROR IS NOT A VERDICT ON THE BATCH** (`lib/email/send-batch.ts`,
-    tested). Resend's `batch.send` validates the whole request, so one malformed
-    recipient errors all 100 — and both workers used to mark all 100 accordingly,
-    silently costing 99 people their mail (permanently in the campaign worker,
-    which has no retry; a campaign list is customer-entered data, so a bad
-    address there is a matter of time). `sendEmailBatch` now re-sends a failed
-    slice MESSAGE BY MESSAGE so only the real culprit fails, with its own
-    `last_error`. The probe is bounded: three individual failures in a row is an
-    outage, not a poison pill, so the remainder is reported failed rather than
-    hammering the API 97 more times. Both workers route through it. - **Digests are what make "notify on everything" survivable.**
-    `lib/notifications/digest.ts` dates each row to the END of its window —
-    CLOCK-ALIGNED, not `now + 1h`, so everything in one window shares a send
-    time and leaves as ONE email (a rolling window silently degrades back to
-    one email per event). The worker groups claimed rows by (store, recipient):
-    one row → a single email, many → a digest. `DAILY_DIGEST_HOUR_UTC` is 23:00
-    **on purpose** — a row is only sent by the next worker run after it comes
-    due, and the cron heartbeat is 00:00 UTC, so a later slot would wait a
-    further day. **Move it if the cron moves.** Hourly digests are best-effort
-    until the worker can run hourly (free with Cloud Scheduler at the Cloud Run
-    cutover); in practice most runs are triggered by an instant email being
-    enqueued, which drains every due row. `recordEvent` kicks the worker only
-    AFTER its transaction commits — a kick inside it would claim an empty queue. - **Every notification email carries a "why am I getting this" footer**
-    linking to the preferences page. Titles/bodies are DB-derived (customer and
-    product names), so every interpolation is escaped, and link paths are
-    absolutised against the store's own origin (custom domain if set). - **Retention**: `pruneNotifications()` (inbox 90 d, events 365 d) — an
-    inbox that grows forever is a slow outage. - **EVERY registry entry HAS AN EMITTER — enforced by a CI test.** A
-    notification listed in the console but fired by nothing is worse than one
-    that doesn't exist: the merchant configures recipients, writes copy, and
-    nothing ever arrives, silently. (27 of 38 entries were in exactly that
-    state — including `customer.signed_up` and `plan.changed` — which is what
-    prompted the guard.) `lib/notifications/coverage.test.ts` greps `app/` +
-    `lib/` for each `EVENT_KEYS` entry and FAILS unless it is either emitted
-    or listed in its `PENDING` map with the unbuilt feature it waits on; it
-    also fails if a `PENDING` key gains an emitter, so the allowlist can't
-    become a graveyard. Only `order.cancellation_requested` and
-    `order.refund_issued` are pending (the cancellation phase). Two collateral
-    rules the wiring settled: - **`recordEvent` in crons/webhooks, `emitEvent` in server actions** —
-    `after()` has nothing to defer onto once a cron response is sent. - **One sender per message.** Where a dedicated sender already exists,
-    the registry entry is in-app only rather than duplicating the mail:
-    `plan.changed` + `subscription.payment_failed` leave email to
-    `lib/email/billing-emails.ts` (platform branding, `billing@`), while
-    `plan.expiring` keeps its email because nothing else warns before a
-    lapse. Blog approve/reject went the other way — `lib/email/blog-notifications.ts` was DELETED and those mails now come from the
-    notification system, so merchants can edit the copy. - **Threshold events fire on the CROSSING, not the state**, or a merchant
-    gets one mail per sale and stops reading all of them:
-    `lib/inventory/alerts.ts` `stockAlertFor(prev, next, threshold)` is the
-    pure, tested rule behind `inventory.low_stock`/`out_of_stock` (called from
-    `checkout-actions` after reserve and from `inventory-actions` after
-    adjust/bulk; restocking re-arms it, untracked + backorderable SKUs are
-    skipped, and it reads the store's threshold from the store ROW so it works
-    without a request host). The same idea elsewhere: `ai.credits_low` fires on
-    `aiWarnAt` — exact-equality with the remaining count, at BOTH 3 left and 0
-    (`lib/ai/quota.ts`; zero matters because the FREE plan's whole cap IS 3, so
-    a single 3-left trigger would have skipped the entire free tier),
-    `plan.expiring`
-    on 24-hour bands at 7 and 1 days out (`expiryWarnWindow` in `lib/plans.ts`,
-    driven by `/api/cron/plan-expiry`),
-    `campaign.sent` on a conditional `→ done` claim, and `customer.signed_up`
-    on `xmax = 0` so an upsert that only UPDATED doesn't look like a signup.
+22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
+    An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
+    SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
+    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
+    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    location foundation, with ZERO changes to existing inventory/checkout code:**
+    - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
+      every store auto-gets one `is_default` "Main" location) +
+      `inventory_levels` (the per-location source of truth: `on_hand`/`reserved`
+      per (location, product, variant-or-null)). SQL: `supabase/pos_00_locations.sql`,
+      `pos_01_inventory_levels.sql`, `pos_02_rpc_location.sql` (run as `postgres`,
+      in order). `products.stock` / `product_variants.stock` become a
+      **trigger-maintained AGGREGATE** = `SUM(on_hand)` across locations
+      (`sync_stock_aggregate` trigger), so the storefront, `lib/inventory/status.ts`,
+      shop pages and the current inventory dashboard read them UNCHANGED. New
+      products/variants get a default-location level row via seed triggers; a
+      migration guard FAILS if the aggregate ever drifts after backfill.
+    - **RPCs gain a location.** `reserve_stock_at` / `release_stock_at` /
+      `adjust_stock_at(p_location, …)` operate on `inventory_levels`; the OLD
+      signatures (`reserve_stock`/`release_stock`/`adjust_stock`) are REPLACED with
+      thin wrappers delegating to the store's default location
+      (`pos_ensure_default_location`) — so `checkout-actions`, `order-actions` and
+      `inventory-actions` keep working with NO code change. `stock_movements`
+      gained `location_id`. This works because post-create stock writes ALREADY
+      flow only through those RPCs (the product editor never writes stock).
+    - **Plan + settings + enable flow.** `PLAN_LIMITS.posEnabled` (pro) +
+      `posLocationsIncluded` (2) in `lib/plans.ts`. Setting `pos.enabled`
+      (registry, section `pos`, `minPlan: pro`, `hidden` so it's driven by a
+      dedicated control, not the generic editor — new `SettingDef.hidden` flag).
+      New `pos` dashboard section (`permissions.ts`, group Workspace) rendered
+      with a **three-state sidebar** in `app/dashboard/layout.tsx`: free/basic →
+      "Included in Pro" (badge → `/dashboard/plans`); pro-not-enabled → "Enable
+      POS"; enabled → Overview + Locations children. `lib/pos/locations.ts`
+      (`getPosState`/`isPosEnabled`/`getStoreLocations`).
+      `app/actions/pos-location-actions.ts` (`enablePos`/`disablePos` +
+      location CRUD, gated `getManagerIdentity("pos")`, Pro-checked server-side,
+      location-capped; tested). Dashboard pages: `app/dashboard/pos/` (overview +
+      `locations/`).
+    - **Phase 1 (done) = the `/pos` app shell + staff accounts + device
+      authorization.** POS is served at **`{slug}.storemink.com/pos`** — a
+      SEPARATE app shell from `/dashboard` (outside the `(storefront)` group, so
+      it gets only the root layout + its own dark chrome).
+      - **Staff have real accounts, created by invitation.** An admin adds a
+        cashier/manager by **name + email + role + locations**
+        (`inviteStaff`); the staff member gets an emailed link (Resend, the
+        `inviteUser` pattern) to **`/pos/register?token=…`** and self-registers:
+        **password (typed twice, must match) → phone OTP (Firebase Phone auth,
+        the signup wizard's invisible-reCAPTCHA pattern) → their own 8-digit
+        PIN (typed twice)**. That creates a Firebase account whose uid is stored
+        on `pos_staff.user_id`, flips `status` invited→active, consumes the
+        single-use token, and sets a **`cashier`/`manager` role claim** — which
+        is what makes `proxy.ts` bounce them out of `/dashboard` to `/pos`. The
+        admin NEVER sets or sees a PIN.
+      - **Login at `/pos` is email + PIN or email + password** (two modes on one
+        screen). PIN → `posLoginWithPin` (server-side scrypt verify → signed
+        `pos_operator` cookie); password → Firebase `signInWithEmailAndPassword`
+        - `establishSession` (the standard `sm_session`).
+      - **Self-service reset** ("Forgot PIN or password?" on the login screen):
+        `requestPosCredentialReset` mails a single-use, 1-hour link to
+        `/pos/reset?token=…` (`reset_token`/`reset_expires_at`, added by
+        `supabase/pos_04_staff_reset.sql`). It is **enumeration-safe** — always
+        returns success and is rate-limited per IP AND per address, so only the
+        inbox differs. The reset page offers two modes: a new 8-digit PIN
+        (hashed server-side) or a new password (written to Identity Platform via
+        `updateAuthUser` — the token, not a session, is the authorization). Only
+        `active` staff can reset; someone still `invited` must use their
+        invitation link. Both staff emails share `lib/pos/staff-email.ts`
+        (branded Resend transport + dev console fallback + `posAbsoluteUrl`,
+        which builds links from the REQUEST host so they work in local dev).
+      - **`/pos/login`, `/pos/register` and `/pos/reset` are public** in
+        `proxy.ts` (`POS_PUBLIC_PATHS`) — a new or locked-out staff member has
+        no credential by definition, and the emailed token is the authorization.
+      - **Hardening (`supabase/pos_05_device_hardening.sql`).** Four invariants
+        the register depends on:
+        1. **The operator cookie is never trusted for authorisation.**
+           `resolvePosOperator` re-reads `pos_staff` on EVERY resolve (active,
+           registered, still a POS role, still assigned to the device's
+           location), so deactivating, deleting, demoting or unassigning a staff
+           member ends their session at once instead of when the token lapses.
+        2. **Device-token rotation + clone detection.** The `pos_device` cookie
+           embeds a `nonce` matched against `pos_devices.token_nonce`, rotated on
+           every operator sign-in. A cookie COPIED off a trusted device carries a
+           retired nonce, so `getAuthorizedDevice` revokes the device and logs
+           `device_clone_detected` (a signature alone can't catch a clone — the
+           clone's signature is valid). A 2-minute `prev_nonce` grace window
+           absorbs in-flight requests so a real shop is never locked out; devices
+           enrolled before rotation adopt their presented nonce.
+        3. **POS cookies are host-only and `SameSite=Strict`** — unlike
+           `sm_session`, which spans `.storemink.com` by design. A register
+           credential is never transmitted to other stores' subdomains, the
+           platform apex, or the help centre.
+        4. **Append-only audit trail** (`pos_audit_log`, admin-readable,
+           service-role writes) for device authorized/revoked, clone detected,
+           operator login + failed login, via `lib/pos/audit.ts` — always
+           best-effort, so a logging failure can never block a sale. Surfaced on
+           **`/dashboard/pos/devices`** (`listPosActivity`) next to a **Revoked
+           devices** list showing WHY each died — without that, a clone-detected
+           auto-revoke is an unexplainable outage.
+           Pairing codes are additionally rate-limited **per store**, not just per
+           IP, so a distributed attacker can't grind them, and
+           `PLAN_LIMITS.posDevicesPerLocation` (pro: 5) caps authorized devices
+           per location — enforced in `registerDevice` (the choke point both
+           authorization paths funnel through) and pre-checked in
+           `createPairingCode` so an admin isn't handed an unusable code.
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): a PIN operator's
+           register locks after `pos.idleLockMinutes` of inactivity (registry
+           setting, default 10, edited at `/dashboard/pos/settings`) with a 20s
+           countdown. Owners are exempt — this targets the
+           walked-away-from-a-shared-till risk. It is a physical-presence
+           measure, NOT an authorization boundary (a client bypass keeps the
+           cookie until it expires); the server boundary remains the device gate
+           - per-request `pos_staff` re-validation.
+      - **Device authorization is the security boundary** (a cashier must not be
+        able to sell from their personal phone). A browser becomes an authorized
+        POS device when the **owner** either taps "Authorize this device" while
+        signed in on it (`authorizeThisDevice`) or enters an
+        authorization code generated in the dashboard (`createPairingCode` →
+        `pairDevice`, single-use, 10-min TTL). It then holds a long-lived signed
+        **`pos_device`** cookie `{deviceId,storeId,locationId}`. **Staff
+        (cashier/manager) can ONLY resolve as an operator on an authorized,
+        non-revoked device** (`lib/pos/devices.ts` `getAuthorizedDevice`, checked
+        in `resolvePosOperator` for BOTH the PIN and password paths); owners are
+        not device-restricted. Revoking a device kills its access (and any
+        operator session — the operator token carries its `deviceId`) on the next
+        request. Known limits: it's per-browser-profile, so clearing site data
+        de-authorizes (owner re-authorizes in seconds).
+      - Both POS cookies are HMAC-signed with **`POS_SESSION_SECRET`** and
+        verified in the Node-runtime `proxy.ts` with NO DB call (verify returns
+        null — never throws — when the secret is unset, so /pos degrades to the
+        login gate instead of 500ing).
+      - Modules: `lib/pos/session.ts` (sign/verify both cookies),
+        `lib/pos/pin.ts` (scrypt, **exactly 8 digits**), `lib/pos/permissions.ts`
+        (`posCan` — cashier=sell, manager=+refund/inventory/shift, owner=all),
+        `lib/pos/devices.ts`, `lib/pos/operator.ts` (`resolvePosOperator`:
+        owner → PIN operator → staff Firebase session). SQL:
+        `supabase/pos_03_staff_devices.sql` — `pos_staff` (email, role,
+        `user_id`, scrypt `pin_hash`, `status`, single-use `invite_token`),
+        `pos_staff_locations` (managers are location-bound, auto-scoped at
+        login), `pos_devices` (revocable), `pos_pairing_codes`. Actions:
+        `pos-staff-actions.ts` (invite/resend/update/activate/delete +
+        `getInviteInfo`/`completeStaffRegistration`) and `pos-auth-actions.ts`
+        (`authorizeThisDevice`/`createPairingCode`/`listDevices`/`revokeDevice`;
+        `pairDevice`/`posLoginWithPin`/`posLock`, rate-limited) — both tested,
+        plus pure-module tests for session/pin/permissions. `/pos` routes:
+        `layout.tsx` (store + Pro + pos.enabled gate), `page.tsx` (operator gate
+        → register shell + the owner's "authorize this device" card),
+        `login/` (email + PIN pad / password), `register/` (the 3-step
+        self-registration wizard). Dashboard: `/dashboard/pos/staff` +
+        `/dashboard/pos/devices`.
+    - **Phase 2 (v1, done) = the register.** `app/actions/pos-sale-actions.ts`
+      is the sell path's trust boundary and mirrors `placeOrder` (§12) step for
+      step: operator resolved server-side, prices RE-READ from the DB, discount
+      re-derived and capped (manager PIN above the cap via `verifyManagerPin`),
+      tax recomputed, stock reserved atomically **at the register's location**
+      (`reserve_stock_at`), service-role writes last, and a reverse rollback
+      chain on any failure. `getRegisterConfig` opens the register;
+      `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
+        AMOUNT (not the rate) so it can never disagree with `computeTax`'s
+        rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
+        inter-state ⇒ IGST; unknown data defaults to INTRA. Snapshotted per line
+        (`order_items.tax_cgst/tax_sgst/tax_igst`).
+      - **Thermal receipt**: `lib/pos/receipt.ts` (pure `buildReceiptModel` off
+        the order snapshot) + `components/pos/thermal-receipt.tsx` + its CSS —
+        a 80mm roll format, deliberately NOT the A4 invoice of §17.
+      - **Barcode scanning, three engines behind one seam**
+        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so a
+        focused hidden input + its trailing Enter is the default and needs no
+        permission; on mobile the camera uses the native `BarcodeDetector`, and
+        `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
+        SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
+        entered in the product editor. StoreMink never prints its own.
+      - **★ Local catalog cache — the "<50 ms, zero network" promise
+        (docs/pos-plan.md §10).** `lib/pos/catalog-index.ts` is the PURE
+        matching core (`buildIndex`/`scanLocal`/`searchLocal`/
+        `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
+        per **store+location** (stock is per-location and a browser can be
+        shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
+        the full catalog in the background via `getCatalogSnapshot` (keyset
+        paging over `products.id`, 300 products/page — pages stay stable while
+        the catalog is edited, and a product's variants can't split at a seam).
+        Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
+        keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
+        search is a plain linear scan rather than an inverted index that would
+        need invalidating on every sync. Three rules keep it honest: a local
+        MISS falls through to `lookupProducts` (a product created since the last
+        sync must stay sellable); nothing cached is authoritative (the server
+        re-prices and re-reserves, so staleness is a display bug at worst, never
+        a wrong charge or an oversell); and **every IndexedDB call degrades to a
+        no-op** when the API is missing or throws (private-mode Safari, kiosk
+        profiles, quota) so the register just falls back to the server. Sales
+        decrement the cache immediately (`applySold`); a 5-min interval
+        re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
+        finds an EXISTING customer of the store (phone/name/email, 2-char
+        floor, store-scoped) to attach to a sale; the register cannot CREATE
+        one, because `users.id` IS the Firebase uid and `(phone, store_id)` is
+        unique — a till-invented row would collide with, and break, that same
+        person's later online signup. Walk-in capture needs a claim/merge
+        story and belongs with the CRM phase. `placePosSale` **verifies the
+        customer belongs to this store** before writing (without it a sale
+        could be filed against another store's customer, who holds RLS SELECT
+        on their own orders and would see a foreign order in their history)
+        and **format-validates the GSTIN** (`isValidGstinFormat`, normalised
+        upper-case) since it prints on the invoice. The GSTIN is independent
+        of the attach — a business buyer needs no account to get it on the
+        bill. **Per-line discounts** mark down ONE line (a damaged tin) as
+        opposed to the whole sale: capped server-side at the line's own gross,
+        counted toward the manager-approval cap together with the order-level
+        discount (so a cashier can't stay under it by splitting the giveaway),
+        and persisted in `order_items.line_discount`
+        (`supabase/pos_07_line_discount.sql`) — `total` stays net of it, so
+        existing readers are unaffected, and the thermal receipt prints
+        "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
+        doesn't add up. Recording it also makes markdowns auditable per
+        cashier, which is the point of the cap.
+    - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
+      inventory (4), returns/store credit (5), Twilio receipts (6), metered
+      extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
+      See `docs/pos-plan.md`.
 
 ## 6. Commands
 
@@ -1616,6 +1557,10 @@ npm run format      # prettier --write
   only) is env **`RAZORPAY_KEY_ID`** / **`RAZORPAY_KEY_SECRET`**. Cron routes
   (`/api/cron/*`) require **`CRON_SECRET`** (Vercel Cron sends it as a Bearer
   header).
+- **POS** (§22): the `/pos` device + operator cookies are HMAC-signed with env
+  **`POS_SESSION_SECRET`** (any high-entropy string; `openssl rand -base64 32`).
+  Required for the register to work; when unset, cookie VERIFY returns null
+  (never throws) so /pos falls back to the login gate rather than 500ing.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&

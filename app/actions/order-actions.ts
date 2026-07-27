@@ -29,10 +29,21 @@ const ORDER_STATUSES = [
   "processing",
   "shipped",
   "delivered",
+  // In-person POS sales are fulfilled the moment they're rung (CODEBASE §22).
+  "completed",
   "cancelled",
 ] as const;
 const PAYMENT_STATUSES = ["pending", "paid", "failed"] as const;
-const PAYMENT_METHODS = ["cash_on_delivery", "razorpay"] as const;
+// "split" = a POS sale settled across several tenders; the itemised breakdown
+// lives in order_payments.
+const PAYMENT_METHODS = [
+  "cash_on_delivery",
+  "razorpay",
+  "cash",
+  "card",
+  "upi",
+  "split",
+] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
@@ -46,6 +57,7 @@ export interface OrderStatusCounts {
   processing: number;
   shipped: number;
   delivered: number;
+  completed: number;
   cancelled: number;
 }
 
@@ -55,6 +67,7 @@ const ZERO_COUNTS: OrderStatusCounts = {
   processing: 0,
   shipped: 0,
   delivered: 0,
+  completed: 0,
   cancelled: 0,
 };
 

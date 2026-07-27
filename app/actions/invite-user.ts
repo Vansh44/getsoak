@@ -16,6 +16,7 @@ import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
 import { sendEmail } from "@/lib/email/send";
 import { PLATFORM_URL } from "@/lib/site";
+import { getRequestOrigin } from "@/lib/request-url";
 import { randomInt } from "crypto";
 
 function generateTempPassword(): string {
@@ -155,8 +156,14 @@ export async function inviteUser(formData: FormData) {
     resendApiKey && !resendApiKey.includes("placeholder");
 
   if (isResendAvailable) {
-    const brand = await getStoreBrandById(storeId);
-    const appUrl = PLATFORM_URL;
+    try {
+      const brand = await getStoreBrandById(storeId);
+      // The invited admin belongs to the INVITER's store, and the inviter is on
+      // that store's host — so the request origin sends them to their own store
+      // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
+      // PLATFORM_URL (the apex) would land them on the platform operator console
+      // instead, and points at an unreachable host when developing locally.
+      const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
 
     // The `staff_invite` mailer is marked sensitive, so the email log records
     // that this went out — to whom, when, whether it sent — WITHOUT storing the

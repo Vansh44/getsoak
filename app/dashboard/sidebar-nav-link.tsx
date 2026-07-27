@@ -36,6 +36,8 @@ import {
   Gem,
   Sparkles,
   House,
+  Store,
+  MapPin,
   type LucideIcon,
   Mail,
 } from "lucide-react";
@@ -76,6 +78,8 @@ export const navIcons = {
   channels: CreditCard,
   ai: Sparkles,
   plans: Gem,
+  pos: Store,
+  location: MapPin,
 } satisfies Record<string, LucideIcon>;
 
 export type NavIconKey = keyof typeof navIcons;

@@ -70,6 +70,7 @@ export async function getStoreSettingsForEditor(group?: string): Promise<{
 
   const visible = SETTINGS.filter(
     (def) =>
+      !def.hidden &&
       (!group || def.group === group) &&
       can(ctx.permissions, def.section, "view", ctx.isSuperadmin),
   );
