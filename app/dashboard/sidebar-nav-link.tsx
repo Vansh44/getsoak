@@ -37,6 +37,7 @@ import {
   Sparkles,
   House,
   type LucideIcon,
+  Mail,
 } from "lucide-react";
 
 export const navIcons = {
@@ -60,6 +61,7 @@ export const navIcons = {
   media: Images,
   roles: KeyRound,
   activity: History,
+  mail: Mail,
   notifications: Bell,
   settings: Settings,
   globe: Globe,

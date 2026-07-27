@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
+import { recordEvent } from "@/lib/notifications/record";
 import { orderItems, orders } from "@/drizzle/schema";
 import { getStoreGateway } from "@/lib/payments/provider";
 import {
@@ -52,6 +53,9 @@ interface PendingOrder {
   store_id: string;
   razorpay_order_id: string | null;
   applied_coupon_code: string | null;
+  order_ref: string | null;
+  customer_id: string | null;
+  total: number | null;
 }
 
 async function handle(request: Request) {
@@ -70,6 +74,9 @@ async function handle(request: Request) {
           store_id: orders.storeId,
           razorpay_order_id: orders.razorpayOrderId,
           applied_coupon_code: orders.appliedCouponCode,
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+          total: orders.total,
         })
         .from(orders)
         .where(
@@ -180,6 +187,23 @@ async function handle(request: Request) {
     }
     if (!claimed.length) continue;
     expired++;
+
+    // The merchant needs to know an order died unpaid — it looked like a sale
+    // in the dashboard until this ran. recordEvent (not emitEvent): a cron
+    // response ends the moment we return, so after() has nothing to run on.
+    await recordEvent({
+      type: "order.payment_failed",
+      storeId: order.store_id,
+      actor: { type: "system" },
+      subject: { type: "order", id: order.id, label: order.order_ref },
+      customerId: order.customer_id,
+      payload: {
+        orderRef: order.order_ref ?? "",
+        total: Number(order.total ?? 0),
+        currency: "INR",
+        reason: "Payment not completed",
+      },
+    });
 
     // 3. Restock exactly once (the order-actions cancellation pattern).
     const stockClaim = await withService((db) =>

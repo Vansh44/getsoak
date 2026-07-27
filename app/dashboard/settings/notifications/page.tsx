@@ -1,5 +1,8 @@
 import { requireSectionAccess } from "../../lib/access";
-import { getNotificationConsole } from "@/app/actions/notification-actions";
+import {
+  getDeliveryHealth,
+  getNotificationConsole,
+} from "@/app/actions/notification-actions";
 import { NotificationOverview } from "./notification-overview";
 
 // The notification landing page.
@@ -26,12 +29,19 @@ export default async function NotificationsOverviewPage() {
   // it, rather than making them pick one home for it.
   const { rows, total, canManage, error } = await getNotificationConsole();
 
+  // Delivery failures ride along with the page rather than getting their own
+  // route: a merchant should meet a "your mail isn't arriving" problem on the
+  // page they'd already be on, not have to know to go looking for it.
+  const delivery = await getDeliveryHealth();
+
   return (
     <NotificationOverview
       rows={rows}
       total={total}
       canManage={canManage}
       error={error}
+      delivery={delivery.failures}
+      deliveryTotal={delivery.total}
     />
   );
 }

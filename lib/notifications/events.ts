@@ -437,7 +437,12 @@ export const EVENTS: readonly EventDef[] = [
     group: "Plan & billing",
     section: "ai",
     severity: "info",
-    audiences: { "store-admins": BOTH },
+    // IN-APP ONLY, deliberately. StoreMink's own billing sender
+    // (lib/email/billing-emails.ts) already mails the merchant from
+    // billing@storemink.com with the receipt/activation details — a second
+    // mail from the store's own address saying the same thing is noise, and
+    // it's platform correspondence, not the store's. Same for the two below.
+    audiences: { "store-admins": IN_APP },
     configurable: false,
   },
   {
@@ -447,6 +452,8 @@ export const EVENTS: readonly EventDef[] = [
     group: "Plan & billing",
     section: "ai",
     severity: "warning",
+    // The exception to the rule above: nothing else warns BEFORE a plan
+    // lapses, so this notification is the only sender and keeps its email.
     audiences: { "store-admins": BOTH },
   },
   {
@@ -456,7 +463,8 @@ export const EVENTS: readonly EventDef[] = [
     group: "Plan & billing",
     section: "ai",
     severity: "critical",
-    audiences: { "store-admins": BOTH },
+    // In-app only — paymentFailedTemplate already mails this one.
+    audiences: { "store-admins": IN_APP },
     configurable: false,
   },
   {

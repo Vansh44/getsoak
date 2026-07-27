@@ -302,7 +302,15 @@ wholesip/
 │   │                          # declared but LOCKED — no provider), config.ts
 │   │                          # (registry ← platform definition ← store
 │   │                          # settings), variables.ts + template.ts (merchant
-│   │                          # {{token}} copy, validated at save). Tested.
+│   │                          # {{token}} copy, validated at save). Tested,
+│   │                          # incl. coverage.test.ts — the CI guard that FAILS
+│   │                          # if a registry event has no emitter anywhere.
+│   ├── inventory/             # status.ts (the display-status source of truth, §13)
+│   │                          # + ★ alerts.ts (§22: stockAlertFor — the pure
+│   │                          # crossing rule behind inventory.low_stock/
+│   │                          # out_of_stock — and reportStockChanges, the
+│   │                          # deferred reader called from checkout + inventory
+│   │                          # actions). Tested.
 │   ├── settings/              # ★ Feature-settings framework (see convention #9):
 │   │   ├── registry.ts        #   catalog: every per-store toggle (key, default, plan gate)
 │   │   └── resolve.ts         #   getStoreSettings()/getStoreSetting() for the host store
@@ -394,7 +402,18 @@ wholesip/
 │   │                          # ★ notification-emails.ts (§22: single + digest
 │   │                          # templates, pure/escaped) + notification-worker.ts
 │   │                          # (claims notification_email_queue, GROUPS by
-│   │                          # recipient into one digest, retries with backoff)
+│   │                          # recipient into one digest, retries with backoff).
+│   │                          # ★ send-batch.ts (per-message outcomes so one bad
+│   │                          # address can't sink a batch), suppression.ts
+│   │                          # (the global bounce/complaint list),
+│   │                          # webhook-signature.ts (Svix verify, pure+tested),
+│   │                          # trigger-worker.ts (the kick that makes "instant"
+│   │                          # instant — PLATFORM_URL, not one env var).
+│   │                          # ★ send.ts — THE choke point: every email leaves
+│   │                          # through sendEmail() and lands in email_logs
+│   │                          # (CI-guarded by send-coverage.test.ts);
+│   │                          # mailers.ts — the mail-type catalog + which types
+│   │                          # are redacted because they carry a credential
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
 │   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
 │   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
@@ -456,6 +475,14 @@ wholesip/
 │   │                          # (platform-global, operator-managed) +
 │   │                          # notification_settings (per store: channels,
 │   │                          # recipients, templates, digest, on/off)
+│   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
+│   │                          # (platform rows = store_id NULL). Service-role
+│   │                          # only; bodies redacted for credential mailers
+│   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
+│   │                          # (GLOBAL — no store_id, by design: a hard bounce
+│   │                          # bounces for everyone and the shared sending
+│   │                          # domain's reputation is the platform's) + the
+│   │                          # failed-row index behind the delivery panel
 │   ├── notifications_02_email_queue.sql  # ★ §22 email channel:
 │   │                          # notification_email_queue + claim/requeue RPCs
 │   │                          # (FOR UPDATE SKIP LOCKED, the email_campaigns
@@ -1335,7 +1362,87 @@ severity, audiences, configurable}`. **Adding a notification is ONE entry
 UPDATE SKIP LOCKED`), is service-role only (RLS on, NO policies — the rows
     hold email addresses), and is idempotent on `(event_id, recipient_id)`.
     Sends retry with backoff (5/15/45 min, 3 attempts) rather than failing on
-    one bad minute at Resend. - **Digests are what make "notify on everything" survivable.**
+    one bad minute at Resend. - **"Instant" rests entirely on the worker KICK, so it must not be
+    config-fragile.** The cron heartbeat is DAILY (Vercel Hobby caps crons at
+    one/day), so if `triggerEmailWorker` doesn't land, an order confirmation
+    waits up to 24 h — silently, since the row is queued and nothing errors. It
+    used to read `NEXT_PUBLIC_APP_URL` directly and give up when unset, which
+    silently cost instant email on any host that hadn't set that one variable
+    (Cloud Run sets no `VERCEL_URL` either). It now uses **`PLATFORM_URL`**,
+    whose fallback chain is `NEXT_PUBLIC_APP_URL → VERCEL_URL →
+https://{ROOT_DOMAIN}`; only `CRON_SECRET` is genuinely required (without it
+    the route 401s). `PLATFORM_URL` moved to **`lib/store/host.ts`** (pure, no
+    DB imports) and is re-exported from `lib/site.ts`, so enqueueing mail no
+    longer drags the store resolver — and its cache deps — into the bundle.
+    Tested. - **EMAIL LOGS — every message, one table, one way out.** `/dashboard/activity/
+email-logs` (a child of Activity Logs, same `activity` permission — it's the
+    same class of data, so splitting the permission would only invent a
+    distinction an owner doesn't want). Columns match the job: To / From / Type
+    / Provider / Status / Sent at, filterable by status, type, date and
+    recipient; a row opens the rendered body in a **sandboxed iframe with no
+    `allow-same-origin` and no `allow-scripts`** (the builder's custom-code
+    rule — a stored body is authored HTML and the session cookie spans
+    `.storemink.com`). Backed by `supabase/email_logs.sql`, service-role only,
+    pruned at 90 days by `pruneNotifications` (it stores BODIES, so it's the
+    heaviest of the three logs). - **THE POINT IS THAT IT'S COMPLETE.** There were EIGHT independent
+    `resend.emails.send` call sites and none recorded anything — OTP mail left
+    no trace at all. All of them now go through **`lib/email/send.ts`
+    `sendEmail()`**, which sends AND logs, never throws into the caller (mail is
+    a side effect of someone else's action), and logs failures as readily as
+    successes. The two BATCH workers can't use the single-message path without
+    giving up batching, so they call `sendEmailBatch` + `logEmail` explicitly —
+    and **`send-coverage.test.ts` FAILS if a `.emails.send(` appears anywhere
+    else**, because a log with a hole invites the wrong conclusion ("it was
+    never sent"). `emailConfigured()` exists so a caller that only wants to know
+    whether mail is set up doesn't build a client and look like a sender. - **CREDENTIALS ARE REDACTED AT WRITE TIME — with ONE deliberate exception.**
+    `lib/email/mailers.ts` is the catalog of every mail TYPE (label +
+    description, feeding the log's filter) and marks the credential-carrying
+    ones `sensitive`: `password_reset` (the link IS the credential) and
+    `staff_invite` (a plaintext temporary password). For those the writer stores
+    a placeholder subject and NO body — a log store staff can read must not
+    become a way to take over an account. Everything a log is for — who, when,
+    did it send — is untouched. **`operator_otp` is deliberately NOT redacted**
+    (owner's decision, 2026-07-27): the sign-in code is stored in full so a
+    login that "never arrived" can be checked against the log. The exposure is
+    bounded — operator OTP is PLATFORM mail (`store_id NULL`), so it appears
+    only on the storemink.com console and never in a merchant's log — but a
+    StoreMink operator can read another operator's live code for its 10-minute
+    window, and the row itself is kept 90 days. Flipping `sensitive: true` on
+    that one entry reverses it. Both behaviours are pinned by tests. - **SENDING ≠ DELIVERY — bounces suppress, failures are visible.** Resend
+    accepting a message says nothing about it arriving, and that gap is where
+    mail died quietly. Two halves: (1) **`/api/webhooks/resend`** (Svix
+    signature verified in `lib/email/webhook-signature.ts` — hand-rolled like
+    the Razorpay HMAC, no SDK; the endpoint decides whether we STOP mailing an
+    address, so unsigned it would let anyone cut off a store's whole list)
+    writes permanent failures into **`email_suppressions`**
+    (`supabase/notifications_05_suppressions.sql`), and BOTH workers filter
+    against it via `lib/email/suppression.ts` before sending — one lookup per
+    run, failing OPEN so a DB hiccup can't silently stop a store's order
+    confirmations. That table is **GLOBAL, no `store_id`** — the only one in
+    §22 that isn't tenant-scoped, on purpose: a hard bounce bounces for
+    everyone, and since every store shares one verified sending domain by
+    default (`lib/email/sender.ts`), the reputation it burns is the platform's.
+    ONLY PERMANENT signals suppress — a soft bounce (full mailbox,
+    greylisting) fixes itself and the queue's retry already covers it, so
+    suppressing on one would cut a real customer off for good; an unknown
+    bounce sub-type is treated as soft. Needs **`RESEND_WEBHOOK_SECRET`** +
+    the endpoint registered in the Resend dashboard (email.bounced +
+    email.complained). (2) A row that exhausts its retries was marked `failed`
+    with NO surface anywhere a person looks — discoverable only by noticing
+    the silence, which nobody does. `getDeliveryHealth` +
+    `retryFailedEmail` (notification-actions, `notifications` section) feed a
+    panel on the notifications page that renders ONLY when mail failed in the
+    last 7 days; a suppressed address shows "Address unusable" rather than
+    offering a retry that cannot succeed. - **A BATCH ERROR IS NOT A VERDICT ON THE BATCH** (`lib/email/send-batch.ts`,
+    tested). Resend's `batch.send` validates the whole request, so one malformed
+    recipient errors all 100 — and both workers used to mark all 100 accordingly,
+    silently costing 99 people their mail (permanently in the campaign worker,
+    which has no retry; a campaign list is customer-entered data, so a bad
+    address there is a matter of time). `sendEmailBatch` now re-sends a failed
+    slice MESSAGE BY MESSAGE so only the real culprit fails, with its own
+    `last_error`. The probe is bounded: three individual failures in a row is an
+    outage, not a poison pill, so the remainder is reported failed rather than
+    hammering the API 97 more times. Both workers route through it. - **Digests are what make "notify on everything" survivable.**
     `lib/notifications/digest.ts` dates each row to the END of its window —
     CLOCK-ALIGNED, not `now + 1h`, so everything in one window shares a send
     time and leaves as ONE email (a rolling window silently degrades back to
@@ -1351,7 +1458,40 @@ UPDATE SKIP LOCKED`), is service-role only (RLS on, NO policies — the rows
     linking to the preferences page. Titles/bodies are DB-derived (customer and
     product names), so every interpolation is escaped, and link paths are
     absolutised against the store's own origin (custom domain if set). - **Retention**: `pruneNotifications()` (inbox 90 d, events 365 d) — an
-    inbox that grows forever is a slow outage.
+    inbox that grows forever is a slow outage. - **EVERY registry entry HAS AN EMITTER — enforced by a CI test.** A
+    notification listed in the console but fired by nothing is worse than one
+    that doesn't exist: the merchant configures recipients, writes copy, and
+    nothing ever arrives, silently. (27 of 38 entries were in exactly that
+    state — including `customer.signed_up` and `plan.changed` — which is what
+    prompted the guard.) `lib/notifications/coverage.test.ts` greps `app/` +
+    `lib/` for each `EVENT_KEYS` entry and FAILS unless it is either emitted
+    or listed in its `PENDING` map with the unbuilt feature it waits on; it
+    also fails if a `PENDING` key gains an emitter, so the allowlist can't
+    become a graveyard. Only `order.cancellation_requested` and
+    `order.refund_issued` are pending (the cancellation phase). Two collateral
+    rules the wiring settled: - **`recordEvent` in crons/webhooks, `emitEvent` in server actions** —
+    `after()` has nothing to defer onto once a cron response is sent. - **One sender per message.** Where a dedicated sender already exists,
+    the registry entry is in-app only rather than duplicating the mail:
+    `plan.changed` + `subscription.payment_failed` leave email to
+    `lib/email/billing-emails.ts` (platform branding, `billing@`), while
+    `plan.expiring` keeps its email because nothing else warns before a
+    lapse. Blog approve/reject went the other way — `lib/email/blog-notifications.ts` was DELETED and those mails now come from the
+    notification system, so merchants can edit the copy. - **Threshold events fire on the CROSSING, not the state**, or a merchant
+    gets one mail per sale and stops reading all of them:
+    `lib/inventory/alerts.ts` `stockAlertFor(prev, next, threshold)` is the
+    pure, tested rule behind `inventory.low_stock`/`out_of_stock` (called from
+    `checkout-actions` after reserve and from `inventory-actions` after
+    adjust/bulk; restocking re-arms it, untracked + backorderable SKUs are
+    skipped, and it reads the store's threshold from the store ROW so it works
+    without a request host). The same idea elsewhere: `ai.credits_low` fires on
+    `aiWarnAt` — exact-equality with the remaining count, at BOTH 3 left and 0
+    (`lib/ai/quota.ts`; zero matters because the FREE plan's whole cap IS 3, so
+    a single 3-left trigger would have skipped the entire free tier),
+    `plan.expiring`
+    on 24-hour bands at 7 and 1 days out (`expiryWarnWindow` in `lib/plans.ts`,
+    driven by `/api/cron/plan-expiry`),
+    `campaign.sent` on a conditional `→ done` claim, and `customer.signed_up`
+    on `xmax = 0` so an upsert that only UPDATED doesn't look like a signup.
 
 ## 6. Commands
 
@@ -1440,7 +1580,11 @@ npm run format      # prettier --write
     identical, so every `admins`/`users` FK + the `app.current_user_id` GUC keep
     working with zero remapping.
 - **Vercel**: hosting + cron. Wildcard domain `*.storemink.com` → store subdomains.
-- **Resend**: transactional email + custom-domain DNS verification.
+- **Resend**: transactional email + custom-domain DNS verification. Delivery
+  webhooks post to `/api/webhooks/resend` and need **`RESEND_WEBHOOK_SECRET`**
+  (Svix signing secret) plus the endpoint registered in the Resend dashboard,
+  subscribed to `email.bounced` + `email.complained` — without it bounces are
+  never learned and dead addresses are mailed forever (§22).
 - **Google Cloud Storage** (media, GCP migration Phase 3 — `lib/storage/gcs.ts`):
   when **`GCS_BUCKET`** is set, new image/video uploads go to that GCS bucket
   (public, uniform bucket-level access) and public URLs are

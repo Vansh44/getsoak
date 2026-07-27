@@ -11,6 +11,7 @@ import {
   getViewerAccess,
 } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
+import { emitEvent } from "@/lib/notifications/record";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -246,6 +247,18 @@ async function syncDomainVerified(isVerified: boolean): Promise<void> {
   } catch (err) {
     console.error("syncDomainVerified:", err);
     return;
+  }
+
+  // Only on the transition INTO verified — a re-check that comes back verified
+  // again short-circuits above, so this can't repeat.
+  if (isVerified) {
+    emitEvent({
+      type: "platform.domain_verified",
+      storeId,
+      actor: { type: "system" },
+      subject: { type: "store", id: storeId, label: store.custom_domain },
+      payload: { domain: store.custom_domain },
+    });
   }
 
   revalidateTag(STORE_TAG, "max");

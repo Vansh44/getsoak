@@ -28,6 +28,9 @@ import { lookupStoreById } from "@/lib/store/resolve";
 import { ROOT_DOMAIN } from "@/lib/store/host";
 import { PLATFORM_URL } from "@/lib/site";
 import { fromAddress } from "@/lib/email/sender";
+import { sendEmailBatch, type BatchSender } from "@/lib/email/send-batch";
+import { findSuppressed, normalizeEmail } from "@/lib/email/suppression";
+import { logEmail } from "@/lib/email/send";
 import { logError, logInfo } from "@/lib/observability/logger";
 import {
   platformBrand,
@@ -200,14 +203,28 @@ export async function processNotificationEmails(
     contexts.set(storeId ?? "platform", await resolveBase(storeId));
   }
 
-  const messages: { rowIds: string[]; message: Record<string, unknown> }[] = [];
+  // One lookup for the whole run: addresses a permanent bounce or a spam
+  // complaint has taken out of service (lib/email/suppression.ts). Mailing them
+  // again can't succeed and spends the shared domain's reputation doing it.
+  const suppressed = await findSuppressed(claimed.map((r) => r.email));
+
+  const messages: {
+    rowIds: string[];
+    storeId: string | null;
+    message: Record<string, unknown>;
+  }[] = [];
   const undeliverable: string[] = [];
+  const blocked: string[] = [];
 
   for (const [, rows] of groupRows(claimed)) {
     const ctx = contexts.get(rows[0].store_id ?? "platform");
     if (!ctx) {
       // No store to brand or link to — these can never be sent.
       undeliverable.push(...rows.map((r) => r.id));
+      continue;
+    }
+    if (suppressed.has(normalizeEmail(rows[0].email))) {
+      blocked.push(...rows.map((r) => r.id));
       continue;
     }
 
@@ -237,6 +254,7 @@ export async function processNotificationEmails(
 
     messages.push({
       rowIds: ordered.map((r) => r.id),
+      storeId: ordered[0].store_id,
       message: {
         from: fromAddress(ctx.brand, { suffix: "Notifications" }),
         to: ordered[0].email,
@@ -249,49 +267,77 @@ export async function processNotificationEmails(
   }
 
   let sent = 0;
-  let failed = undeliverable.length;
+  let failed = undeliverable.length + blocked.length;
   let retried = 0;
 
   if (undeliverable.length > 0) {
     await markFailed(undeliverable, "Store could not be resolved");
   }
+  if (blocked.length > 0) {
+    // Recorded as failed with a reason a human can act on, not retried: the
+    // address is out of service until someone clears the suppression.
+    await markFailed(
+      blocked,
+      "Address suppressed after a permanent bounce or spam complaint",
+    );
+  }
 
-  // Send in Resend-sized batches. A batch is all-or-nothing from the API's
-  // point of view, so its rows share an outcome.
+  // Send in Resend-sized batches. sendEmailBatch reports PER MESSAGE: a batch
+  // error is not a verdict on the batch, so one bad address costs only its own
+  // recipient their email, not everyone else's in the same slice.
   for (let i = 0; i < messages.length; i += RESEND_BATCH) {
     const slice = messages.slice(i, i + RESEND_BATCH);
-    let ok = false;
-    let errorText = "Unknown send error";
-    try {
-      const { error } = await resend.batch.send(
-        slice.map((m) => m.message) as Parameters<typeof resend.batch.send>[0],
-      );
-      ok = !error;
-      if (error) {
-        errorText = error.message ?? String(error);
-        logError("notification worker: resend batch error", error);
-      }
-    } catch (error) {
-      errorText = error instanceof Error ? error.message : String(error);
-      logError("notification worker: resend batch threw", error);
+    const outcome = await sendEmailBatch(
+      resend as unknown as BatchSender,
+      slice.map((m) => ({ key: m, message: m.message })),
+    );
+
+    const sentIds = outcome.sent.flatMap((m) => m.rowIds);
+    if (sentIds.length) {
+      await markSent(sentIds);
+      sent += outcome.sent.length;
     }
 
-    const ids = slice.flatMap((m) => m.rowIds);
-    if (ok) {
-      await markSent(ids);
-      sent += slice.length;
-    } else {
+    // Mirror every send into the store's email log. The batch API can't route
+    // through sendEmail() without giving up batching, so the log write is
+    // explicit here — the send-coverage test is what stops that becoming a hole.
+    for (const m of outcome.sent) {
+      await logEmail({
+        storeId: m.storeId,
+        to: String(m.message.to ?? ""),
+        from: String(m.message.from ?? ""),
+        subject: String(m.message.subject ?? ""),
+        html: String(m.message.html ?? ""),
+        mailer: "notification",
+        status: "sent",
+      });
+    }
+
+    // Group the failures by their own error text so a row's last_error names
+    // what actually went wrong for IT, not for some other message in the slice.
+    for (const { key, error } of outcome.failed) {
+      await logEmail({
+        storeId: key.storeId,
+        to: String(key.message.to ?? ""),
+        from: String(key.message.from ?? ""),
+        subject: String(key.message.subject ?? ""),
+        html: String(key.message.html ?? ""),
+        mailer: "notification",
+        status: "failed",
+        error,
+      });
+
       // Split by whether the row has retries left: exhausted rows are parked,
       // the rest go back to pending with a delay.
-      const exhausted = ids.filter(
+      const exhausted = key.rowIds.filter(
         (id) => attemptsFor(claimed, id) >= MAX_ATTEMPTS,
       );
-      const retryable = ids.filter(
+      const retryable = key.rowIds.filter(
         (id) => attemptsFor(claimed, id) < MAX_ATTEMPTS,
       );
-      if (exhausted.length) await markFailed(exhausted, errorText);
+      if (exhausted.length) await markFailed(exhausted, error);
       if (retryable.length) {
-        await markForRetry(retryable, claimed, errorText);
+        await markForRetry(retryable, claimed, error);
         retried += retryable.length;
       }
       failed += exhausted.length;

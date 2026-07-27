@@ -7,19 +7,9 @@
 import { ROOT_DOMAIN } from "@/lib/store/host";
 import { getCurrentStore } from "@/lib/store/resolve";
 
-function resolvePlatformUrl(): string {
-  const fromEnv = process.env.NEXT_PUBLIC_APP_URL;
-  const raw = fromEnv
-    ? fromEnv.startsWith("http")
-      ? fromEnv
-      : `https://${fromEnv}`
-    : process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : `https://${ROOT_DOMAIN}`;
-  return raw.replace(/\/+$/, "");
-}
-
-export const PLATFORM_URL = resolvePlatformUrl();
+// Defined in lib/store/host.ts (pure, no DB imports) and re-exported here so
+// this stays the one place most code looks for platform origins.
+export { PLATFORM_URL } from "@/lib/store/host";
 
 // Canonical origin of the help centre (help.{root}). Used for help-article
 // canonicals, OG urls, JSON-LD and the help branch of sitemap.ts/robots.ts.

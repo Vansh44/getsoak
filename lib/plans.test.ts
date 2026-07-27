@@ -7,6 +7,8 @@ import {
   effectivePlan,
   planAllows,
   limitsFor,
+  EXPIRY_WARN_DAYS,
+  expiryWarnWindow,
 } from "./plans";
 
 describe("normalizePlan", () => {
@@ -156,5 +158,55 @@ describe("catalog consistency", () => {
   it("limitsFor tolerates junk plans", () => {
     expect(limitsFor("bogus")).toEqual(PLAN_LIMITS.free);
     expect(limitsFor("pro").maxProducts).toBeNull();
+  });
+});
+
+// The value of a "your plan expires soon" warning is that it arrives once per
+// horizon. "≤ 7 days away" would re-send it every day for a week; the daily
+// cron plus a 24-hour band gives once-only with no state to keep.
+describe("expiryWarnWindow", () => {
+  const now = new Date("2026-07-27T00:00:00.000Z");
+  const at = (iso: string) => {
+    // Which horizons would match a plan expiring at `iso`, on a run at `now`.
+    return EXPIRY_WARN_DAYS.filter((days) => {
+      const { from, to } = expiryWarnWindow(now, days);
+      return iso > from && iso <= to;
+    });
+  };
+
+  it("covers exactly 24 hours per horizon", () => {
+    const w = expiryWarnWindow(now, 7);
+    expect(w.from).toBe("2026-08-02T00:00:00.000Z"); // now + 6d
+    expect(w.to).toBe("2026-08-03T00:00:00.000Z"); // now + 7d
+  });
+
+  it("matches a store on exactly one horizon at a time", () => {
+    expect(at("2026-08-03T00:00:00.000Z")).toEqual([7]); // 7 days out
+    expect(at("2026-07-28T00:00:00.000Z")).toEqual([1]); // 1 day out
+  });
+
+  it("does not warn on the days between the horizons", () => {
+    expect(at("2026-07-31T12:00:00.000Z")).toEqual([]); // ~4.5 days out
+    expect(at("2026-07-29T12:00:00.000Z")).toEqual([]); // ~2.5 days out
+  });
+
+  it("does not warn about a plan expiring beyond the furthest horizon", () => {
+    expect(at("2026-09-01T00:00:00.000Z")).toEqual([]);
+  });
+
+  it("leaves already-expired plans to the downgrade pass", () => {
+    // The window is half-open and starts in the FUTURE for the 1-day horizon,
+    // so a plan that already lapsed is never picked up as a "warning".
+    expect(at("2026-07-26T00:00:00.000Z")).toEqual([]);
+    expect(at("2026-07-27T00:00:00.000Z")).toEqual([]); // exactly now
+  });
+
+  it("re-warns the same store as it passes each horizon in turn", () => {
+    const expiry = "2026-08-03T00:00:00.000Z";
+    expect(at(expiry)).toEqual([7]);
+    // Six days later the same store is now one day out.
+    const later = new Date("2026-08-02T00:00:00.000Z");
+    const { from, to } = expiryWarnWindow(later, 1);
+    expect(expiry > from && expiry <= to).toBe(true);
   });
 });

@@ -1,8 +1,10 @@
 "use server";
 
 import { count, eq } from "drizzle-orm";
-import { Resend } from "resend";
 import { getServerUser } from "@/lib/auth/server-user";
+import { emitEvent } from "@/lib/notifications/record";
+import { sendEmail } from "@/lib/email/send";
+import { getActingStoreId } from "@/app/dashboard/lib/access";
 import {
   deleteAuthUser,
   updateAuthUser,
@@ -91,6 +93,12 @@ export async function deleteUser(userId: string): Promise<Result> {
     return { error: "Failed to delete the user's login. Please try again." };
   }
 
+  emitEvent({
+    type: "admin.removed",
+    storeId: await getActingStoreId(),
+    actor: { type: "admin", id: gate.id },
+    subject: { type: "admin", id: userId },
+  });
   return { success: true };
 }
 
@@ -146,6 +154,14 @@ export async function changeUserRole(
   await setUserClaims(userId, { role }).catch((err) =>
     console.error("changeUserRole setUserClaims error:", err),
   );
+
+  emitEvent({
+    type: "admin.role_changed",
+    storeId: await getActingStoreId(),
+    actor: { type: "admin", id: gate.id },
+    subject: { type: "admin", id: userId },
+    payload: { role },
+  });
   return { success: true };
 }
 
@@ -196,15 +212,20 @@ export async function triggerPasswordReset(email: string): Promise<Result> {
 
   const resendApiKey = process.env.RESEND_API_KEY;
   if (resendApiKey && !resendApiKey.includes("placeholder")) {
-    try {
-      const brand = await getStoreBrand();
-      const resend = new Resend(resendApiKey);
-      await resend.emails.send({
-        from: fromAddress(brand, { suffix: "Accounts" }),
-        to: email,
-        subject: `Reset your ${brand.name} password`,
-        html: wrapBrandedEmail(
-          `
+    const brand = await getStoreBrand();
+    // `password_reset` is a sensitive mailer: the log records the attempt but
+    // not the body, because the reset link in it IS the credential.
+    // ignoreSuppression — someone is waiting on this to get back into their
+    // account, and a historic bounce shouldn't lock them out.
+    await sendEmail({
+      storeId: await getActingStoreId().catch(() => null),
+      from: fromAddress(brand, { suffix: "Accounts" }),
+      to: email,
+      subject: `Reset your ${brand.name} password`,
+      mailer: "password_reset",
+      ignoreSuppression: true,
+      html: wrapBrandedEmail(
+        `
         <h2 style="margin-top: 0;">Reset your password</h2>
         <p>We received a request to reset your password. Click the button below
           to choose a new one. If you didn't ask for this, you can ignore this email.</p>
@@ -215,12 +236,9 @@ export async function triggerPasswordReset(email: string): Promise<Result> {
         </div>
         <p style="font-size:13px;color:#666;">Or open this link: <br />${link}</p>
       `,
-          brand,
-        ),
-      });
-    } catch (e) {
-      console.error("Failed to send password-reset email:", e);
-    }
+        brand,
+      ),
+    });
   } else {
     // Dev fallback: no email provider configured.
     console.log(`\n🔑 Password reset link for ${email}:\n${link}\n`);

@@ -545,6 +545,13 @@ export async function updateProduct(
 
     revalidateProduct(slug);
     await notifyProductPublished(slug, formData.status === "published");
+    emitEvent({
+      type: "product.updated",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "product", id, label: formData.name },
+      payload: { status: formData.status },
+    });
     return { success: true };
   }
 

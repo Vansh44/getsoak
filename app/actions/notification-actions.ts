@@ -19,6 +19,7 @@
 // scope filter is the first.
 // ---------------------------------------------------------------------------
 
+import { after } from "next/server";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import {
@@ -37,6 +38,8 @@ import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import {
   activityEvents,
   admins,
+  emailLogs,
+  notificationEmailQueue,
   notificationPreferences,
   notifications,
   roles,
@@ -88,8 +91,10 @@ import {
 } from "@/lib/email/notification-emails";
 import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
+import { findSuppressed, normalizeEmail } from "@/lib/email/suppression";
+import { sendEmail } from "@/lib/email/send";
+import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 import { rateLimit } from "@/lib/rate-limit";
-import { Resend } from "resend";
 import { PLATFORM_URL } from "@/lib/site";
 import {
   variablesFor,
@@ -1031,22 +1036,21 @@ export async function sendTestNotificationEmail(
       baseUrl: storeId ? `https://${brand.domain}` : PLATFORM_URL,
     });
 
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey || apiKey.includes("placeholder")) {
-      return { error: "Email isn't configured in this environment yet." };
-    }
-
-    const { error } = await new Resend(apiKey).emails.send({
+    const result = await sendEmail({
+      storeId,
       from: fromAddress(brand, { suffix: "Notifications" }),
       to: access.email,
       // Flagged in the subject so a test can never be mistaken for the real
       // thing sitting in an inbox next to it.
       subject: `[Test] ${rendered.subject}`,
       html: rendered.html,
+      mailer: "notification_test",
     });
-    if (error) {
-      logError("notifications: test send failed", error, { key });
-      return { error: "Couldn't send the test email." };
+    if (!result.sent) {
+      logError("notifications: test send failed", result.error, { key });
+      return {
+        error: result.error ?? "Couldn't send the test email.",
+      };
     }
     return { success: true, sentTo: access.email };
   } catch (error) {
@@ -1323,12 +1327,19 @@ export async function getStoreNotificationAudience(): Promise<StoreAudience> {
 export async function pruneNotifications(
   notificationDays = 90,
   eventDays = 365,
-): Promise<{ notifications: number; events: number }> {
+  // Email logs keep BODIES, so they're the heaviest of the three and get the
+  // shortest life. 90 days still covers "did last quarter's order confirmation
+  // go out?", which is the question anyone actually asks.
+  emailLogDays = 90,
+): Promise<{ notifications: number; events: number; emailLogs: number }> {
   const notificationFloor = new Date(
     Date.now() - notificationDays * 86_400_000,
   ).toISOString();
   const eventFloor = new Date(
     Date.now() - eventDays * 86_400_000,
+  ).toISOString();
+  const emailFloor = new Date(
+    Date.now() - emailLogDays * 86_400_000,
   ).toISOString();
 
   return withService(async (db) => {
@@ -1340,9 +1351,210 @@ export async function pruneNotifications(
       .delete(activityEvents)
       .where(lt(activityEvents.createdAt, eventFloor))
       .returning({ id: activityEvents.id });
+    const removedEmailLogs = await db
+      .delete(emailLogs)
+      .where(lt(emailLogs.createdAt, emailFloor))
+      .returning({ id: emailLogs.id });
     return {
       notifications: removedNotifications.length,
       events: removedEvents.length,
+      emailLogs: removedEmailLogs.length,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Delivery failures — making the dead-letter queue visible
+// ---------------------------------------------------------------------------
+//
+// A queue row that burned through its retries was marked 'failed' and that was
+// the end of it: no error surfaced anywhere a person would look, so a store
+// whose notification mail had stopped arriving had no way to find out except by
+// noticing the silence. This is the surface for that.
+//
+// Read-only and store-scoped. It reports WHAT failed and WHY; clearing a
+// suppression is an operator action, because a suppression is platform-wide.
+
+export interface DeliveryFailure {
+  id: string;
+  email: string;
+  title: string;
+  eventKey: string;
+  error: string | null;
+  attempts: number;
+  createdAt: string;
+  /** True when the address itself is out of service, not just this send. */
+  suppressed: boolean;
+}
+
+export interface DeliveryHealth {
+  failures: DeliveryFailure[];
+  /** Failed rows in the window, which may exceed the listed sample. */
+  total: number;
+  error?: string;
+}
+
+/** How far back the panel looks. Older failures are history, not a live issue. */
+const DELIVERY_WINDOW_DAYS = 7;
+const DELIVERY_SAMPLE = 20;
+
+/**
+ * Recent notification emails that could not be delivered for the current store.
+ * Gated on the same `notifications` section as the rest of the console.
+ */
+export async function getDeliveryHealth(): Promise<DeliveryHealth> {
+  const access = await getViewerAccess();
+  if (!access) return { failures: [], total: 0, error: "Not signed in." };
+  if (!access.can("notifications", "view")) {
+    return {
+      failures: [],
+      total: 0,
+      error: "You don't have access to notification settings.",
+    };
+  }
+
+  const { storeId } = await currentScope();
+  const since = new Date(
+    Date.now() - DELIVERY_WINDOW_DAYS * 86_400_000,
+  ).toISOString();
+
+  try {
+    // Service scope: notification_email_queue is worker-only (RLS on, no
+    // policies — the rows are email addresses), so the store filter below IS
+    // the tenancy boundary. It must never be dropped.
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: notificationEmailQueue.id,
+          email: notificationEmailQueue.email,
+          title: notificationEmailQueue.title,
+          eventKey: notificationEmailQueue.eventKey,
+          error: notificationEmailQueue.lastError,
+          attempts: notificationEmailQueue.attempts,
+          createdAt: notificationEmailQueue.createdAt,
+        })
+        .from(notificationEmailQueue)
+        .where(
+          and(
+            storeId
+              ? eq(notificationEmailQueue.storeId, storeId)
+              : isNull(notificationEmailQueue.storeId),
+            eq(notificationEmailQueue.status, "failed"),
+            gte(notificationEmailQueue.createdAt, since),
+          ),
+        )
+        .orderBy(desc(notificationEmailQueue.createdAt))
+        .limit(DELIVERY_SAMPLE),
+    );
+
+    if (rows.length === 0) return { failures: [], total: 0 };
+
+    // Sequential, not Promise.all — one pooled connection per scoped
+    // transaction (see order-actions.ts).
+    const suppressed = await findSuppressed(rows.map((r) => r.email));
+
+    const counted = await withService((db) =>
+      db
+        .select({ n: count() })
+        .from(notificationEmailQueue)
+        .where(
+          and(
+            storeId
+              ? eq(notificationEmailQueue.storeId, storeId)
+              : isNull(notificationEmailQueue.storeId),
+            eq(notificationEmailQueue.status, "failed"),
+            gte(notificationEmailQueue.createdAt, since),
+          ),
+        ),
+    );
+
+    return {
+      failures: rows.map((r) => ({
+        ...r,
+        suppressed: suppressed.has(normalizeEmail(r.email)),
+      })),
+      total: counted[0]?.n ?? rows.length,
+    };
+  } catch (error) {
+    logError("getDeliveryHealth failed", error);
+    return { failures: [], total: 0, error: "Could not load delivery status." };
+  }
+}
+
+/**
+ * Put a failed row back in the queue for another try.
+ *
+ * Refuses a suppressed address rather than pretending: retrying one is
+ * guaranteed to fail again and spends the shared domain's reputation doing it.
+ * Attempts reset to zero so the row gets a full set of retries, not the tail of
+ * an exhausted one.
+ */
+export async function retryFailedEmail(
+  id: string,
+): Promise<{ success?: boolean; error?: string }> {
+  const access = await getViewerAccess();
+  if (!access) return { error: "Not signed in." };
+  if (!access.can("notifications", "manage")) {
+    return { error: "You don't have permission to manage notifications." };
+  }
+
+  const { storeId } = await currentScope();
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ email: notificationEmailQueue.email })
+        .from(notificationEmailQueue)
+        .where(
+          and(
+            eq(notificationEmailQueue.id, id),
+            storeId
+              ? eq(notificationEmailQueue.storeId, storeId)
+              : isNull(notificationEmailQueue.storeId),
+            eq(notificationEmailQueue.status, "failed"),
+          ),
+        )
+        .limit(1),
+    );
+    const target = rows[0];
+    if (!target) return { error: "That message is no longer retryable." };
+
+    const suppressed = await findSuppressed([target.email]);
+    if (suppressed.has(normalizeEmail(target.email))) {
+      return {
+        error:
+          "This address bounced permanently or reported spam. Retrying can't succeed — contact the recipient for a working address.",
+      };
+    }
+
+    // Store-scoped and status-guarded, so a stale click can't resurrect a row
+    // that has since been retried by someone else.
+    const claimed = await withService((db) =>
+      db
+        .update(notificationEmailQueue)
+        .set({
+          status: "pending",
+          attempts: 0,
+          claimedAt: null,
+          lastError: null,
+          sendAfter: sql`NOW()`,
+        })
+        .where(
+          and(
+            eq(notificationEmailQueue.id, id),
+            eq(notificationEmailQueue.status, "failed"),
+          ),
+        )
+        .returning({ id: notificationEmailQueue.id }),
+    );
+    if (!claimed.length)
+      return { error: "That message is no longer retryable." };
+
+    after(() => triggerEmailWorker());
+    revalidatePath("/dashboard/settings/notifications");
+    return { success: true };
+  } catch (error) {
+    logError("retryFailedEmail failed", error, { id });
+    return { error: "Could not retry that message." };
+  }
 }

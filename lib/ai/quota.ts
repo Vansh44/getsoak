@@ -1,9 +1,11 @@
 import "server-only";
 
+import { after } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { aiCreditBalances, aiUsage, stores } from "@/drizzle/schema";
 import { effectivePlan, limitsFor, planAllows, PLAN_META } from "@/lib/plans";
+import { recordEvent } from "@/lib/notifications/record";
 
 // Per-store AI generation quota — the first real enforcement of a plan limit.
 // Every AI copy feature (product description, SEO, coupon email, brand-voice
@@ -75,7 +77,10 @@ export async function consumeAiQuota(storeId: string): Promise<QuotaResult> {
     );
     return { allowed: true };
   }
-  if (ok) return { allowed: true, source: "plan" };
+  if (ok) {
+    reportAiBalance(storeId);
+    return { allowed: true, source: "plan" };
+  }
 
   // Monthly allowance spent — fall back to the purchased-credit balance.
   let spent: boolean;
@@ -91,7 +96,10 @@ export async function consumeAiQuota(storeId: string): Promise<QuotaResult> {
     );
     return { allowed: true };
   }
-  if (spent) return { allowed: true, source: "credit" };
+  if (spent) {
+    reportAiBalance(storeId);
+    return { allowed: true, source: "credit" };
+  }
 
   return {
     allowed: false,
@@ -99,6 +107,67 @@ export async function consumeAiQuota(storeId: string): Promise<QuotaResult> {
       ? `You've used all ${cap} AI generations included in the ${PLAN_META[plan].name} plan this month and have no AI credits left. Buy AI credits (Dashboard → Plans & Billing) or upgrade your plan.`
       : `You've used all ${cap} AI generations included in the ${PLAN_META[plan].name} plan this month. Upgrade your plan for more.`,
   };
+}
+
+/** Remaining generations at which the merchant gets a heads-up. */
+export const LOW_REMAINING = 3;
+
+/**
+ * Should a store with `remaining` generations left be warned right now? PURE,
+ * so the once-only rule can be tested without a database.
+ *
+ * EXACT equality, not "≤ 3 left": a consume moves the count by exactly one, so
+ * matching a point instead of a band is what keeps this to ONE notification
+ * rather than one per generation for the rest of the month (the same rule the
+ * stock alerts use). Buying credits raises the count and re-arms it.
+ *
+ * TWO points, not one. The FREE plan's cap IS 3, so its remaining count goes
+ * 3 → 2 on the very first generation and would never equal LOW_REMAINING —
+ * the entire free tier would silently never be warned. Zero catches that case
+ * and is the more useful signal anyway ("your allowance is gone"), while a
+ * bigger plan still gets the earlier heads-up.
+ */
+export function aiWarnAt(remaining: number): boolean {
+  return remaining === LOW_REMAINING || remaining === 0;
+}
+
+/**
+ * Warn once when a store's AI allowance runs low (see aiWarnAt).
+ *
+ * Deferred and fully swallowed: a quota warning must never affect the
+ * generation that triggered it.
+ */
+function reportAiBalance(storeId: string): void {
+  try {
+    after(async () => {
+      try {
+        const usage = await getAiUsage(storeId);
+        if (usage.cap === null) return; // unlimited plan — nothing to warn about
+        const remaining =
+          Math.max(0, usage.cap - usage.used) + usage.creditBalance;
+        if (!aiWarnAt(remaining)) return;
+
+        await recordEvent({
+          type: "ai.credits_low",
+          storeId,
+          actor: { type: "system" },
+          payload: {
+            remaining,
+            used: usage.used,
+            cap: usage.cap,
+            credits: usage.creditBalance,
+          },
+        });
+      } catch (err) {
+        console.error(
+          "reportAiBalance:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    });
+  } catch {
+    // No request scope (a script or a test) — nothing to defer onto.
+  }
 }
 
 export interface AiUsageSummary {

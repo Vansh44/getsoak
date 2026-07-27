@@ -2743,6 +2743,44 @@ export const notificationPreferences = pgTable(
 // Notification EMAIL queue (supabase/notifications_02_email_queue.sql).
 // Worker-only: RLS is enabled with NO policies, so only the service scope can
 // touch it — the rows hold recipients' addresses.
+// Every email the platform sends — see supabase/email_logs.sql. A LOG, not a
+// queue: nothing reads it to decide what to do next.
+export const emailLogs = pgTable("email_logs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id"),
+  toEmail: text("to_email").notNull(),
+  fromEmail: text("from_email").notNull(),
+  cc: text(),
+  bcc: text(),
+  subject: text(),
+  mailer: text().notNull(),
+  provider: text().default("resend").notNull(),
+  status: text().notNull(),
+  error: text(),
+  providerMessageId: text("provider_message_id"),
+  bodyHtml: text("body_html"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Global, NOT tenant-scoped, on purpose — see supabase/notifications_05_suppressions.sql.
+export const emailSuppressions = pgTable("email_suppressions", {
+  email: text().primaryKey().notNull(),
+  reason: text().notNull(),
+  detail: text(),
+  source: text().default("resend").notNull(),
+  lastEventAt: timestamp("last_event_at", {
+    withTimezone: true,
+    mode: "string",
+  })
+    .defaultNow()
+    .notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
 export const notificationEmailQueue = pgTable(
   "notification_email_queue",
   {

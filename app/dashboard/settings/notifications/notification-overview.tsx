@@ -26,7 +26,11 @@ import {
 } from "lucide-react";
 import { eventKeySlug } from "@/lib/notifications/events";
 import { CHANNELS } from "@/lib/notifications/channels";
-import type { ConsoleRow } from "@/app/actions/notification-actions";
+import type {
+  ConsoleRow,
+  DeliveryFailure,
+} from "@/app/actions/notification-actions";
+import { DeliveryHealth } from "./delivery-health";
 
 const CHANNEL_LABEL = new Map<string, string>(
   CHANNELS.map((c) => [c.key, c.label]),
@@ -100,11 +104,15 @@ export function NotificationOverview({
   total,
   canManage,
   error,
+  delivery = [],
+  deliveryTotal = 0,
 }: {
   rows: ConsoleRow[];
   total: number;
   canManage: boolean;
   error?: string;
+  delivery?: DeliveryFailure[];
+  deliveryTotal?: number;
 }) {
   const [tab, setTab] = useState<"customer" | "team">("customer");
 
@@ -161,6 +169,13 @@ export function NotificationOverview({
           My notifications
         </Link>
       </header>
+
+      {/* Only rendered when mail actually failed — see delivery-health.tsx. */}
+      <DeliveryHealth
+        failures={delivery}
+        total={deliveryTotal}
+        canManage={canManage}
+      />
 
       {/* One tab at a time: a merchant is doing one of the two jobs, not both. */}
       <div className="dash-filter-tabs">

@@ -14,10 +14,14 @@ vi.mock("@/lib/store/brand", () => ({
   })),
 }));
 
-const { batchSend } = vi.hoisted(() => ({ batchSend: vi.fn() }));
+const { batchSend, emailSend } = vi.hoisted(() => ({
+  batchSend: vi.fn(),
+  emailSend: vi.fn(),
+}));
 vi.mock("resend", () => {
   class Resend {
     batch = { send: batchSend };
+    emails = { send: emailSend };
     constructor() {}
   }
   return { Resend };
@@ -48,9 +52,13 @@ const campaign = {
 // executeQueue: #1 requeue (ignored) → #2 claim_email_batch (the batch) →
 // #3 claim again (empty, so the drain loop terminates).
 // selectQueue: #1 = the email_campaigns lookup for the batch.
-function wire(batch: Array<Record<string, unknown>>) {
+function wire(
+  batch: Array<Record<string, unknown>>,
+  suppressed: string[] = [],
+) {
   dbHolder.current = makeDbMock({
-    selectQueue: [[campaign]],
+    // #1 the email_campaigns lookup, #2 the suppression lookup.
+    selectQueue: [[campaign], suppressed.map((email) => ({ email }))],
     executeQueue: [[], batch, []],
   });
 }
@@ -58,6 +66,7 @@ function wire(batch: Array<Record<string, unknown>>) {
 beforeEach(() => {
   vi.clearAllMocks();
   batchSend.mockResolvedValue({ data: { data: [{ id: "1" }] }, error: null });
+  emailSend.mockResolvedValue({ data: { id: "1" }, error: null });
 });
 
 afterEach(() => {
@@ -107,5 +116,69 @@ describe("processEmailQueue", () => {
 
     expect(result).toMatchObject({ processed: 1, sent: 0, failed: 1 });
     expect(dbHolder.current.calls.set).toContainEqual({ status: "failed" });
+  });
+
+  // REGRESSION. A campaign list is customer-entered data, so a bad address in
+  // it is inevitable — and this worker has NO retry, so an all-or-nothing batch
+  // verdict wrote off every other recipient in that batch permanently. Their
+  // coupon email simply never arrived and nothing said so.
+  it("delivers the rest of a campaign batch when one address is bad", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_realkey");
+    batchSend.mockResolvedValue({
+      data: null,
+      error: { message: "invalid to" },
+    });
+    emailSend.mockImplementation(async (message: any) =>
+      message.to === "broken@@x.com"
+        ? { data: null, error: { message: "invalid to" } }
+        : { data: { id: "1" }, error: null },
+    );
+    wire([
+      { id: "r1", campaign_id: "camp1", email: "a@x.com", first_name: "Ada" },
+      {
+        id: "r2",
+        campaign_id: "camp1",
+        email: "broken@@x.com",
+        first_name: "Bob",
+      },
+      { id: "r3", campaign_id: "camp1", email: "c@x.com", first_name: "Cy" },
+    ]);
+
+    const result = await processEmailQueue();
+
+    expect(result).toMatchObject({ processed: 3, sent: 2, failed: 1 });
+    expect(dbHolder.current.calls.set).toContainEqual({ status: "sent" });
+    expect(dbHolder.current.calls.set).toContainEqual({ status: "failed" });
+  });
+
+  // A marketing blast is where mailing dead addresses hurts most: it's the
+  // shared sending domain's reputation being spent on mail nobody receives.
+  it("skips addresses a permanent bounce has taken out of service", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_realkey");
+    wire(
+      [
+        {
+          id: "r1",
+          campaign_id: "camp1",
+          email: "live@x.com",
+          first_name: "A",
+        },
+        {
+          id: "r2",
+          campaign_id: "camp1",
+          email: "dead@x.com",
+          first_name: "B",
+        },
+      ],
+      ["dead@x.com"],
+    );
+
+    const result = await processEmailQueue();
+
+    expect(batchSend).toHaveBeenCalledTimes(1);
+    expect(batchSend.mock.calls[0][0].map((m: any) => m.to)).toEqual([
+      "live@x.com",
+    ]);
+    expect(result).toMatchObject({ processed: 2, sent: 1, failed: 1 });
   });
 });

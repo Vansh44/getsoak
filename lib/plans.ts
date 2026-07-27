@@ -175,3 +175,35 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
 export function limitsFor(plan: unknown): PlanLimits {
   return PLAN_LIMITS[normalizePlan(plan)];
 }
+
+// ---------------------------------------------------------------------------
+// Expiry warnings (notifications §22 — "fire on the crossing, not the state")
+// ---------------------------------------------------------------------------
+
+/** How many days ahead a merchant is told their timed plan is about to lapse. */
+export const EXPIRY_WARN_DAYS = [7, 1] as const;
+
+/**
+ * The half-open window `(from, to]` of expiry timestamps that the `days`-ahead
+ * warning covers on a run at `now`. PURE, so the once-only property is testable.
+ *
+ * Each horizon is a 24-HOUR BAND, not "≤ N days away". The cron runs daily, so
+ * a band matches each store exactly once per horizon and needs no "already
+ * warned" column to stay idempotent — whereas "≤ 7 days" would re-warn every
+ * single day for a week, which is how a warning becomes noise.
+ *
+ * The trade-off is that a skipped cron day skips that horizon's warning. That's
+ * acceptable: the backstop (the downgrade email when the plan actually lapses)
+ * is unconditional, and the two horizons mean one missed run rarely silences
+ * both.
+ */
+export function expiryWarnWindow(
+  now: Date,
+  days: number,
+): { from: string; to: string } {
+  const DAY_MS = 86_400_000;
+  return {
+    from: new Date(now.getTime() + (days - 1) * DAY_MS).toISOString(),
+    to: new Date(now.getTime() + days * DAY_MS).toISOString(),
+  };
+}

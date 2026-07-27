@@ -11,10 +11,10 @@ import {
 import { setUserClaims } from "@/lib/auth/firebase-claims";
 import { withService, withUser } from "@/lib/db/client";
 import { admins } from "@/drizzle/schema";
-import { Resend } from "resend";
 import { wrapBrandedEmail } from "@/lib/email/layout";
 import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
+import { sendEmail } from "@/lib/email/send";
 import { PLATFORM_URL } from "@/lib/site";
 import { randomInt } from "crypto";
 
@@ -155,19 +155,22 @@ export async function inviteUser(formData: FormData) {
     resendApiKey && !resendApiKey.includes("placeholder");
 
   if (isResendAvailable) {
-    try {
-      const brand = await getStoreBrandById(storeId);
-      const appUrl = PLATFORM_URL;
+    const brand = await getStoreBrandById(storeId);
+    const appUrl = PLATFORM_URL;
 
-      const resend = new Resend(resendApiKey);
-      await resend.emails.send({
-        // From/Subject are mail headers, NOT HTML — build the From with the
-        // RFC-5322-safe helper and leave the brand name unescaped in both.
-        from: fromAddress(brand, { suffix: "Dashboard" }),
-        to: email,
-        subject: `Welcome to ${brand.name} Dashboard`,
-        html: wrapBrandedEmail(
-          `
+    // The `staff_invite` mailer is marked sensitive, so the email log records
+    // that this went out — to whom, when, whether it sent — WITHOUT storing the
+    // body, which carries a working temporary password in plaintext.
+    await sendEmail({
+      storeId,
+      // From/Subject are mail headers, NOT HTML — build the From with the
+      // RFC-5322-safe helper and leave the brand name unescaped in both.
+      from: fromAddress(brand, { suffix: "Dashboard" }),
+      to: email,
+      subject: `Welcome to ${brand.name} Dashboard`,
+      mailer: "staff_invite",
+      html: wrapBrandedEmail(
+        `
         <h2 style="margin-top: 0;">You've Been Invited 🎉</h2>
 
         <p>Hello ${escapeHtml(firstName)}${lastName ? " " + escapeHtml(lastName) : ""},</p>
@@ -234,12 +237,9 @@ export async function inviteUser(formData: FormData) {
           <strong>Team ${escapeHtml(brand.name)}</strong>
         </p>
       `,
-          brand,
-        ),
-      });
-    } catch (e) {
-      console.error("Failed to send invite email via Resend:", e);
-    }
+        brand,
+      ),
+    });
   }
 
   // Dev fallback only: if no email provider is configured there is no other

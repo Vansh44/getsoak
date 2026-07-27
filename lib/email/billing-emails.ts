@@ -1,10 +1,10 @@
 import "server-only";
 
-import { Resend } from "resend";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { wrapBrandedEmail } from "./layout";
 import { EMAIL_THEME } from "./shell";
 import { PLATFORM_EMAIL_DOMAIN } from "./sender";
+import { sendEmail } from "./send";
 import type { StoreBrand } from "@/lib/store/brand";
 import { withService } from "@/lib/db/client";
 import { admins, storeBillingSettings, stores } from "@/drizzle/schema";
@@ -36,12 +36,6 @@ const PLATFORM_BRAND: StoreBrand = {
   badges: [],
   domain: PLATFORM_EMAIL_DOMAIN,
 };
-
-function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || apiKey.includes("placeholder")) return null;
-  return new Resend(apiKey);
-}
 
 function escapeHtml(value: string): string {
   return value
@@ -259,22 +253,24 @@ export async function resolveBillingEmail(
   };
 }
 
-/** Send a built billing email to a recipient. Best-effort — never throws. */
+/**
+ * Send a built billing email to a recipient. Best-effort — never throws.
+ *
+ * `storeId` is optional only because some callers have the recipient before
+ * they have the store; pass it whenever you can, or the send lands in the
+ * platform log instead of the merchant's own.
+ */
 export async function sendBillingEmail(
   to: string,
   built: BuiltEmail,
+  storeId?: string | null,
 ): Promise<void> {
-  const resend = getResend();
-  if (!resend) return;
-  try {
-    const { error } = await resend.emails.send({
-      from: BILLING_FROM,
-      to,
-      subject: built.subject,
-      html: built.html,
-    });
-    if (error) console.error("sendBillingEmail:", error);
-  } catch (e) {
-    console.error("sendBillingEmail:", e instanceof Error ? e.message : e);
-  }
+  await sendEmail({
+    storeId: storeId ?? null,
+    to,
+    from: BILLING_FROM,
+    subject: built.subject,
+    html: built.html,
+    mailer: "billing",
+  });
 }
