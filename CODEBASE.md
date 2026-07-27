@@ -104,7 +104,15 @@ wholesip/
 │   │   │   ├── blogs/         #   blog listing, [slug] detail (comments/reactions),
 │   │   │   │                  #   write/ (TipTap customer blog editor), my-submissions/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
-│   │   │   ├── profile/       #   customer profile (personal info + address-book card)
+│   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
+│   │   │   │                  #   [id] detail (status timeline, items, totals,
+│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   customer_id = auth.uid()) AND host store id
+│   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
+│   │   │   │                  #   the customer rows the fan-out has always
+│   │   │   │                  #   written, finally rendered
+│   │   │   ├── profile/       #   customer profile (personal info + address-book
+│   │   │   │                  #   card + quick links to orders/notifications)
 │   │   │   └── [pageSlug]/    #   ★ ALL content pages from store_pages (see §11): merchant
 │   │   │                      #   custom pages AND the former hardcoded static pages
 │   │   │                      #   (our-story, faqs, …) — retired in Phase 4b, now editable
@@ -181,7 +189,12 @@ wholesip/
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
-│   │   └── settings/          # account/ + domain/ (custom-domain connect + verify);
+│   │   ├── activity/          # ★ Activity & audit trail (§22): the store's
+│   │   │                      # activity_events feed — filters by category/date,
+│   │   │                      # day-grouped. Fills the long-dead `activity` nav link
+│   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
+│   │                          # list → [key] detail with General + per-channel
+│   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
 │   │                          # (e.g. blogs → blogs/settings — see convention #9)
 │   │
@@ -237,6 +250,19 @@ wholesip/
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
+│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # RLS alone would show an order placed on a
+│   │   │                      # DIFFERENT store while browsing this one.
+│   │   ├── customer-notification-actions.ts # ★ The shopper's notification
+│   │   │                      # centre (§22): list/unread/mark-read over the
+│   │   │                      # same notifications table the staff bell uses,
+│   │   │                      # scoped to recipient_type 'customer' + host store
+│   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
+│   │   │                      # (the bell polls it), mark read/all-read/archive,
+│   │   │                      # activity feed, preference get/save, pruneNotifications.
+│   │   │                      # Scope = HOST-derived (store, or platform when
+│   │   │                      # storemink.com) — never getCurrentStoreId()'s fallback.
 │   │   ├── address-actions.ts # ★ Customer saved-address book (own-row RLS, tested):
 │   │   │                      # getMyAddresses, saveAddress (checkout dedup+default),
 │   │   │                      # upsertAddress (profile add/edit), setDefaultAddress,
@@ -245,7 +271,9 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
-│       ├── cron/send-emails/  # Daily email campaign worker (Vercel cron)
+│       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
+│       │                      # cron): coupon campaigns + notification emails
+│       │                      # (§22). Self-chains while either has work left
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
@@ -261,6 +289,28 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
+│   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
+│   │                          # every event, its audiences + default channels),
+│   │                          # render.ts (audience-aware copy, pure), record.ts
+│   │                          # (emitEvent/recordEvent — the ONE write path, service
+│   │                          # scope, deferred with after(), never throws),
+│   │                          # recipients.ts (permission-derived routing),
+│   │                          # digest.ts (clock-aligned send windows),
+│   │                          # routing.ts (per-event recipient rules; NARROWS
+│   │                          # the permission set, never widens),
+│   │                          # channels.ts (email/web live; sms/push/whatsapp
+│   │                          # declared but LOCKED — no provider), config.ts
+│   │                          # (registry ← platform definition ← store
+│   │                          # settings), variables.ts + template.ts (merchant
+│   │                          # {{token}} copy, validated at save). Tested,
+│   │                          # incl. coverage.test.ts — the CI guard that FAILS
+│   │                          # if a registry event has no emitter anywhere.
+│   ├── inventory/             # status.ts (the display-status source of truth, §13)
+│   │                          # + ★ alerts.ts (§22: stockAlertFor — the pure
+│   │                          # crossing rule behind inventory.low_stock/
+│   │                          # out_of_stock — and reportStockChanges, the
+│   │                          # deferred reader called from checkout + inventory
+│   │                          # actions). Tested.
 │   ├── settings/              # ★ Feature-settings framework (see convention #9):
 │   │   ├── registry.ts        #   catalog: every per-store toggle (key, default, plan gate)
 │   │   └── resolve.ts         #   getStoreSettings()/getStoreSetting() for the host store
@@ -348,7 +398,22 @@ wholesip/
 │   │                          # after() on store create + publish. Best-effort, dormant
 │   │                          # until env is set. IndexNow key: public/<key>.txt.
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
-│   │                          # trigger-worker, blog/enquiry notifications
+│   │                          # trigger-worker, blog/enquiry notifications.
+│   │                          # ★ notification-emails.ts (§22: single + digest
+│   │                          # templates, pure/escaped) + notification-worker.ts
+│   │                          # (claims notification_email_queue, GROUPS by
+│   │                          # recipient into one digest, retries with backoff).
+│   │                          # ★ send-batch.ts (per-message outcomes so one bad
+│   │                          # address can't sink a batch), suppression.ts
+│   │                          # (the global bounce/complaint list),
+│   │                          # webhook-signature.ts (Svix verify, pure+tested),
+│   │                          # trigger-worker.ts (the kick that makes "instant"
+│   │                          # instant — PLATFORM_URL, not one env var).
+│   │                          # ★ send.ts — THE choke point: every email leaves
+│   │                          # through sendEmail() and lands in email_logs
+│   │                          # (CI-guarded by send-coverage.test.ts);
+│   │                          # mailers.ts — the mail-type catalog + which types
+│   │                          # are redacted because they carry a credential
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
 │   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
 │   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
@@ -402,6 +467,28 @@ wholesip/
 │   │                          # reserve/release (enforces max_uses under concurrency)
 │   ├── blog_taxonomy.sql      # per-store blog_categories + blog_tags (+ RLS + seed)
 │   ├── store_menus.sql        # ★ per-store header/footer nav (+ RLS + WholeSip seed) — §11
+│   ├── notifications_01_schema.sql  # ★ the event spine (§22): activity_events
+│   │                          # (append-only audit) + notifications (per-recipient
+│   │                          # inbox, UNIQUE on event+recipient) + notification_
+│   │                          # preferences (store defaults ← user overrides). READ-
+│   │                          # ONLY RLS by design — every write is service-role
+│   │                          # (no client can forge an audit row or push a bell)
+│   ├── notifications_03_console.sql  # ★ §22 console: notification_definitions
+│   │                          # (platform-global, operator-managed) +
+│   │                          # notification_settings (per store: channels,
+│   │                          # recipients, templates, digest, on/off)
+│   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
+│   │                          # (platform rows = store_id NULL). Service-role
+│   │                          # only; bodies redacted for credential mailers
+│   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
+│   │                          # (GLOBAL — no store_id, by design: a hard bounce
+│   │                          # bounces for everyone and the shared sending
+│   │                          # domain's reputation is the platform's) + the
+│   │                          # failed-row index behind the delivery panel
+│   ├── notifications_02_email_queue.sql  # ★ §22 email channel:
+│   │                          # notification_email_queue + claim/requeue RPCs
+│   │                          # (FOR UPDATE SKIP LOCKED, the email_campaigns
+│   │                          # pattern). Worker-only: RLS on, NO policies
 │   ├── media_assets.sql       # ★ per-store Media Library table (RLS is_store_admin; NOT
 │   │                          # public — object URLs are public, the listing is admin-only)
 │   ├── invoicing.sql          # ★ tax_classes + products.tax_class_id + order_items tax
@@ -1096,9 +1183,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Management console** at **`/dashboard/help`** (platform host; nav entry
       in `app/platform/dashboard/(console)/layout.tsx`, `faq` icon), gated by
       `getPlatformViewer()`. `app/actions/help-actions.ts` holds public actions
-      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle`) and
+      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle` — the
+      two public counters are per-IP rate-limited via `lib/rate-limit`, since
+      `view_count` drives both the Popular ordering and search ranking) and
       operator CRUD (articles + categories, publish/unpublish, reorder) under
-      `withService` after the gate, plus **AI drafting** — `runHelpAiCommand`
+      `withService` after the gate. **`deleteHelpCategory` refuses a non-empty
+      category** (atomic `NOT EXISTS` guard on the DELETE — the conditional-write
+      pattern): the FK is `ON DELETE SET NULL`, so deleting one would strand its
+      articles with no category and therefore no URL. Storefront reads
+      (`searchHelpArticles`/`getPopularHelpArticles`) inner-join the category so
+      any legacy orphan stays invisible rather than showing an unlinkable hit.
+      Plus **AI drafting** — `runHelpAiCommand`
       (Gemini via `lib/ai/gemini.ts`, a fixed technical-writer system prompt in
       `brand/tasks/help-article.md`; output sanitized) is one flexible command
       that both writes-from-scratch and edits current content per a
@@ -1334,9 +1429,31 @@ group, span}` (span = columns of the 4-wide desktop grid),
         "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
         doesn't add up. Recording it also makes markdowns auditable per
         cashier, which is the point of the cap.
+      - **A register sale is a SALE — it emits like one.** `placePosSale` ends
+        with `emitEvent("order.placed")` + `reportStockChanges` (§22
+        notifications). Without them an in-store sale wrote an `orders` row and
+        nothing else: no `/dashboard/activity` entry, no team alert, and no
+        low/out-of-stock warning even when it emptied the shelf — the one
+        channel physically in front of the merchant was the one they couldn't
+        see. `customerId` is null for a walk-in, which the fan-out reads as "no
+        customer audience" (right: they leave holding a receipt). NOTE the
+        coverage guard can't catch this class of gap — it asserts a key is
+        emitted SOMEWHERE, not that every path which should emit it does.
+      - **CANCELLING A POS SALE RESTOCKS AT ITS OWN LOCATION.**
+        `updateOrderStatus` returns `orders.location_id` with the
+        reserved→released claim and calls `release_stock_at` when it's set. The
+        plain `release_stock` wrapper delegates to the store's DEFAULT location
+        (`pos_02_rpc_location.sql`), so cancelling an in-store sale used to hand
+        the units to the wrong shop — the selling location never recovered its
+        stock and the default gained one it never had, silently, compounding
+        per cancellation. Online orders reserve against the default and keep the
+        wrapper. Both branches are regression-tested.
     - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
-      inventory (4), returns/store credit (5), Twilio receipts (6), metered
-      extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
+      inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
+      writes to the DEFAULT location, so a multi-location store cannot yet
+      correct stock at a specific shop), returns/store credit (5), Twilio
+      receipts (6), metered extra-location billing (7), omnichannel/BOPIS (8),
+      offline outbox (9).
       See `docs/pos-plan.md`.
 
 ## 6. Commands
@@ -1426,7 +1543,11 @@ npm run format      # prettier --write
     identical, so every `admins`/`users` FK + the `app.current_user_id` GUC keep
     working with zero remapping.
 - **Vercel**: hosting + cron. Wildcard domain `*.storemink.com` → store subdomains.
-- **Resend**: transactional email + custom-domain DNS verification.
+- **Resend**: transactional email + custom-domain DNS verification. Delivery
+  webhooks post to `/api/webhooks/resend` and need **`RESEND_WEBHOOK_SECRET`**
+  (Svix signing secret) plus the endpoint registered in the Resend dashboard,
+  subscribed to `email.bounced` + `email.complained` — without it bounces are
+  never learned and dead addresses are mailed forever (§22).
 - **Google Cloud Storage** (media, GCP migration Phase 3 — `lib/storage/gcs.ts`):
   when **`GCS_BUCKET`** is set, new image/video uploads go to that GCS bucket
   (public, uniform bucket-level access) and public URLs are

@@ -2,6 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { emitEvent } from "@/lib/notifications/record";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getCurrentStoreId } from "@/lib/store/resolve";
 import { withUser } from "@/lib/db/client";
@@ -83,6 +84,14 @@ export async function submitReview(
       error: err instanceof Error ? err.message : "Failed to save review.",
     };
   }
+
+  emitEvent({
+    type: "customer.review_submitted",
+    storeId,
+    actor: { type: "customer", id: user.id, label: reviewFields.authorName },
+    subject: { type: "product", id: form.product_id, label: form.slug },
+    payload: { rating },
+  });
 
   revalidatePath(`/shop/${form.slug}`);
   return { success: true };

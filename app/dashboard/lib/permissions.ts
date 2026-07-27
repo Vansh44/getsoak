@@ -248,6 +248,22 @@ export const SECTIONS: DashboardSection[] = [
     icon: "activity",
     group: "Administration",
     actions: ["view"],
+    // Two logs, one permission: "what happened" and "what we sent about it".
+    // They answer different questions but they're the same class of data, so
+    // splitting them into separate permission sections would only give an owner
+    // a distinction they don't want to think about.
+    children: [
+      {
+        label: "Activity",
+        href: "/dashboard/activity",
+        icon: "activity",
+      },
+      {
+        label: "Email Logs",
+        href: "/dashboard/activity/email-logs",
+        icon: "mail",
+      },
+    ],
   },
   {
     key: "branding",
@@ -282,6 +298,14 @@ export const SECTIONS: DashboardSection[] = [
     actions: ["view", "manage"],
   },
   {
+    key: "notifications",
+    label: "Notifications",
+    href: "/dashboard/settings/notifications",
+    icon: "notifications",
+    group: "Administration",
+    actions: ["view", "manage"],
+  },
+  {
     key: "settings",
     label: "Settings",
     href: "/dashboard/settings",
@@ -293,6 +317,11 @@ export const SECTIONS: DashboardSection[] = [
         label: "Account",
         href: "/dashboard/settings/account",
         icon: "settings",
+      },
+      {
+        label: "Notifications",
+        href: "/dashboard/settings/notifications",
+        icon: "notifications",
       },
       {
         label: "Domain",

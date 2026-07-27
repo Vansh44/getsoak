@@ -148,6 +148,7 @@ async function sendInviteEmail(
   await sendPosStaffEmail({
     storeId,
     to,
+    mailer: "pos_staff_invite",
     devFallback: `🧾 POS STAFF INVITED (email not configured — dev fallback)\nEmail: ${to}\nRole: ${role}\nRegister: ${link}`,
     build: (brand) => ({
       subject: `You've been added to ${brand.name} POS`,

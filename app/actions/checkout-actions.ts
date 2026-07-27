@@ -26,6 +26,8 @@ import {
   rzpFetchOrderPayments,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
+import { emitEvent } from "@/lib/notifications/record";
+import { reportStockChanges } from "@/lib/inventory/alerts";
 import {
   rowToBillingSettings,
   rowToTaxClass,
@@ -963,6 +965,45 @@ export async function placeOrder(
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";
 
+  // The order exists and its items are saved — from here it is a real order, so
+  // record it. Emitted for BOTH payment methods (an unpaid razorpay order is
+  // still a placed order, exactly as the dashboard list shows it); the separate
+  // order.payment_received fires when the money actually lands. emitEvent
+  // defers via after(), so nothing below waits on it and a bookkeeping failure
+  // can never fail a checkout that already succeeded.
+  emitEvent({
+    type: "order.placed",
+    storeId,
+    actor: {
+      type: "customer",
+      id: user.id,
+      label:
+        [shippingAddress.firstName, shippingAddress.lastName]
+          .filter(Boolean)
+          .join(" ") || null,
+    },
+    subject: { type: "order", id: order.id, label: orderRef },
+    customerId: user.id,
+    payload: {
+      total,
+      currency: "INR",
+      items: orderItemsToInsert.length,
+      paymentMethod,
+    },
+  });
+
+  // Tell the merchant if this sale just emptied a shelf. Deferred, and keyed on
+  // the threshold CROSSING, so a slow-moving SKU alerts once rather than on
+  // every subsequent order (lib/notifications/inventory-alerts.ts).
+  reportStockChanges(
+    storeId,
+    reservedStockItems.map((r) => ({
+      productId: r.product_id,
+      variantId: r.variant_id,
+      delta: -r.qty,
+    })),
+  );
+
   // 6. Online payment: create the Razorpay Order for the SERVER-computed total
   //    (never the client's) and pin its id to our order. Any failure here
   //    unwinds the whole checkout (stock → order [items cascade] → coupon) —
@@ -1081,12 +1122,43 @@ async function markOrderPaid(
   orderId: string,
   rzpPaymentId: string,
 ): Promise<void> {
-  await withService((db) =>
+  // The single choke point for "this order is now paid" — reached from the
+  // client callback, reconcile-on-read, and the cron reaper alike. The UPDATE
+  // is a conditional pending → paid CLAIM, so `claimed` is non-empty for
+  // exactly one caller and the notification can't fire twice for one payment.
+  const claimed = await withService((db) =>
     db
       .update(orders)
       .set({ paymentStatus: "paid", razorpayPaymentId: rzpPaymentId })
-      .where(and(eq(orders.id, orderId), eq(orders.paymentStatus, "pending"))),
-  ).catch((err) => console.error("markOrderPaid:", errMsg(err)));
+      .where(and(eq(orders.id, orderId), eq(orders.paymentStatus, "pending")))
+      .returning({
+        storeId: orders.storeId,
+        orderRef: orders.orderRef,
+        customerId: orders.customerId,
+        total: orders.total,
+        currency: orders.currency,
+      }),
+  ).catch((err) => {
+    console.error("markOrderPaid:", errMsg(err));
+    return [] as {
+      storeId: string;
+      orderRef: string;
+      customerId: string;
+      total: number;
+      currency: string;
+    }[];
+  });
+
+  const row = claimed[0];
+  if (!row) return;
+
+  emitEvent({
+    type: "order.payment_received",
+    storeId: row.storeId,
+    actor: { type: "customer", id: row.customerId },
+    subject: { type: "order", id: orderId, label: row.orderRef },
+    payload: { total: row.total, currency: row.currency },
+  });
 }
 
 /**

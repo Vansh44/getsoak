@@ -7,6 +7,7 @@ import { stores } from "@/drizzle/schema";
 import { getViewerContext } from "@/app/dashboard/lib/access";
 import { can } from "@/app/dashboard/lib/permissions";
 import { STORE_TAG } from "@/lib/store/resolve";
+import { emitEvent } from "@/lib/notifications/record";
 import {
   FEATURES_KEY,
   SETTINGS,
@@ -179,5 +180,18 @@ export async function saveStoreSettings(
 
   revalidateTag(STORE_TAG, "max");
   revalidatePath("/blogs");
+
+  // In-app only by default: this is an audit breadcrumb ("who turned that
+  // off?"), not something worth mailing a team about.
+  emitEvent({
+    type: "settings.changed",
+    storeId,
+    actor: { type: "admin", id: ctx.userId },
+    payload: {
+      settings: permitted.map((d) => d.label).join(", "),
+      count: permitted.length,
+    },
+  });
+
   return { success: true };
 }

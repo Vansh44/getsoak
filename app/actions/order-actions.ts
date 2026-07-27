@@ -19,6 +19,7 @@ import {
   DASHBOARD_PAGE_SIZE,
   sanitizeSearch,
 } from "@/app/dashboard/lib/list-params";
+import { emitEvent } from "@/lib/notifications/record";
 
 // Allowlists — order/payment state is a closed set, so never trust an arbitrary
 // string from the client into the DB (keeps the status column clean + prevents
@@ -301,13 +302,19 @@ export async function updateOrderStatus(
             eq(orders.stockStatus, "reserved"),
           ),
         )
-        .returning({ id: orders.id }),
+        // location_id comes back with the claim: a POS sale reserved stock at
+        // the register's own location (reserve_stock_at), so the units must go
+        // BACK there. The plain release_stock wrapper delegates to the store's
+        // DEFAULT location, which would silently move stock between shops —
+        // the selling location never gets its unit back and the default gains
+        // one it never had.
+        .returning({ id: orders.id, location_id: orders.locationId }),
     ).catch((err) => {
       console.error(
         "stock release claim:",
         err instanceof Error ? err.message : err,
       );
-      return [] as { id: string }[];
+      return [] as { id: string; location_id: string | null }[];
     });
 
     if (claimed.length > 0) {
@@ -324,11 +331,18 @@ export async function updateOrderStatus(
           .where(eq(orderItems.orderId, orderId)),
       ).catch(() => []);
 
+      // Where the stock came from. Online orders have no location and reserved
+      // against the default, so the wrapper is right for them; a POS sale must
+      // be released at the location it was rung up on.
+      const locationId = claimed[0]?.location_id ?? null;
+
       for (const item of items) {
-        // The unchanged Postgres function does the atomic restock + ledger row.
+        // The Postgres function does the atomic restock + ledger row.
         await withService((db) =>
           db.execute(
-            sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
+            locationId
+              ? sql`select release_stock_at(p_store => ${storeId}, p_location => ${locationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`
+              : sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
           ),
         ).catch((err) =>
           console.error(
@@ -345,16 +359,38 @@ export async function updateOrderStatus(
     updateData.paymentStatus = paymentStatus;
   }
 
+  // customer_id is NULLABLE — an order can have no account behind it (a POS
+  // walk-in). emitEvent takes that as "no customer audience", which is right:
+  // there is nobody to tell.
+  let updated: { order_ref: string; customer_id: string | null }[];
   try {
-    await withUser(admin, (db) =>
+    updated = await withUser(admin, (db) =>
       db
         .update(orders)
         .set(updateData)
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId))),
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        // Returned so the event below can name the order and reach its owner
+        // — the shopper is told about their own order, not just the staff.
+        .returning({
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+        }),
     );
   } catch (err) {
     console.error("Error updating order status:", err);
     return { error: dbErrorMessage(err, "Failed to update order status.") };
+  }
+
+  const row = updated[0];
+  if (row) {
+    emitEvent({
+      type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "order", id: orderId, label: row.order_ref },
+      customerId: row.customer_id,
+      payload: { status, ...(paymentStatus ? { paymentStatus } : {}) },
+    });
   }
 
   revalidatePath("/dashboard/orders");

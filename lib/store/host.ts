@@ -10,6 +10,22 @@ export const ROOT_DOMAIN = (
   process.env.NEXT_PUBLIC_ROOT_DOMAIN || "storemink.com"
 ).toLowerCase();
 
+// The platform's own origin (the apex). PURE and dependency-free on purpose:
+// it lives here rather than in lib/site.ts so callers that need only an origin
+// — the email worker's self-call, for one — don't drag in the DB-backed store
+// resolver. lib/site.ts re-exports it, so every existing importer is unchanged.
+export const PLATFORM_URL = ((): string => {
+  const fromEnv = process.env.NEXT_PUBLIC_APP_URL;
+  const raw = fromEnv
+    ? fromEnv.startsWith("http")
+      ? fromEnv
+      : `https://${fromEnv}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : `https://${ROOT_DOMAIN}`;
+  return raw.replace(/\/+$/, "");
+})();
+
 // Search indexing is enabled ONLY on the real production platform apex
 // (storemink.com) — and never when NEXT_PUBLIC_NOINDEX=1 forces it off. Staging
 // (ROOT_DOMAIN=staging.storemink.com), Vercel/Cloud Run previews, and local dev

@@ -1,0 +1,361 @@
+/* Shopper-facing order history + detail. Mirrors profile.module.css so the
+   account area feels like one place, including the market-header offset rule. */
+.container {
+  min-height: 100vh;
+  padding: 140px 24px 80px;
+  background-color: var(--sm-cream);
+  font-family: var(--font-outfit), sans-serif;
+}
+
+:global(.sm-header-market.storefront-root) .container {
+  padding-top: 32px;
+}
+
+@media (min-width: 768px) {
+  :global(.sm-header-market.storefront-root) .container {
+    padding-top: 48px;
+  }
+}
+
+.content {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.header {
+  margin-bottom: 32px;
+}
+
+.title {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: var(--sm-ink);
+}
+
+.subtitle {
+  margin-top: 6px;
+  font-size: 15px;
+  color: var(--sm-ink-soft);
+}
+
+.card {
+  background: var(--sm-surface);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.1);
+  border-radius: var(--sm-radius-card);
+  padding: 20px 22px;
+  margin-bottom: 14px;
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+a.card:hover {
+  border-color: rgba(var(--sm-shadow-rgb), 0.24);
+  transform: translateY(-1px);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ref {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.meta {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--sm-ink-faint);
+}
+
+.summary {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--sm-ink-soft);
+}
+
+.total {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--sm-ink);
+  white-space: nowrap;
+}
+
+/* ---- Status pill ---- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: var(--sm-radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: capitalize;
+}
+
+.pillPending {
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+}
+.pillProcessing {
+  background: rgba(2, 132, 199, 0.12);
+  color: #0369a1;
+}
+.pillShipped {
+  background: rgba(124, 58, 237, 0.12);
+  color: #6d28d9;
+}
+.pillDelivered {
+  background: rgba(5, 150, 105, 0.12);
+  color: #047857;
+}
+.pillCancelled {
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+}
+
+/* ---- Timeline (detail page) ---- */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 4px 0 8px;
+}
+
+.step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.stepDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+  border: 2px solid rgba(var(--sm-shadow-rgb), 0.18);
+  background: var(--sm-surface);
+}
+
+.stepDotDone {
+  border-color: var(--sm-accent);
+  background: var(--sm-accent);
+}
+
+.stepLine {
+  width: 2px;
+  height: 26px;
+  margin-left: 5px;
+  background: rgba(var(--sm-shadow-rgb), 0.12);
+}
+
+.stepLineDone {
+  background: var(--sm-accent);
+}
+
+.stepLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sm-ink-faint);
+}
+
+.stepLabelDone {
+  color: var(--sm-ink);
+}
+
+/* ---- Items + totals ---- */
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--sm-ink-faint);
+  margin-bottom: 12px;
+}
+
+.item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(var(--sm-shadow-rgb), 0.08);
+}
+
+.item:first-of-type {
+  border-top: none;
+}
+
+.itemName {
+  font-size: 15px;
+  color: var(--sm-ink);
+}
+
+.itemMeta {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--sm-ink-faint);
+}
+
+.totalsRow {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 0;
+  font-size: 14.5px;
+  color: var(--sm-ink-soft);
+}
+
+.totalsGrand {
+  border-top: 1px solid rgba(var(--sm-shadow-rgb), 0.12);
+  margin-top: 6px;
+  padding-top: 13px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.address {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--sm-ink-soft);
+}
+
+.empty {
+  text-align: center;
+  padding: 64px 24px;
+}
+
+.emptyTitle {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.emptyText {
+  margin-top: 8px;
+  font-size: 15px;
+  color: var(--sm-ink-soft);
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 20px;
+  padding: 12px 26px;
+  border-radius: var(--sm-radius-control);
+  background: var(--sm-accent);
+  color: var(--sm-on-accent);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--sm-ink-soft);
+  text-decoration: none;
+  margin-bottom: 18px;
+}
+
+.back:hover {
+  color: var(--sm-ink);
+}
+
+.link {
+  font-size: 14.5px;
+  color: var(--sm-accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/* ---- Notification rows ---- */
+.notification {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  background: var(--sm-surface);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.1);
+  border-radius: var(--sm-radius-card);
+  padding: 16px 18px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+
+.notification:hover {
+  border-color: rgba(var(--sm-shadow-rgb), 0.24);
+}
+
+.notificationRead {
+  opacity: 0.62;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 7px;
+  flex-shrink: 0;
+  background: var(--sm-accent);
+}
+
+.dotRead {
+  background: rgba(var(--sm-shadow-rgb), 0.22);
+}
+
+.notificationTitle {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.notificationBody {
+  margin-top: 3px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--sm-ink-soft);
+  white-space: pre-line;
+}
+
+.notificationTime {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--sm-ink-faint);
+}
+
+.markAll {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sm-accent);
+  cursor: pointer;
+}
+
+.markAll:hover {
+  text-decoration: underline;
+}

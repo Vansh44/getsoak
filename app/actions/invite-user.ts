@@ -2,6 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { getServerUser } from "@/lib/auth/server-user";
+import { emitEvent } from "@/lib/notifications/record";
 import {
   createAuthUser,
   deleteAuthUser,
@@ -10,10 +11,10 @@ import {
 import { setUserClaims } from "@/lib/auth/firebase-claims";
 import { withService, withUser } from "@/lib/db/client";
 import { admins } from "@/drizzle/schema";
-import { Resend } from "resend";
 import { wrapBrandedEmail } from "@/lib/email/layout";
 import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
+import { sendEmail } from "@/lib/email/send";
 import { PLATFORM_URL } from "@/lib/site";
 import { getRequestOrigin } from "@/lib/request-url";
 import { randomInt } from "crypto";
@@ -155,24 +156,31 @@ export async function inviteUser(formData: FormData) {
     resendApiKey && !resendApiKey.includes("placeholder");
 
   if (isResendAvailable) {
-    try {
-      const brand = await getStoreBrandById(storeId);
-      // The invited admin belongs to the INVITER's store, and the inviter is on
-      // that store's host — so the request origin sends them to their own store
-      // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
-      // PLATFORM_URL (the apex) would land them on the platform operator console
-      // instead, and points at an unreachable host when developing locally.
-      const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
+    const brand = await getStoreBrandById(storeId);
+    // The invited admin belongs to the INVITER's store, and the inviter is on
+    // that store's host — so the request origin sends them to their own store
+    // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
+    // PLATFORM_URL (the apex) would land them on the platform operator console
+    // instead, and points at an unreachable host when developing locally.
+    const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
 
-      const resend = new Resend(resendApiKey);
-      await resend.emails.send({
-        // From/Subject are mail headers, NOT HTML — build the From with the
-        // RFC-5322-safe helper and leave the brand name unescaped in both.
-        from: fromAddress(brand, { suffix: "Dashboard" }),
-        to: email,
-        subject: `Welcome to ${brand.name} Dashboard`,
-        html: wrapBrandedEmail(
-          `
+    // No try/catch: sendEmail never throws into its caller (rule 1 in
+    // lib/email/send.ts), and it records the failure in the email log — which
+    // is strictly more than the console.error this used to swallow it with.
+    //
+    // The `staff_invite` mailer is marked sensitive, so the email log records
+    // that this went out — to whom, when, whether it sent — WITHOUT storing the
+    // body, which carries a working temporary password in plaintext.
+    await sendEmail({
+      storeId,
+      // From/Subject are mail headers, NOT HTML — build the From with the
+      // RFC-5322-safe helper and leave the brand name unescaped in both.
+      from: fromAddress(brand, { suffix: "Dashboard" }),
+      to: email,
+      subject: `Welcome to ${brand.name} Dashboard`,
+      mailer: "staff_invite",
+      html: wrapBrandedEmail(
+        `
         <h2 style="margin-top: 0;">You've Been Invited 🎉</h2>
 
         <p>Hello ${escapeHtml(firstName)}${lastName ? " " + escapeHtml(lastName) : ""},</p>
@@ -239,12 +247,9 @@ export async function inviteUser(formData: FormData) {
           <strong>Team ${escapeHtml(brand.name)}</strong>
         </p>
       `,
-          brand,
-        ),
-      });
-    } catch (e) {
-      console.error("Failed to send invite email via Resend:", e);
-    }
+        brand,
+      ),
+    });
   }
 
   // Dev fallback only: if no email provider is configured there is no other
@@ -258,6 +263,16 @@ export async function inviteUser(formData: FormData) {
     console.log(`Temporary Password: ${tempPassword}`);
     console.log("=".repeat(60) + "\n");
   }
+
+  // Team changes are always-on notifications (registry: configurable false) —
+  // an owner must never be able to go blind on who gained dashboard access.
+  emitEvent({
+    type: "admin.invited",
+    storeId,
+    actor: { type: "admin", id: caller.id, label: caller.email },
+    subject: { type: "admin", id: normalizedEmail, label: normalizedEmail },
+    payload: { role },
+  });
 
   return { success: true };
 }

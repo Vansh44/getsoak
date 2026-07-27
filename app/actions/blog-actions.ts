@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { getStoreUrl } from "@/lib/site";
 import { pingIndexNow } from "@/lib/seo/search-engines";
 import { TAGS } from "@/lib/storefront/tags";
+import { emitEvent } from "@/lib/notifications/record";
 import { sanitizeBlogContent } from "@/lib/sanitize";
 import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import { isUniqueViolation, dbErrorMessage } from "@/lib/db/errors";
@@ -21,11 +22,6 @@ import {
   extractMediaUrlsFromHtml,
 } from "@/lib/storage/cleanup";
 import { gcsPathFromUrl } from "@/lib/storage/gcs";
-import {
-  sendBlogApprovedEmail,
-  sendBlogRejectedEmail,
-} from "@/lib/email/blog-notifications";
-import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { fetchBlogTaxonomy } from "@/lib/blog-taxonomy";
 
@@ -134,29 +130,6 @@ export async function getBlogForEditor(
     return (rows[0] as Record<string, unknown> | undefined) ?? null;
   } catch (err) {
     console.error("getBlogForEditor error:", err);
-    return null;
-  }
-}
-
-// Looks up a customer's email + first name by id, bypassing RLS via the
-// service scope. The customers table only lets a customer read their own
-// row, so an admin session can't read a submitter — this is used purely to
-// address review-notification emails after an admin action.
-async function getCustomerContact(
-  submittedBy: string | null,
-): Promise<{ email: string | null; firstName: string | null } | null> {
-  if (!submittedBy) return null;
-  try {
-    const rows = await withService((db) =>
-      db
-        .select({ email: users.email, firstName: users.firstName })
-        .from(users)
-        .where(eq(users.id, submittedBy))
-        .limit(1),
-    );
-    return rows[0] ?? null;
-  } catch (e) {
-    console.error("getCustomerContact error:", e);
     return null;
   }
 }
@@ -395,23 +368,22 @@ export async function updateBlog(
     }
 
     // Approving a customer submission by publishing it from the editor:
-    // notify the author (best-effort), mirroring approveCustomerBlog.
+    // tell the author, mirroring approveCustomerBlog. The notification system
+    // owns the mail now (merchant-editable copy, one global design), so this
+    // is an emit rather than a bespoke send.
     const isApproval =
       currentBlog?.status === "pending_review" &&
       formData.status === "published" &&
       currentBlog?.submitted_by;
     if (isApproval) {
-      const contact = await getCustomerContact(currentBlog!.submitted_by);
-      if (contact?.email) {
-        const brand = await getStoreBrand();
-        await sendBlogApprovedEmail({
-          to: contact.email,
-          firstName: contact.firstName,
-          title: formData.title,
-          slug,
-          brand,
-        });
-      }
+      emitEvent({
+        type: "blog.approved",
+        storeId,
+        actor: { type: "admin", id: userId },
+        subject: { type: "blog", id, label: formData.title },
+        customerId: currentBlog!.submitted_by,
+        payload: { title: formData.title, url: `/blogs/${slug}` },
+      });
     }
 
     // Purge images no longer referenced (old cover + old body images that
@@ -853,6 +825,21 @@ export async function submitCustomerBlog(
       }
     }
 
+    // Notify the store: a submission that needs approval is work waiting in a
+    // queue; a direct publish is just news. Either way the shopper's post is
+    // now the store's responsibility.
+    emitEvent({
+      type: requireApproval ? "blog.submitted" : "blog.published",
+      storeId,
+      actor: { type: "customer", id: user.id, label: authorName || null },
+      subject: {
+        type: "blog",
+        id: (inserted?.id as string) ?? null,
+        label: formData.title,
+      },
+      payload: { slug },
+    });
+
     revalidatePath("/dashboard/blogs");
     return { success: true, data: inserted };
   }
@@ -1285,20 +1272,17 @@ export async function approveCustomerBlog(id: string): Promise<ActionResult> {
     return { error: "This blog is no longer pending review." };
   }
 
-  // Notify the author that their blog is live (best-effort — a mail failure
-  // must not undo the approval).
+  // Tell the author their blog is live. Deferred and swallowed by emitEvent,
+  // so a mail failure can never undo the approval.
   if (approved.submitted_by) {
-    const contact = await getCustomerContact(approved.submitted_by);
-    if (contact?.email) {
-      const brand = await getStoreBrand();
-      await sendBlogApprovedEmail({
-        to: contact.email,
-        firstName: contact.firstName,
-        title: approved.title,
-        slug: approved.slug,
-        brand,
-      });
-    }
+    emitEvent({
+      type: "blog.approved",
+      storeId: await getActingStoreId(),
+      actor: { type: "admin", id: userId },
+      subject: { type: "blog", id, label: approved.title },
+      customerId: approved.submitted_by,
+      payload: { title: approved.title, url: `/blogs/${approved.slug}` },
+    });
   }
 
   revalidateBlogs();
@@ -1337,18 +1321,16 @@ export async function rejectCustomerBlog(id: string): Promise<ActionResult> {
     return { error: dbErrorMessage(err, "Failed to reject blog.") };
   }
 
-  // Notify the author that their submission wasn't approved (best-effort).
+  // Tell the author their submission wasn't approved.
   if (target?.submitted_by) {
-    const contact = await getCustomerContact(target.submitted_by);
-    if (contact?.email) {
-      const brand = await getStoreBrand();
-      await sendBlogRejectedEmail({
-        to: contact.email,
-        firstName: contact.firstName,
-        title: target.title,
-        brand,
-      });
-    }
+    emitEvent({
+      type: "blog.rejected",
+      storeId: await getActingStoreId(),
+      actor: { type: "admin", id: admin.uid },
+      subject: { type: "blog", id, label: target.title },
+      customerId: target.submitted_by,
+      payload: { title: target.title },
+    });
   }
 
   revalidatePath("/dashboard/blogs");

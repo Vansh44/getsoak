@@ -2,6 +2,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { getServerUser } from "@/lib/auth/server-user";
+import { emitEvent } from "@/lib/notifications/record";
 import { withService, withUser, type Db } from "@/lib/db/client";
 import { blogComments, blogLikes, users } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
@@ -147,13 +148,23 @@ export async function submitBlogComment(form: {
           body,
           storeId,
         });
-        return { ok: true as const };
+        return { ok: true as const, authorName: authorName || "Anonymous" };
       },
     );
 
     if ("error" in result) {
       return { error: "Complete your profile before commenting." };
     }
+
+    // In-app only by default (registry) — comment volume makes this a poor
+    // thing to mail on, but a merchant can switch email on per store.
+    emitEvent({
+      type: "blog.comment_posted",
+      storeId,
+      actor: { type: "customer", id: user.id, label: result.authorName },
+      subject: { type: "blog", id: form.blog_id, label: form.slug },
+      payload: { author: result.authorName, url: `/blogs/${form.slug}` },
+    });
   } catch (err) {
     console.error("submitBlogComment error:", err);
     return {

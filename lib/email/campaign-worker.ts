@@ -1,12 +1,16 @@
 import "server-only";
 
 import { Resend } from "resend";
-import { and, count, eq, inArray, sql } from "drizzle-orm";
+import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { emailCampaignRecipients, emailCampaigns } from "@/drizzle/schema";
 import { mergeTokens, renderCouponEmail } from "@/lib/email/coupon-campaign";
 import { getStoreBrandById } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
+import { sendEmailBatch, type BatchSender } from "@/lib/email/send-batch";
+import { findSuppressed, normalizeEmail } from "@/lib/email/suppression";
+import { logEmail } from "@/lib/email/send";
+import { recordEvent } from "@/lib/notifications/record";
 
 const RESEND_BATCH = 100; // Resend batch.send() hard limit
 const MAX_PER_RUN = 2000; // emails per worker invocation (stays within timeout)
@@ -109,13 +113,22 @@ export async function processEmailQueue(
       brandsMap.set(sid, await getStoreBrandById(sid));
     }
 
+    // Addresses taken out of service by a permanent bounce or a spam complaint.
+    // A marketing blast is exactly where mailing them hurts most: it's the
+    // shared sending domain's reputation being spent on mail nobody receives.
+    const suppressed = await findSuppressed(batch.map((r) => r.email));
+
     // Pair each recipient id with its message so we mark ONLY the rows we
     // actually attempt to send. Recipients whose campaign/brand couldn't be
-    // resolved are "skipped" — they must never be recorded as sent.
+    // resolved — or whose address is suppressed — are "skipped" and must never
+    // be recorded as sent.
     const prepared = batch.map((r) => {
       const c = campaigns.get(r.campaign_id);
       const brand = c ? brandsMap.get(c.store_id) : undefined;
       if (!c || !brand) return { id: r.id, message: null };
+      if (suppressed.has(normalizeEmail(r.email))) {
+        return { id: r.id, message: null };
+      }
 
       const firstName = r.first_name?.trim() || "there";
       return {
@@ -140,50 +153,70 @@ export async function processEmailQueue(
       (p): p is { id: string; message: NonNullable<typeof p.message> } =>
         p.message !== null,
     );
-    const sentIds = sendable.map((p) => p.id);
     const skippedIds = prepared
       .filter((p) => p.message === null)
       .map((p) => p.id);
 
-    let ok = false;
-    if (sendable.length > 0) {
-      try {
-        const { error: sendErr } = await resend.batch.send(
-          sendable.map((p) => p.message),
-        );
-        ok = !sendErr;
-        if (sendErr) console.error("resend batch error:", sendErr);
-      } catch (e) {
-        console.error("resend batch threw:", e);
-      }
+    // PER-MESSAGE outcomes. A campaign recipient list is customer-entered data,
+    // so a bad address in it is a matter of time — and this worker has no retry,
+    // meaning an all-or-nothing batch verdict would permanently lose up to 99
+    // good recipients to one typo. sendEmailBatch isolates the bad one.
+    const outcome =
+      sendable.length > 0
+        ? await sendEmailBatch(
+            resend as unknown as BatchSender,
+            sendable.map((p) => ({ key: p.id, message: p.message })),
+          )
+        : {
+            sent: [] as string[],
+            failed: [] as { key: string; error: string }[],
+          };
+
+    const okIds = outcome.sent;
+    // Attempted-but-failed rows join the skipped ones (no campaign/brand to
+    // send them) so nothing is silently lost as "sent".
+    const failedIds = [...outcome.failed.map((f) => f.key), ...skippedIds];
+
+    // Mirror every attempt into the store's email log. Batch sends can't route
+    // through sendEmail() without giving up batching, so this is explicit —
+    // send-coverage.test.ts is what keeps it from being forgotten.
+    const errorFor = new Map(outcome.failed.map((f) => [f.key, f.error]));
+    for (const p of sendable) {
+      const failure = errorFor.get(p.id);
+      await logEmail({
+        storeId: campaigns.get(
+          batch.find((r) => r.id === p.id)?.campaign_id ?? "",
+        )?.store_id,
+        to: String(p.message.to ?? ""),
+        from: String(p.message.from ?? ""),
+        subject: String(p.message.subject ?? ""),
+        html: String(p.message.html ?? ""),
+        mailer: "coupon_campaign",
+        status: failure ? "failed" : "sent",
+        error: failure,
+      });
     }
 
-    // Attempted rows follow the send outcome; skipped rows are always failures
-    // (no campaign/brand to send them) so they aren't silently lost as "sent".
-    if (sentIds.length) {
+    if (okIds.length) {
       await withService((db) =>
         db
           .update(emailCampaignRecipients)
-          .set({ status: ok ? "sent" : "failed" })
-          .where(inArray(emailCampaignRecipients.id, sentIds)),
-      ).catch((err) => console.error("mark attempted:", err));
+          .set({ status: "sent" })
+          .where(inArray(emailCampaignRecipients.id, okIds)),
+      ).catch((err) => console.error("mark sent:", err));
     }
-    if (skippedIds.length) {
+    if (failedIds.length) {
       await withService((db) =>
         db
           .update(emailCampaignRecipients)
           .set({ status: "failed" })
-          .where(inArray(emailCampaignRecipients.id, skippedIds)),
-      ).catch((err) => console.error("mark skipped:", err));
+          .where(inArray(emailCampaignRecipients.id, failedIds)),
+      ).catch((err) => console.error("mark failed:", err));
     }
 
     processed += batch.length;
-    if (ok) {
-      sent += sentIds.length;
-      failed += skippedIds.length;
-    } else {
-      failed += sentIds.length + skippedIds.length;
-    }
+    sent += okIds.length;
+    failed += failedIds.length;
   }
 
   await finalizeCampaigns();
@@ -225,7 +258,7 @@ async function finalizeCampaigns(): Promise<void> {
   for (const c of active) {
     const id = c.id;
     try {
-      await withService(async (db) => {
+      const finished = await withService(async (db) => {
         const sentRes = await db
           .select({ n: count() })
           .from(emailCampaignRecipients)
@@ -255,15 +288,44 @@ async function finalizeCampaigns(): Promise<void> {
           );
 
         const open = openRes[0]?.n ?? 0;
-        await db
+        // Claim the → done transition: `ne(status, "done")` means only the
+        // pass that actually finishes the campaign gets a row back, so the
+        // completion notification fires exactly once no matter how often the
+        // worker runs.
+        const rows = await db
           .update(emailCampaigns)
           .set({
             sent: sentRes[0]?.n ?? 0,
             failed: failedRes[0]?.n ?? 0,
             status: open === 0 ? "done" : "sending",
           })
-          .where(eq(emailCampaigns.id, id));
+          .where(
+            and(eq(emailCampaigns.id, id), ne(emailCampaigns.status, "done")),
+          )
+          .returning({
+            storeId: emailCampaigns.storeId,
+            subject: emailCampaigns.subject,
+            sent: emailCampaigns.sent,
+            failed: emailCampaigns.failed,
+          });
+        return open === 0 ? rows[0] : undefined;
       });
+
+      if (finished?.storeId) {
+        // recordEvent, not emitEvent: the worker runs from a cron route whose
+        // response is already gone by the time after() would fire.
+        await recordEvent({
+          type: "campaign.sent",
+          storeId: finished.storeId,
+          actor: { type: "system" },
+          subject: { type: "campaign", id, label: finished.subject },
+          payload: {
+            campaign: finished.subject ?? "",
+            sent: Number(finished.sent ?? 0),
+            failed: Number(finished.failed ?? 0),
+          },
+        });
+      }
     } catch (err) {
       console.error(`finalizeCampaigns (campaign ${id}):`, err);
     }

@@ -12,6 +12,12 @@ import {
 // POS routes served without any POS credential (see the /pos gate below).
 const POS_PUBLIC_PATHS = ["/pos/login", "/pos/register", "/pos/reset"];
 
+// File types served from public/ (today: ico, svg, txt, webp) plus the ones a
+// future asset or app route would plausibly use. Deliberately explicit: see the
+// note at the call site for what a permissive version cost us.
+const ASSET_EXTENSION =
+  /\.(?:avif|css|eot|gif|ico|jpe?g|js|json|map|mp4|otf|pdf|png|svg|ttf|txt|webm|webp|woff2?|xml|zip)$/i;
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const host =
@@ -20,10 +26,18 @@ export async function proxy(request: NextRequest) {
   // --- Static public assets (e.g. /themes/arcade/preview.webp, svgs) ---
   // Serve them as-is on EVERY host. Without this, the platform/help rewrites
   // below would map /themes/... to /platform/themes/... and 404 the file.
-  // Anything with a file extension is a public asset (app routes never have
-  // dots except robots.txt/sitemap.xml, which should also skip the rewrite —
-  // they're host-aware app routes at the root).
-  if (/\.[a-z0-9]+$/i.test(pathname)) {
+  // (robots.txt / sitemap.xml are host-aware app routes at the root, and also
+  // need to skip the rewrite — the extension list covers them.)
+  //
+  // ⚠ This is an ALLOWLIST of real asset extensions, not "any path with a
+  // dot". It used to be the latter, on the assumption that app routes never
+  // contain dots — which stopped being true the moment a route segment carried
+  // an id with a dot in it (the notification console's `order.placed`). Such a
+  // path matched here, skipped the session gate below, and reached the page
+  // with no edge auth check at all. The page's own requireSectionAccess still
+  // held, so nothing leaked, but a route is not supposed to depend on a single
+  // layer. Keep this list to genuine file types; never widen it back to `\.\w+`.
+  if (ASSET_EXTENSION.test(pathname)) {
     return NextResponse.next();
   }
 

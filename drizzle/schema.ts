@@ -3017,3 +3017,377 @@ export const helpArticles = pgTable(
     }),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Notifications & activity (supabase/notifications_01_schema.sql).
+// `storeId` is NULLABLE on all three: NULL means a PLATFORM-level row (an
+// operator event / an operator's preferences), mirroring platform_admins.
+// Writes are service-role only — see the migration's header for why.
+// ---------------------------------------------------------------------------
+export const activityEvents = pgTable(
+  "activity_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    type: text().notNull(),
+    actorType: text("actor_type").default("system").notNull(),
+    actorId: text("actor_id"),
+    actorLabel: text("actor_label"),
+    subjectType: text("subject_type"),
+    subjectId: text("subject_id"),
+    subjectLabel: text("subject_label"),
+    payload: jsonb().default({}).notNull(),
+    ip: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("activity_events_store_idx").on(table.storeId, table.createdAt),
+    index("activity_events_store_type_idx").on(
+      table.storeId,
+      table.type,
+      table.createdAt,
+    ),
+    index("activity_events_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "activity_events_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "activity_events_actor_type_check",
+      sql`actor_type = ANY (ARRAY['customer'::text, 'admin'::text, 'operator'::text, 'system'::text])`,
+    ),
+    pgPolicy("Read activity_events", {
+      for: "select",
+      to: ["public"],
+      using: sql`CASE WHEN store_id IS NULL THEN ( SELECT is_platform_admin()) ELSE ( SELECT is_store_admin(store_id)) END`,
+    }),
+  ],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    eventId: uuid("event_id").notNull(),
+    recipientType: text("recipient_type").notNull(),
+    recipientId: text("recipient_id").notNull(),
+    type: text().notNull(),
+    title: text().notNull(),
+    body: text(),
+    url: text(),
+    severity: text().default("info").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true, mode: "string" }),
+    archivedAt: timestamp("archived_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notifications_event_recipient_key").on(
+      table.eventId,
+      table.recipientId,
+    ),
+    index("notifications_recipient_idx").on(table.recipientId, table.createdAt),
+    index("notifications_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notifications_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.eventId],
+      foreignColumns: [activityEvents.id],
+      name: "notifications_event_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notifications_recipient_type_check",
+      sql`recipient_type = ANY (ARRAY['admin'::text, 'customer'::text, 'operator'::text])`,
+    ),
+    check(
+      "notifications_severity_check",
+      sql`severity = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'critical'::text])`,
+    ),
+    // Operators are keyed by lowercased email (platform_admins is an email
+    // allowlist with no uid); everyone else by Firebase uid.
+    pgPolicy("Read own notifications", {
+      for: "select",
+      to: ["public"],
+      using: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+    }),
+    pgPolicy("Update own notifications", {
+      for: "update",
+      to: ["public"],
+      using: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+      withCheck: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+    }),
+  ],
+);
+
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    scope: text().default("user").notNull(),
+    recipientId: text("recipient_id").default("").notNull(),
+    eventKey: text("event_key").notNull(),
+    // Nullable on purpose: NULL = "no override at this level", so a store
+    // default doesn't freeze every staff member's personal choice.
+    inApp: boolean("in_app"),
+    email: boolean(),
+    digest: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("notification_preferences_lookup_idx").on(
+      table.recipientId,
+      table.storeId,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_preferences_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_preferences_scope_check",
+      sql`scope = ANY (ARRAY['store'::text, 'user'::text])`,
+    ),
+    check(
+      "notification_preferences_digest_check",
+      sql`digest IS NULL OR digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+    check(
+      "notification_preferences_scope_recipient_check",
+      sql`(scope = 'store'::text AND recipient_id = ''::text) OR (scope = 'user'::text AND recipient_id <> ''::text)`,
+    ),
+    pgPolicy("Manage own notification_preferences", {
+      for: "all",
+      to: ["public"],
+      using: sql`scope = 'user'::text AND ( SELECT auth.uid() AS uid) = recipient_id`,
+      withCheck: sql`scope = 'user'::text AND ( SELECT auth.uid() AS uid) = recipient_id`,
+    }),
+    pgPolicy("Manage store notification_preferences", {
+      for: "all",
+      to: ["public"],
+      using: sql`scope = 'store'::text AND store_id IS NOT NULL AND ( SELECT is_store_admin(store_id))`,
+      withCheck: sql`scope = 'store'::text AND store_id IS NOT NULL AND ( SELECT is_store_admin(store_id))`,
+    }),
+  ],
+);
+
+// Notification EMAIL queue (supabase/notifications_02_email_queue.sql).
+// Worker-only: RLS is enabled with NO policies, so only the service scope can
+// touch it — the rows hold recipients' addresses.
+// Every email the platform sends — see supabase/email_logs.sql. A LOG, not a
+// queue: nothing reads it to decide what to do next.
+export const emailLogs = pgTable("email_logs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id"),
+  toEmail: text("to_email").notNull(),
+  fromEmail: text("from_email").notNull(),
+  cc: text(),
+  bcc: text(),
+  subject: text(),
+  mailer: text().notNull(),
+  provider: text().default("resend").notNull(),
+  status: text().notNull(),
+  error: text(),
+  providerMessageId: text("provider_message_id"),
+  bodyHtml: text("body_html"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Global, NOT tenant-scoped, on purpose — see supabase/notifications_05_suppressions.sql.
+export const emailSuppressions = pgTable("email_suppressions", {
+  email: text().primaryKey().notNull(),
+  reason: text().notNull(),
+  detail: text(),
+  source: text().default("resend").notNull(),
+  lastEventAt: timestamp("last_event_at", {
+    withTimezone: true,
+    mode: "string",
+  })
+    .defaultNow()
+    .notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const notificationEmailQueue = pgTable(
+  "notification_email_queue",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    eventId: uuid("event_id").notNull(),
+    recipientId: text("recipient_id").notNull(),
+    recipientType: text("recipient_type").notNull(),
+    email: text().notNull(),
+    eventKey: text("event_key").notNull(),
+    digest: text().default("instant").notNull(),
+    title: text().notNull(),
+    body: text(),
+    url: text(),
+    severity: text().default("info").notNull(),
+    // Snapshotted at enqueue, like subject/body — see notifications_04_email_cc.sql.
+    cc: text(),
+    bcc: text(),
+    status: text().default("pending").notNull(),
+    sendAfter: timestamp("send_after", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
+    attempts: integer().default(0).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_email_queue_event_recipient_key").on(
+      table.eventId,
+      table.recipientId,
+    ),
+    index("notification_email_queue_recipient_idx").on(
+      table.recipientId,
+      table.sendAfter,
+    ),
+    index("notification_email_queue_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_email_queue_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.eventId],
+      foreignColumns: [activityEvents.id],
+      name: "notification_email_queue_event_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_email_queue_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'sending'::text, 'sent'::text, 'failed'::text])`,
+    ),
+    check(
+      "notification_email_queue_digest_check",
+      sql`digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Notification CONSOLE (supabase/notifications_03_console.sql).
+// notification_definitions is PLATFORM-GLOBAL (no store_id — the
+// platform_admins model); notification_settings is per store.
+// Resolution: code registry ← definition ← store settings.
+// ---------------------------------------------------------------------------
+export const notificationDefinitions = pgTable(
+  "notification_definitions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    key: text().notNull(),
+    displayName: text("display_name"),
+    description: text(),
+    category: text(),
+    group: text(),
+    // NULL = defer to the code registry's defaults.
+    channels: jsonb(),
+    isActive: boolean("is_active").default(true).notNull(),
+    // Operator-registered but not emitted by any code path yet.
+    isCustom: boolean("is_custom").default(false).notNull(),
+    createdBy: text("created_by"),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_definitions_key_key").on(table.key),
+    index("notification_definitions_category_idx").on(
+      table.category,
+      table.key,
+    ),
+    pgPolicy("Read notification_definitions", {
+      for: "select",
+      to: ["public"],
+      using: sql`true`,
+    }),
+    pgPolicy("Write notification_definitions", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_platform_admin())`,
+      withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);
+
+export const notificationSettings = pgTable(
+  "notification_settings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventKey: text("event_key").notNull(),
+    /** {"email": true, "web": false} — absent keys defer to the default. */
+    channels: jsonb().default({}).notNull(),
+    /** permission | roles | admins. Targeting NARROWS, never widens. */
+    routing: text().default("permission").notNull(),
+    targetRoles: text("target_roles").array().default([]).notNull(),
+    targetAdmins: text("target_admins").array().default([]).notNull(),
+    /** Merchant copy per channel; absent channels use the built-in copy. */
+    templates: jsonb().default({}).notNull(),
+    digest: text().default("instant").notNull(),
+    isEnabled: boolean("is_enabled").default(true).notNull(),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_settings_store_event_key").on(
+      table.storeId,
+      table.eventKey,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_settings_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_settings_routing_check",
+      sql`routing = ANY (ARRAY['permission'::text, 'roles'::text, 'admins'::text])`,
+    ),
+    check(
+      "notification_settings_digest_check",
+      sql`digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+    pgPolicy("Manage notification_settings", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(store_id))`,
+      withCheck: sql`( SELECT is_store_admin(store_id))`,
+    }),
+  ],
+);

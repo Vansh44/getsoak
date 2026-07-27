@@ -1,15 +1,11 @@
 import { wrapBrandedEmail } from "./layout";
 import type { StoreBrand } from "@/lib/store/brand";
 
-/** Escape user / AI supplied values before interpolating into email HTML. */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+// escapeHtml moved to lib/email/shell.ts (the bottom of the email layer, so the
+// shell can use it without importing a specific email type). Re-exported here
+// because plenty of callers already import it from this module.
+export { escapeHtml } from "./shell";
+import { EMAIL_FONT, EMAIL_THEME, escapeHtml } from "./shell";
 
 /** Merge per-recipient tokens into a subject or body string. */
 export function mergeTokens(text: string, firstName: string): string {
@@ -56,14 +52,14 @@ function couponBox(
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 4px;">
     <tr>
       <td align="center" style="padding:8px;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f5; border:1px dashed #c7bfb3; border-radius:10px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="background:${EMAIL_THEME.panel}; border:1px dashed ${EMAIL_THEME.border}; border-radius:10px;">
           <tr>
             <td align="center" style="padding:20px 32px;">
-              <div style="font-size:13px; color:#8a8175; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">${escapeHtml(discountLabel)}</div>
-              <div style="font-size:26px; font-weight:700; letter-spacing:2px; color:#1f2937; font-family:'Courier New', monospace;">${escapeHtml(code)}</div>
+              <div style="font-family:${EMAIL_FONT}; font-size:12px; color:${EMAIL_THEME.muted}; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">${escapeHtml(discountLabel)}</div>
+              <div style="font-size:26px; font-weight:700; letter-spacing:2px; color:${EMAIL_THEME.ink}; font-family:'Courier New', monospace;">${escapeHtml(code)}</div>
               ${
                 validUntilLabel
-                  ? `<div style="font-size:12px; color:#9a9183; margin-top:8px;">Valid until ${escapeHtml(validUntilLabel)}</div>`
+                  ? `<div style="font-family:${EMAIL_FONT}; font-size:12px; color:${EMAIL_THEME.muted}; margin-top:8px;">Valid until ${escapeHtml(validUntilLabel)}</div>`
                   : ""
               }
             </td>

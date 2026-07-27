@@ -1,60 +1,33 @@
 import type { StoreBrand } from "@/lib/store/brand";
+import { emailFooter, emailShell, inlineEmailStyles } from "./shell";
 
 /**
- * Wraps email body content in the shared branded layout.
+ * Wrap an email body in the shared branded layout.
  *
- * Returns a full HTML document that forces a light color scheme: the
- * `color-scheme` / `supported-color-schemes` meta + CSS tell clients the email
- * only supports light mode, so they won't apply the device's dark theme and
- * invert the white background to black. `bgcolor` attributes back this up for
- * clients that ignore the meta. (A few clients with aggressive forced dark mode
- * can still override this — a known email limitation.)
+ * A thin adapter over `emailShell` (lib/email/shell.ts), which is the ONE email
+ * design — white card on light grey, near-black text, the store's logo or name
+ * at the top. Every email type goes through the same shell now: coupon
+ * campaigns, blog and enquiry notifications, billing, operator OTP, and the
+ * notification spine.
+ *
+ * This used to render the store name in `brand.primaryColor`. It no longer
+ * does: a storefront accent pushed into an email has to survive colour-managed
+ * clients, forced dark mode, and a button that must stay legible at any hue a
+ * merchant picks — and when it fails, a customer receives something that looks
+ * broken. Identity comes from the logo instead. See the header of shell.ts.
+ *
+ * Kept as a named function with the original signature, so the five existing
+ * callers inherit the new design without being touched.
  *
  * `bodyHtml` is dropped into the white content cell — include your own sign-off.
  */
 export function wrapBrandedEmail(bodyHtml: string, brand: StoreBrand): string {
-  const logoHtml = brand.logoUrl
-    ? `<img src="${brand.logoUrl}" alt="${brand.name}" width="140" style="display:block; width:140px; max-width:55%; height:auto;" />`
-    : `<h2 style="margin:0; font-family:Arial, sans-serif; color:${brand.primaryColor}; font-size:24px;">${brand.name}</h2>`;
-
-  return `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light only" />
-    <meta name="supported-color-schemes" content="light only" />
-    <style>
-      :root {
-        color-scheme: light only;
-        supported-color-schemes: light only;
-      }
-      body {
-        margin: 0;
-        padding: 0;
-        background-color: #f4f4f5;
-      }
-    </style>
-  </head>
-  <body bgcolor="#f4f4f5" style="margin:0; padding:0; background-color:#f4f4f5;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f4f4f5" style="background-color:#f4f4f5; margin:0; padding:0;">
-      <tr>
-        <td align="center" style="padding:24px 12px;">
-          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff" style="width:100%; max-width:600px; background-color:#ffffff; border:1px solid #e5e5e5; border-radius:12px; overflow:hidden;">
-            <tr>
-              <td align="center" bgcolor="#ffffff" style="background-color:#ffffff; padding:28px 24px; border-bottom:1px solid #f0f0f0;">
-                ${logoHtml}
-              </td>
-            </tr>
-            <tr>
-              <td bgcolor="#ffffff" style="background-color:#ffffff; padding:32px 28px; font-family:Arial, sans-serif; color:#333333; font-size:15px; line-height:1.6;">
-                ${bodyHtml}
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
+  return emailShell({
+    brand,
+    // These bodies are hand-written HTML that mostly carry their own inline
+    // styles; inlineEmailStyles only fills in bare tags (a plain <p>, a list)
+    // and leaves anything already styled alone.
+    bodyHtml: inlineEmailStyles(bodyHtml),
+    footerHtml: emailFooter(brand),
+  });
 }

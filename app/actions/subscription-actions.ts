@@ -18,6 +18,7 @@ import {
 } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
+import { emitEvent } from "@/lib/notifications/record";
 import { PLAN_META, type Plan } from "@/lib/plans";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
@@ -369,6 +370,14 @@ async function confirmSubscriptionForStore(
   }
 
   revalidateTag(STORE_TAG, "max");
+
+  emitEvent({
+    type: "plan.changed",
+    storeId,
+    actor: { type: "system", label: "Subscription" },
+    subject: { type: "plan", id: plan, label: PLAN_META[plan].name },
+    payload: { plan, note: `Activated for ${period}` },
+  });
 
   // Welcome / activation email (best-effort — never blocks activation).
   const recip = await resolveBillingEmail(storeId);

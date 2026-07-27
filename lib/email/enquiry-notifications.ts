@@ -1,5 +1,6 @@
-import { Resend } from "resend";
 import { wrapBrandedEmail } from "./layout";
+import { EMAIL_THEME } from "./shell";
+import { sendEmail } from "./send";
 import type { StoreBrand } from "@/lib/store/brand";
 
 /** Escape user-supplied values before interpolating into email HTML. */
@@ -10,14 +11,6 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  // Mirror blog-notifications.ts: skip sending when the key is missing or a
-  // placeholder so local/dev environments don't error out.
-  if (!apiKey || apiKey.includes("placeholder")) return null;
-  return new Resend(apiKey);
 }
 
 /** Wraps body content in the shared branded layout + sign-off. */
@@ -43,28 +36,22 @@ export async function sendEnquiryAcknowledgementEmail(opts: {
   subject: string | null;
   message: string;
   brand: StoreBrand;
+  storeId?: string | null;
 }): Promise<void> {
-  const resend = getResend();
-  if (!resend) {
-    console.log(
-      `📨 [enquiry ack] email skipped (Resend not configured) — to: ${opts.to}`,
-    );
-    return;
-  }
-
   const trimmedSubject = opts.subject?.trim() || "";
   const subjectLine = trimmedSubject
     ? `We received your enquiry: "${trimmedSubject}"`
     : "We received your enquiry";
 
-  try {
-    const fromAddress = `${opts.brand.name} <admin@${opts.brand.domain}>`;
-    const { data, error } = await resend.emails.send({
-      from: fromAddress,
-      to: opts.to,
-      subject: subjectLine,
-      html: emailShell(
-        `
+  const fromAddress = `${opts.brand.name} <admin@${opts.brand.domain}>`;
+  await sendEmail({
+    storeId: opts.storeId ?? null,
+    to: opts.to,
+    from: fromAddress,
+    subject: subjectLine,
+    mailer: "enquiry_notification",
+    html: emailShell(
+      `
         <h2 style="margin-top: 0;">Thanks for reaching out!</h2>
         <p>Hi ${escapeHtml(opts.name)},</p>
         <p>
@@ -74,9 +61,9 @@ export async function sendEnquiryAcknowledgementEmail(opts: {
         <p style="margin: 24px 0 6px;">
           <strong>Here's a copy of what you sent us:</strong>
         </p>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#faf8f5; border:1px solid #eeeeee; border-radius:8px; margin:8px 0 4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${EMAIL_THEME.panel}; border:1px solid ${EMAIL_THEME.border}; border-radius:8px; margin:8px 0 4px;">
           <tr>
-            <td style="padding:16px 18px; font-size:14px; color:#444444; line-height:1.6;">
+            <td style="padding:16px 18px; font-size:14px; color:${EMAIL_THEME.inkSoft}; line-height:1.6;">
               ${
                 trimmedSubject
                   ? `<p style="margin:0 0 10px;"><strong>Subject:</strong> ${escapeHtml(trimmedSubject)}</p>`
@@ -87,18 +74,7 @@ export async function sendEnquiryAcknowledgementEmail(opts: {
           </tr>
         </table>
       `,
-        opts.brand,
-      ),
-    });
-    // Resend returns errors in the response body rather than throwing.
-    if (error) {
-      console.error("Resend rejected enquiry-ack email:", error);
-    } else {
-      console.log(
-        `📨 [enquiry ack] email sent (id: ${data?.id}) — to: ${opts.to}`,
-      );
-    }
-  } catch (e) {
-    console.error("Failed to send enquiry-ack email via Resend:", e);
-  }
+      opts.brand,
+    ),
+  });
 }

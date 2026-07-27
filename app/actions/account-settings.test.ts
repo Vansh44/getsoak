@@ -8,6 +8,9 @@ vi.mock("@/lib/auth/firebase-users", () => ({
   updateAuthUser: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
+vi.mock("@/app/dashboard/lib/access", () => ({
+  getActingStoreId: vi.fn(async () => "store-1"),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));

@@ -1,7 +1,8 @@
 import "server-only";
-import { Resend } from "resend";
 import { wrapBrandedEmail } from "./layout";
+import { EMAIL_THEME } from "./shell";
 import { PLATFORM_EMAIL_DOMAIN } from "./sender";
+import { sendEmail } from "./send";
 import type { StoreBrand } from "@/lib/store/brand";
 
 // A minimal StoreBrand for the platform's own transactional mail (operator
@@ -9,7 +10,9 @@ import type { StoreBrand } from "@/lib/store/brand";
 const PLATFORM_BRAND: StoreBrand = {
   name: "StoreMink",
   logoUrl: null,
-  primaryColor: "#4f46e5",
+  // Unused by the email shell now (one global palette — see shell.ts);
+  // kept because StoreBrand requires it.
+  primaryColor: "#202223",
   tagline: null,
   blurb: null,
   legalName: "StoreMink",
@@ -44,26 +47,28 @@ export async function sendOperatorOtpEmail(
   }
 
   const body = wrapBrandedEmail(
-    `<p style="margin:0 0 16px; font-size:16px; color:#111827;">Your StoreMink admin sign-in code:</p>
-     <p style="margin:0 0 8px; font-size:34px; font-weight:700; letter-spacing:8px; color:#111827; font-family:'Courier New', monospace;">${code}</p>
-     <p style="margin:16px 0 0; font-size:14px; color:#6b7280;">This code expires in 10 minutes. If you didn't request it, you can safely ignore this email — no one can sign in without it.</p>`,
+    `<p style="margin:0 0 16px; font-size:16px; color:${EMAIL_THEME.ink};">Your StoreMink admin sign-in code:</p>
+     <p style="margin:0 0 8px; font-size:34px; font-weight:700; letter-spacing:8px; color:${EMAIL_THEME.ink}; font-family:'Courier New', monospace;">${code}</p>
+     <p style="margin:16px 0 0; font-size:14px; color:${EMAIL_THEME.muted};">This code expires in 10 minutes. If you didn't request it, you can safely ignore this email — no one can sign in without it.</p>`,
     PLATFORM_BRAND,
   );
 
-  try {
-    const { error } = await new Resend(apiKey).emails.send({
-      from: `StoreMink <security@${PLATFORM_EMAIL_DOMAIN}>`,
-      to,
-      subject: `${code} is your StoreMink sign-in code`,
-      html: body,
-    });
-    if (error) {
-      console.error("sendOperatorOtpEmail:", error);
-      return { sent: false };
-    }
-    return { sent: true };
-  } catch (err) {
-    console.error("sendOperatorOtpEmail threw:", err);
-    return { sent: false };
-  }
+  // Platform mail: storeId stays null, so this only ever shows on the
+  // storemink.com console — never in a merchant's own email log.
+  //
+  // The code is stored IN FULL there (owner's decision — see the note on the
+  // `operator_otp` entry in lib/email/mailers.ts), so a sign-in that "never
+  // arrived" can be checked against the log directly.
+  //
+  // ignoreSuppression: someone is sitting at a login screen waiting for this;
+  // a historic bounce is not a reason to withhold it.
+  const result = await sendEmail({
+    to,
+    from: `StoreMink <security@${PLATFORM_EMAIL_DOMAIN}>`,
+    subject: `${code} is your StoreMink sign-in code`,
+    html: body,
+    mailer: "operator_otp",
+    ignoreSuppression: true,
+  });
+  return { sent: result.sent };
 }

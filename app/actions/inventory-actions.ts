@@ -14,6 +14,8 @@ import {
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { DASHBOARD_PAGE_SIZE } from "@/app/dashboard/lib/list-params";
 import { TAGS } from "@/lib/storefront/tags";
+import { emitEvent } from "@/lib/notifications/record";
+import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 import { inventoryStatus } from "@/lib/inventory/status";
 
@@ -286,6 +288,21 @@ export async function adjustStock(
     );
     revalidateTag(TAGS.products, "max");
     const row = res.rows[0] as { new_stock: number | string } | undefined;
+
+    emitEvent({
+      type: "inventory.adjusted",
+      storeId,
+      actor: { type: "admin", id: userId },
+      subject: { type: "product", id: variantId || productId },
+      payload: {
+        delta,
+        stock: Number(row?.new_stock),
+        reason,
+        ...(note ? { note } : {}),
+      },
+    });
+    reportStockChanges(storeId, [{ productId, variantId, delta }]);
+
     return { success: true, newStock: Number(row?.new_stock) };
   } catch (err) {
     return { error: dbErrorMessage(err, "Failed to adjust stock.") };
@@ -440,6 +457,17 @@ export async function bulkAdjust(
   // Bust the shared product cache ONCE for the whole batch, not per item. Some
   // ops may have succeeded even if one failed, so revalidate regardless.
   revalidateTag(TAGS.products, "max");
+
+  reportStockChanges(
+    storeId,
+    ops
+      .filter((_, i) => results[i] === null)
+      .map((op) => ({
+        productId: op.item.productId,
+        variantId: op.item.variantId || null,
+        delta: op.delta,
+      })),
+  );
 
   const failed = results.find((r) => r !== null);
   if (failed) return { error: dbErrorMessage(failed, "Some updates failed.") };

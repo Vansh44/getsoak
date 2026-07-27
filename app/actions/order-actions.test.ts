@@ -1,9 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { makeDbMock, sqlParamValues } from "./_test-helpers";
+import { makeDbMock, sqlParamValues, sqlText } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// Activity/notification bookkeeping is deferred with after(), so in a real
+// request it runs AFTER the action returns and never touches the action's own
+// DB scope. No-op it here so these assertions see only the action's queries.
+vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),
   getManagerIdentity: vi.fn(),
@@ -198,6 +202,50 @@ describe("order-actions", () => {
 
       // The status update itself still lands.
       expect(dbHolder.current.calls.set[1]).toEqual({ status: "cancelled" });
+    });
+
+    // REGRESSION (POS merge). A register reserves stock at its OWN location via
+    // reserve_stock_at. The plain release_stock wrapper delegates to the store's
+    // DEFAULT location, so cancelling an in-store sale used to hand the units
+    // back to the wrong shop — the selling location never recovered its stock
+    // and the default gained a unit it never had. Silent, and it compounds.
+    it("returns a POS sale's stock to the location it was sold at", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "o1", location_id: "loc-2" }],
+        selectQueue: [[{ product_id: "p1", variant_id: null, quantity: 3 }]],
+      });
+
+      const result = await updateOrderStatus("o1", "cancelled");
+      expect(result.success).toBe(true);
+
+      const text = sqlText(dbHolder.current.calls.execute[0]);
+      expect(text).toContain("release_stock_at");
+      const params = sqlParamValues(dbHolder.current.calls.execute[0]);
+      // p_location sits second, right after the store.
+      expect(params).toEqual([
+        STORE,
+        "loc-2",
+        "p1",
+        null,
+        3,
+        "o1",
+        "order_cancelled",
+      ]);
+    });
+
+    // An online order has no location and reserved against the default, so the
+    // wrapper stays correct for it — the branch must not flip everything over.
+    it("still uses the default-location wrapper for an online order", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "o1", location_id: null }],
+        selectQueue: [[{ product_id: "p1", variant_id: "v1", quantity: 1 }]],
+      });
+
+      await updateOrderStatus("o1", "cancelled");
+
+      const text = sqlText(dbHolder.current.calls.execute[0]);
+      expect(text).toContain("release_stock");
+      expect(text).not.toContain("release_stock_at");
     });
 
     it("does not restock an order whose stock was never reserved or already released", async () => {

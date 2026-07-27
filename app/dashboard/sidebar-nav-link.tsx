@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
   LayoutGrid,
   Package,
   ShoppingBag,
@@ -38,6 +39,7 @@ import {
   Store,
   MapPin,
   type LucideIcon,
+  Mail,
 } from "lucide-react";
 
 export const navIcons = {
@@ -61,6 +63,8 @@ export const navIcons = {
   media: Images,
   roles: KeyRound,
   activity: History,
+  mail: Mail,
+  notifications: Bell,
   settings: Settings,
   globe: Globe,
   rich_text: Type,

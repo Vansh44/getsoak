@@ -51,7 +51,16 @@ function SuccessContent() {
           Continue Shopping
         </Link>
         {orderId && (
-          <div>
+          <div className="flex flex-col items-center gap-2">
+            {/* The order now has a permanent home, so the confirmation isn't
+                the only place a shopper can ever see it. */}
+            <Link
+              href={`/orders/${orderId}`}
+              className="text-sm font-medium underline underline-offset-4"
+              style={{ color: "var(--sm-accent)" }}
+            >
+              Track this order
+            </Link>
             <Link
               href={`/checkout/invoice/${orderId}`}
               className="text-sm font-medium text-muted-foreground underline underline-offset-4 hover:text-foreground"

@@ -14,6 +14,7 @@
 
 import { and, desc, eq, lte, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
+import { emitEvent } from "@/lib/notifications/record";
 import { aiCreditLedger, aiCreditPurchases, stores } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { effectivePlan, planAllows } from "@/lib/plans";
@@ -395,6 +396,14 @@ export async function confirmCreditPurchase(
     },
     rzpPaymentId,
   );
+  emitEvent({
+    type: "ai.credits_purchased",
+    storeId: purchase.store_id,
+    actor: { type: "admin", id: userId },
+    subject: { type: "credits", id: purchase.id, label: purchase.pack_id },
+    payload: { credits: purchase.credits },
+  });
+
   return { success: true, creditsAdded: purchase.credits };
 }
 

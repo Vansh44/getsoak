@@ -12,6 +12,9 @@ vi.mock("@/lib/auth/firebase-claims", () => ({
   setUserClaims: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
+vi.mock("@/app/dashboard/lib/access", () => ({
+  getActingStoreId: vi.fn(async () => "store-1"),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 // The caller-role gate reads via withUser, target reads/updates via withService

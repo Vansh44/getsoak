@@ -2,6 +2,8 @@
 
 import { eq } from "drizzle-orm";
 import { getServerUser } from "@/lib/auth/server-user";
+import { emitEvent } from "@/lib/notifications/record";
+import { getActingStoreId } from "@/app/dashboard/lib/access";
 import { verifyPassword, updateAuthUser } from "@/lib/auth/firebase-users";
 import { withUser } from "@/lib/db/client";
 import { admins } from "@/drizzle/schema";
@@ -74,6 +76,13 @@ export async function changePassword(formData: FormData): Promise<Result> {
     console.error("changePassword error:", err);
     return { error: "Couldn't update your password." };
   }
+
+  emitEvent({
+    type: "security.password_changed",
+    storeId: await getActingStoreId(),
+    actor: { type: "admin", id: user.id, label: user.email },
+    subject: { type: "admin", id: user.id, label: user.email },
+  });
 
   return { success: true };
 }

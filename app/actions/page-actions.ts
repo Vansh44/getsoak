@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { withService } from "@/lib/db/client";
 import { storePages } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
+import { emitEvent } from "@/lib/notifications/record";
 import { getStoreUrl } from "@/lib/site";
 import { pingIndexNow } from "@/lib/seo/search-engines";
 import { TAGS } from "@/lib/storefront/tags";
@@ -456,6 +457,14 @@ export async function publishPage(
   const base = await getStoreUrl();
   const pageUrl = page.slug ? `${base}/${page.slug}` : `${base}/`;
   after(() => pingIndexNow([pageUrl]));
+
+  emitEvent({
+    type: "page.published",
+    storeId,
+    actor: { type: "admin", id: userId },
+    subject: { type: "page", id, label: page.slug || "Home" },
+    payload: { page: page.slug || "Home", url: pageUrl },
+  });
 
   return {
     success: true,
