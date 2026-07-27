@@ -151,84 +151,98 @@ export function CameraScanner({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black">
-      <div className="flex items-center justify-between px-4 py-3 text-white">
-        <div className="flex items-center gap-2 font-semibold">
-          <Camera className="h-5 w-5" strokeWidth={2} />
-          Scan barcode
-        </div>
-        <div className="flex items-center gap-2">
-          {torchable && (
-            <button
-              type="button"
-              onClick={toggleTorch}
-              className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
-              aria-label={torchOn ? "Turn off light" : "Turn on light"}
-            >
-              {torchOn ? (
-                <Zap className="h-5 w-5" />
-              ) : (
-                <ZapOff className="h-5 w-5" />
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
-            aria-label="Close scanner"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-      </div>
-
-      <div className="relative flex-1 overflow-hidden">
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          autoPlay
-          className="h-full w-full object-cover"
-        />
-
-        {/* Aiming guide */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div
-            className={`h-40 w-[78%] max-w-sm rounded-2xl border-4 transition-colors ${
-              flash ? "border-emerald-400 bg-emerald-400/20" : "border-white/70"
-            }`}
-          />
-        </div>
-
-        {starting && !unavailable && !error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white">
-            <Loader2 className="h-6 w-6 animate-spin" />
+    // Full-bleed on a phone (how every scanning app behaves, and the camera is
+    // the whole task there); a contained card from `sm` up, where swallowing a
+    // 27" display to show a webcam is absurd and hides the cart behind it.
+    <div className="fixed inset-0 z-50 flex flex-col bg-black sm:items-center sm:justify-center sm:bg-black/80 sm:p-6">
+      <div className="flex h-full w-full flex-col overflow-hidden bg-black sm:h-[560px] sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl sm:border sm:border-white/10 sm:shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-3 text-white">
+          <div className="flex items-center gap-2 font-semibold">
+            <Camera className="h-5 w-5" strokeWidth={2} />
+            Scan barcode
           </div>
-        )}
-
-        {(error || unavailable) && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6 text-center">
-            <div className="max-w-sm">
-              <p className="text-white">{error ?? unavailable}</p>
+          <div className="flex items-center gap-2">
+            {torchable && (
               <button
                 type="button"
-                onClick={onClose}
-                className="mt-4 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black"
+                onClick={toggleTorch}
+                className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
+                aria-label={torchOn ? "Turn off light" : "Turn on light"}
               >
-                Close
+                {torchOn ? (
+                  <Zap className="h-5 w-5" />
+                ) : (
+                  <ZapOff className="h-5 w-5" />
+                )}
               </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
+              aria-label="Close scanner"
+            >
+              <X className="h-5 w-5" />
+            </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      <div className="px-4 py-4 text-center text-sm text-white/70">
-        {lastCode ? (
-          <span className="text-emerald-400">Added · {lastCode}</span>
-        ) : (
-          "Point the camera at the barcode"
-        )}
+        {/* Takes whatever height is left. Deliberately NOT a fixed aspect
+            ratio: on a short window that pushed the footer off-screen, and the
+            footer is where the "Added · code" scan confirmation appears. */}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            autoPlay
+            className="h-full w-full object-cover"
+          />
+
+          {/* Aiming guide — only while there is actually a picture to aim.
+              Left up during the error state it shows through the message and
+              reads as a broken layout. */}
+          {!starting && !error && !unavailable && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div
+                className={`h-28 w-[78%] max-w-sm rounded-2xl border-4 transition-colors sm:h-24 ${
+                  flash
+                    ? "border-emerald-400 bg-emerald-400/20"
+                    : "border-white/70"
+                }`}
+              />
+            </div>
+          )}
+
+          {starting && !unavailable && !error && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          )}
+
+          {(error || unavailable) && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6 text-center">
+              <div className="max-w-sm">
+                <p className="text-white">{error ?? unavailable}</p>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="mt-4 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="px-4 py-4 text-center text-sm text-white/70">
+          {lastCode ? (
+            <span className="text-emerald-400">Added · {lastCode}</span>
+          ) : (
+            "Point the camera at the barcode"
+          )}
+        </div>
       </div>
     </div>
   );

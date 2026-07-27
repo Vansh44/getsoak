@@ -2114,6 +2114,39 @@ export const posDevices = pgTable(
 
 // Append-only POS security trail (pos_05_device_hardening.sql). Admin-readable;
 // written only via the service role.
+// Manager-arranged register grid, per location (supabase/pos_09_register_layout.sql).
+// NO ROW = NO LAYOUT = show the whole catalogue, so adding this feature could
+// not blank an existing register. `items` is deliberately not FK-checked —
+// a deleted product drops out at render rather than wedging the layout.
+export const posLayouts = pgTable(
+  "pos_layouts",
+  {
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").primaryKey().notNull(),
+    items: jsonb().default([]).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  (table) => [
+    index("idx_pos_layouts_store").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_layouts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_layouts_location_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const posAuditLog = pgTable(
   "pos_audit_log",
   {

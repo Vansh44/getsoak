@@ -51,6 +51,9 @@ export interface CatalogApi extends CatalogState {
   search: (query: string, limit?: number) => CatalogItem[];
   /** Local scan; [] means a miss — the caller must ask the server. */
   scan: (code: string) => CatalogItem[];
+  /** Every cached SKU, in catalogue order — the idle grid and the layout
+   *  editor both work from the whole list rather than a search result. */
+  all: () => CatalogItem[];
   /** Decrement cached stock after a sale, keyed `productId:variantId`. */
   applySold: (sold: Map<string, number>) => void;
   /** Force a refresh (e.g. the cashier suspects the grid is stale). */
@@ -172,6 +175,7 @@ export function useCatalog(
     (code: string) => scanLocal(indexRef.current, code),
     [],
   );
+  const all = useCallback(() => indexRef.current.all, []);
   const applySold = useCallback(
     (sold: Map<string, number>) => {
       if (sold.size === 0) return;
@@ -183,5 +187,5 @@ export function useCatalog(
     [key, setIndex],
   );
 
-  return { ...state, search, scan, applySold, resync: () => void sync() };
+  return { ...state, search, scan, all, applySold, resync: () => void sync() };
 }
