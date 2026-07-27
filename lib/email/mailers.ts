@@ -18,6 +18,8 @@ export const MAILER_KEYS = [
   "staff_invite",
   "password_reset",
   "notification_test",
+  "pos_staff_invite",
+  "pos_credential_reset",
   // Billing (platform → merchant)
   "billing",
   // Platform security
@@ -81,6 +83,21 @@ export const MAILERS: MailerDef[] = [
     key: "notification_test",
     label: "Test send",
     description: 'A "send test to me" from the notification editor.',
+  },
+  {
+    key: "pos_staff_invite",
+    label: "POS staff invite",
+    description:
+      "An invitation for a cashier or manager to set up register access.",
+    // The registration link is a single-use token that creates their account.
+    sensitive: true,
+  },
+  {
+    key: "pos_credential_reset",
+    label: "POS credential reset",
+    description: "A link for POS staff to set a new PIN or password.",
+    // The link IS the authorization — no session is needed to use it.
+    sensitive: true,
   },
   {
     key: "billing",

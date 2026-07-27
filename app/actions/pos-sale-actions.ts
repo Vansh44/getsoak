@@ -31,6 +31,8 @@ import {
   users,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
+import { emitEvent } from "@/lib/notifications/record";
+import { reportStockChanges } from "@/lib/inventory/alerts";
 import { posCan } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
@@ -1041,6 +1043,37 @@ export async function placePosSale(
     // not void a completed transaction. Log loudly for reconciliation.
     console.error("placePosSale (payments):", errMsg(err));
   }
+
+  // An in-store sale is a sale. Without this it existed only in the orders
+  // table: absent from /dashboard/activity, absent from the team's "new order"
+  // alert, and — because reserve_stock_at bypassed the checkout path — it could
+  // empty a shelf without ever tripping the low-stock warning. The register was
+  // the one channel the store couldn't see happening.
+  emitEvent({
+    type: "order.placed",
+    storeId: op.storeId,
+    actor: { type: "admin", id: op.staffId ?? null, label: op.name },
+    subject: { type: "order", id: orderId, label: orderRef },
+    // Null for a walk-in, which emitEvent reads as "no customer audience" —
+    // correct, since a POS shopper leaves with a printed receipt in hand.
+    customerId,
+    payload: {
+      total,
+      currency: "INR",
+      items: lines.length,
+      paymentMethod: "pos",
+      channel: "In-store",
+    },
+  });
+
+  reportStockChanges(
+    op.storeId,
+    lines.map((l) => ({
+      productId: l.productId,
+      variantId: l.variantId,
+      delta: -l.quantity,
+    })),
+  );
 
   revalidatePath("/dashboard/orders");
   return {

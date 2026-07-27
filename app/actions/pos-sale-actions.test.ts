@@ -9,6 +9,11 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/lib/notifications/record", () => ({
+  emitEvent: vi.fn(),
+  recordEvent: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
   clientIp: vi.fn(() => "1.2.3.4"),
@@ -27,6 +32,8 @@ vi.mock("@/lib/db/client", () => ({
 import { withService } from "@/lib/db/client";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import { emitEvent } from "@/lib/notifications/record";
+import { reportStockChanges } from "@/lib/inventory/alerts";
 import {
   getCatalogSnapshot,
   placePosSale,
@@ -258,6 +265,34 @@ describe("placePosSale — stock", () => {
     );
     expect(reserveCall).toBeTruthy();
     expect(sqlText(reserveCall)).toContain("p_location");
+  });
+
+  // REGRESSION (POS merge). A register sale wrote an orders row and nothing
+  // else: no activity_events entry, no "new order" alert for the team, and no
+  // low-stock warning even when it emptied the shelf. The one sales channel
+  // physically in front of the merchant was the one they couldn't see.
+  it("records the sale as an order.placed event", async () => {
+    await placePosSale([line], cash);
+
+    const call = vi
+      .mocked(emitEvent)
+      .mock.calls.find(([input]) => input?.type === "order.placed");
+    expect(call, "a POS sale must emit order.placed").toBeTruthy();
+    expect(call![0]).toMatchObject({
+      storeId: "store-1",
+      payload: { channel: "In-store" },
+    });
+  });
+
+  it("reports the stock it took, so a shelf it empties still warns", async () => {
+    await placePosSale([line], cash);
+
+    expect(reportStockChanges).toHaveBeenCalledWith(
+      "store-1",
+      // Signed NEGATIVE — stockAlertFor compares before/after, so a sale that
+      // crosses the threshold has to look like a decrease.
+      expect.arrayContaining([expect.objectContaining({ delta: -1 })]),
+    );
   });
 
   // Overselling must fail the whole sale, not silently sell air.

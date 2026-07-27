@@ -302,13 +302,19 @@ export async function updateOrderStatus(
             eq(orders.stockStatus, "reserved"),
           ),
         )
-        .returning({ id: orders.id }),
+        // location_id comes back with the claim: a POS sale reserved stock at
+        // the register's own location (reserve_stock_at), so the units must go
+        // BACK there. The plain release_stock wrapper delegates to the store's
+        // DEFAULT location, which would silently move stock between shops —
+        // the selling location never gets its unit back and the default gains
+        // one it never had.
+        .returning({ id: orders.id, location_id: orders.locationId }),
     ).catch((err) => {
       console.error(
         "stock release claim:",
         err instanceof Error ? err.message : err,
       );
-      return [] as { id: string }[];
+      return [] as { id: string; location_id: string | null }[];
     });
 
     if (claimed.length > 0) {
@@ -325,11 +331,18 @@ export async function updateOrderStatus(
           .where(eq(orderItems.orderId, orderId)),
       ).catch(() => []);
 
+      // Where the stock came from. Online orders have no location and reserved
+      // against the default, so the wrapper is right for them; a POS sale must
+      // be released at the location it was rung up on.
+      const locationId = claimed[0]?.location_id ?? null;
+
       for (const item of items) {
-        // The unchanged Postgres function does the atomic restock + ledger row.
+        // The Postgres function does the atomic restock + ledger row.
         await withService((db) =>
           db.execute(
-            sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
+            locationId
+              ? sql`select release_stock_at(p_store => ${storeId}, p_location => ${locationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`
+              : sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
           ),
         ).catch((err) =>
           console.error(
@@ -346,7 +359,10 @@ export async function updateOrderStatus(
     updateData.paymentStatus = paymentStatus;
   }
 
-  let updated: { order_ref: string; customer_id: string }[];
+  // customer_id is NULLABLE — an order can have no account behind it (a POS
+  // walk-in). emitEvent takes that as "no customer audience", which is right:
+  // there is nobody to tell.
+  let updated: { order_ref: string; customer_id: string | null }[];
   try {
     updated = await withUser(admin, (db) =>
       db

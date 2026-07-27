@@ -665,6 +665,7 @@ export async function requestPosCredentialReset(
   await sendPosStaffEmail({
     storeId,
     to: email,
+    mailer: "pos_credential_reset",
     devFallback: `🔑 POS CREDENTIAL RESET (email not configured — dev fallback)\nEmail: ${email}\nReset: ${link}`,
     build: (brand) => ({
       subject: `Reset your ${brand.name} POS access`,

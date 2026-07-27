@@ -1429,9 +1429,31 @@ group, span}` (span = columns of the 4-wide desktop grid),
         "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
         doesn't add up. Recording it also makes markdowns auditable per
         cashier, which is the point of the cap.
+      - **A register sale is a SALE — it emits like one.** `placePosSale` ends
+        with `emitEvent("order.placed")` + `reportStockChanges` (§22
+        notifications). Without them an in-store sale wrote an `orders` row and
+        nothing else: no `/dashboard/activity` entry, no team alert, and no
+        low/out-of-stock warning even when it emptied the shelf — the one
+        channel physically in front of the merchant was the one they couldn't
+        see. `customerId` is null for a walk-in, which the fan-out reads as "no
+        customer audience" (right: they leave holding a receipt). NOTE the
+        coverage guard can't catch this class of gap — it asserts a key is
+        emitted SOMEWHERE, not that every path which should emit it does.
+      - **CANCELLING A POS SALE RESTOCKS AT ITS OWN LOCATION.**
+        `updateOrderStatus` returns `orders.location_id` with the
+        reserved→released claim and calls `release_stock_at` when it's set. The
+        plain `release_stock` wrapper delegates to the store's DEFAULT location
+        (`pos_02_rpc_location.sql`), so cancelling an in-store sale used to hand
+        the units to the wrong shop — the selling location never recovered its
+        stock and the default gained one it never had, silently, compounding
+        per cancellation. Online orders reserve against the default and keep the
+        wrapper. Both branches are regression-tested.
     - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
-      inventory (4), returns/store credit (5), Twilio receipts (6), metered
-      extra-location billing (7), omnichannel/BOPIS (8), offline outbox (9).
+      inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
+      writes to the DEFAULT location, so a multi-location store cannot yet
+      correct stock at a specific shop), returns/store credit (5), Twilio
+      receipts (6), metered extra-location billing (7), omnichannel/BOPIS (8),
+      offline outbox (9).
       See `docs/pos-plan.md`.
 
 ## 6. Commands

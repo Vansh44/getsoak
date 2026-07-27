@@ -156,15 +156,18 @@ export async function inviteUser(formData: FormData) {
     resendApiKey && !resendApiKey.includes("placeholder");
 
   if (isResendAvailable) {
-    try {
-      const brand = await getStoreBrandById(storeId);
-      // The invited admin belongs to the INVITER's store, and the inviter is on
-      // that store's host — so the request origin sends them to their own store
-      // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
-      // PLATFORM_URL (the apex) would land them on the platform operator console
-      // instead, and points at an unreachable host when developing locally.
-      const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
+    const brand = await getStoreBrandById(storeId);
+    // The invited admin belongs to the INVITER's store, and the inviter is on
+    // that store's host — so the request origin sends them to their own store
+    // dashboard ({slug}.storemink.com/dashboard) and is clickable in local dev.
+    // PLATFORM_URL (the apex) would land them on the platform operator console
+    // instead, and points at an unreachable host when developing locally.
+    const appUrl = (await getRequestOrigin()) ?? PLATFORM_URL;
 
+    // No try/catch: sendEmail never throws into its caller (rule 1 in
+    // lib/email/send.ts), and it records the failure in the email log — which
+    // is strictly more than the console.error this used to swallow it with.
+    //
     // The `staff_invite` mailer is marked sensitive, so the email log records
     // that this went out — to whom, when, whether it sent — WITHOUT storing the
     // body, which carries a working temporary password in plaintext.
