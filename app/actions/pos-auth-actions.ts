@@ -54,6 +54,8 @@ import {
   POS_DEVICE_MAX_AGE_S,
   POS_OPERATOR_COOKIE,
   POS_OPERATOR_MAX_AGE_S,
+  POS_SECRET_MISSING_ERROR,
+  posSessionConfigured,
   signDeviceToken,
   signOperatorToken,
 } from "@/lib/pos/session";
@@ -142,6 +144,20 @@ async function registerDevice(
 
   const deviceId = crypto.randomUUID();
   const nonce = newDeviceNonce();
+
+  // Mint the cookie BEFORE inserting the row. Every input is already known, and
+  // signing is the one step that can fail for a reason the DB knows nothing
+  // about (a missing POS_SESSION_SECRET). Insert-then-sign left an authorized
+  // device row behind on every failure — rows that counted against the
+  // per-location cap, so a genuinely broken deployment eventually reported
+  // "this location already has 5 authorized devices" instead of its real fault.
+  let token: string;
+  try {
+    token = signDeviceToken({ deviceId, storeId, locationId, nonce });
+  } catch {
+    return { error: POS_SECRET_MISSING_ERROR };
+  }
+
   try {
     await withService((db) =>
       db.insert(posDevices).values({
@@ -159,7 +175,7 @@ async function registerDevice(
   }
   (await cookies()).set(
     POS_DEVICE_COOKIE,
-    signDeviceToken({ deviceId, storeId, locationId, nonce }),
+    token,
     posCookieOptions(POS_DEVICE_MAX_AGE_S),
   );
   await posAudit({
@@ -456,6 +472,13 @@ export async function posLoginWithPin(
     typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
   if (!email.includes("@")) return { error: "Enter your email." };
   if (!isValidPinFormat(pin)) return { error: "Enter your 8-digit PIN." };
+
+  // Refuse up front rather than mid-flow: this sign-in ROTATES the device nonce
+  // before it mints cookies, so throwing at the signing step would leave the
+  // device holding a retired nonce — which getAuthorizedDevice reads as a clone
+  // and punishes by revoking the device. A missing secret must not cost a shop
+  // its authorized register.
+  if (!posSessionConfigured()) return { error: POS_SECRET_MISSING_ERROR };
 
   // Throttled per email + IP: there may be no device yet to key on.
   const ip = clientIp(await headers());

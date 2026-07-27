@@ -81,7 +81,7 @@ vi.mock("@/lib/db/client", () => ({
 
 import { rateLimit } from "@/lib/rate-limit";
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
-import { getAuthorizedDevice } from "@/lib/pos/devices";
+import { getAuthorizedDevice, rotateDeviceNonce } from "@/lib/pos/devices";
 import { hashPin } from "@/lib/pos/pin";
 import {
   POS_DEVICE_COOKIE,
@@ -149,6 +149,26 @@ describe("authorizeThisDevice", () => {
     const r = await authorizeThisDevice("loc-1");
     expect(r.error).toMatch(/already has 5 authorized devices/i);
     expect(H.jar.set).not.toHaveBeenCalled();
+  });
+
+  // A deployment missing POS_SESSION_SECRET can't mint a device cookie. It must
+  // say so — and must NOT bank a device row it can't hand a credential for.
+  // Staging shipped without the secret and every click 500'd, each one leaving
+  // an orphan row that counted toward the cap above, so the register eventually
+  // blamed a device cap for a missing env var.
+  it("reports a missing signing secret and writes no device row", async () => {
+    const saved = process.env.POS_SESSION_SECRET;
+    delete process.env.POS_SESSION_SECRET;
+    try {
+      dbHolder.current = makeDbMock({ selectQueue: capSelects() });
+      const r = await authorizeThisDevice("loc-1");
+      expect(r.success).toBeUndefined();
+      expect(r.error).toMatch(/isn't fully configured/i);
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+      expect(H.jar.set).not.toHaveBeenCalled();
+    } finally {
+      process.env.POS_SESSION_SECRET = saved;
+    }
   });
 });
 
@@ -222,6 +242,26 @@ describe("posLoginWithPin", () => {
     expect(r.needsPairing).toBe(true);
     expect(r.success).toBeUndefined();
     expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
+  });
+
+  // Bail BEFORE the nonce rotation. Failing at the signing step would rotate
+  // the device's nonce without re-issuing the cookie, and the next request
+  // would present a retired nonce — which reads as a CLONE and revokes the
+  // device. A missing env var must not cost a shop its authorized register.
+  it("refuses up front when the signing secret is missing", async () => {
+    const saved = process.env.POS_SESSION_SECRET;
+    delete process.env.POS_SESSION_SECRET;
+    try {
+      vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
+      seed([[staffRow], [{ staff_id: "st1" }]]);
+      const r = await posLoginWithPin("p@x.com", "12345678");
+      expect(r.success).toBeUndefined();
+      expect(r.error).toMatch(/isn't fully configured/i);
+      expect(rotateDeviceNonce).not.toHaveBeenCalled();
+      expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
+    } finally {
+      process.env.POS_SESSION_SECRET = saved;
+    }
   });
 
   // Credentials are checked BEFORE the device, so a bad PIN on an unpaired

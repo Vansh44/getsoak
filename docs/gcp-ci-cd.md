@@ -117,8 +117,21 @@ gcloud builds triggers create github \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml \
   --service-account=projects/storemink-prod/serviceAccounts/705863961054-compute@developer.gserviceaccount.com \
-  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=1,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com'
+  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=1,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com,_POS_SESSION_SECRET_SECRET=POS_SESSION_SECRET_PROD,_PAYMENT_CRED_KEY_SECRET=PAYMENT_CRED_KEY_PROD,_RAZORPAY_KEY_ID_SECRET=RAZORPAY_KEY_ID_PROD,_RAZORPAY_KEY_SECRET_SECRET=RAZORPAY_KEY_SECRET_PROD,_RAZORPAY_WEBHOOK_SECRET_SECRET=RAZORPAY_WEBHOOK_SECRET_PROD'
 ```
+
+> **⚠ The prod trigger must override every per-env secret NAME.** The
+> `cloudbuild.yaml` defaults all target STAGING, so anything the prod trigger
+> omits silently inherits a staging secret — prod would run on Razorpay TEST
+> keys, and a `PAYMENT_CRED_KEY` mismatch cannot decrypt prod-stored gateway
+> creds. The five `*_SECRET` substitutions above were absent from this command
+> until 2026-07-27; verify the live trigger actually carries them:
+>
+> ```bash
+> gcloud builds triggers describe storemink-web-prod \
+>   --project=storemink-prod --region=global \
+>   --format='value(substitutions)'
+> ```
 
 ---
 
@@ -152,6 +165,21 @@ gcloud builds triggers delete rmgpgab-storemink-web-asia-south1-Vansh44-storemin
 | `_NEXT_PUBLIC_ROOT_DOMAIN`                  | `staging.storemink.com`                                             | `storemink.com`                                                  |
 | `_NEXT_PUBLIC_APP_URL`                      | `https://staging.storemink.com`                                     | `https://storemink.com`                                          |
 | `_GOOGLE_SEARCH_CONSOLE_PROPERTY`           | _(empty — staging is never indexed)_                                | `sc-domain:storemink.com`                                        |
+| `_POS_SESSION_SECRET_SECRET`                | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_PROD`                                        |
+
+> **POS_SESSION_SECRET is required for the register to work at all.** It signs
+> the `pos_device` / `pos_operator` cookies (`lib/pos/session.ts`). Verification
+> degrades quietly without it, but MINTING does not — so with the secret absent,
+> "Authorize this device" and cashier PIN login both fail. It was missing from
+> this file until 2026-07-27, which is exactly how staging shipped a POS that
+> 500'd on every authorize attempt. Per-env, like `PAYMENT_CRED_KEY`: this key
+> mints register credentials, so a leaked staging value must not forge a device
+> cookie against prod. Create each once:
+>
+> ```bash
+> printf '%s' "$(openssl rand -base64 32)" | gcloud secrets create POS_SESSION_SECRET_STAGING \
+>   --project=storemink-prod --data-file=-
+> ```
 
 Staging is never indexed (its `ROOT_DOMAIN` isn't the prod apex), so it needs no
 Search Console property. On prod, the runtime SA `_RUN_SA` authenticates to
