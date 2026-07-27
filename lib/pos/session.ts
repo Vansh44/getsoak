@@ -25,6 +25,24 @@ function secretOrNull(): string | null {
   return process.env.POS_SESSION_SECRET || null;
 }
 
+/**
+ * Can this deployment MINT POS credentials? Verification degrades quietly when
+ * the secret is missing (see below), but signing cannot — so every action that
+ * mints a cookie checks this first and returns a readable error.
+ *
+ * Without it a missing env var surfaces as a raw 500 on the register with no
+ * hint of the cause: staging ran without POS_SESSION_SECRET (it was never wired
+ * into cloudbuild.yaml) and "Authorize this device" simply threw, five times,
+ * leaving five orphan pos_devices rows against the per-location cap.
+ */
+export function posSessionConfigured(): boolean {
+  return secretOrNull() !== null;
+}
+
+/** Shown wherever a mint is refused for want of the secret. */
+export const POS_SECRET_MISSING_ERROR =
+  "Point of Sale isn't fully configured on this server (POS_SESSION_SECRET is missing). Contact support — this needs a deployment setting, not a change on your side.";
+
 // Signing MUST have a secret; verifying without one just means "no valid
 // session" (so the proxy never 500s when POS isn't configured — it falls to the
 // login/pro-gate instead of throwing).

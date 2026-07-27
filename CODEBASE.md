@@ -1583,6 +1583,18 @@ npm run format      # prettier --write
   **`POS_SESSION_SECRET`** (any high-entropy string; `openssl rand -base64 32`).
   Required for the register to work; when unset, cookie VERIFY returns null
   (never throws) so /pos falls back to the login gate rather than 500ing.
+  **That graceful degradation covers VERIFY only — MINTING a cookie cannot
+  degrade**, so with the secret absent `authorizeThisDevice` / `pairDevice` /
+  `posLoginWithPin` are dead. They now check `posSessionConfigured()` and return
+  `POS_SECRET_MISSING_ERROR` instead of throwing a raw 500 (staging ran without
+  the secret until 2026-07-27 — it was never added to `cloudbuild.yaml` — and
+  every "Authorize this device" click 500'd). `registerDevice` also SIGNS BEFORE
+  IT INSERTS: insert-then-sign left an orphan `pos_devices` row per failure, and
+  those rows count against `PLAN_LIMITS.posDevicesPerLocation`, so a broken
+  deployment eventually reported a bogus "already has 5 authorized devices".
+  Deploy wiring is per-env (`_POS_SESSION_SECRET_SECRET` → the
+  `POS_SESSION_SECRET_STAGING`/`_PROD` Secret Manager entries) — see
+  `docs/gcp-ci-cd.md`.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&
