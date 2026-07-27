@@ -19,6 +19,7 @@ import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
+  inventoryLevels,
   orderItems,
   orderPayments,
   orders,
@@ -232,9 +233,21 @@ export async function lookupProducts(
           v_backorder: productVariants.allowBackorder,
           p_stock: products.stock,
           v_stock: productVariants.stock,
+          // Stock AT THIS REGISTER'S LOCATION. products.stock is the aggregate
+          // across every location, so a two-location store would otherwise show
+          // (and let a cashier ring up) stock sitting in the other shop.
+          loc_stock: inventoryLevels.onHand,
         })
         .from(products)
         .leftJoin(productVariants, eq(productVariants.productId, products.id))
+        .leftJoin(
+          inventoryLevels,
+          and(
+            eq(inventoryLevels.productId, products.id),
+            eq(inventoryLevels.locationId, op.locationId),
+            sql`${inventoryLevels.variantId} is not distinct from ${productVariants.id}`,
+          ),
+        )
         .where(
           and(
             eq(products.storeId, op.storeId),
@@ -267,7 +280,7 @@ export async function lookupProducts(
         barcode: (isVariant ? r.v_barcode : r.p_barcode) ?? null,
         price: special && special > 0 ? special : base,
         image: (isVariant ? r.v_image : r.p_image) ?? r.p_image ?? null,
-        stock: isVariant ? (r.v_stock ?? 0) : (r.p_stock ?? 0),
+        stock: r.loc_stock ?? (isVariant ? (r.v_stock ?? 0) : (r.p_stock ?? 0)),
         trackInventory: isVariant ? !!r.v_track : !!r.p_track,
         allowBackorder: isVariant ? !!r.v_backorder : !!r.p_backorder,
       };

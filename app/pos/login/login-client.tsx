@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword } from "firebase/auth";
@@ -11,15 +11,16 @@ import {
   firebaseAuthErrorMessage,
 } from "@/lib/auth/firebase-client";
 import {
+  pairDevice,
   posLoginWithPin,
   requestPosCredentialReset,
 } from "@/app/actions/pos-auth-actions";
 
 export function PosLoginClient({
-  deviceAuthorized,
   locationName,
 }: {
-  deviceAuthorized: boolean;
+  /** Shown once the device is paired, so the cashier can confirm which counter
+   *  they're on. Null on an unpaired device. */
   locationName: string | null;
 }) {
   const router = useRouter();
@@ -32,6 +33,10 @@ export function PosLoginClient({
   const [busy, setBusy] = useState(false);
   // "Forgot?" — reuses the email already typed above.
   const [resetSent, setResetSent] = useState(false);
+  // Device pairing, surfaced only after credentials check out.
+  const [pairing, setPairing] = useState(false);
+  const [pairCode, setPairCode] = useState("");
+  const pendingPinRef = useRef<string | null>(null);
 
   const requestReset = () => {
     setError(null);
@@ -46,41 +51,21 @@ export function PosLoginClient({
     });
   };
 
-  // --- Device not authorized: staff can't sign in here. ---
-  if (!deviceAuthorized) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-6">
-        <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
-            <ShieldAlert className="h-7 w-7" strokeWidth={1.75} />
-          </div>
-          <h1 className="mt-4 text-lg font-semibold">
-            Use your shop&apos;s register
-          </h1>
-          <p className="mt-2 text-sm text-white/60">
-            If you&apos;ve already set up your account, it&apos;s ready — you
-            just can&apos;t sell from this device. For security the register
-            only runs on a device your store owner has authorized, so sign in on
-            the one at your shop.
-          </p>
-          <p className="mt-3 text-sm text-white/50">
-            Store owner? Sign in below to authorize this device.
-          </p>
-          <Link
-            href="/auth/login"
-            className="mt-5 inline-block rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#0b0f14] transition-opacity hover:opacity-90"
-          >
-            Store owner? Sign in
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const submitPin = () => {
+  // Credentials are checked FIRST; if this browser isn't an authorized device
+  // the server says so explicitly and we ask for a pairing code right here,
+  // instead of blocking the cashier before they've typed anything.
+  const submitPin = (retryPin?: string) => {
+    const usePin = retryPin ?? pin;
     setError(null);
     start(async () => {
-      const res = await posLoginWithPin(email, pin);
+      const res = await posLoginWithPin(email, usePin);
+      if (res.needsPairing) {
+        // Keep the verified PIN so the sign-in completes itself once paired.
+        pendingPinRef.current = usePin;
+        setPairing(true);
+        setError(null);
+        return;
+      }
       if (res.error) {
         setError(res.error);
         setPin("");
@@ -88,6 +73,27 @@ export function PosLoginClient({
       }
       router.replace("/pos");
       router.refresh();
+    });
+  };
+
+  const submitPairing = () => {
+    setError(null);
+    start(async () => {
+      const res = await pairDevice(pairCode);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setPairing(false);
+      setPairCode("");
+      const held = pendingPinRef.current;
+      pendingPinRef.current = null;
+      if (held) {
+        // Device is authorized now — finish the sign-in they already started.
+        submitPin(held);
+      } else {
+        router.refresh();
+      }
     });
   };
 
@@ -141,6 +147,71 @@ export function PosLoginClient({
           >
             Back to sign in
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Credentials verified, but this browser isn't an authorized device yet.
+  // Reached only AFTER a correct email + PIN, so the cashier already knows
+  // their login works and just needs the device set up.
+  if (pairing) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="w-full max-w-sm text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+            <ShieldAlert className="h-7 w-7" strokeWidth={1.75} />
+          </div>
+          <h1 className="mt-4 text-lg font-semibold">Set up this device</h1>
+          <p className="mt-2 text-sm text-white/60">
+            Your sign-in is correct. For security the register only runs on a
+            device the store owner has approved — enter a pairing code from
+            Dashboard → POS → Devices to set this one up.
+          </p>
+
+          <input
+            value={pairCode}
+            autoFocus
+            autoCapitalize="characters"
+            autoCorrect="off"
+            placeholder="8-character code"
+            onChange={(e) =>
+              setPairCode(e.target.value.toUpperCase().slice(0, 8))
+            }
+            onKeyDown={(e) => e.key === "Enter" && submitPairing()}
+            className="mt-5 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-lg tracking-[0.3em] outline-none placeholder:tracking-normal placeholder:text-white/30 focus:border-white/40"
+          />
+          {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+
+          <button
+            type="button"
+            disabled={pending || pairCode.trim().length !== 8}
+            onClick={submitPairing}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {pending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Set up and sign in
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setPairing(false);
+              setPairCode("");
+              setPin("");
+              pendingPinRef.current = null;
+              setError(null);
+            }}
+            className="mt-4 text-sm text-white/50 underline-offset-4 hover:text-white hover:underline"
+          >
+            Back to sign in
+          </button>
+          <Link
+            href="/auth/login"
+            className="mt-3 block text-sm text-white/50 underline-offset-4 hover:text-white hover:underline"
+          >
+            Store owner? Sign in to approve this device
+          </Link>
         </div>
       </div>
     );
@@ -220,7 +291,7 @@ export function PosLoginClient({
               <button
                 type="button"
                 disabled={pending || pin.length !== 8 || !email.includes("@")}
-                onClick={submitPin}
+                onClick={() => submitPin()}
                 className="flex items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
               >
                 {pending ? (

@@ -19,6 +19,7 @@ import {
   X,
   ScanLine,
   Camera,
+  Package,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -100,21 +101,30 @@ export function SellClient({
   }, [refocus, cart.length]);
 
   const addItem = useCallback((it: PosCatalogItem) => {
+    const label = it.variantName ? `${it.name} (${it.variantName})` : it.name;
+    // Clamp to stock at THIS location unless the SKU is untracked or
+    // backorderable. The server re-checks; this only avoids ringing up what
+    // can't be sold. Every rejection MUST say why — silently doing nothing
+    // after a scan looks like the scanner is broken.
+    const cap =
+      it.trackInventory && !it.allowBackorder ? (it.stock ?? 0) : Infinity;
+    if (cap < 1) {
+      setError(`${label} is out of stock at this location.`);
+      return;
+    }
     setError(null);
     setCart((c) => {
       const key = lineKey(it.productId, it.variantId);
       const found = c.find((l) => l.key === key);
-      // Clamp to live stock unless the SKU is untracked or backorderable —
-      // the server re-checks, this just avoids ringing what can't be sold.
-      const cap =
-        it.trackInventory && !it.allowBackorder ? (it.stock ?? 0) : Infinity;
       if (found) {
-        if (found.quantity + 1 > cap) return c;
+        if (found.quantity + 1 > cap) {
+          setError(`Only ${cap} of ${label} left at this location.`);
+          return c;
+        }
         return c.map((l) =>
           l.key === key ? { ...l, quantity: l.quantity + 1 } : l,
         );
       }
-      if (cap < 1) return c;
       return [
         ...c,
         {
@@ -136,7 +146,10 @@ export function SellClient({
   const runSearch = useCallback(
     async (q: string, fromScan: boolean) => {
       setSearching(true);
-      setError(null);
+      // Only a scan resets the message. A browse refresh must NOT, or the
+      // "out of stock" it just raised would vanish before it can be read
+      // (clearing the query after a scan re-triggers this very function).
+      if (fromScan) setError(null);
       const res = await lookupProducts(q);
       setSearching(false);
       if (res.error) {
@@ -255,7 +268,10 @@ export function SellClient({
                 ref={scanRef}
                 value={query}
                 autoFocus
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setError(null);
+                }}
                 onBlur={() => setTimeout(refocus, 80)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && query.trim()) {
@@ -301,8 +317,25 @@ export function SellClient({
                   type="button"
                   disabled={out}
                   onClick={() => addItem(it)}
-                  className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-3 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
+                  className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-2 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
                 >
+                  {/* Photos make the grid scannable by eye for items without a
+                      barcode (loose produce, bakery). */}
+                  <div className="mb-2 aspect-square w-full overflow-hidden rounded-lg bg-white/5">
+                    {it.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={it.image}
+                        alt=""
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-white/20">
+                        <Package className="h-8 w-8" strokeWidth={1.5} />
+                      </div>
+                    )}
+                  </div>
                   <span className="line-clamp-2 text-sm font-medium">
                     {it.name}
                   </span>
