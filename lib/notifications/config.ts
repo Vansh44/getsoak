@@ -193,6 +193,7 @@ type SettingsRow = {
   storeName: string | null;
   channels: unknown;
   routing: string;
+  routingScope: string | null;
   targetRoles: string[];
   targetAdmins: string[];
   templates: unknown;
@@ -298,6 +299,7 @@ function applySettings(
   );
   const routing = normalizeRouting({
     routing: row.routing,
+    routing_scope: row.routingScope,
     target_roles: row.targetRoles,
     target_admins: row.targetAdmins,
   });
@@ -347,6 +349,7 @@ const SETTINGS_COLUMNS = {
   storeName: stores.name,
   channels: notificationSettings.channels,
   routing: notificationSettings.routing,
+  routingScope: notificationSettings.routingScope,
   targetRoles: notificationSettings.targetRoles,
   targetAdmins: notificationSettings.targetAdmins,
   templates: notificationSettings.templates,

@@ -29,8 +29,22 @@
 export const ROUTING_MODES = ["permission", "roles", "admins"] as const;
 export type RoutingMode = (typeof ROUTING_MODES)[number];
 
+/**
+ * Where the recipients may be.
+ *
+ *   store          everyone in the store — today's behaviour, and the default
+ *   event_location only staff assigned to the location the event happened at
+ *
+ * NOT a fourth mode. Location COMPOSES with all three: "people with the orders
+ * permission, at this order's location" is a mode AND a scope, and making it a
+ * mode would multiply the list every time another axis appears.
+ */
+export const ROUTING_SCOPES = ["store", "event_location"] as const;
+export type RoutingScope = (typeof ROUTING_SCOPES)[number];
+
 export interface RoutingRule {
   mode: RoutingMode;
+  scope: RoutingScope;
   /** Role slugs, for mode "roles". */
   roles: string[];
   /** Admin uids, for mode "admins". */
@@ -39,6 +53,7 @@ export interface RoutingRule {
 
 export const DEFAULT_ROUTING: RoutingRule = {
   mode: "permission",
+  scope: "store",
   roles: [],
   admins: [],
 };
@@ -47,12 +62,26 @@ export const DEFAULT_ROUTING: RoutingRule = {
 export interface RoutableRecipient {
   id: string;
   roleSlug: string;
+  /**
+   * Locations this person is restricted to, or null for unrestricted — the
+   * same contract as lib/locations/scope.ts. Absence is not restriction: an
+   * admin nobody has assigned anywhere hears about everything, which is
+   * exactly what happened before locations existed.
+   */
+  locationIds?: string[] | null;
 }
 
 export function isRoutingMode(value: unknown): value is RoutingMode {
   return (
     typeof value === "string" &&
     (ROUTING_MODES as readonly string[]).includes(value)
+  );
+}
+
+export function isRoutingScope(value: unknown): value is RoutingScope {
+  return (
+    typeof value === "string" &&
+    (ROUTING_SCOPES as readonly string[]).includes(value)
   );
 }
 
@@ -65,18 +94,25 @@ export function isRoutingMode(value: unknown): value is RoutingMode {
  */
 export function normalizeRouting(input: {
   routing?: unknown;
+  routing_scope?: unknown;
   target_roles?: unknown;
   target_admins?: unknown;
 }): RoutingRule {
   const mode = isRoutingMode(input.routing) ? input.routing : "permission";
+  // Scope is independent of mode, so it survives a mode that falls back.
+  const scope = isRoutingScope(input.routing_scope)
+    ? input.routing_scope
+    : "store";
   const roles = toStringArray(input.target_roles);
   const admins = toStringArray(input.target_admins);
 
-  if (mode === "roles" && roles.length === 0) return DEFAULT_ROUTING;
-  if (mode === "admins" && admins.length === 0) return DEFAULT_ROUTING;
-  if (mode === "permission") return DEFAULT_ROUTING;
+  if (mode === "roles" && roles.length === 0)
+    return { ...DEFAULT_ROUTING, scope };
+  if (mode === "admins" && admins.length === 0)
+    return { ...DEFAULT_ROUTING, scope };
+  if (mode === "permission") return { ...DEFAULT_ROUTING, scope };
 
-  return { mode, roles, admins };
+  return { mode, scope, roles, admins };
 }
 
 function toStringArray(value: unknown): string[] {
@@ -100,16 +136,36 @@ function toStringArray(value: unknown): string[] {
 export function selectRecipients<T extends RoutableRecipient>(
   eligible: readonly T[],
   rule: RoutingRule = DEFAULT_ROUTING,
+  /** Where the event happened. Null for anything with no location — an online
+   *  order before fulfilment routing, a blog comment, a plan change. */
+  eventLocationId?: string | null,
 ): T[] {
-  if (rule.mode === "permission") return [...eligible];
-
-  if (rule.mode === "roles") {
+  let out: T[];
+  if (rule.mode === "permission") {
+    out = [...eligible];
+  } else if (rule.mode === "roles") {
     const wanted = new Set(rule.roles);
-    return eligible.filter((r) => wanted.has(r.roleSlug));
+    out = eligible.filter((r) => wanted.has(r.roleSlug));
+  } else {
+    const wanted = new Set(rule.admins);
+    out = eligible.filter((r) => wanted.has(r.id));
   }
 
-  const wanted = new Set(rule.admins);
-  return eligible.filter((r) => wanted.has(r.id));
+  // Scope narrows what the mode selected — it never widens it.
+  if (rule.scope !== "event_location") return out;
+
+  // An event that belongs to no location can't be narrowed by one. Dropping
+  // everyone would silently black-hole every online order alert, which is the
+  // failure this whole module is written to avoid.
+  if (!eventLocationId) return out;
+
+  return out.filter((r) => {
+    // Unrestricted staff hear about every location (owners, and anyone nobody
+    // has assigned) — same contract as lib/locations/scope.ts.
+    const locs = r.locationIds;
+    if (locs === null || locs === undefined) return true;
+    return locs.includes(eventLocationId);
+  });
 }
 
 /**

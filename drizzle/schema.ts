@@ -3654,6 +3654,10 @@ export const notificationSettings = pgTable(
     channels: jsonb().default({}).notNull(),
     /** permission | roles | admins. Targeting NARROWS, never widens. */
     routing: text().default("permission").notNull(),
+    // Location axis for routing (supabase/notifications_07_routing_scope.sql).
+    // 'store' (default) = today's behaviour; 'event_location' = only staff
+    // assigned where the event happened. See lib/notifications/routing.ts.
+    routingScope: text("routing_scope").default("store").notNull(),
     targetRoles: text("target_roles").array().default([]).notNull(),
     targetAdmins: text("target_admins").array().default([]).notNull(),
     /** Merchant copy per channel; absent channels use the built-in copy. */

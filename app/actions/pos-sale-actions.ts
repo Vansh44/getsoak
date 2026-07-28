@@ -1090,6 +1090,9 @@ export async function placePosSale(
   emitEvent({
     type: "order.placed",
     storeId: op.storeId,
+    // The register this was rung at, so a store can route in-store alerts to
+    // the staff who actually work there (routing scope "event_location").
+    locationId: op.locationId,
     actor: { type: "admin", id: op.staffId ?? null, label: op.name },
     subject: { type: "order", id: orderId, label: orderRef },
     // Null for a walk-in, which emitEvent reads as "no customer audience" —

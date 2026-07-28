@@ -1030,6 +1030,9 @@ export async function placeOrder(
   emitEvent({
     type: "order.placed",
     storeId,
+    // The shop this will ship from. Null when routing had no better answer —
+    // an event with no location is never narrowed by one (routing.ts).
+    locationId: fulfilmentLocationId,
     actor: {
       type: "customer",
       id: user.id,

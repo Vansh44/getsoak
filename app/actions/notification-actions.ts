@@ -714,7 +714,13 @@ export interface SaveAudienceInput {
   templates?: Record<string, ChannelTemplate>;
   /** Team only; ignored (and rejected) for the customer audience, which has
    *  exactly one recipient by definition. */
-  routing?: { mode: string; roles?: string[]; admins?: string[] };
+  routing?: {
+    mode: string;
+    /** "store" (default) or "event_location" — see routing.ts. */
+    scope?: string;
+    roles?: string[];
+    admins?: string[];
+  };
 }
 
 export interface SaveNotificationInput {
@@ -808,10 +814,14 @@ export async function saveNotificationConfig(
       }
       const rule = normalizeRouting({
         routing: audienceInput.routing.mode,
+        // Independent of mode — "people with the orders permission, AT this
+        // order's location" is a mode AND a scope (lib/notifications/routing.ts).
+        routing_scope: audienceInput.routing.scope,
         target_roles: audienceInput.routing.roles,
         target_admins: audienceInput.routing.admins,
       });
       values.routing = rule.mode;
+      values.routingScope = rule.scope;
       values.targetRoles = rule.roles;
       values.targetAdmins = rule.admins;
     }

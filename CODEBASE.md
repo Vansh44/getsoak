@@ -492,6 +492,8 @@ wholesip/
 │   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
 │   │                          # (platform rows = store_id NULL). Service-role
 │   │                          # only; bodies redacted for credential mailers
+│   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
+│   │                          # — 'store' (default) | 'event_location'
 │   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
 │   │                          # (GLOBAL — no store_id, by design: a hard bounce
 │   │                          # bounces for everyone and the shared sending
@@ -1700,6 +1702,21 @@ group, span}` (span = columns of the 4-wide desktop grid),
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
+    - **ROUTING HAS A LOCATION AXIS, AND IT IS A SCOPE NOT A MODE.**
+      `RoutingRule` was `mode: permission | roles | admins` with no idea where
+      anyone worked, so a manager bound to one shop was still emailed about
+      every other one. `scope` (`store` | `event_location`) COMPOSES with all
+      three modes — "people with the orders permission, AT this order's
+      location" is a mode AND a scope, and making location a fourth mode would
+      multiply the list every time another axis appears. It can only ever
+      NARROW what the mode selected. Two rules keep it from black-holing mail:
+      an event with **no** location is never narrowed by one (an online order
+      before routing resolves a shop, a blog comment, a plan change), and
+      **unrestricted staff still hear everything** — absence is not
+      restriction, the same contract as `lib/locations/scope.ts`. Defaults to
+      `store`, so nothing changes until a merchant switches an event over.
+      `EmitEventInput.locationId` carries it; `placePosSale` passes the
+      register's location and `placeOrder` the resolved fulfilment one.
     - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
       sends AND logs, never throws into its caller, and records failures as
       readily as successes. There were EIGHT scattered `resend.emails.send`

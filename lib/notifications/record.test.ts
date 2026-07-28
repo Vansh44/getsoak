@@ -41,6 +41,8 @@ function setupDb(opts: {
   settings?: any[];
   staff?: any[];
   roles?: any[];
+  /** admin_locations rows — empty means every admin is unrestricted. */
+  adminLocations?: any[];
   prefs?: any[];
   customerEmail?: string;
 }) {
@@ -51,6 +53,7 @@ function setupDb(opts: {
       opts.settings ?? [],
       opts.staff ?? [],
       opts.roles ?? [],
+      opts.adminLocations ?? [],
       opts.prefs ?? [],
       opts.customerEmail ? [{ email: opts.customerEmail }] : [],
     ],
@@ -833,5 +836,94 @@ describe("recordEvent", () => {
     expect(
       fannedOut(mock).some((r: any) => r.recipientType === "operator"),
     ).toBe(false);
+  });
+});
+
+// Location-aware routing (roadmap §1.5). The pure composition is covered in
+// routing.test.ts; this proves the fan-out actually threads the event's
+// location and each admin's bindings through to it.
+describe("recordEvent — location scope", () => {
+  const DELHI = "loc-delhi";
+  const staffRows = [
+    {
+      id: "uid-delhi",
+      email: "d@x.com",
+      role: "member",
+      firstName: "D",
+      lastName: null,
+    },
+    {
+      id: "uid-mumbai",
+      email: "m@x.com",
+      role: "member",
+      firstName: "M",
+      lastName: null,
+    },
+  ];
+
+  it("reaches every admin under the default store scope", async () => {
+    const mock = setupDb({
+      settings: [settingsRow()],
+      staff: staffRows,
+      adminLocations: [{ admin_id: "uid-mumbai", location_id: "loc-mumbai" }],
+    });
+    await recordEvent({
+      type: "order.placed",
+      storeId: STORE,
+      locationId: DELHI,
+    });
+    expect(fannedOut(mock).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // THE point: Mumbai's manager stops being emailed about a Delhi sale.
+  it("narrows to the event's location when scoped", async () => {
+    const mock = setupDb({
+      settings: [settingsRow({ routingScope: "event_location" })],
+      staff: staffRows,
+      adminLocations: [
+        { admin_id: "uid-delhi", location_id: DELHI },
+        { admin_id: "uid-mumbai", location_id: "loc-mumbai" },
+      ],
+    });
+    await recordEvent({
+      type: "order.placed",
+      storeId: STORE,
+      locationId: DELHI,
+    });
+    const ids = fannedOut(mock).map((r: any) => r.recipientId);
+    expect(ids).toContain("uid-delhi");
+    expect(ids).not.toContain("uid-mumbai");
+  });
+
+  // An online order before routing resolves one, a blog comment, a plan change:
+  // narrowing by a location it hasn't got would black-hole the alert.
+  it("does not narrow an event with no location", async () => {
+    const mock = setupDb({
+      settings: [settingsRow({ routingScope: "event_location" })],
+      staff: staffRows,
+      adminLocations: [
+        { admin_id: "uid-delhi", location_id: DELHI },
+        { admin_id: "uid-mumbai", location_id: "loc-mumbai" },
+      ],
+    });
+    await recordEvent({ type: "order.placed", storeId: STORE });
+    expect(fannedOut(mock).length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Absence is not restriction — an admin nobody has assigned hears everything.
+  it("still reaches unassigned admins when scoped", async () => {
+    const mock = setupDb({
+      settings: [settingsRow({ routingScope: "event_location" })],
+      staff: staffRows,
+      adminLocations: [{ admin_id: "uid-mumbai", location_id: "loc-mumbai" }],
+    });
+    await recordEvent({
+      type: "order.placed",
+      storeId: STORE,
+      locationId: DELHI,
+    });
+    const ids = fannedOut(mock).map((r: any) => r.recipientId);
+    expect(ids).toContain("uid-delhi");
+    expect(ids).not.toContain("uid-mumbai");
   });
 });

@@ -81,6 +81,13 @@ export interface EmitEventInput {
   };
   /** Small, non-secret extras used by the copy templates (render.ts). */
   payload?: Record<string, unknown>;
+  /**
+   * Where this happened, when it happened somewhere: a POS sale's register, an
+   * online order's fulfilment location, a stock adjustment's shop. Feeds the
+   * `event_location` routing scope. Omitted for anything with no location, and
+   * such an event is never narrowed by one (routing.ts).
+   */
+  locationId?: string | null;
   ip?: string | null;
   /**
    * The customer this event concerns (order owner, blog author). Required for
@@ -282,7 +289,11 @@ async function fanOut(
     // must never widen it.
     const eligible = await storeAdminRecipients(db, input.storeId, def.section);
     recipients.push(
-      ...selectRecipients(eligible, config.audiences.team?.routing),
+      ...selectRecipients(
+        eligible,
+        config.audiences.team?.routing,
+        input.locationId ?? null,
+      ),
     );
   }
   if (def.audiences.customer && input.customerId) {

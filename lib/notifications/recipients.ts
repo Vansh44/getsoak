@@ -15,7 +15,12 @@ import "server-only";
 
 import { and, eq, ne, or, isNull } from "drizzle-orm";
 import type { Db } from "@/lib/db/client";
-import { admins, platformAdmins, roles } from "@/drizzle/schema";
+import {
+  adminLocations,
+  admins,
+  platformAdmins,
+  roles,
+} from "@/drizzle/schema";
 import {
   can,
   normalizePermissions,
@@ -35,6 +40,11 @@ export interface Recipient {
   /** Role slug, so a store's routing rule can target by role (routing.ts).
    *  Empty for customers and operators, who are never role-routed. */
   roleSlug: string;
+  /** Locations this admin is restricted to, or null for unrestricted. Feeds
+   *  the `event_location` routing scope. Absence is not restriction — an admin
+   *  nobody has assigned hears about every location, exactly as before
+   *  locations existed. */
+  locationIds?: string[] | null;
 }
 
 /**
@@ -70,6 +80,21 @@ export async function storeAdminRecipients(
     .select({ slug: roles.slug, permissions: roles.permissions })
     .from(roles)
     .where(eq(roles.storeId, storeId));
+  // Sequential for the same reason as above: one pooled connection.
+  const locationRows = await db
+    .select({
+      admin_id: adminLocations.adminId,
+      location_id: adminLocations.locationId,
+    })
+    .from(adminLocations)
+    .where(eq(adminLocations.storeId, storeId));
+
+  const locationsByAdmin = new Map<string, string[]>();
+  for (const row of locationRows) {
+    const list = locationsByAdmin.get(row.admin_id) ?? [];
+    list.push(row.location_id);
+    locationsByAdmin.set(row.admin_id, list);
+  }
 
   const permsBySlug = new Map(
     roleRows.map((r) => [r.slug, normalizePermissions(r.permissions)]),
@@ -91,6 +116,10 @@ export async function storeAdminRecipients(
       audience: "store-admins",
       email: admin.email,
       roleSlug: slug,
+      // A superadmin is never location-bound (docs/locations-ia.md §6).
+      locationIds: isSuperadmin
+        ? null
+        : (locationsByAdmin.get(admin.id) ?? null),
       label:
         [admin.firstName, admin.lastName].filter(Boolean).join(" ") || null,
     });
