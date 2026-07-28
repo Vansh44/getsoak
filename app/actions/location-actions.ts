@@ -1,10 +1,19 @@
 "use server";
 
-// POS Phase 0 — enable/disable POS + manage store locations. All actions are
-// gated on the `pos` dashboard section (getManagerIdentity), store-scoped, and
-// re-check the store's EFFECTIVE plan server-side: POS is Pro-only, and the
-// number of locations is capped by PLAN_LIMITS.posLocationsIncluded (extra
-// locations are a paid add-on — see docs/pos-plan.md Phase 7).
+// Locations — the places a store holds stock, and what each is allowed to DO
+// (docs/locations-ia.md, docs/inventory-fulfilment-roadmap.md Phase B).
+//
+// Locations used to belong to POS. They do not: POS is one CAPABILITY of a
+// location, and a warehouse is a location with POS switched off. Hence the
+// `locations` permission section and the rename from pos-location-actions.
+//
+// enablePos/disablePos still live here because the POS toggle is what makes
+// the section visible at all — but note the CRUD below deliberately does NOT
+// require POS to be switched on. A Pro store must be able to add a warehouse
+// for online fulfilment without ever opening a till.
+//
+// Every action is store-scoped and re-checks the EFFECTIVE plan server-side:
+// multi-location is Pro-only, capped by PLAN_LIMITS.posLocationsIncluded.
 
 import { and, count, eq, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
@@ -17,16 +26,22 @@ import {
 } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { FEATURES_KEY } from "@/lib/settings/registry";
-import { effectivePlan, limitsFor } from "@/lib/plans";
+import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
 import { getStoreLocations, type StoreLocation } from "@/lib/pos/locations";
+import {
+  CAPABILITY_REGISTRY,
+  defaultCapabilitiesFor,
+  isLocationType,
+  normalizeCapabilities,
+  type CapabilityMap,
+  type LocationCapability,
+  type LocationType,
+} from "@/lib/locations/capabilities";
 
 export interface ActionResult {
   success?: boolean;
   error?: string;
 }
-
-const LOCATION_TYPES = ["shop", "warehouse"] as const;
-type LocationType = (typeof LOCATION_TYPES)[number];
 
 const MAX_NAME = 80;
 const MAX_SHORT = 40;
@@ -129,9 +144,9 @@ export interface LocationInput {
 }
 
 function sanitizeInput(input: LocationInput) {
-  const type = LOCATION_TYPES.includes(input.type as LocationType)
-    ? (input.type as LocationType)
-    : "shop";
+  // Fixed list, from the registry — free text would mean nothing to the
+  // capability defaults.
+  const type: LocationType = isLocationType(input.type) ? input.type : "shop";
   return {
     name: clean(input.name, MAX_NAME),
     type,
@@ -143,32 +158,32 @@ function sanitizeInput(input: LocationInput) {
   };
 }
 
-/** Guard shared by create/update/delete: POS must be Pro + enabled. Returns the
- *  store's effective plan/limits or an error. */
-async function requirePosEnabled(storeId: string) {
+/**
+ * Guard shared by create/update/delete. Multi-location is Pro — but
+ * deliberately NOT gated on `pos.enabled`: a warehouse that only fulfils
+ * online orders needs no till, and requiring one would mean switching on a
+ * feature you do not want in order to reach a feature you do.
+ */
+async function requireLocationsAvailable(storeId: string) {
   const store = await readStoreRow(storeId);
   const plan = effectivePlan(store ?? {});
   const limits = limitsFor(plan);
   if (!limits.posEnabled) {
-    return { error: "Point of Sale is available on the Pro plan." as string };
+    return {
+      error: "Multiple locations are available on the Pro plan." as string,
+    };
   }
-  const features = (store?.settings as Record<string, unknown>)?.[
-    FEATURES_KEY
-  ] as Record<string, unknown> | undefined;
-  if (features?.["pos.enabled"] !== true) {
-    return { error: "Enable POS first." as string };
-  }
-  return { limits };
+  return { limits, plan };
 }
 
 export async function createLocation(
   input: LocationInput,
 ): Promise<{ location?: StoreLocation; error?: string }> {
-  const admin = await getManagerIdentity("pos");
+  const admin = await getManagerIdentity("locations");
   if (!admin) return { error: "You don't have permission to do this." };
   const storeId = await getActingStoreId();
 
-  const guard = await requirePosEnabled(storeId);
+  const guard = await requireLocationsAvailable(storeId);
   if ("error" in guard) return { error: guard.error };
 
   const data = sanitizeInput(input);
@@ -204,6 +219,9 @@ export async function createLocation(
         stateCode: data.stateCode,
         receiptPrefix: data.receiptPrefix,
         address: data.address,
+        // Seeded from the type: a shop sells, a warehouse fulfils online.
+        // Nothing customer-facing (pickup, returns) is ever on by default.
+        capabilities: defaultCapabilitiesFor(data.type),
         isDefault: false,
         active: true,
         sortOrder: existing,
@@ -213,7 +231,7 @@ export async function createLocation(
     return { error: dbErrorMessage(err, "Couldn't add the location.") };
   }
 
-  revalidatePath("/dashboard/pos/locations");
+  revalidatePath("/dashboard/locations");
   const locations = await getStoreLocations(storeId);
   return {
     location: locations.find((l) => l.name === data.name && !l.isDefault),
@@ -229,7 +247,7 @@ export async function updateLocation(
   const storeId = await getActingStoreId();
   if (typeof id !== "string" || !id) return { error: "Invalid location." };
 
-  const guard = await requirePosEnabled(storeId);
+  const guard = await requireLocationsAvailable(storeId);
   if ("error" in guard) return { error: guard.error };
 
   const data = sanitizeInput(input);
@@ -257,7 +275,7 @@ export async function updateLocation(
     return { error: dbErrorMessage(err, "Couldn't save the location.") };
   }
 
-  revalidatePath("/dashboard/pos/locations");
+  revalidatePath("/dashboard/locations");
   return { success: true };
 }
 
@@ -267,7 +285,7 @@ export async function deleteLocation(id: string): Promise<ActionResult> {
   const storeId = await getActingStoreId();
   if (typeof id !== "string" || !id) return { error: "Invalid location." };
 
-  const guard = await requirePosEnabled(storeId);
+  const guard = await requireLocationsAvailable(storeId);
   if ("error" in guard) return { error: guard.error };
 
   // Load the target + a count, store-scoped.
@@ -335,6 +353,155 @@ export async function deleteLocation(id: string): Promise<ActionResult> {
     return { error: dbErrorMessage(err, "Couldn't delete the location.") };
   }
 
-  revalidatePath("/dashboard/pos/locations");
+  revalidatePath("/dashboard/locations");
+  return { success: true };
+}
+
+// ---- Capabilities ---------------------------------------------------------
+
+export interface LocationWithCapabilities extends StoreLocation {
+  capabilities: CapabilityMap;
+}
+
+export interface LocationsView {
+  locations: LocationWithCapabilities[];
+  plan: Plan;
+  error?: string;
+}
+
+/** Locations plus their resolved capabilities, for the Locations section. */
+export async function listLocations(): Promise<LocationsView> {
+  const admin = await getManagerIdentity("locations");
+  if (!admin) {
+    return { locations: [], plan: "free", error: "You don't have permission." };
+  }
+  const storeId = await getActingStoreId();
+
+  try {
+    const [rows, store] = await Promise.all([
+      withService((db) =>
+        db
+          .select({
+            id: storeLocations.id,
+            capabilities: storeLocations.capabilities,
+          })
+          .from(storeLocations)
+          .where(eq(storeLocations.storeId, storeId)),
+      ),
+      readStoreRow(storeId),
+    ]);
+    const capsById = new Map(rows.map((r) => [r.id, r.capabilities]));
+    const locations = await getStoreLocations(storeId);
+    return {
+      plan: effectivePlan(store ?? {}),
+      locations: locations.map((l) => ({
+        ...l,
+        capabilities: normalizeCapabilities(capsById.get(l.id), l.type),
+      })),
+    };
+  } catch (err) {
+    return {
+      locations: [],
+      plan: "free",
+      error: dbErrorMessage(err, "Couldn't load locations."),
+    };
+  }
+}
+
+/**
+ * Save one location's capabilities.
+ *
+ * Two invariants the DB cannot express, enforced here rather than in the UI —
+ * a disabled checkbox is not a permission (roadmap invariant 4):
+ *
+ *  1. A capability whose dependency is off is stored off too, so the saved
+ *     state can never disagree with what locationCan() reports.
+ *  2. The LAST location that fulfils online orders cannot be switched off.
+ *     Doing so would leave the store advertising products it has no way to
+ *     ship — checkout would fail on every order with no visible cause.
+ */
+export async function saveLocationCapabilities(
+  id: string,
+  input: Partial<CapabilityMap>,
+): Promise<ActionResult> {
+  const admin = await getManagerIdentity("locations");
+  if (!admin) return { error: "You don't have permission to do this." };
+  const storeId = await getActingStoreId();
+  if (typeof id !== "string" || !id) return { error: "Invalid location." };
+
+  const guard = await requireLocationsAvailable(storeId);
+  if ("error" in guard) return { error: guard.error };
+
+  let rows: Array<{ id: string; type: string; capabilities: unknown }>;
+  try {
+    rows = await withService((db) =>
+      db
+        .select({
+          id: storeLocations.id,
+          type: storeLocations.type,
+          capabilities: storeLocations.capabilities,
+        })
+        .from(storeLocations)
+        .where(eq(storeLocations.storeId, storeId)),
+    );
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save the location.") };
+  }
+
+  const target = rows.find((r) => r.id === id);
+  if (!target) return { error: "Location not found." };
+
+  const current = normalizeCapabilities(
+    target.capabilities,
+    isLocationType(target.type) ? target.type : "shop",
+  );
+  // Only known keys, and only booleans — the client sends a partial map.
+  const next: CapabilityMap = { ...current };
+  for (const [k, v] of Object.entries(input ?? {})) {
+    if (typeof v === "boolean" && k in next) {
+      next[k as LocationCapability] = v;
+    }
+  }
+
+  // (1) A dependency that is off forces its dependants off.
+  for (const cap of Object.keys(next) as LocationCapability[]) {
+    for (const dep of CAPABILITY_REGISTRY[cap].requires ?? []) {
+      if (!next[dep]) next[cap] = false;
+    }
+  }
+
+  // (2) Never strand the store with nowhere to fulfil from.
+  if (!next.online_fulfil) {
+    const othersFulfil = rows.some((r) => {
+      if (r.id === id) return false;
+      const caps = normalizeCapabilities(
+        r.capabilities,
+        isLocationType(r.type) ? r.type : "shop",
+      );
+      return caps.online_fulfil;
+    });
+    if (!othersFulfil) {
+      return {
+        error:
+          "This is the only location that fulfils online orders. Enable another one first.",
+      };
+    }
+  }
+
+  try {
+    await withService((db) =>
+      db
+        .update(storeLocations)
+        .set({ capabilities: next, updatedAt: new Date().toISOString() })
+        .where(
+          and(eq(storeLocations.id, id), eq(storeLocations.storeId, storeId)),
+        ),
+    );
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save the location.") };
+  }
+
+  revalidatePath("/dashboard/locations");
+  revalidateTag(STORE_TAG, "max");
   return { success: true };
 }

@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_01_capabilities.sql  # ★ store_locations.capabilities (jsonb) —
+│   │                          # what a location may DO; registry in lib/locations/
 │   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
 │   │                          # a store's locations, atomically (one plpgsql txn)
 │   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
@@ -1560,6 +1562,43 @@ group, span}` (span = columns of the 4-wide desktop grid),
       - Adjustments feed `reportStockChanges`, so a manual correction to zero
         still fires the low/out-of-stock crossing (§22) rather than alerting
         nobody.
+23. **Locations own capabilities; POS is one of them.** Locations used to live
+    under Point of Sale. They don't: a warehouse is a location with POS
+    switched off, and pickup/online-fulfilment/returns are storefront features
+    that merely depend on a location. So **`/dashboard/locations`** is its own
+    Workspace section (above Point of Sale), `/dashboard/pos/locations`
+    redirects to it, and `pos-location-actions.ts` became
+    `location-actions.ts`. Full design: `docs/locations-ia.md`; the phased
+    build: `docs/inventory-fulfilment-roadmap.md`.
+    - **`lib/locations/capabilities.ts` is a REGISTRY, not columns.** Six
+      capabilities (`pos`, `online_fulfil`, `pickup`, `returns`,
+      `receive_stock`, `transfer_stock`) with labels, `requires`, `minPlan` and
+      per-type creation defaults, stored in `store_locations.capabilities`
+      (jsonb, `locations_01_capabilities.sql`). Six boolean columns would make
+      a seventh capability a migration plus a check to forget in every
+      consumer; as jsonb it's one registry entry and `normalizeCapabilities()`
+      gives existing rows a sensible value with no migration — the same trade
+      `stores.settings.features` makes. **PUBLIC** — the storefront reads it to
+      decide whether to offer pickup, so no secrets.
+    - **`locationCan()` is the only read.** Three gates: the stored flag, every
+      capability in `requires`, and the plan. `pickup`/`returns` require `pos`
+      (someone has to hand the goods over) and are `minPlan: pro`.
+      `applyCapability()` cascades a switch-off to dependants so the stored
+      state can never disagree with what `locationCan` reports.
+    - **Two rules enforced server-side** in `saveLocationCapabilities` — a
+      disabled checkbox is not a permission: a capability whose dependency is
+      off is stored off, and **the last location fulfilling online orders
+      cannot be switched off** (the store would advertise products it has no
+      way to ship, and every checkout would fail with no visible cause).
+    - **The backfill is NOT the creation defaults.** A migration may not change
+      what a live store does, so a capability describing EXISTING behaviour is
+      backfilled ON (`online_fulfil` on the default location — the
+      `reserve_stock` wrapper sends every online order there) and one
+      introducing NEW behaviour is backfilled OFF (`pickup`, `returns`).
+    - **Location CRUD no longer requires POS to be switched on** — only Pro. A
+      warehouse that fulfils online orders needs no till. The sidebar entry is
+      hidden until the store has 2+ locations or POS is on, so a
+      single-location store never sees it.
     - **Still on the desk side:** `/dashboard/inventory` continues to write to
       the store's DEFAULT location via the compatibility wrappers, so an owner
       at the dashboard cannot yet target a specific shop — a manager can, from
