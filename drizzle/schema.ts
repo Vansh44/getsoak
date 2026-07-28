@@ -1865,6 +1865,13 @@ export const storeLocations = pgTable(
     gstin: text(),
     stateCode: text("state_code"),
     receiptPrefix: text("receipt_prefix"),
+    // What this location may DO (supabase/locations_01_capabilities.sql).
+    // jsonb rather than one boolean per capability so a new capability is a
+    // registry entry in lib/locations/capabilities.ts, not a migration plus a
+    // check to forget in every consumer. Read it through
+    // normalizeCapabilities() — never index into the raw blob.
+    // PUBLIC: the storefront reads it to decide whether to offer pickup.
+    capabilities: jsonb().default({}).notNull(),
     isDefault: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
