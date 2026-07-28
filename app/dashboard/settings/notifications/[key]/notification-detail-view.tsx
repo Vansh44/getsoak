@@ -432,6 +432,11 @@ export function NotificationDetailView({
                       onChange={(next) =>
                         patchAudience(current.key, { routing: next })
                       }
+                      // Only where both halves are true: the store has more
+                      // than one location, AND this event actually carries one.
+                      showScope={
+                        detail.multiLocation && notification.hasLocation
+                      }
                     />
                   </div>
                 </Field>

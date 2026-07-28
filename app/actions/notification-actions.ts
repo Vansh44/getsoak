@@ -20,6 +20,8 @@
 // ---------------------------------------------------------------------------
 
 import { after } from "next/server";
+
+import { getStoreLocations } from "@/lib/pos/locations";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import {
@@ -482,6 +484,8 @@ export interface ConsoleRow {
   isEnabled: boolean;
   isCustom: boolean;
   configurable: boolean;
+  /** Can carry a locationId — gates the location routing scope in the UI. */
+  hasLocation: boolean;
   isConfigured: boolean;
 }
 
@@ -529,6 +533,7 @@ function toConsoleRow(n: ResolvedNotification): ConsoleRow {
     isEnabled: n.isEnabled,
     isCustom: n.isCustom,
     configurable: n.configurable,
+    hasLocation: !!n.hasLocation,
     isConfigured: n.isConfigured,
   };
 }
@@ -635,6 +640,9 @@ export async function getNotificationConsole(
 
 export interface NotificationDetail {
   notification: ConsoleRow;
+  /** The store has more than one location, so "only where it happened" is a
+   *  meaningful choice. False keeps the control hidden entirely. */
+  multiLocation: boolean;
   /** Built-in copy PER AUDIENCE, pre-filled into the editor. */
   defaults: Record<string, { subject: string; body: string }>;
   variables: TemplateVariable[];
@@ -674,6 +682,11 @@ export async function getNotificationDetail(
 
     return {
       notification: toConsoleRow(resolved),
+      // Cheap and only on the detail page: a single-location store never sees
+      // a control whose two options mean the same thing.
+      multiLocation: storeId
+        ? (await getStoreLocations(storeId)).length > 1
+        : false,
       defaults,
       variables: variablesFor(def.key),
       audience: await getStoreNotificationAudience(),

@@ -1717,6 +1717,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
       `store`, so nothing changes until a merchant switches an event over.
       `EmitEventInput.locationId` carries it; `placePosSale` passes the
       register's location and `placeOrder` the resolved fulfilment one.
+      The console renders it as a second **Where** section in the same
+      recipient popover (it composes with the mode, so it is a second
+      question, not more entries in the first list), shown ONLY when the
+      store has 2+ locations AND `EventDef.hasLocation` is set — a switch
+      that would do nothing is worse than no switch.
     - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
       sends AND logs, never throws into its caller, and records failures as
       readily as successes. There were EIGHT scattered `resend.emails.send`

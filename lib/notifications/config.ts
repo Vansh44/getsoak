@@ -115,6 +115,8 @@ export interface ResolvedNotification {
   isCustom: boolean;
   /** False = the merchant may not switch this notification off. */
   configurable: boolean;
+  /** Can carry a locationId (events.ts) — gates the location routing scope. */
+  hasLocation: boolean;
   /** True once the store has saved its own configuration for this event. */
   isConfigured: boolean;
   /** The store's display name, for {{store_name}} in a merchant template.
@@ -172,6 +174,7 @@ function fromRegistry(def: EventDef): ResolvedNotification {
     isEnabled: true,
     isCustom: false,
     configurable: def.configurable !== false,
+    hasLocation: !!def.hasLocation,
     isConfigured: false,
     storeName: null,
   };
