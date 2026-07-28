@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   ShieldCheck,
   Loader2,
+  Banknote,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { authorizeThisDevice } from "@/app/actions/pos-auth-actions";
@@ -168,6 +169,14 @@ export function RegisterHome({
               Authorize this device above to start selling on it.
             </p>
           )}
+
+          <Link
+            href="/pos/shift"
+            className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+          >
+            <Banknote className="h-4 w-4" strokeWidth={2} />
+            Cash drawer
+          </Link>
         </div>
       </main>
     </div>

@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
+│   │                          # (one open shift per LOCATION, partial unique index)
 │   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
 │   │                          # per location (no row = show the whole catalogue)
 │   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
@@ -1489,12 +1491,49 @@ group, span}` (span = columns of the 4-wide desktop grid),
         products left off would be unsellable. Entries are not FK-checked, so
         a deleted product silently drops its tile; the header shows
         "12 of 20 products" once configured.
-    - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
-      inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
-      writes to the DEFAULT location, so a multi-location store cannot yet
-      correct stock at a specific shop), returns/store credit (5), Twilio
-      receipts (6), metered extra-location billing (7), omnichannel/BOPIS (8),
-      offline outbox (9).
+    - **Phase 3 (done) = shifts & cash reconciliation.** A shift is one
+      accounting period for a location's cash drawer:
+      `expected = float + net cash sales + paid-ins − payouts − drops`, and
+      `variance = counted − expected` (negative = short). `lib/pos/shifts.ts`
+      is the PURE math (tested); `app/actions/pos-shift-actions.ts` is the
+      gate; `/pos/shift` is the screen, which shows the whole equation rather
+      than just the answer — "expected ₹1,895" is only trustworthy if you can
+      see what fed it.
+      - **Per LOCATION, not per device.** Owners are not device-bound
+        (`resolvePosOperator` resolves them with no device), so a per-device
+        shift would have no home for an owner's cash sale. Every operator has a
+        `locationId`. A store running several drawers per shop wants a
+        `device_id` column and a wider partial unique index; nothing else
+        changes.
+      - **ONE open shift per location, enforced by a partial unique index** —
+        not by application logic. Two managers tapping "Open" at the same
+        moment cannot split a day's cash across two drawers; the loser gets a
+        friendly "already open" rather than a raw constraint error. Closing
+        claims the open→closed transition CONDITIONALLY (the order-cancellation
+        pattern), so a second tap can't overwrite the first count.
+      - **`orders.shift_id` is stamped at sale time**, not inferred from a time
+        window — a sale rung a second before midnight must not land in
+        tomorrow's drawer. If the drawer lookup fails the sale still completes
+        and goes unattributed, which reconciliation surfaces rather than hides.
+      - **★ Change is subtracted ONCE per order.** `placePosSale` writes the
+        SALE's `change_due` onto EVERY cash tender row, so a sale settled with
+        two cash tenders carries it twice. Summing would deduct it twice and
+        report the drawer short by that amount every time — a small, consistent
+        discrepancy that gets blamed on a cashier. `netCashFromSales` groups by
+        order and takes the max; `totalsByMethod` delegates to it rather than
+        re-implementing. Both directions are tested.
+      - Settings (convention #9): `pos.requireOpenShift` (default **off** —
+        turning it on can stop a till, so it stays the merchant's call) and
+        `pos.cashVarianceTolerance` (a hand-counted drawer is never exact to
+        the paise). Capabilities: `open_close_shift` to open/close,
+        `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
+        declare what was in it. A CLOSED shift reports the figures snapshotted
+        at close, so an old Z-report can't drift when an order is later edited.
+    - **Not yet built:** POS-native inventory (Phase 4 — note `adjust_stock`
+      from `/dashboard/inventory` still writes to the DEFAULT location, so a
+      multi-location store cannot yet correct stock at a specific shop),
+      returns/store credit (5), Twilio receipts (6), metered extra-location
+      billing (7), omnichannel/BOPIS (8), offline outbox (9).
       See `docs/pos-plan.md`.
 
 ## 6. Commands

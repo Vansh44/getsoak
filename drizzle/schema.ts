@@ -1144,6 +1144,10 @@ export const orderPayments = pgTable(
 export const orders = pgTable(
   "orders",
   {
+    // Which cash-drawer period this sale belongs to (pos_10_shifts.sql).
+    // Explicit rather than inferred from a time window: a sale rung a second
+    // before midnight must not land in tomorrow's drawer.
+    shiftId: uuid("shift_id"),
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
     // Nullable since pos_06: a walk-in POS sale has no account and no
@@ -2144,6 +2148,108 @@ export const posLayouts = pgTable(
       foreignColumns: [storeLocations.id],
       name: "pos_layouts_location_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// POS Phase 3 — one cash-drawer accounting period per location
+// (supabase/pos_10_shifts.sql). At most one open at a time, enforced by a
+// partial unique index rather than by application logic.
+export const posShifts = pgTable(
+  "pos_shifts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    status: text().default("open").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    openedBy: text("opened_by"),
+    // Denormalised so a report still names whoever opened it after that staff
+    // member is deleted — the audit outlives the employment.
+    openedByName: text("opened_by_name"),
+    openingFloat: numeric("opening_float", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "string" }),
+    closedBy: text("closed_by"),
+    closedByName: text("closed_by_name"),
+    // Snapshotted at close so a historical Z-report can never drift.
+    countedCash: numeric("counted_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    expectedCash: numeric("expected_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    variance: numeric({ precision: 12, scale: 2, mode: "number" }),
+    note: text(),
+  },
+  (table) => [
+    index("idx_pos_shifts_store_opened").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_shifts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_shifts_location_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_shifts_status_check",
+      sql`status = ANY (ARRAY['open'::text, 'closed'::text])`,
+    ),
+  ],
+);
+
+// Cash into or out of the drawer that ISN'T a sale. `amount` is always
+// positive; `type` carries the direction.
+export const posCashMovements = pgTable(
+  "pos_cash_movements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    shiftId: uuid("shift_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    type: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    reason: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    createdBy: text("created_by"),
+    createdByName: text("created_by_name"),
+  },
+  (table) => [
+    index("idx_pos_cash_movements_shift").using(
+      "btree",
+      table.shiftId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.shiftId],
+      foreignColumns: [posShifts.id],
+      name: "pos_cash_movements_shift_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_cash_movements_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_cash_movements_type_check",
+      sql`type = ANY (ARRAY['drop'::text, 'payout'::text, 'paid_in'::text])`,
+    ),
   ],
 );
 

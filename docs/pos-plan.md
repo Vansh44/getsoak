@@ -492,11 +492,14 @@ invisibility.
 **Ships:** a real in-store sale end to end; appears in `/dashboard/orders` +
 analytics alongside online orders.
 
-### Phase 3 — Shifts & cash reconciliation
+### Phase 3 — Shifts & cash reconciliation — **DONE**
 
-`pos_shifts` + `pos_cash_movements`; open/close (float → expected vs counted →
-variance), cash drop/payout/paid-in, X-report (mid-shift) / Z-report (EOD).
-`pos-shift-actions.ts`. Manager/owner only.
+`pos_shifts` + `pos_cash_movements` (supabase/pos_10_shifts.sql) +
+`orders.shift_id`; open/close (float → expected vs counted → variance), cash
+drop/payout/paid-in, live X-report and the closed Z-report at `/pos/shift`.
+`pos-shift-actions.ts`, gated on `open_close_shift` / `cash_drop`. Pure math in
+`lib/pos/shifts.ts`. One open shift per LOCATION, enforced by a partial unique
+index. Settings: `pos.requireOpenShift`, `pos.cashVarianceTolerance`.
 
 ### Phase 4 — POS-native inventory management (manager, location-scoped) + transfers
 

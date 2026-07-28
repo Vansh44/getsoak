@@ -19,6 +19,11 @@ vi.mock("@/lib/rate-limit", () => ({
   clientIp: vi.fn(() => "1.2.3.4"),
 }));
 vi.mock("@/lib/settings/resolve", () => ({ getStoreSettings: vi.fn() }));
+// The drawer lookup is exercised in pos-shift-actions.test.ts; stubbing it here
+// keeps it out of this file's seeded query sequence.
+vi.mock("./pos-shift-actions", () => ({
+  currentShiftIdFor: vi.fn(async () => null),
+}));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 vi.mock("@/lib/db/client", () => ({
@@ -30,6 +35,7 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { withService } from "@/lib/db/client";
+import { currentShiftIdFor } from "./pos-shift-actions";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
@@ -604,5 +610,43 @@ describe("searchPosCustomers", () => {
     const r = await searchPosCustomers("ravi");
     expect(r.customers[0]).toMatchObject({ name: "Ravi Kumar", id: "c1" });
     expect(r.customers[1].name).toBe("9000000000");
+  });
+});
+
+describe("placePosSale — shift attribution", () => {
+  it("stamps the sale onto the open drawer", async () => {
+    vi.mocked(currentShiftIdFor).mockResolvedValue("shift-1");
+    const r = await placePosSale([line], cash);
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].shiftId).toBe("shift-1");
+  });
+
+  // Reconciliation surfaces an unattributed sale; a failed drawer lookup must
+  // never refuse a paying customer.
+  it("still sells when no shift is open", async () => {
+    vi.mocked(currentShiftIdFor).mockResolvedValue(null);
+    const r = await placePosSale([line], cash);
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].shiftId).toBeNull();
+  });
+
+  it("refuses when the store requires an open shift and there is none", async () => {
+    vi.mocked(currentShiftIdFor).mockResolvedValue(null);
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...SETTINGS,
+      "pos.requireOpenShift": true,
+    } as any);
+    const r = await placePosSale([line], cash);
+    expect(r.error).toMatch(/open a shift/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("sells under that setting once a shift is open", async () => {
+    vi.mocked(currentShiftIdFor).mockResolvedValue("shift-1");
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...SETTINGS,
+      "pos.requireOpenShift": true,
+    } as any);
+    expect((await placePosSale([line], cash)).success).toBe(true);
   });
 });

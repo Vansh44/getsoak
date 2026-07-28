@@ -31,6 +31,7 @@ import {
   users,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
+import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { posCan } from "@/lib/pos/permissions";
@@ -698,6 +699,15 @@ export async function placePosSale(
   const requireApproval = settings["pos.requireManagerForDiscount"] === true;
   const maxDiscountPct = Number(settings["pos.maxDiscountPercent"]) || 10;
 
+  // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
+  // reconciliation never has to infer it from a timestamp. A store may require
+  // an open shift before selling; that is OFF by default because turning it on
+  // can stop a till, so it stays the merchant's decision.
+  const shiftId = await currentShiftIdFor(op.locationId);
+  if (!shiftId && settings["pos.requireOpenShift"] === true) {
+    return { error: "Open a shift before selling." };
+  }
+
   // 3. Re-read prices from the DB, store-scoped. The client's prices are only
   //    ever a display hint.
   const productIds = Array.from(new Set(lines.map((l) => l.productId)));
@@ -961,6 +971,7 @@ export async function placePosSale(
           notes: opts.note ?? null,
           stockStatus: "reserved",
           salesChannel: "pos",
+          shiftId,
           locationId: op.locationId,
           cashierId: op.staffId,
           cashierName: op.name,

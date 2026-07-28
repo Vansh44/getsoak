@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Loader2,
@@ -25,6 +26,7 @@ import {
   UserPlus,
   UserRound,
   LayoutGrid,
+  Banknote,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -436,6 +438,14 @@ export function SellClient({
               <span className="hidden sm:inline">Edit layout</span>
             </button>
           )}
+          <Link
+            href="/pos/shift"
+            title="Cash drawer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+          >
+            <Banknote className="h-4 w-4" strokeWidth={2} />
+            <span className="hidden sm:inline">Drawer</span>
+          </Link>
           <span className="flex items-center gap-1.5 text-white/70">
             <MapPin className="h-4 w-4" strokeWidth={2} />
             {config.locationName}
