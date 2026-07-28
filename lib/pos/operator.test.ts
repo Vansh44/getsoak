@@ -44,6 +44,7 @@ vi.mock("@/lib/db/client", () => ({
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
 
+import { withService } from "@/lib/db/client";
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
 import { getAuthorizedDevice } from "@/lib/pos/devices";
 import { POS_OPERATOR_COOKIE, signOperatorToken } from "./session";
@@ -133,5 +134,55 @@ describe("resolvePosOperator", () => {
       source: "owner",
       deviceAuthorized: false,
     });
+  });
+});
+
+describe("owner display name", () => {
+  // An email in the "opened by" line, on a receipt, or against a cash variance
+  // reads like a system log — and it is printed in front of customers.
+  it("uses the admin's first and last name", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "u1",
+      email: "owner@shop.com",
+    } as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ first: "Vansh", last: "Gupta" }]],
+    });
+    const op = await resolvePosOperator();
+    expect(op?.name).toBe("Vansh Gupta");
+  });
+
+  it("copes with a first name only", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "u1",
+      email: "owner@shop.com",
+    } as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ first: "Vansh", last: null }]],
+    });
+    expect((await resolvePosOperator())?.name).toBe("Vansh");
+  });
+
+  it("falls back to the email for a legacy row with no name", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "u1",
+      email: "owner@shop.com",
+    } as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ first: "", last: null }]],
+    });
+    expect((await resolvePosOperator())?.name).toBe("owner@shop.com");
+  });
+
+  // A name lookup must never be able to lock an owner out of the register.
+  it("still resolves the operator when the lookup fails", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "u1",
+      email: "owner@shop.com",
+    } as any);
+    vi.mocked(withService).mockRejectedValueOnce(new Error("connection reset"));
+    const op = await resolvePosOperator();
+    expect(op?.role).toBe("owner");
+    expect(op?.name).toBe("owner@shop.com");
   });
 });
