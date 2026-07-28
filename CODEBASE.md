@@ -459,6 +459,10 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
+│   │                          # (sellable-online total, trigger-maintained)
+│   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
+│   │                          # dashboard admins (NO ROWS = unrestricted)
 │   ├── locations_01_capabilities.sql  # ★ store_locations.capabilities (jsonb) —
 │   │                          # what a location may DO; registry in lib/locations/
 │   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
@@ -1614,6 +1618,31 @@ group, span}` (span = columns of the 4-wide desktop grid),
       when stocking a new shop. The selector is also scope-aware (§B2): a
       location-bound admin sees only their shops, and naming another one in the
       URL is refused server-side.
+    - **Online orders are ROUTED to a location (Phase D).** Checkout used to
+      call the `reserve_stock` wrapper, which always targets the store's
+      DEFAULT location — so a store with stock in a second shop advertised it
+      and then failed the order. `lib/fulfilment/resolve.ts` now picks a
+      location and `placeOrder` reserves there and stamps `orders.location_id`,
+      which also brings online orders inside the §B2 location scope.
+      - **`lib/fulfilment/strategies.ts` is a REGISTRY** (roadmap §1.2), not a
+        switch. v1 registers `priority`; `nearest`/`most_stock`/`cheapest` each
+        become a file that registers itself, and checkout never learns their
+        names. An unknown strategy id resolves to the default rather than
+        stopping a store selling.
+      - **Falling back is deliberate.** No rules row, no eligible location, or
+        a failed query ⇒ null ⇒ the wrapper's default location, exactly as
+        before. Routing must never be the reason a sale is refused. A store
+        with one location short-circuits entirely.
+      - **★ `products.online_stock` is what the STOREFRONT promises.**
+        `products.stock` stays the all-locations total (the dashboard and POS
+        want that); `online_stock` is the same sum restricted to locations with
+        `online_fulfil` that are active. Both are maintained by the SAME
+        `_recompute_stock_aggregate`, so there is one place stock totals are
+        derived. A second trigger recomputes on a capability or `active`
+        change — without it, enabling fulfilment at a shop would leave the
+        website saying "out of stock" until something else touched that SKU.
+        The migration's guard FAILS if `online_stock > stock`, which can only
+        mean the capability filter is wrong.
     - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
       metered extra-location billing (7), omnichannel/BOPIS (8), offline
       outbox (9). See `docs/pos-plan.md`.

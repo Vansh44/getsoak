@@ -1419,6 +1419,11 @@ export const productVariants = pgTable(
     productId: uuid("product_id").notNull(),
     name: text().notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     sku: text().notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1552,6 +1557,11 @@ export const products = pgTable(
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     sku: text().notNull(),
@@ -2174,6 +2184,32 @@ export const adminLocations = pgTable(
       columns: [table.adminId, table.locationId],
       name: "admin_locations_pkey",
     }),
+  ],
+);
+
+// Where online orders ship from (supabase/locations_03_fulfilment.sql).
+// `strategy` names a resolver in lib/fulfilment/strategies.ts, so adding
+// "nearest" later needs no schema change. `priority` is an ordered array of
+// location ids, deliberately not FK-checked: a deleted location drops out of
+// the order rather than blocking the delete. NO ROW = fall back to the default
+// location, which is every store's behaviour before Phase D.
+export const storeFulfilmentRules = pgTable(
+  "store_fulfilment_rules",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    strategy: text().default("priority").notNull(),
+    priority: jsonb().default([]).notNull(),
+    skipInactive: boolean("skip_inactive").default(true).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_fulfilment_rules_store_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 

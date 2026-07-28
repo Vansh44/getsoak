@@ -22,6 +22,7 @@ import { dbErrorMessage } from "@/lib/db/errors";
 import {
   adminLocations,
   inventoryLevels,
+  storeFulfilmentRules,
   storeLocations,
   stores,
 } from "@/drizzle/schema";
@@ -33,6 +34,7 @@ import { STORE_TAG } from "@/lib/store/resolve";
 import { FEATURES_KEY } from "@/lib/settings/registry";
 import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
 import { getStoreLocations, type StoreLocation } from "@/lib/pos/locations";
+import { DEFAULT_STRATEGY_ID, getStrategy } from "@/lib/fulfilment/strategies";
 import {
   CAPABILITY_REGISTRY,
   defaultCapabilitiesFor,
@@ -607,5 +609,113 @@ export async function setAdminLocations(
   }
 
   revalidatePath("/dashboard/admins");
+  return { success: true };
+}
+
+// ---- Fulfilment rules (Phase D) -------------------------------------------
+
+export interface FulfilmentRules {
+  strategy: string;
+  /** Ordered location ids. Locations absent from it are tried afterwards. */
+  priority: string[];
+  skipInactive: boolean;
+}
+
+export async function getFulfilmentRules(): Promise<{
+  rules: FulfilmentRules;
+  error?: string;
+}> {
+  const fallback: FulfilmentRules = {
+    strategy: DEFAULT_STRATEGY_ID,
+    priority: [],
+    skipInactive: true,
+  };
+  const admin = await getManagerIdentity("locations");
+  if (!admin) return { rules: fallback, error: "You don't have permission." };
+  const storeId = await getActingStoreId();
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          strategy: storeFulfilmentRules.strategy,
+          priority: storeFulfilmentRules.priority,
+          skip_inactive: storeFulfilmentRules.skipInactive,
+        })
+        .from(storeFulfilmentRules)
+        .where(eq(storeFulfilmentRules.storeId, storeId))
+        .limit(1),
+    );
+    const row = rows[0];
+    if (!row) return { rules: fallback };
+    return {
+      rules: {
+        strategy: getStrategy(row.strategy).id,
+        priority: Array.isArray(row.priority)
+          ? (row.priority as unknown[]).filter(
+              (v): v is string => typeof v === "string",
+            )
+          : [],
+        skipInactive: row.skip_inactive,
+      },
+    };
+  } catch (err) {
+    return {
+      rules: fallback,
+      error: dbErrorMessage(err, "Couldn't load fulfilment rules."),
+    };
+  }
+}
+
+export async function saveFulfilmentRules(
+  input: Partial<FulfilmentRules>,
+): Promise<ActionResult> {
+  const admin = await getManagerIdentity("locations");
+  if (!admin) return { error: "You don't have permission to do this." };
+  const storeId = await getActingStoreId();
+
+  const guard = await requireLocationsAvailable(storeId);
+  if ("error" in guard) return { error: guard.error };
+
+  // An unknown strategy id resolves to the default rather than being stored —
+  // a typo must not leave a store with a rule nothing can execute.
+  const strategy = getStrategy(input.strategy).id;
+  const skipInactive = input.skipInactive !== false;
+
+  let priority: string[] = [];
+  try {
+    const valid = await withService((db) =>
+      db
+        .select({ id: storeLocations.id })
+        .from(storeLocations)
+        .where(eq(storeLocations.storeId, storeId)),
+    );
+    const allowed = new Set(valid.map((v) => v.id));
+    priority = Array.from(
+      new Set(
+        (Array.isArray(input.priority) ? input.priority : []).filter(
+          (id) => typeof id === "string" && allowed.has(id),
+        ),
+      ),
+    );
+
+    await withService((db) =>
+      db
+        .insert(storeFulfilmentRules)
+        .values({ storeId, strategy, priority, skipInactive })
+        .onConflictDoUpdate({
+          target: storeFulfilmentRules.storeId,
+          set: {
+            strategy,
+            priority,
+            skipInactive,
+            updatedAt: sql`now()`,
+          },
+        }),
+    );
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save fulfilment rules.") };
+  }
+
+  revalidatePath("/dashboard/locations/fulfilment");
   return { success: true };
 }

@@ -134,6 +134,15 @@ export function LocationsClient({
         )}
       </header>
 
+      {initialLocations.length > 1 && (
+        <Link
+          href="/dashboard/locations/fulfilment"
+          className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[#111827] underline underline-offset-4"
+        >
+          Online fulfilment order
+        </Link>
+      )}
+
       <div className="mt-2 text-xs font-medium text-[#9aa1ab]">
         {count} of {locationsIncluded} included locations used
         {atCap && " · additional locations are ₹1,000/mo (coming soon)"}

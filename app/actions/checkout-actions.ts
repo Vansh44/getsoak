@@ -28,6 +28,7 @@ import {
 } from "@/lib/payments/razorpay";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import {
   recordStorePolicyConsent,
   getCheckoutPolicies,
@@ -597,6 +598,10 @@ export async function placeOrder(
         selling_price: products.sellingPrice,
         store_id: products.storeId,
         tax_class_id: products.taxClassId,
+        // Routing only: a location cannot be disqualified by a SKU that has no
+        // stock to run out of (roadmap Phase D).
+        track_inventory: products.trackInventory,
+        allow_backorder: products.allowBackorder,
       })
       .from(products)
       .where(
@@ -630,7 +635,13 @@ export async function placeOrder(
   ) as string[];
   const variantsMap = new Map<
     string,
-    { id: string; name: string; selling_price: number }
+    {
+      id: string;
+      name: string;
+      selling_price: number;
+      track_inventory?: boolean | null;
+      allow_backorder?: boolean | null;
+    }
   >();
   if (variantIds.length > 0) {
     const dbVariants = await withService((db) =>
@@ -639,6 +650,8 @@ export async function placeOrder(
           id: productVariants.id,
           name: productVariants.name,
           selling_price: productVariants.sellingPrice,
+          track_inventory: productVariants.trackInventory,
+          allow_backorder: productVariants.allowBackorder,
         })
         .from(productVariants)
         .where(
@@ -817,6 +830,28 @@ export async function placeOrder(
   //    foreign key and every tracked-SKU checkout fails. We pass the
   //    pre-generated id so the sale movements carry the real order id from the
   //    start.
+  // Where this order ships from (roadmap Phase D). Before this, every online
+  // order reserved against the store's DEFAULT location via the reserve_stock
+  // wrapper — so a store with stock in a second shop advertised it and then
+  // failed the order. null means "no better answer": the wrapper's default
+  // location, exactly as before. Routing must never be why a sale is refused.
+  const fulfilmentLocationId = await resolveFulfilmentLocation(
+    storeId,
+    validItems.map((it) => {
+      const p = productsMap.get(it.product_id);
+      const v = it.variant_id ? variantsMap.get(it.variant_id) : null;
+      const tracked = v ? v.track_inventory : p?.track_inventory;
+      const backorder = v ? v.allow_backorder : p?.allow_backorder;
+      return {
+        productId: it.product_id,
+        variantId: it.variant_id,
+        quantity: it.quantity,
+        // Untracked or backorderable SKUs never disqualify a location.
+        needsStock: !!tracked && !backorder,
+      };
+    }),
+  );
+
   const orderRows = await withService((db) =>
     db
       .insert(orders)
@@ -841,6 +876,7 @@ export async function placeOrder(
         total,
         currency: "INR",
         appliedCouponCode: couponCode || null,
+        locationId: fulfilmentLocationId,
         notes,
         // This order goes through the reserve flow below; mark it so that
         // cancellation restocks it exactly once (and never restocks legacy
@@ -895,7 +931,9 @@ export async function placeOrder(
     try {
       const res = await withService((db) =>
         db.execute(
-          sql`select reserve_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`,
+          fulfilmentLocationId
+            ? sql`select reserve_stock_at(p_store => ${storeId}, p_location => ${fulfilmentLocationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`
+            : sql`select reserve_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`,
         ),
       );
       reserved = (res.rows[0] as { reserved: boolean | null } | undefined)
