@@ -27,6 +27,7 @@ import {
   UserRound,
   LayoutGrid,
   Banknote,
+  Boxes,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -442,6 +443,16 @@ export function SellClient({
               <LayoutGrid className="h-4 w-4" strokeWidth={2} />
               <span className="hidden sm:inline">Edit layout</span>
             </button>
+          )}
+          {canEditLayout && (
+            <Link
+              href="/pos/inventory"
+              title="Stock at this location"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+            >
+              <Boxes className="h-4 w-4" strokeWidth={2} />
+              <span className="hidden sm:inline">Stock</span>
+            </Link>
           )}
           <Link
             href="/pos/shift"

@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
+│   │                          # a store's locations, atomically (one plpgsql txn)
 │   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
 │   │                          # (one open shift per LOCATION, partial unique index)
 │   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
@@ -1529,12 +1531,43 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
         declare what was in it. A CLOSED shift reports the figures snapshotted
         at close, so an old Z-report can't drift when an order is later edited.
-    - **Not yet built:** POS-native inventory (Phase 4 — note `adjust_stock`
-      from `/dashboard/inventory` still writes to the DEFAULT location, so a
-      multi-location store cannot yet correct stock at a specific shop),
-      returns/store credit (5), Twilio receipts (6), metered extra-location
-      billing (7), omnichannel/BOPIS (8), offline outbox (9).
-      See `docs/pos-plan.md`.
+    - **Phase 4 (done) = inventory from the shop floor.** `/pos/inventory`
+      (`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`, so
+      a cashier sells stock but never declares how much exists). Search or
+      scan, then three actions per row: **receive/correct** a delta, **count**
+      to an absolute figure, or **send** stock to another location. The
+      location is ALWAYS the operator's session — the only location a caller
+      may name is a transfer's destination, verified against the store here
+      AND again inside the RPC.
+      - **A count is stored as a DELTA, not an absolute write.** It goes
+        through the same atomic `adjust_stock_at` and leaves the same ledger
+        row as any other correction — and a sale rung while someone was
+        counting the shelf isn't silently erased. A count that matches writes
+        nothing, so confirming a figure doesn't litter the history.
+      - **★ `transfer_stock` is ONE RPC because it touches TWO locations**
+        (`supabase/pos_11_transfer_stock.sql`). The app has no cross-statement
+        transaction over the pool — that's why placeOrder/placePosSale carry
+        manual rollback chains — so doing this as two adjustments could
+        decrement the source, fail to credit the destination, and the units
+        would simply cease to exist on the store's books. A plpgsql body is
+        one transaction, so both legs commit or neither does. The source
+        decrement is CONDITIONAL on having the stock, so two managers moving
+        the last 5 units can't both win. Writes paired `transfer_out` /
+        `transfer_in` ledger rows so each location's history explains its own
+        balance. **If `reserved` is ever brought into use, the guard must
+        become `on_hand - reserved >= qty`** or a transfer will ship units
+        already promised to an online order.
+      - Adjustments feed `reportStockChanges`, so a manual correction to zero
+        still fires the low/out-of-stock crossing (§22) rather than alerting
+        nobody.
+    - **Still on the desk side:** `/dashboard/inventory` continues to write to
+      the store's DEFAULT location via the compatibility wrappers, so an owner
+      at the dashboard cannot yet target a specific shop — a manager can, from
+      `/pos/inventory` at that shop. A location selector on the dashboard page
+      is the remaining half of that gap.
+    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
+      metered extra-location billing (7), omnichannel/BOPIS (8), offline
+      outbox (9). See `docs/pos-plan.md`.
 
 ## 6. Commands
 

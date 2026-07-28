@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Loader2,
   Banknote,
+  Boxes,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
@@ -172,6 +173,16 @@ export function RegisterHome({
             <p className="mt-6 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/70">
               Authorize this device above to start selling on it.
             </p>
+          )}
+
+          {role !== "cashier" && (
+            <Link
+              href="/pos/inventory"
+              className="mt-3 ml-2 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+            >
+              <Boxes className="h-4 w-4" strokeWidth={2} />
+              Stock
+            </Link>
           )}
 
           <Link
