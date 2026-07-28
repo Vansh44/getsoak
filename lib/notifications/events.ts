@@ -127,6 +127,7 @@ export const EVENT_KEYS = [
   "admin.removed",
   "security.password_changed",
   "settings.changed",
+  "store.created",
   // ── Plan & billing ──────────────────────────────────────────────────────
   "plan.changed",
   "plan.expiring",
@@ -430,6 +431,22 @@ export const EVENTS: readonly EventDef[] = [
   },
 
   // ── Plan & billing ──────────────────────────────────────────────────────
+  {
+    key: "store.created",
+    label: "Store created",
+    description: "Welcome mail for a merchant who has just finished signup.",
+    group: "Team & security",
+    section: "settings",
+    severity: "success",
+    // BOTH, and the ONLY thing that greets a new merchant. Store creation used
+    // to emit `platform.store_created` alone — operators, in-app — so the
+    // person who had just signed up received nothing at all: no confirmation,
+    // no store address, no next step.
+    audiences: { "store-admins": BOTH },
+    // Not switchable: a merchant cannot have turned this off before they had
+    // an account to turn it off in.
+    configurable: false,
+  },
   {
     key: "plan.changed",
     label: "Plan changed",

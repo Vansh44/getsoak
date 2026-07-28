@@ -18,6 +18,7 @@
 
 import { escapeHtml } from "@/lib/email/coupon-campaign";
 import { variableNamesFor } from "./variables";
+import { formatVariable } from "./format";
 
 /** {{ token }} — whitespace tolerated, token limited to a safe charset. */
 const TOKEN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
@@ -122,6 +123,11 @@ export function templateValues(
   const allowed = variableNamesFor(eventKey);
   const values: Record<string, string> = {};
 
+  // The currency this event's money is in, read before anything is formatted so
+  // every amount below is denominated correctly.
+  const currency =
+    typeof payload?.currency === "string" ? payload.currency : "INR";
+
   const base: Record<string, string | null | undefined> = {
     store_name: envelope.storeName,
     actor_name: envelope.actorLabel,
@@ -131,7 +137,10 @@ export function templateValues(
     link: envelope.link,
   };
   for (const [name, value] of Object.entries(base)) {
-    if (allowed.has(name) && value != null) values[name] = String(value);
+    if (!allowed.has(name) || value == null) continue;
+    // `link` is a URL — formatting would corrupt it.
+    values[name] =
+      name === "link" ? String(value) : formatVariable(name, value, currency);
   }
 
   // Payload keys are camelCase at the call sites but snake_case in templates
@@ -140,7 +149,9 @@ export function templateValues(
     if (value === null || value === undefined) continue;
     const name = camelToSnake(key);
     if (!allowed.has(name)) continue;
-    values[name] = String(value);
+    // DB values are stored shapes (a numeric column, an enum, an ISO string).
+    // formatVariable is what turns them into something a customer would read.
+    values[name] = formatVariable(name, value, currency);
   }
 
   return values;

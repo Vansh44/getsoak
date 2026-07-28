@@ -331,6 +331,11 @@ export const SECTIONS: DashboardSection[] = [
         icon: "notifications",
       },
       {
+        label: "Policies",
+        href: "/dashboard/settings/policies",
+        icon: "settings",
+      },
+      {
         label: "Domain",
         href: "/dashboard/settings/domain",
         icon: "globe",

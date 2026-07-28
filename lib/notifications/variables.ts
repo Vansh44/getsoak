@@ -68,7 +68,11 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
   "order.placed": [
     { name: "total", description: "Order total.", sample: "₹1,240.00" },
     { name: "currency", description: "Currency code.", sample: "INR" },
-    { name: "items", description: "Number of line items.", sample: "3" },
+    {
+      name: "items",
+      description: "What was ordered.",
+      sample: "3 items · Amul Taaza Milk, Tata Salt × 2",
+    },
     {
       name: "payment_method",
       description: "How the shopper paid.",
@@ -185,6 +189,18 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
   ],
   "ai.credits_purchased": [
     { name: "credits", description: "Credits added.", sample: "60" },
+  ],
+  "store.created": [
+    {
+      name: "store_url",
+      description: "The store's public address.",
+      sample: "https://acme.storemink.com",
+    },
+    {
+      name: "plan",
+      description: "The plan it started on.",
+      sample: "free",
+    },
   ],
   "platform.store_created": [
     { name: "slug", description: "The new store's subdomain.", sample: "acme" },

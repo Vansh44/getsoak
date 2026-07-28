@@ -1,6 +1,7 @@
 import "server-only";
 
 import { PLATFORM_URL } from "@/lib/store/host";
+import { getRequestOrigin } from "@/lib/request-url";
 import { logError, logWarn } from "@/lib/observability/logger";
 
 /**
@@ -14,12 +15,20 @@ import { logError, logWarn } from "@/lib/observability/logger";
  * land, an order-confirmation email waits up to 24 hours. That failure is
  * silent: the mail is queued, nothing errors, it just sits there.
  *
- * Which is why the origin comes from PLATFORM_URL — the resolver that already
- * falls back NEXT_PUBLIC_APP_URL → VERCEL_URL → https://{ROOT_DOMAIN} — rather
- * than reading one env var and giving up when it's unset. It previously read
- * NEXT_PUBLIC_APP_URL directly, so an environment that hadn't set that one
- * variable (Cloud Run sets no VERCEL_URL either) silently lost instant email
- * even though the apex would have worked fine.
+ * ORIGIN: THE CURRENT REQUEST'S HOST, not a configured one.
+ *
+ * A worker kick must land on THIS process. Resolving it from env instead meant
+ * a developer placing an order on echos.localhost:3000 POSTed the kick to
+ * https://staging.storemink.com — a different environment, told to drain a
+ * queue that isn't ours, using our CRON_SECRET. (An earlier version read
+ * NEXT_PUBLIC_APP_URL directly and bailed when unset: safe, but it silently
+ * lost instant email on any host that hadn't set that one variable, since
+ * Cloud Run sets no VERCEL_URL either.)
+ *
+ * getRequestOrigin() is the same helper the invite and POS emails use to build
+ * links that work in every environment. PLATFORM_URL remains the fallback for
+ * callers with no request scope — the cron route chaining itself, where the
+ * apex is exactly right.
  *
  * CRON_SECRET is genuinely required: without it the worker route 401s, so
  * there is nothing useful to attempt.
@@ -32,8 +41,9 @@ export async function triggerEmailWorker(): Promise<void> {
     );
     return;
   }
+  const origin = (await getRequestOrigin()) ?? PLATFORM_URL;
   try {
-    await fetch(`${PLATFORM_URL}/api/cron/send-emails`, {
+    await fetch(`${origin}/api/cron/send-emails`, {
       method: "POST",
       headers: { authorization: `Bearer ${secret}` },
       // Don't hold the triggering request open waiting for a full drain — the

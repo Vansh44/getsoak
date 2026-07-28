@@ -375,6 +375,16 @@ export function renderNotification(
       };
     }
 
+    // The merchant's own welcome. Deliberately separate from
+    // platform.store_created below, which is the operators' copy of the same
+    // moment — different audience, different words, different destination.
+    case "store.created":
+      return {
+        title: `Welcome to StoreMink, ${subject ?? "your store"} is live`,
+        body: str(p.store_url) || null,
+        url: "/dashboard",
+      };
+
     // ── Platform (operator console) ───────────────────────────────────────
     case "platform.store_created":
       return {

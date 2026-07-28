@@ -32,6 +32,9 @@ export const storeNoSeq = pgSequence("store_no_seq", {
 export const admins = pgTable(
   "admins",
   {
+    // The optional product-updates box at signup — a preference, not a
+    // contract (see supabase/legal_01_schema.sql).
+    marketingOptIn: boolean("marketing_opt_in").default(false).notNull(),
     id: text().primaryKey().notNull(),
     email: text().notNull(),
     role: text().default("member").notNull(),
@@ -3402,6 +3405,55 @@ export const notificationPreferences = pgTable(
 // Notification EMAIL queue (supabase/notifications_02_email_queue.sql).
 // Worker-only: RLS is enabled with NO policies, so only the service scope can
 // touch it — the rows hold recipients' addresses.
+// StoreMink's OWN policies, versioned and immutable once published — see
+// supabase/legal_01_schema.sql. Platform-global: no store_id.
+export const legalDocuments = pgTable("legal_documents", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  kind: text().notNull(),
+  version: integer().notNull(),
+  title: text().notNull(),
+  body: text().notNull(),
+  checksum: text().notNull(),
+  effectiveAt: timestamp("effective_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  publishedAt: timestamp("published_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  isCurrent: boolean("is_current").default(false).notNull(),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Who agreed to what, when, from where. APPEND-ONLY (DB trigger).
+export const legalAcceptances = pgTable("legal_acceptances", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  // Anchored to EITHER a platform document OR a store policy page — exactly
+  // one, enforced by legal_acceptances_anchor_check (legal_02_store_consent).
+  documentId: uuid("document_id"),
+  kind: text().notNull(),
+  version: integer().notNull(),
+  userId: text("user_id").notNull(),
+  email: text(),
+  actorType: text("actor_type").notNull(),
+  storeId: uuid("store_id"),
+  context: text().notNull(),
+  /** Store-policy anchor: the page slug, and a hash of the text they saw. */
+  policySlug: text("policy_slug"),
+  policyChecksum: text("policy_checksum"),
+  ip: text(),
+  userAgent: text("user_agent"),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
 // Every email the platform sends — see supabase/email_logs.sql. A LOG, not a
 // queue: nothing reads it to decide what to do next.
 export const emailLogs = pgTable("email_logs", {
@@ -3458,6 +3510,9 @@ export const notificationEmailQueue = pgTable(
     // Snapshotted at enqueue, like subject/body — see notifications_04_email_cc.sql.
     cc: text(),
     bcc: text(),
+    // Display-only order summary, snapshotted at enqueue — see
+    // supabase/notifications_06_email_items.sql for why it isn't in the payload.
+    lineItems: jsonb("line_items"),
     status: text().default("pending").notNull(),
     sendAfter: timestamp("send_after", {
       withTimezone: true,

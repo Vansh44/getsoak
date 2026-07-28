@@ -82,6 +82,23 @@
   letter-spacing: -0.01em;
   line-height: 1.25;
   margin: 1.4em 0 0.5em;
+  /* Tailwind's preflight resets headings to inherit size and weight, and this
+     block never set them back — so every heading in every rich_text section
+     rendered at body size, indistinguishable from a paragraph. Affects custom
+     pages too, not just policies. */
+  font-weight: 700;
+}
+.home-rich-text-content h1 {
+  font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.25rem);
+}
+.home-rich-text-content h2 {
+  font-size: clamp(1.35rem, 1.1rem + 0.9vw, 1.6rem);
+}
+.home-rich-text-content h3 {
+  font-size: 1.2rem;
+}
+.home-rich-text-content h4 {
+  font-size: 1.05rem;
 }
 .home-rich-text-content h1:first-child,
 .home-rich-text-content h2:first-child,

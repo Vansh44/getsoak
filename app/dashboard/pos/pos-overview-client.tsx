@@ -51,7 +51,11 @@ export function PosOverviewClient({
         </p>
       </header>
 
-      <div className="max-w-2xl mt-6">
+      {/* Centred: states 1 and 2 are a single empty-state card on an otherwise
+          blank page, and a narrow column hugging the left edge of a wide
+          dashboard reads as a layout bug rather than a deliberate column.
+          State 3 is the same narrow width, so it centres with them. */}
+      <div className="mx-auto mt-6 max-w-2xl">
         {/* State 1 — not on Pro: included-in-Pro upgrade nudge */}
         {!state.posAvailable && (
           <div className="rounded-2xl border border-[#e5e5e5] bg-white p-8 text-center">

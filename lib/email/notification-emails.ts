@@ -40,6 +40,10 @@ import {
 // Re-exported: lib/notifications/template.test.ts and callers reach for it here.
 export { inlineEmailStyles } from "@/lib/email/shell";
 import type { Digest } from "@/lib/notifications/events";
+import {
+  renderOrderSummary,
+  type EmailOrderSummary,
+} from "@/lib/email/line-items";
 
 export interface NotificationEmailItem {
   title: string;
@@ -49,6 +53,9 @@ export interface NotificationEmailItem {
   url: string | null;
   severity: string;
   createdAt?: string | null;
+  /** Order summary, when the event carried one. Renderer chrome — see
+   *  lib/email/line-items.ts for why it can't come through the template. */
+  summary?: EmailOrderSummary | null;
 }
 
 export interface RenderedEmail {
@@ -107,9 +114,12 @@ export function renderNotificationEmail(opts: {
   const { item, brand, baseUrl, isTeam = true } = opts;
   const href = absoluteUrl(item.url, baseUrl);
 
+  // Order: what happened → what was bought → what to do about it. The summary
+  // sits above the button because the button is the exit, not the content.
   const bodyHtml = `
 ${emailHeading(item.title)}
 ${inlineEmailStyles(item.body ?? "")}
+${renderOrderSummary(item.summary ?? null)}
 ${href ? emailButton(href, isTeam ? "View in dashboard" : "View your order") : ""}`;
 
   return {

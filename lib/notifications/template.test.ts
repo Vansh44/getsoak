@@ -163,7 +163,8 @@ describe("templateValues", () => {
 
   it("converts camelCase payload keys to snake_case tokens", () => {
     const values = templateValues("plan.expiring", {}, { daysLeft: 7 });
-    expect(values.days_left).toBe("7");
+    // Formatted for reading, not echoed raw — see lib/notifications/format.ts.
+    expect(values.days_left).toBe("7 days");
   });
 
   // A payload key nobody documented must not be reachable from a template.
@@ -173,7 +174,8 @@ describe("templateValues", () => {
       {},
       { total: 1240, internalSecretRef: "abc" },
     );
-    expect(values.total).toBe("1240");
+    // Money carries its currency: "Total ₹1,240.00", never a bare "1240".
+    expect(values.total).toBe("₹1,240.00");
     expect(values).not.toHaveProperty("internal_secret_ref");
   });
 
@@ -258,7 +260,21 @@ describe("default template HTML", () => {
   });
 
   it("only uses tags the email shell knows how to style", () => {
-    const allowed = new Set(["p", "ul", "li", "strong", "br", "h2", "h3", "a"]);
+    // Mirrors TAG_STYLES in lib/email/shell.ts, plus `br` — a void element
+    // that needs no styling. A tag the shell doesn't style arrives unstyled in
+    // the inbox, which is why this list exists; keep the two in step.
+    const allowed = new Set([
+      "p",
+      "ul",
+      "ol",
+      "li",
+      "strong",
+      "br",
+      "h2",
+      "h3",
+      "a",
+      "hr",
+    ]);
     for (const def of EVENTS) {
       for (const audience of ["team", "customer"] as const) {
         const body = defaultEmailTemplate(def.key, audience).body;
