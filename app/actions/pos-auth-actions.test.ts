@@ -334,6 +334,26 @@ describe("posLoginWithPin", () => {
   });
 });
 
+describe("posLock — handing the till over", () => {
+  // The bug: posLock cleared only the operator cookie, but resolvePosOperator
+  // checks the Firebase session FIRST. An owner tapping Lock stayed resolved,
+  // /pos/login bounced them back to the register, and the device could never
+  // actually be handed to a cashier.
+  it("ends the Firebase session too, not just the operator cookie", async () => {
+    H.store.set(POS_OPERATOR_COOKIE, "tok");
+    H.store.set("sm_session", "firebase-session");
+    await posLock();
+    expect(H.store.has(POS_OPERATOR_COOKIE)).toBe(false);
+    // Cleared by overwriting with an expired value, so the domain/path match
+    // the cookie it was set with.
+    expect(H.jar.set).toHaveBeenCalledWith(
+      "sm_session",
+      "",
+      expect.objectContaining({ maxAge: 0 }),
+    );
+  });
+});
+
 describe("posLock", () => {
   it("clears the operator cookie", async () => {
     H.store.set(POS_OPERATOR_COOKIE, "something");

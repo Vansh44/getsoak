@@ -13,6 +13,7 @@ import {
   Banknote,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
+import { endSession } from "@/lib/auth/firebase-client";
 import { authorizeThisDevice } from "@/app/actions/pos-auth-actions";
 import { toast } from "sonner";
 import { IdleLock } from "./idle-lock";
@@ -49,6 +50,9 @@ export function RegisterHome({
   const lock = () =>
     start(async () => {
       await posLock();
+      // Also sign the Firebase SDK out locally, so nothing can re-mint a
+      // session for the person who just walked away.
+      await endSession();
       router.replace("/pos/login");
       router.refresh();
     });

@@ -39,6 +39,7 @@ import {
 } from "@/app/actions/pos-sale-actions";
 import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
+import { endSession } from "@/lib/auth/firebase-client";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import { useCatalog } from "@/lib/pos/use-catalog";
 import {
@@ -392,7 +393,11 @@ export function SellClient({
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <IdleLock minutes={idleLockMinutes} />
+      {/* Owners are exempt, as on the POS home: idle-lock targets the
+          walked-away-from-a-shared-till risk, and since posLock now ends the
+          Firebase session it would otherwise sign an owner out of the
+          dashboard for standing still. */}
+      {config.role !== "owner" && <IdleLock minutes={idleLockMinutes} />}
 
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-2 font-semibold">
@@ -457,6 +462,9 @@ export function SellClient({
             type="button"
             onClick={async () => {
               await posLock();
+              // Also sign the Firebase SDK out locally, so nothing can re-mint
+              // a session for the person who just walked away.
+              await endSession();
               router.replace("/pos/login");
               router.refresh();
             }}
