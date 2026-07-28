@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { makeDbMock, sqlParamValues } from "./_test-helpers";
+import { makeDbMock, sqlParamValues, sqlText } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
@@ -23,9 +23,13 @@ vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
+vi.mock("@/lib/locations/scope", () => ({
+  getViewerLocations: vi.fn(async () => null),
+}));
 
 import { revalidateTag } from "next/cache";
 import { getManagerUserId } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import {
   getInventory,
   adjustStock,
@@ -250,6 +254,93 @@ describe("inventory-actions", () => {
       expect(res.movements).toHaveLength(1);
       expect(dbHolder.current.calls.limit[0]).toBe(50);
       expect(dbHolder.current.calls.offset[0]).toBe(0);
+    });
+  });
+
+  // Phase C — the desk view can target a specific shop.
+  describe("location-scoped inventory", () => {
+    beforeEach(() => {
+      vi.mocked(getViewerLocations).mockResolvedValue(null);
+    });
+
+    describe("adjustStock", () => {
+      it("uses the default-location wrapper when no shop is given", async () => {
+        dbHolder.current = makeDbMock({ executeQueue: [[{ new_stock: 7 }]] });
+        await adjustStock("p1", null, 2);
+        expect(sqlText(dbHolder.current.calls.execute[0])).toContain(
+          "adjust_stock(",
+        );
+      });
+
+      it("writes to the chosen shop's shelf", async () => {
+        dbHolder.current = makeDbMock({
+          selectQueue: [[{ id: "loc-2" }]],
+          executeQueue: [[{ new_stock: 7 }]],
+        });
+        await adjustStock("p1", null, 2, "adjustment", undefined, "loc-2");
+        expect(sqlText(dbHolder.current.calls.execute[0])).toContain(
+          "adjust_stock_at(",
+        );
+      });
+
+      // Phase B2: a location-bound admin must not reach another shop's shelf by
+      // editing the URL. Invariant 7 — a filter the client sets is not a boundary.
+      it("refuses a location outside the viewer's scope", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+        const r = await adjustStock(
+          "p1",
+          null,
+          2,
+          "adjustment",
+          undefined,
+          "loc-9",
+        );
+        expect(r.error).toMatch(/don't have access/i);
+        expect(dbHolder.current.calls.execute).toHaveLength(0);
+      });
+
+      it("refuses a location belonging to another store", async () => {
+        dbHolder.current = makeDbMock({ selectQueue: [[]] });
+        const r = await adjustStock(
+          "p1",
+          null,
+          2,
+          "adjustment",
+          undefined,
+          "loc-x",
+        );
+        expect(r.error).toMatch(/unknown location/i);
+        expect(dbHolder.current.calls.execute).toHaveLength(0);
+      });
+    });
+
+    describe("setStock", () => {
+      // The bug this guards: computing the delta against products.stock — the
+      // cross-location SUM — would write a wildly wrong correction.
+      it("computes the delta against THAT shelf, not the store total", async () => {
+        dbHolder.current = makeDbMock({
+          selectQueue: [
+            [{ id: "loc-2" }], // location validation
+            [{ stock: 4 }], // inventory_levels at loc-2
+            [{ id: "loc-2" }], // adjustStock re-validates
+          ],
+          executeQueue: [[{ new_stock: 9 }]],
+        });
+        await setStock("p1", null, 9, "count", "loc-2");
+        // 9 − 4 = +5 at that location, not 9 − (whatever the aggregate is).
+        expect(sqlText(dbHolder.current.calls.execute[0])).toContain(
+          "adjust_stock_at(",
+        );
+      });
+
+      it("treats a shop that never carried the SKU as zero", async () => {
+        dbHolder.current = makeDbMock({
+          selectQueue: [[{ id: "loc-2" }], [], [{ id: "loc-2" }]],
+          executeQueue: [[{ new_stock: 5 }]],
+        });
+        const r = await setStock("p1", null, 5, "stocking", "loc-2");
+        expect(r.error).toBeUndefined();
+      });
     });
   });
 });

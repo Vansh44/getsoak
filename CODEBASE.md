@@ -1599,16 +1599,26 @@ group, span}` (span = columns of the 4-wide desktop grid),
       warehouse that fulfils online orders needs no till. The sidebar entry is
       hidden until the store has 2+ locations or POS is on, so a
       single-location store never sees it.
-    - **Still on the desk side:** `/dashboard/inventory` continues to write to
-      the store's DEFAULT location via the compatibility wrappers, so an owner
-      at the dashboard cannot yet target a specific shop — a manager can, from
-      `/pos/inventory` at that shop. A location selector on the dashboard page
-      is the remaining half of that gap.
+    - **The desk view can now target a shop (Phase C).**
+      `/dashboard/inventory` gained a location selector: **All locations** shows
+      the cross-location total and is READ-ONLY (you cannot adjust a sum), while
+      a specific shop is editable and routes every write through
+      `adjust_stock_at`. Omitting the location keeps the compatibility wrapper,
+      so a single-location store is untouched and never sees the selector.
+      Three things had to move together or the page would lie: the list reads
+      `inventory_levels.on_hand` at that shop instead of the `products.stock`
+      aggregate; **`setStock` computes its delta against THAT shelf** (against
+      the aggregate it would write a wildly wrong correction); and `bulkAdjust`
+      does the same for its batch baseline, treating a shop that has never
+      carried a SKU as zero rather than skipping it — which is the normal case
+      when stocking a new shop. The selector is also scope-aware (§B2): a
+      location-bound admin sees only their shops, and naming another one in the
+      URL is refused server-side.
     - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
       metered extra-location billing (7), omnichannel/BOPIS (8), offline
       outbox (9). See `docs/pos-plan.md`.
 
-23. **Notifications & email — one event log, registry-driven fan-out, one way
+24. **Notifications & email — one event log, registry-driven fan-out, one way
     out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
     decision lives, how to add one, troubleshooting). This section restores the
     summary the POS merge overwrote.
@@ -1774,7 +1784,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
       heartbeat is 00:00 UTC — **move it if the cron moves.**
 
-24. **Legal & consent — versioned policies, and consent as evidence.**
+25. **Legal & consent — versioned policies, and consent as evidence.**
     - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,
       Privacy, Acceptable Use) live in **`legal_documents`** — platform-global,
       no `store_id`, the `platform_admins`/`help_categories` model. A MERCHANT's
