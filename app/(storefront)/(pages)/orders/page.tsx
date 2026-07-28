@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Package } from "lucide-react";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getMyOrders } from "@/app/actions/customer-order-actions";
@@ -49,39 +49,67 @@ export default async function MyOrdersPage() {
             </Link>
           </div>
         ) : (
-          orders.map((order) => (
-            <Link
-              key={order.id}
-              href={`/orders/${order.id}`}
-              className={styles.card}
-            >
-              <div className={styles.row}>
-                <div>
-                  <div className={styles.ref}>{order.order_ref}</div>
-                  <div className={styles.meta}>
-                    {formatDate(order.created_at)} · {order.item_count}{" "}
-                    {order.item_count === 1 ? "item" : "items"}
-                  </div>
-                  {order.first_item && (
-                    <div className={styles.summary}>
-                      {order.first_item}
-                      {order.item_count > 1 ? " and more" : ""}
+          <ul className={styles.list}>
+            {orders.map((order) => {
+              // "Basmati Rice + 2 more" — the products are what a shopper
+              // recognises an order by, so they lead. The reference is a
+              // support handle, not an identity, and reads as metadata.
+              const extra = order.item_count - 1;
+              return (
+                <li key={order.id}>
+                  <Link
+                    href={`/orders/${order.id}`}
+                    className={styles.card}
+                    aria-label={`Order ${order.order_ref}, ${money(order.total, order.currency)}`}
+                  >
+                    <div className={styles.thumbs}>
+                      {order.thumbnails.length > 0 ? (
+                        order.thumbnails.map((src, i) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={`${order.id}-${i}`}
+                            src={src}
+                            alt=""
+                            className={styles.thumb}
+                            loading="lazy"
+                          />
+                        ))
+                      ) : (
+                        <span className={styles.thumbFallback} aria-hidden>
+                          <Package size={20} />
+                        </span>
+                      )}
                     </div>
-                  )}
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <StatusPill status={order.status} />
-                  <div className={styles.total} style={{ marginTop: 8 }}>
-                    {money(order.total, order.currency)}
-                  </div>
-                  <ChevronRight
-                    size={16}
-                    style={{ marginTop: 6, opacity: 0.4 }}
-                  />
-                </div>
-              </div>
-            </Link>
-          ))
+
+                    <div className={styles.info}>
+                      <div className={styles.itemName}>
+                        {order.first_item ?? "Order"}
+                        {extra > 0 && (
+                          <span className={styles.more}> + {extra} more</span>
+                        )}
+                      </div>
+                      <div className={styles.meta}>
+                        <span className={styles.ref}>{order.order_ref}</span>
+                        <span className={styles.dot} aria-hidden>
+                          ·
+                        </span>
+                        {formatDate(order.created_at)}
+                      </div>
+                    </div>
+
+                    <div className={styles.trailing}>
+                      <StatusPill status={order.status} />
+                      <div className={styles.total}>
+                        {money(order.total, order.currency)}
+                      </div>
+                    </div>
+
+                    <ChevronRight size={18} className={styles.chevron} />
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
     </div>

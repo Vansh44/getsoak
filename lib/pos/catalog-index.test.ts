@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyLayout,
   applyStockDeltas,
   buildIndex,
+  isOutOfStock,
+  layoutCoverage,
+  pruneLayout,
   itemKey,
   scanLocal,
   searchLocal,
   type CatalogItem,
+  type LayoutEntry,
 } from "./catalog-index";
 
 const item = (over: Partial<CatalogItem> & { name: string }): CatalogItem => ({
@@ -19,6 +24,7 @@ const item = (over: Partial<CatalogItem> & { name: string }): CatalogItem => ({
   stock: 10,
   trackInventory: true,
   allowBackorder: false,
+  taxClassId: null,
   ...over,
 });
 
@@ -155,5 +161,178 @@ describe("applyStockDeltas", () => {
     const out = applyStockDeltas([v1, v2], new Map([[itemKey(v2), 4]]));
     expect(out[0].stock).toBe(10);
     expect(out[1].stock).toBe(6);
+  });
+});
+
+describe("sold-out ordering", () => {
+  const inA = item({ name: "Apples", stock: 5 });
+  const outB = item({ name: "Bananas", stock: 0 });
+  const inC = item({ name: "Carrots", stock: 2 });
+  const outD = item({ name: "Dates", stock: 0 });
+  const untracked = item({ name: "Delivery", trackInventory: false, stock: 0 });
+  const backorder = item({ name: "Eggs", stock: 0, allowBackorder: true });
+
+  describe("isOutOfStock", () => {
+    it("is true only for a tracked, non-backorderable SKU at zero", () => {
+      expect(isOutOfStock(outB)).toBe(true);
+      expect(isOutOfStock(inA)).toBe(false);
+    });
+
+    // A service or an untracked SKU has no stock to run out of, and a
+    // backorderable one is still sellable at zero.
+    it("never sidelines untracked or backorderable SKUs", () => {
+      expect(isOutOfStock(untracked)).toBe(false);
+      expect(isOutOfStock(backorder)).toBe(false);
+    });
+  });
+
+  it("moves sold-out SKUs to the end of the idle grid", () => {
+    const idx = buildIndex([outB, inA, outD, inC]);
+    expect(idx.ordered.map((i) => i.name)).toEqual([
+      "Apples",
+      "Carrots",
+      "Bananas",
+      "Dates",
+    ]);
+  });
+
+  it("keeps catalog order within each group", () => {
+    const idx = buildIndex([inC, inA, outD, outB]);
+    expect(idx.ordered.map((i) => i.name)).toEqual([
+      "Carrots",
+      "Apples",
+      "Dates",
+      "Bananas",
+    ]);
+  });
+
+  // The bug this guards: slicing `all` for the empty query put whatever came
+  // first in the catalog on screen, so a shop whose first rows were sold out
+  // showed a grid of greyed-out cards.
+  it("fills a limited idle grid with sellable items first", () => {
+    const idx = buildIndex([outB, outD, inA, inC]);
+    expect(searchLocal(idx, "", 2).map((i) => i.name)).toEqual([
+      "Apples",
+      "Carrots",
+    ]);
+  });
+
+  it("ranks a sellable match above a sold-out one when searching", () => {
+    // "Bananas" is sold out but an exact name match; "Banana Chips" is not.
+    const chips = item({ name: "Banana Chips", stock: 3 });
+    const res = searchLocal(buildIndex([outB, chips]), "banana");
+    expect(res.map((i) => i.name)).toEqual(["Banana Chips", "Bananas"]);
+  });
+
+  // Still findable — the cashier often needs to tell the customer it's gone.
+  it("does not hide sold-out items from search", () => {
+    expect(searchLocal(buildIndex([outB]), "bananas")).toEqual([outB]);
+  });
+
+  it("re-orders after a sale empties a SKU", () => {
+    const idx = buildIndex([inA, inC]);
+    expect(idx.ordered[0].name).toBe("Apples");
+    const after = buildIndex(
+      applyStockDeltas(idx.all, new Map([[itemKey(inA), 5]])),
+    );
+    expect(after.ordered.map((i) => i.name)).toEqual(["Carrots", "Apples"]);
+  });
+});
+
+describe("manager-arranged layout", () => {
+  const milk = item({ name: "Milk", productId: "p-milk", stock: 5 });
+  const bread = item({ name: "Bread", productId: "p-bread", stock: 5 });
+  const eggs = item({ name: "Eggs", productId: "p-eggs", stock: 5 });
+  const rice = item({ name: "Rice", productId: "p-rice", stock: 5 });
+  const CAT = [milk, bread, eggs, rice];
+  const at = (...ids: string[]): LayoutEntry[] =>
+    ids.map((productId) => ({ productId, variantId: null }));
+
+  // The safety property: shipping this feature must not blank a register that
+  // was working before anyone arranged anything.
+  it("shows the whole catalogue when no layout is configured", () => {
+    expect(applyLayout(CAT, [])).toEqual(CAT);
+    expect(layoutCoverage(CAT, [])).toEqual({
+      shown: 4,
+      total: 4,
+      configured: false,
+    });
+  });
+
+  it("shows only laid-out products, in the manager's order", () => {
+    const out = applyLayout(CAT, at("p-eggs", "p-milk"));
+    expect(out.map((i) => i.name)).toEqual(["Eggs", "Milk"]);
+  });
+
+  it("reports coverage as 'shown of total'", () => {
+    expect(layoutCoverage(CAT, at("p-eggs", "p-milk"))).toEqual({
+      shown: 2,
+      total: 4,
+      configured: true,
+    });
+  });
+
+  it("drops sold-out products to the end without losing their order", () => {
+    const soldOutBread = { ...bread, stock: 0 };
+    const cat = [milk, soldOutBread, eggs, rice];
+    const layout = at("p-bread", "p-milk", "p-eggs");
+    expect(applyLayout(cat, layout).map((i) => i.name)).toEqual([
+      "Milk",
+      "Eggs",
+      "Bread",
+    ]);
+  });
+
+  // THE requirement: the shift is computed at render, never written back, so a
+  // restock puts the product back in the manager's slot with no edit at all.
+  it("restores a restocked product to its original slot", () => {
+    const layout = at("p-bread", "p-milk", "p-eggs");
+    const soldOut = [milk, { ...bread, stock: 0 }, eggs];
+    expect(applyLayout(soldOut, layout).map((i) => i.name)).toEqual([
+      "Milk",
+      "Eggs",
+      "Bread",
+    ]);
+    // Same layout, bread back in stock — no layout mutation involved.
+    const restocked = [milk, { ...bread, stock: 9 }, eggs];
+    expect(applyLayout(restocked, layout).map((i) => i.name)).toEqual([
+      "Bread",
+      "Milk",
+      "Eggs",
+    ]);
+  });
+
+  it("skips entries whose product no longer exists", () => {
+    const out = applyLayout(CAT, at("p-milk", "p-deleted", "p-eggs"));
+    expect(out.map((i) => i.name)).toEqual(["Milk", "Eggs"]);
+  });
+
+  it("does not count a deleted product toward coverage", () => {
+    expect(layoutCoverage(CAT, at("p-milk", "p-deleted"))).toMatchObject({
+      shown: 1,
+      total: 4,
+    });
+  });
+
+  it("distinguishes variants of the same product", () => {
+    const small = item({ name: "Tee S", productId: "p-tee", variantId: "v-s" });
+    const large = item({ name: "Tee L", productId: "p-tee", variantId: "v-l" });
+    const out = applyLayout(
+      [small, large],
+      [{ productId: "p-tee", variantId: "v-l" }],
+    );
+    expect(out).toEqual([large]);
+  });
+
+  describe("pruneLayout", () => {
+    it("removes stale entries and de-duplicates, keeping order", () => {
+      const messy = at("p-eggs", "p-gone", "p-milk", "p-eggs");
+      expect(pruneLayout(CAT, messy)).toEqual(at("p-eggs", "p-milk"));
+    });
+
+    it("is a no-op on an already-clean layout", () => {
+      const clean = at("p-milk", "p-bread");
+      expect(pruneLayout(CAT, clean)).toEqual(clean);
+    });
   });
 });

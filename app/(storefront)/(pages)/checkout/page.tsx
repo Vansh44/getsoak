@@ -35,6 +35,10 @@ import {
   type AddressInput,
 } from "@/app/actions/address-actions";
 import { useAuth } from "@/app/(storefront)/components/auth/AuthProvider";
+import {
+  PolicyConsent,
+  usePolicyLinks,
+} from "@/app/(storefront)/components/policy-consent";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import { formatPrice } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
@@ -82,6 +86,12 @@ export default function CheckoutPage() {
   // Set once the order is placed so clearing the cart below doesn't trip the
   // "cart empty → /shop" effect and steal the redirect to the success page.
   const orderPlaced = useRef(false);
+
+  // Consent to the payment + refund terms, at the moment money moves. Only
+  // these two — naming the privacy policy in a sentence about paying is noise.
+  const { links: policyLinks, required: policyRequired } =
+    usePolicyLinks("checkout");
+  const [policyAgreed, setPolicyAgreed] = useState(false);
 
   const [addresses, setAddresses] = useState<SavedAddress[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -396,6 +406,11 @@ export default function CheckoutPage() {
   const handlePlaceOrder = async () => {
     if (!selected) {
       toast.error("Please select a delivery address.");
+      return;
+    }
+    // placeOrder writes the acceptance server-side; this is the UI affordance.
+    if (policyRequired && !policyAgreed) {
+      toast.error("Please accept the store policies to place your order.");
       return;
     }
     setPlacing(true);
@@ -917,11 +932,21 @@ export default function CheckoutPage() {
                 </span>
               </div>
 
+              <PolicyConsent
+                links={policyLinks}
+                checked={policyAgreed}
+                onChange={setPolicyAgreed}
+                className={styles.policyConsent}
+                verb="I have read and accept the"
+              />
+
               <button
                 type="button"
                 className={styles.placeBtn}
                 onClick={handlePlaceOrder}
-                disabled={placing || !selected}
+                disabled={
+                  placing || !selected || (policyRequired && !policyAgreed)
+                }
               >
                 {placing
                   ? "Processing…"

@@ -12,6 +12,7 @@ import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
 import { getLowStockAlertCount } from "./inventory/data";
 import { getPosState } from "@/lib/pos/locations";
+import { outstandingDocs } from "@/lib/legal/store";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
 import {
@@ -111,6 +112,25 @@ export default async function DashboardLayout({
         </div>
       </div>
     );
+  }
+
+  // --- Re-acceptance gate -------------------------------------------------
+  // A policy published at a new version binds nobody until they agree to it,
+  // so someone who accepted v1 has to be asked again when v2 goes out. Same
+  // shape as the force_password_reset gate in proxy.ts, one layer lower.
+  //
+  // It lives HERE rather than in proxy.ts on purpose: the proxy reads its
+  // claims straight from the verified session cookie and does no DB query at
+  // all, and putting a lookup on every dashboard request would give that up.
+  // This layout already resolves the viewer from the database.
+  //
+  // Deliberately AFTER the outage and no-access branches above: someone who
+  // can't use this dashboard shouldn't be asked to accept terms for it, and an
+  // unreachable database must never present as a consent demand. outstandingDocs
+  // fails open for the same reason — a hiccup must not lock everyone out.
+  const pendingPolicies = await outstandingDocs(ctx.userId);
+  if (pendingPolicies.length > 0) {
+    redirect("/auth/policy-update");
   }
 
   // isSuperadmin + permissions come from the shared cached context above.

@@ -95,6 +95,7 @@ function row(overrides: Record<string, unknown> = {}) {
     id: "q1",
     store_id: "store-1",
     recipient_id: "uid-owner",
+    recipient_type: "admin",
     email: "owner@acme.com",
     cc: null,
     bcc: null,
@@ -377,6 +378,57 @@ describe("processNotificationEmails", () => {
 
     expect(resendHolder.sent).toEqual([]);
     expect(result.sent).toBe(0);
+  });
+
+  // REGRESSION. `isTeam` defaults to true and the worker never passed it, so
+  // EVERY email rendered as team mail. A shopper's order confirmation arrived
+  // with a "View in dashboard" button and a footer inviting them to "change
+  // what you get emailed about" — pointing at a staff-only page they cannot
+  // open, about transactional mail that isn't switchable in the first place.
+  it("renders a customer's email as a receipt, not as team mail", async () => {
+    setupQueue([
+      row({
+        recipient_type: "customer",
+        recipient_id: "cust-1",
+        email: "shopper@example.com",
+        title: "Your order is confirmed · ORD10010004",
+        url: "/orders/o1",
+      }),
+    ]);
+
+    await processNotificationEmails();
+
+    const html = String(resendHolder.sent[0][0].html);
+    expect(html).toContain("View your order");
+    expect(html).not.toContain("View in dashboard");
+    // The footer must not send a shopper to the staff preferences page.
+    expect(html).not.toContain("/dashboard/settings/notifications");
+    expect(html).toContain("because of your order");
+  });
+
+  it("still renders staff mail with the dashboard link and preferences footer", async () => {
+    setupQueue([row({ recipient_type: "admin", url: "/dashboard/orders" })]);
+
+    await processNotificationEmails();
+
+    const html = String(resendHolder.sent[0][0].html);
+    expect(html).toContain("View in dashboard");
+    expect(html).toContain("/dashboard/settings/notifications");
+  });
+
+  // One person can be BOTH — an owner who orders from their own store. Grouped
+  // without the type, those rows share one digest rendered with whichever came
+  // first, so half of it carries the wrong footer.
+  it("never mixes a person's staff and customer mail into one digest", async () => {
+    setupQueue([
+      row({ id: "q1", recipient_type: "admin", title: "New order" }),
+      row({ id: "q2", recipient_type: "customer", title: "Your order" }),
+    ]);
+
+    const result = await processNotificationEmails();
+
+    // Two separate emails, not one digest of two.
+    expect(result.sent).toBe(2);
   });
 
   it("reports work still due so the route can chain another run", async () => {

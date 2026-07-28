@@ -14,10 +14,22 @@ const DB_NAME = "storemink-pos";
 const DB_VERSION = 1;
 const STORE = "catalog";
 
+/**
+ * Bump whenever CatalogItem gains a field the register RELIES on. Cached
+ * entries are keyed by it, so an older shape simply isn't found and the
+ * register re-syncs instead of serving items missing the new field.
+ *
+ * v2 added `taxClassId` — without it a cached line resolves to the store's
+ * default tax rate, which would quote the customer a total the server then
+ * charges differently. A cache may serve a stale PRICE for a few minutes
+ * (harmless: the server re-prices), but it must not serve a stale SHAPE.
+ */
+const SCHEMA_VERSION = "v2";
+
 /** One cached catalog per register: a location's stock is its own truth, and
  *  an operator can legitimately move between stores on a shared browser. */
 export const catalogKey = (storeId: string, locationId: string): string =>
-  `${storeId}:${locationId}`;
+  `${SCHEMA_VERSION}:${storeId}:${locationId}`;
 
 export interface CachedCatalog {
   key: string;

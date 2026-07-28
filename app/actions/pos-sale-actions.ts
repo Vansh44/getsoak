@@ -33,10 +33,15 @@ import {
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { summariseItems } from "@/lib/notifications/format";
 import { posCan } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
-import { computeTax } from "@/lib/billing/tax";
+import {
+  posTotals,
+  coversTotal,
+  changeDue as posChangeDue,
+} from "@/lib/pos/totals";
 import { isIntraState, isValidGstinFormat, splitGst } from "@/lib/billing/gst";
 import { rowToBillingSettings, rowToTaxClass } from "@/lib/billing/types";
 import { getStoreSettings } from "@/lib/settings/resolve";
@@ -131,6 +136,13 @@ export interface RegisterConfig {
   taxEnabled: boolean;
   gstEnabled: boolean;
   pricesIncludeTax: boolean;
+  /** Tax-class id → rate (%). Sent once at register open so the sell screen can
+   *  quote the SAME total placePosSale will charge. Rates live here rather than
+   *  baked into the cached catalog because the catalog persists in IndexedDB —
+   *  a rate change would otherwise stay stale until the next background sync. */
+  taxRates: Record<string, number>;
+  /** Applied to products with no tax class of their own. */
+  defaultTaxClassId: string | null;
   currency: string;
   allowPriceOverride: boolean;
   requireManagerForDiscount: boolean;
@@ -143,13 +155,14 @@ export async function getRegisterConfig(): Promise<
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
 
-  const [billingRows, locRows, settings] = await Promise.all([
+  const [billingRows, locRows, settings, classRows] = await Promise.all([
     withService((db) =>
       db
         .select({
           tax_enabled: storeBillingSettings.taxEnabled,
           prices_include_tax: storeBillingSettings.pricesIncludeTax,
           gst_enabled: storeBillingSettings.gstEnabled,
+          default_tax_class_id: storeBillingSettings.defaultTaxClassId,
         })
         .from(storeBillingSettings)
         .where(eq(storeBillingSettings.storeId, op.storeId))
@@ -163,7 +176,18 @@ export async function getRegisterConfig(): Promise<
         .limit(1),
     ).catch(() => []),
     getStoreSettings(),
+    withService((db) =>
+      db
+        .select({ id: taxClasses.id, rate: taxClasses.rate })
+        .from(taxClasses)
+        .where(eq(taxClasses.storeId, op.storeId)),
+    ).catch(() => []),
   ]);
+
+  const taxRates: Record<string, number> = {};
+  for (const c of classRows) {
+    if (c.id) taxRates[c.id] = Number(c.rate) || 0;
+  }
 
   return {
     storeId: op.storeId,
@@ -174,6 +198,8 @@ export async function getRegisterConfig(): Promise<
     taxEnabled: !!billingRows[0]?.tax_enabled,
     gstEnabled: !!billingRows[0]?.gst_enabled,
     pricesIncludeTax: !!billingRows[0]?.prices_include_tax,
+    taxRates,
+    defaultTaxClassId: billingRows[0]?.default_tax_class_id ?? null,
     currency: "INR",
     allowPriceOverride: settings["pos.allowPriceOverride"] !== false,
     requireManagerForDiscount:
@@ -197,6 +223,10 @@ export interface PosCatalogItem {
   stock: number | null;
   trackInventory: boolean;
   allowBackorder: boolean;
+  /** The product's tax class, resolved to a RATE on the client via
+   *  RegisterConfig.taxRates. Carried so the sell screen can quote the
+   *  tax-inclusive total without a round trip (see lib/pos/totals.ts). */
+  taxClassId: string | null;
 }
 
 // The sellable-catalog projection, shared by the interactive lookup and the
@@ -226,6 +256,7 @@ const CATALOG_COLS = {
   // every location, so a two-location store would otherwise show (and let a
   // cashier ring up) stock sitting in the other shop.
   loc_stock: inventoryLevels.onHand,
+  p_tax_class: products.taxClassId,
 };
 
 /** Mirrors CATALOG_COLS. Written out rather than inferred so a schema change
@@ -252,6 +283,7 @@ interface CatalogRow {
   p_stock: number | null;
   v_stock: number | null;
   loc_stock: number | null;
+  p_tax_class: string | null;
 }
 
 function mapCatalogRow(r: CatalogRow): PosCatalogItem {
@@ -272,6 +304,7 @@ function mapCatalogRow(r: CatalogRow): PosCatalogItem {
     stock: r.loc_stock ?? (isVariant ? (r.v_stock ?? 0) : (r.p_stock ?? 0)),
     trackInventory: isVariant ? !!r.v_track : !!r.p_track,
     allowBackorder: isVariant ? !!r.v_backorder : !!r.p_backorder,
+    taxClassId: r.p_tax_class ?? null,
   };
 }
 
@@ -775,8 +808,6 @@ export async function placePosSale(
 
   // 5. Price each line + validate discounts/overrides.
   const priced: PricedLine[] = [];
-  let subtotal = 0;
-  let lineDiscountTotal = 0;
   let needsApproval = false;
 
   for (const l of lines) {
@@ -815,8 +846,6 @@ export async function placePosSale(
         ? classById.get(billing.defaultTaxClassId)
         : null;
 
-    subtotal += gross;
-    lineDiscountTotal += lineDisc;
     priced.push({
       product_id: l.productId,
       variant_id: l.variantId ?? null,
@@ -832,11 +861,23 @@ export async function placePosSale(
     });
   }
 
-  const orderDiscount =
-    Number.isFinite(opts.orderDiscount) && (opts.orderDiscount ?? 0) > 0
-      ? Math.min(Math.round(opts.orderDiscount!), subtotal - lineDiscountTotal)
-      : 0;
-  const discount = lineDiscountTotal + orderDiscount;
+  // Totals come from the SHARED pure helper the sell screen also uses, so the
+  // amount quoted to the customer and the amount charged cannot diverge.
+  const totals = posTotals({
+    lines: priced.map((l) => ({
+      gross: l.unit_price * l.quantity,
+      lineDiscount: l.line_discount,
+      rate: l.tax_rate,
+      label: l.tax_class_name ?? undefined,
+    })),
+    requestedOrderDiscount:
+      Number.isFinite(opts.orderDiscount) && (opts.orderDiscount ?? 0) > 0
+        ? Math.round(opts.orderDiscount!)
+        : 0,
+    pricesIncludeTax: billing.pricesIncludeTax,
+    taxEnabled: billing.taxEnabled,
+  });
+  const { subtotal, discount } = totals;
 
   // Discount cap — enforced SERVER-side; a cashier needs a manager PIN above it.
   if (requireApproval && subtotal > 0 && op.role === "cashier") {
@@ -851,37 +892,23 @@ export async function placePosSale(
   }
 
   // 6. Tax + GST split.
-  const taxResult = computeTax({
-    lines: priced.map((l) => ({
-      amount: l.amount,
-      rate: l.tax_rate,
-      label: l.tax_class_name ?? undefined,
-    })),
-    discount: orderDiscount,
-    pricesIncludeTax: billing.pricesIncludeTax,
-    enabled: billing.taxEnabled,
-  });
-  const tax = taxResult.totalTax;
+  const tax = totals.tax;
 
   // A walk-in's place of supply is the selling location's state.
   const placeOfSupply = supplierState;
   const intra = isIntraState(supplierState, placeOfSupply);
 
-  const total = Math.max(
-    0,
-    subtotal - discount + (billing.pricesIncludeTax ? 0 : tax),
-  );
+  const total = totals.total;
 
   // 7. Tenders must cover the total. Change is derived server-side.
   const paid = tenders.reduce((s, t) => s + t.amount, 0);
-  if (Math.round(paid * 100) < Math.round(total * 100)) {
-    return { error: "The payment doesn't cover the total." };
+  if (!coversTotal(paid, total)) {
+    return {
+      error: `The payment doesn't cover the total of ₹${total.toLocaleString("en-IN")}.`,
+    };
   }
   const cashTender = tenders.find((t) => t.method === "cash");
-  const changeDue =
-    Math.round((paid - total) * 100) / 100 > 0
-      ? Math.round((paid - total) * 100) / 100
-      : 0;
+  const changeDue = posChangeDue(paid, total);
   if (changeDue > 0 && !cashTender) {
     return { error: "Only a cash payment can produce change." };
   }
@@ -994,7 +1021,7 @@ export async function placePosSale(
     await withService((db) =>
       db.insert(orderItems).values(
         priced.map((l, i) => {
-          const lineTax = taxResult.lines[i]?.tax ?? 0;
+          const lineTax = totals.taxLines[i]?.tax ?? 0;
           const g = splitGst(gstEnabled ? lineTax : 0, intra);
           return {
             orderId,
@@ -1060,9 +1087,30 @@ export async function placePosSale(
     payload: {
       total,
       currency: "INR",
-      items: lines.length,
+      items: summariseItems(
+        priced.map((l) => ({
+          name: l.name,
+          variantName: l.variant_name,
+          quantity: l.quantity,
+        })),
+      ),
       paymentMethod: "pos",
       channel: "In-store",
+    },
+    // Same order summary the thermal receipt prints, so an attached customer's
+    // emailed copy and the paper in their hand agree line for line.
+    email: {
+      currency: "INR",
+      items: priced.map((l) => ({
+        name: l.name,
+        variant: l.variant_name,
+        quantity: l.quantity,
+        total: l.amount,
+      })),
+      subtotal: totals.subtotal,
+      discount: totals.discount,
+      tax: totals.tax,
+      total: totals.total,
     },
   });
 

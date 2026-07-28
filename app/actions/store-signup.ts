@@ -11,6 +11,7 @@ import { STORE_TAG } from "@/lib/store/resolve";
 import { ROOT_DOMAIN } from "@/lib/store/host";
 import { slugify } from "@/lib/slug";
 import { emitEvent } from "@/lib/notifications/record";
+import { recordSignupConsent } from "@/lib/legal/store";
 import { applyTheme } from "@/lib/themes/apply";
 import { DEFAULT_THEME_ID } from "@/lib/themes/meta";
 import { submitSitemapToGoogle, pingIndexNow } from "@/lib/seo/search-engines";
@@ -187,8 +188,14 @@ export interface CreateStoreInput {
   lastName?: string;
   /** ISO country code the merchant sells from (settings.business.country). */
   country?: string;
-  /** City the merchant sells from (settings.business.city; optional). */
+  /** City the merchant sells from (settings.business.city). Required. */
   city?: string;
+  /** Free-text address line, when the merchant confirmed a map pin. */
+  address?: string;
+  /** Pin coordinates, when captured. Stored as numbers, not strings, so the
+   *  eventual "stores near you" query doesn't have to parse them back. */
+  lat?: number;
+  lng?: number;
 }
 
 export interface CreateStoreResult {
@@ -248,9 +255,31 @@ export async function createStore(
   // under `business` (never a secret — convention #9).
   const country = (input.country || "").trim().slice(0, 2).toUpperCase();
   const city = (input.city || "").trim().slice(0, 80);
-  const business: Record<string, string> = {};
-  if (country) business.country = country;
-  if (city) business.city = city;
+  const address = (input.address || "").trim().slice(0, 300);
+
+  // Required server-side, not just in the wizard: a client can post whatever it
+  // likes, and every invoice this store ever prints carries this address.
+  if (!country) return { error: "Please choose the country you sell from." };
+  if (!city) return { error: "Please enter the city you sell from." };
+
+  const business: Record<string, string | number> = { country, city };
+  if (address) business.address = address;
+
+  // Coordinates are optional — they come from the map pin or the browser's
+  // geolocation, and a merchant who declines the permission prompt must still
+  // be able to finish signing up. Bounds-checked so a bad client can't store
+  // nonsense that later breaks a distance query.
+  const lat = Number(input.lat);
+  const lng = Number(input.lng);
+  if (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180
+  ) {
+    business.lat = lat;
+    business.lng = lng;
+  }
 
   // Create the store.
   let store: { id: string; slug: string };
@@ -345,8 +374,33 @@ export async function createStore(
     ]);
   });
 
-  // Platform-level event (store_id NULL): this is news for StoreMink
-  // operators, not for the merchant's own dashboard.
+  // Belt and braces: consent is recorded right after the account is created,
+  // but a wizard resumed from a refreshed tab or a Google redirect can reach
+  // store creation by a path that skipped it. The unique index makes this a
+  // no-op when it already landed, and an account that owns a store with NO
+  // recorded agreement is the one outcome worth a second write to avoid.
+  await recordSignupConsent({
+    userId: user.id,
+    email: user.email ?? null,
+    actorType: "merchant",
+    storeId: store.id,
+    context: "signup",
+  });
+
+  // The MERCHANT's welcome — the only thing that greets someone who has just
+  // finished signup. Without it a new store owner completed the wizard and
+  // received nothing: no confirmation, no store address, no next step.
+  // Scoped to the new store so it reaches the owner's own dashboard and inbox.
+  emitEvent({
+    type: "store.created",
+    storeId: store.id,
+    actor: { type: "system" },
+    subject: { type: "store", id: store.id, label: rawName.trim() },
+    payload: { storeUrl, plan: "free" },
+  });
+
+  // The OPERATORS' copy of the same moment (store_id NULL): same trigger,
+  // different audience, different words — the two-audience rule (§23).
   emitEvent({
     type: "platform.store_created",
     storeId: null,

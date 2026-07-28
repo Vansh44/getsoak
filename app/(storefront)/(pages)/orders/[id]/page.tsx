@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Package } from "lucide-react";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getMyOrder } from "@/app/actions/customer-order-actions";
@@ -82,115 +82,132 @@ export default async function MyOrderDetailPage({
           </div>
         </header>
 
-        {/* Progress. A cancelled order shows its own line rather than a
-            half-filled track that implies it's still on its way. */}
-        <div className={styles.card}>
-          <div className={styles.sectionTitle}>Progress</div>
-          {cancelled ? (
-            <p className={styles.summary}>
-              This order was cancelled. If you paid online, any refund goes back
-              to your original payment method.
-            </p>
-          ) : (
-            <div className={styles.timeline}>
-              {ORDER_FLOW.map((step, i) => {
-                const done = i <= reachedIndex;
-                return (
-                  <div key={step}>
-                    <div className={styles.step}>
-                      <span
-                        className={`${styles.stepDot} ${done ? styles.stepDotDone : ""}`}
-                      />
-                      <span
-                        className={`${styles.stepLabel} ${done ? styles.stepLabelDone : ""}`}
+        {/* Two columns on desktop: what's happening + what you bought on the
+            left, the money and where it's going on the right. Three stacked
+            full-width cards made a four-line order scroll like a document. */}
+        <div className={styles.layout}>
+          <div className={styles.main}>
+            {/* A cancelled order gets its own line rather than a half-filled
+                track implying it's still on its way. */}
+            <div className={styles.card}>
+              <div className={styles.sectionTitle}>Progress</div>
+              {cancelled ? (
+                <p className={styles.summary}>
+                  This order was cancelled. If you paid online, any refund goes
+                  back to your original payment method.
+                </p>
+              ) : (
+                <ol className={styles.track}>
+                  {ORDER_FLOW.map((step, i) => {
+                    const done = i <= reachedIndex;
+                    return (
+                      <li
+                        key={step}
+                        className={`${styles.trackStep} ${done ? styles.trackStepDone : ""}`}
                       >
-                        {CUSTOMER_STATUS_LABEL[step]}
-                      </span>
-                    </div>
-                    {i < ORDER_FLOW.length - 1 && (
-                      <div
-                        className={`${styles.stepLine} ${i < reachedIndex ? styles.stepLineDone : ""}`}
+                        <span className={styles.trackDot} />
+                        <span className={styles.trackLabel}>
+                          {CUSTOMER_STATUS_LABEL[step]}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+            </div>
+
+            <div className={styles.card}>
+              <div className={styles.sectionTitle}>
+                {order.item_count} {order.item_count === 1 ? "item" : "items"}
+              </div>
+              <ul className={styles.itemList}>
+                {order.items.map((item) => (
+                  <li key={item.id} className={styles.item}>
+                    {item.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.image}
+                        alt=""
+                        className={styles.itemThumb}
+                        loading="lazy"
                       />
+                    ) : (
+                      <span className={styles.itemThumbFallback} aria-hidden>
+                        <Package size={18} />
+                      </span>
                     )}
-                  </div>
-                );
-              })}
+                    <div className={styles.itemInfo}>
+                      <div className={styles.itemName}>{item.name}</div>
+                      <div className={styles.itemMeta}>
+                        {item.variant_name ? `${item.variant_name} · ` : ""}
+                        {money(item.price, order.currency)} × {item.quantity}
+                      </div>
+                    </div>
+                    <div className={styles.itemTotal}>
+                      {money(item.total, order.currency)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
-          )}
-        </div>
+          </div>
 
-        <div className={styles.card}>
-          <div className={styles.sectionTitle}>Items</div>
-          {order.items.map((item) => (
-            <div key={item.id} className={styles.item}>
-              <div>
-                <div className={styles.itemName}>{item.name}</div>
-                <div className={styles.itemMeta}>
-                  {item.variant_name ? `${item.variant_name} · ` : ""}
-                  {money(item.price, order.currency)} × {item.quantity}
+          <aside className={styles.side}>
+            <div className={styles.card}>
+              <div className={styles.sectionTitle}>Summary</div>
+              <div className={styles.totalsRow}>
+                <span>Subtotal</span>
+                <span>{money(order.subtotal, order.currency)}</span>
+              </div>
+              {order.discount > 0 && (
+                <div className={styles.totalsRow}>
+                  <span>
+                    Discount
+                    {order.applied_coupon_code
+                      ? ` (${order.applied_coupon_code})`
+                      : ""}
+                  </span>
+                  <span>−{money(order.discount, order.currency)}</span>
                 </div>
+              )}
+              {order.shipping > 0 && (
+                <div className={styles.totalsRow}>
+                  <span>Shipping</span>
+                  <span>{money(order.shipping, order.currency)}</span>
+                </div>
+              )}
+              {order.tax > 0 && (
+                <div className={styles.totalsRow}>
+                  <span>Tax</span>
+                  <span>{money(order.tax, order.currency)}</span>
+                </div>
+              )}
+              <div className={`${styles.totalsRow} ${styles.totalsGrand}`}>
+                <span>Total</span>
+                <span>{money(order.total, order.currency)}</span>
               </div>
-              <div className={styles.itemName}>
-                {money(item.total, order.currency)}
-              </div>
+              <Link
+                href={`/checkout/invoice/${order.id}`}
+                className={styles.invoiceBtn}
+              >
+                View invoice
+              </Link>
             </div>
-          ))}
 
-          <div style={{ marginTop: 18 }}>
-            <div className={styles.totalsRow}>
-              <span>Subtotal</span>
-              <span>{money(order.subtotal, order.currency)}</span>
+            <div className={styles.card}>
+              <div className={styles.sectionTitle}>Delivery address</div>
+              <div className={styles.address}>
+                {addressLines(order.shipping_address).map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+              {order.notes && (
+                <p className={styles.summary} style={{ marginTop: 14 }}>
+                  <strong>Note:</strong> {order.notes}
+                </p>
+              )}
             </div>
-            {order.discount > 0 && (
-              <div className={styles.totalsRow}>
-                <span>
-                  Discount
-                  {order.applied_coupon_code
-                    ? ` (${order.applied_coupon_code})`
-                    : ""}
-                </span>
-                <span>−{money(order.discount, order.currency)}</span>
-              </div>
-            )}
-            {order.shipping > 0 && (
-              <div className={styles.totalsRow}>
-                <span>Shipping</span>
-                <span>{money(order.shipping, order.currency)}</span>
-              </div>
-            )}
-            {order.tax > 0 && (
-              <div className={styles.totalsRow}>
-                <span>Tax</span>
-                <span>{money(order.tax, order.currency)}</span>
-              </div>
-            )}
-            <div className={`${styles.totalsRow} ${styles.totalsGrand}`}>
-              <span>Total</span>
-              <span>{money(order.total, order.currency)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className={styles.card}>
-          <div className={styles.sectionTitle}>Delivery address</div>
-          <div className={styles.address}>
-            {addressLines(order.shipping_address).map((line, i) => (
-              <div key={i}>{line}</div>
-            ))}
-          </div>
-          {order.notes && (
-            <p className={styles.summary} style={{ marginTop: 14 }}>
-              <strong>Note:</strong> {order.notes}
-            </p>
-          )}
-          <p style={{ marginTop: 16 }}>
-            <Link
-              href={`/checkout/invoice/${order.id}`}
-              className={styles.link}
-            >
-              View invoice
-            </Link>
-          </p>
+          </aside>
         </div>
       </div>
     </div>

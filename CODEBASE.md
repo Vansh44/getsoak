@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
+│   │                          # per location (no row = show the whole catalogue)
 │   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
 │   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
@@ -1370,6 +1372,24 @@ group, span}` (span = columns of the 4-wide desktop grid),
       (`reserve_stock_at`), service-role writes last, and a reverse rollback
       chain on any failure. `getRegisterConfig` opens the register;
       `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **★ ONE total, shared by the screen and the sale** (`lib/pos/totals.ts`,
+        pure + tested). `posTotals` owns subtotal → line markdowns → capped
+        order discount → tax → total, and BOTH `placePosSale` and the sell
+        screen call it. The screen used to quote the PRE-TAX subtotal ("tax is
+        calculated on the server when the sale completes") while the server
+        charged the tax-inclusive total: a ₹238 cart on a 5% class was quoted
+        ₹238, rung up at ₹249.90, and ₹300 cash returned ₹50.10 instead of the
+        ₹62 promised — and tendering the quoted ₹238 was refused as "the payment
+        doesn't cover the total" by the same panel that said "Paid in full
+        ₹238". Rates reach the client via `RegisterConfig.taxRates` (class id →
+        rate) + `PosCatalogItem.taxClassId`, resolved with the store's
+        `defaultTaxClassId` exactly as the server resolves it — no round trip,
+        so the POS zero-network promise holds. Rates ride in the CONFIG, not the
+        cached catalog, because the catalog persists in IndexedDB and a stale
+        rate would misquote a customer; the catalog cache key now carries a
+        `SCHEMA_VERSION` so an older CatalogItem shape is re-synced rather than
+        served. Money is compared in PAISE (`coversTotal`/`changeDue`) — a
+        rupee-float compare can refuse an exactly-covering payment.
       - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
         AMOUNT (not the rate) so it can never disagree with `computeTax`'s
         rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
@@ -1448,6 +1468,27 @@ group, span}` (span = columns of the 4-wide desktop grid),
         stock and the default gained one it never had, silently, compounding
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
+      - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
+        to the end of the register grid — `isOutOfStock` in
+        `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
+        state and the ordering must agree), and `buildIndex` precomputes an
+        `ordered` array so the empty-query slice can't fill the first screen
+        with things nobody can sell. **`applyLayout`** then lets a manager or
+        owner (`edit_layout` capability, so never a cashier) choose exactly
+        which products the till shows and in what order — `/pos/sell` →
+        "Edit layout" (`layout-editor.tsx`: searchable catalogue on the left,
+        dnd-kit sortable grid on the right), stored per LOCATION in
+        `pos_layouts` (`supabase/pos_09_register_layout.sql`,
+        `app/actions/pos-layout-actions.ts`). Three rules: **no row = show the
+        whole catalogue**, so the feature could not blank a register that
+        predates it and a failed read degrades to everything rather than an
+        empty till; the sold-out shift is computed at RENDER, never written
+        back, so a restock returns a product to its chosen slot with no edit;
+        and **search always spans the whole catalogue** — the layout decides
+        what the IDLE grid shows, never what can be found and sold, or the
+        products left off would be unsellable. Entries are not FK-checked, so
+        a deleted product silently drops its tile; the header shows
+        "12 of 20 products" once configured.
     - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
       inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
       writes to the DEFAULT location, so a multi-location store cannot yet
@@ -1455,6 +1496,340 @@ group, span}` (span = columns of the 4-wide desktop grid),
       receipts (6), metered extra-location billing (7), omnichannel/BOPIS (8),
       offline outbox (9).
       See `docs/pos-plan.md`.
+
+23. **Notifications & email — one event log, registry-driven fan-out, one way
+    out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
+    decision lives, how to add one, troubleshooting). This section restores the
+    summary the POS merge overwrote.
+    - **EVERY action emits an EVENT** into append-only `activity_events` — the
+      audit trail, complete by construction, rendered at `/dashboard/activity`.
+      Only events with a non-empty `audiences` entry FAN OUT into per-recipient
+      `notifications` rows; `audiences: {}` is audit-only, which is how a busy
+      store gets full history without 400 badges a day.
+    - **ONE EVENT, TWO AUDIENCES.** "Order placed" tells the TEAM ("New order
+      ORD10011027 · ₹1,240") and the CUSTOMER ("Thanks for your order") — same
+      trigger, nothing else shared. Config is **per audience**
+      (`notification_settings.channels`/`templates` keyed `{team, customer}`),
+      because turning off team email must never stop a shopper's confirmation.
+      That was a real bug; there is a regression test.
+    - **Configuration resolves in THREE layers**, the settings-registry shape
+      (convention #9): code registry (`lib/notifications/events.ts`) ←
+      `notification_definitions` (operators) ← `notification_settings` (the
+      merchant). An empty database behaves exactly like the code defaults.
+      Console at **Settings → Notifications**, gated on the `notifications`
+      section; personal opt-outs at `…/notifications/me`.
+    - **EVERY registry entry HAS AN EMITTER — CI-enforced.**
+      `lib/notifications/coverage.test.ts` fails unless each key is emitted from
+      `app/`/`lib/` or listed in `PENDING` with the unbuilt feature it waits on.
+      27 of 38 were dead before it existed. **Its limit:** it asserts a key is
+      emitted SOMEWHERE, not that every path which should emit it does — which
+      is how POS sales stayed silent (§22).
+    - **`recordEvent` in crons/webhooks, `emitEvent` in server actions** —
+      `after()` has nothing to defer onto once a cron response is sent.
+    - **THRESHOLD EVENTS FIRE ON THE CROSSING, NOT THE STATE**, or a merchant
+      gets one mail per sale and stops reading all of them: `stockAlertFor`
+      (`lib/inventory/alerts.ts`), `aiWarnAt` (`lib/ai/quota.ts` — at 3 left
+      AND at 0, because the FREE plan's whole cap IS 3 and a single trigger
+      would have skipped the entire tier), `expiryWarnWindow` (`lib/plans.ts`,
+      24-hour bands at 7 and 1 days out), `campaign.sent` (conditional → done
+      claim), `customer.signed_up` (`xmax = 0`, so an upsert that only UPDATED
+      isn't a signup). All pure and tested.
+    - **A NEW MERCHANT GETS A WELCOME.** Store creation used to emit only
+      `platform.store_created` — operators, in-app — so the person who had just
+      finished signup received NOTHING: no confirmation, no store address, no
+      next step. `createStore` now emits **`store.created`** as well
+      (store-scoped, `store-admins`, BOTH channels, `configurable: false` —
+      nobody can have turned it off before they had an account). The two are
+      the same moment for different audiences, which is the §23 rule working as
+      intended, not duplication. - **SOME COPY IS HAND-WRITTEN** (`BESPOKE` in default-templates.ts). The
+      generated shape — intro, then a Reference/Who/When fact list — is right
+      for a report and wrong for anything a person should feel something about;
+      a welcome rendered as a fact list reads like a receipt for existing. Keep
+      the map small: an event that only needs a better opening line belongs in
+      `INTRO`. - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+      entry is in-app only: `plan.changed` + `subscription.payment_failed`
+      leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
+      email — nothing else warns before a lapse.
+    - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
+      sends AND logs, never throws into its caller, and records failures as
+      readily as successes. There were EIGHT scattered `resend.emails.send`
+      calls and none recorded anything. **`send-coverage.test.ts` fails if a
+      ninth appears.** Batch workers can't use the single-message path without
+      losing batching, so they call `sendEmailBatch` + `logEmail` explicitly.
+    - **A BATCH ERROR IS NOT A VERDICT ON THE BATCH** (`lib/email/send-batch.ts`).
+      Resend validates the whole request, so one bad recipient errors all 100 —
+      and both workers used to mark all 100 failed, permanently in the campaign
+      worker, which has no retry. It now re-sends a failed slice message by
+      message so only the real culprit fails; three failures in a row is an
+      outage, not a poison pill, so it stops probing.
+    - **SENDING ≠ DELIVERY.** `/api/webhooks/resend` (Svix-verified,
+      `RESEND_WEBHOOK_SECRET`) writes permanent bounces + complaints to
+      **`email_suppressions`** — GLOBAL, no `store_id`, the one table here that
+      isn't tenant-scoped, because a hard bounce bounces for everyone and the
+      shared sending domain's reputation is the platform's. Only PERMANENT
+      signals suppress; an unknown bounce sub-type is treated as soft. Both
+      workers filter, failing OPEN. Failed rows surface in a panel on the
+      notifications page (`getDeliveryHealth` + `retryFailedEmail`) that renders
+      only when mail actually failed.
+    - **"INSTANT" RESTS ON THE WORKER KICK.** The cron heartbeat is DAILY, so if
+      `triggerEmailWorker` doesn't land, mail waits up to 24 h — silently.
+      The origin is **the current request's host** (`getRequestOrigin()`), not a
+      configured one: resolving it from env made a local dev order POST the kick
+      to `https://staging.storemink.com`, telling another environment to drain a
+      queue that wasn't ours. `PLATFORM_URL` remains the fallback for callers
+      with no request scope (the cron chaining itself).
+    - **EMAIL LOGS** at `/dashboard/activity/email-logs` (a child of Activity
+      Logs, same `activity` permission): To / From / Type / Provider / Status /
+      Sent at, filterable, with the body in a **sandboxed iframe** (no
+      `allow-same-origin`, no `allow-scripts`). `supabase/email_logs.sql`,
+      service-role only, pruned at 90 days. `lib/email/mailers.ts` is the
+      mail-TYPE catalog and marks `password_reset`, `staff_invite`,
+      `pos_staff_invite` and `pos_credential_reset` **sensitive** — their bodies
+      carry a working credential and are not stored. **`operator_otp` is
+      deliberately NOT redacted** (owner's decision, 2026-07-27): the code is
+      stored in full so a sign-in that "never arrived" can be checked. It's
+      platform mail (`store_id NULL`), so it only appears on the storemink.com
+      console — but an operator can read another operator's live code. Flipping
+      one flag reverses it; both behaviours are pinned by tests.
+    - **VALUES ARE FORMATTED FOR READING** (`lib/notifications/format.ts`, pure
+      - tested). Every value used to reach the email as `String(value)`, so an
+        order confirmation read "Total 281.4 / Currency INR / Payment method cod /
+        When 28/7/2026, 12:20:46 am" — four tells that nobody had looked at it,
+        while the variable catalog had been advertising `sample: "₹1,240.00"` all
+        along, so the console previewed something the send could never produce.
+        `formatVariable` maps by variable NAME (`items` and `total` are both
+        numbers; only one is a price): money → `₹281.40` via Intl with Indian
+        grouping, `payment_method` → "Cash on delivery", `status` → title case,
+        dates → "28 July 2026 at 5:50 am", `days_left` → "7 days". `link` passes
+        through untouched — formatting would corrupt a URL. `HIDDEN_VARIABLES`
+        drops `currency` from the summary: it rides on every amount, so its own
+        row was the email saying it twice. `summariseItems` replaces the bare
+        count with what was bought ("3 items · Amul Taaza Toned Milk (1 L), Tata
+        Salt × 2"), capped at three names — the difference between a receipt and a
+        log line. The CTA button is renderer chrome (`emailButton` from the
+        notification's url), not editable copy, so a body can never end up with
+        two of them.
+    - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
+      `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
+      passed it, so EVERY email rendered as team mail: a shopper's order
+      confirmation arrived with a "View in dashboard" button and a footer
+      inviting them to "change what you get emailed about" — linking to a
+      staff-only page they cannot open, about transactional mail that isn't
+      switchable in the first place (the customer audience has no preference
+      layer, by design). `isTeamRow` now derives it from the row, defaulting to
+      TEAM only for non-customer types so an unknown type can't silently turn a
+      receipt back into staff mail. `groupRows` keys on recipient_type too:
+      one person can be BOTH (an owner ordering from their own store), and
+      grouped without it their staff and customer rows shared one digest
+      rendered with whichever sorted first. Regression-tested in both
+      directions. - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
+      pure + tested). It cannot come through the merchant template system:
+      template values are ESCAPED strings — that escaping is the XSS boundary —
+      so a table would arrive as visible markup. It renders between the body and
+      the CTA button, like the button itself. All `<table>` with inline styles
+      and explicit widths, the only layout Outlook, Gmail clipping and a 320px
+      phone agree on. Items + totals ladder, discounts shown NEGATIVE (bare,
+      they read as another charge and the totals visibly stop adding up), capped
+      at 20 rows with "+N more", names escaped, and `""` when there's nothing to
+      show — the block is attached to every notification email and an empty
+      frame on "Blog approved" would look broken. - **THE ITEMS RIDE THEIR OWN FIELD, NOT THE PAYLOAD.** `EmitEventInput.email`
+      is display-only data for the email channel, snapshotted onto
+      `notification_email_queue.line_items`
+      (`supabase/notifications_06_email_items.sql`) at enqueue. It is separate
+      from `payload` because that one is the AUDIT record — kept small and
+      scalar on purpose (`sanitizePayload` drops objects and arrays) and read by
+      the bell, the activity feed and merchant `{{tokens}}`. Snapshotting (like
+      title/body/url) means the worker needs no joins and a receipt keeps the
+      prices it was written with. `sanitizeSummary` bounds it: 50 items, capped
+      names, coerced numbers. Emitted by `placeOrder` and `placePosSale`, so an
+      in-store customer's emailed copy and their printed receipt agree line for
+      line. - **The fact list and the table must not both carry the same thing.**
+      `HAS_ORDER_SUMMARY` + `SUMMARY_OWNED` (default-templates.ts) drop items
+      and every money row from the built-in copy for events that render a
+      summary — printing "Total ₹343.00" directly above a table ending in
+      ₹343.00 is what makes an email look auto-generated. The fact list keeps
+      what the table doesn't: reference, payment method, when. The tokens stay
+      declared, so a merchant who wants them can still use them. - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): the same neutral
+      palette for every store — white card, near-black text, one dark button.
+      The storefront accent is deliberately unused: pushed into an email it must
+      survive colour-managed clients and forced dark mode, and the failure mode
+      is a customer receiving something that looks broken. Identity comes from
+      the logo. Every email type routes through it.
+    - **Email is a QUEUE, never an inline send** (`notification_email_queue`):
+      the fan-out enqueues, `lib/email/notification-worker.ts` drains it from
+      `/api/cron/send-emails`. A Resend round-trip must never sit on a
+      checkout's code path. Retries back off (5/15/45 min, 3 attempts).
+      **Digests** date each row to the END of its window (clock-aligned, so one
+      window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
+      heartbeat is 00:00 UTC — **move it if the cron moves.**
+
+24. **Legal & consent — versioned policies, and consent as evidence.**
+    - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,
+      Privacy, Acceptable Use) live in **`legal_documents`** — platform-global,
+      no `store_id`, the `platform_admins`/`help_categories` model. A MERCHANT's
+      own store policies are ordinary `store_pages` rows at the existing
+      `terms`/`privacy-policy`/`refund-policy` slugs, written by a guided
+      editor: the deliberate decision NOT to build a second CMS when the website
+      builder already renders and versions pages.
+    - **A VERSION AND A CHECKSUM, OR IT'S WORTHLESS.** "They accepted the terms"
+      means nothing without "…which said THIS". Each version stores its exact
+      body plus a sha256, and an acceptance references the version id. So a
+      published row is **IMMUTABLE, enforced by a DB trigger** — a change is a
+      new version, never an UPDATE — and published rows cannot be deleted
+      because acceptances point at them. `legal_documents_current_key` (partial
+      unique on `is_current`) guarantees "what must be accepted right now?" has
+      exactly one answer per kind.
+    - **CONSENT IS NEVER A CLIENT BOOLEAN.** A checkbox is a UI affordance:
+      anyone can POST `accepted: true` and a form can be replayed. The row is
+      written SERVER-SIDE by `recordSignupConsent` (`lib/legal/store.ts`) from
+      the REQUEST's own IP and user agent, against the versions the server
+      re-reads — the client never says which version it agreed to.
+      `legal_acceptances` is **append-only, trigger-enforced**, service-role
+      writes only; retracting consent is a future event, never an edit to the
+      past. Idempotent on `(user_id, document_id)`, so the safety-net write in
+      `createStore` (for a wizard resumed past the account step) is a no-op when
+      the first one landed.
+    - **CONTENT LIVES IN CODE, TRUTH LIVES IN THE DB.** `lib/legal/content.ts`
+      holds v1 so it is reviewable in a diff; `scripts/seed-legal.ts` publishes
+      it idempotently (the `ensureHomepage` pattern). Once published the DB row
+      is authoritative and immutable — editing the file changes what the NEXT
+      version says, never what anyone already accepted. `/legal/[slug]` renders
+      the DB row with its version and effective date, because an acceptance
+      references a version and the reader must see which one.
+    - **THE TWO BOXES ARE DIFFERENT THINGS.** The mandatory tick names and links
+      the actual documents and gates BOTH signup paths (email and Google start
+      from the same screen). The optional product-updates box is unticked,
+      gates nothing, and writes to `admins.marketing_opt_in` — a preference on
+      the PERSON, kept apart from `legal_acceptances` because conflating a
+      contract with a mailing preference is what makes a consent record
+      arguable later.
+    - **ONE BOX, EVERY REQUIRED DOCUMENT — AND THE LIST COMES FROM THE
+      REGISTRY.** All three (Terms, Privacy, **Acceptable Use**) are
+      `requiredAtSignup`, so all three get a real acceptance row. The AUP was
+      briefly excluded on the theory that it rides along via the Terms clause
+      "which forms part of these Terms" — but one tick box names every required
+      document, so including it costs the merchant nothing: a third name in the
+      sentence, not a third box. And it is the document you actually ENFORCE
+      against when suspending a store, which is a bad thing to hold only by
+      reference from another document. The signup sentence, the acceptance
+      write and the re-acceptance gate all read `signupRequiredDocs()` —
+      hardcoding the names in the UI is how a merchant ends up ticking a box
+      for two documents while the server records three.
+    - **FAIL OPEN ON THE GATE, LOUD ON THE WRITE.** `outstandingDocs` (the
+      re-acceptance check) returns empty on a DB error — a hiccup must not lock
+      every merchant behind a consent screen they cannot pass. But a consent
+      write that finds no published documents logs an ERROR: an account created
+      with no recorded agreement is exactly what this exists to prevent.
+    - **⚠ THE POLICY TEXT IS NOT LAWYER-REVIEWED.** It covers the shields this
+      product structurally needs — platform-not-seller, funds settling directly
+      to merchants (§18), merchant-as-controller, "as is", liability capped at
+      12 months' fees, merchant indemnity — and carries `⚠ REVIEW` markers on
+      the clauses where wording most affects exposure. Get counsel on it before
+      taking real money.
+    - **EDITING A POLICY MEANS PUBLISHING A NEW VERSION.** There is no other
+      way, and three things enforce it: the DB trigger rejects an UPDATE to a
+      published body, `ensureLegalSeeded` skips a kind that already has a
+      current version, and `publishLegalVersion` refuses a version that isn't
+      strictly higher than the current one. Flow: edit the body in
+      `lib/legal/content.ts`, bump its `version`, run
+      `scripts/publish-legal.ts --publish`. The const is `LEGAL_CONTENT`, NOT
+      `_V1` — someone writing v2 must not be editing something named for v1.
+      **The retire and the insert are ONE transaction** (`withService` wraps in
+      BEGIN/COMMIT): `legal_documents_current_key` allows one current row per
+      kind, so insert-first violates it — and retire-first that dies before the
+      insert would leave the policy with NO current version, which makes the
+      signup screen nameless and `recordSignupConsent` log "no published
+      documents" for every new account. Order is pinned by a test.
+    - **THE PUBLISH SCRIPT IS DRY-RUN BY DEFAULT.** It cannot be undone and, with
+      the gate live, it interrupts every merchant on their next dashboard load.
+      It also **detects a body edited WITHOUT a version bump** by comparing the
+      checksum — otherwise that edit silently does nothing and whoever made it
+      believes the policy changed. (This is why `PublishedDoc` carries
+      `checksum`.)
+    - **THE RE-ACCEPTANCE GATE LIVES IN THE DASHBOARD LAYOUT, NOT `proxy.ts`.**
+      The proxy reads its claims straight from the verified session cookie and
+      does no DB query at all — that is its design — and "which documents has
+      this user not accepted?" cannot be answered from a cookie. Claims can't
+      carry it either: a claim set server-side doesn't reach an EXISTING session
+      until the cookie is re-minted, which is precisely the population a v2 must
+      reach. So the layout, which already resolves the viewer from the database,
+      calls `outstandingDocs(ctx.userId)` and redirects to
+      **`/auth/policy-update`** — under `/auth` because a route inside
+      `/dashboard` would be wrapped by the same layout and redirect to itself
+      forever, and because that is where the analogous `force_password_reset`
+      screen already lives. The gate sits AFTER the outage and no-access
+      branches: an unreachable database must never present as a consent demand.
+      `getSignupDocsCached` (60s, tag `LEGAL_TAG`, busted on publish) keeps it
+      to ONE indexed query per dashboard load; the consent WRITE path stays
+      uncached, because recording an acceptance against a superseded version is
+      the exact failure this feature exists to prevent.
+      **`unstable_cache` THROWS ("Invariant: incrementalCache missing") when
+      there is no render scope** — a server action, a route handler, a script.
+      `outstandingDocs` is called from the layout (has one) AND from
+      `acceptUpdatedPolicies` (does not), so the cached read is wrapped in a
+      try/catch that falls through to the uncached query. The cache is an
+      OPTIMISATION, never an input to correctness. Unguarded, the accept action
+      rejected and the screen hung on "Saving…" forever — which is also why the
+      client wraps the action in try/catch: **a thrown action inside
+      `startTransition` leaves `pending` true permanently and surfaces
+      nothing.** Both are regression-tested.
+    - **THE GATE CATCHES INVITED STAFF TOO**, not just owners — they reach the
+      dashboard through `/auth/set-password`, never the signup wizard, so they
+      had agreed to nothing at all. The screen has a **"Sign out instead"**
+      escape: someone who won't agree must be able to leave rather than be
+      stuck on a screen with one button. And `acceptUpdatedPolicies` re-derives
+      what is outstanding and VERIFIES the write stuck — `recordSignupConsent`
+      swallows its errors by design, so without the re-check a failure would
+      bounce the merchant back to the gate with no explanation.
+    - **A STORE'S OWN POLICIES ARE ORDINARY PAGES.** Settings → Policies
+      (`/dashboard/settings/policies`) edits Terms, Refund, Shipping and
+      Privacy as `store_pages` rows at the slugs the footer ALREADY links to —
+      so writing one fixes the dead link rather than adding a second address
+      for the same document. The registry is `lib/legal/store-policies.ts`.
+      Deliberately NOT the versioned/checksummed/immutable machinery of
+      `legal_documents`: that exists so you can prove what a merchant agreed to
+      years later, whereas a shop owner should be able to reword their returns
+      policy on a Tuesday without a release process. Saving PUBLISHES — a
+      draft-only refund policy is a broken link and an unreadable consent box —
+      and emptying one unpublishes rather than leaving a blank page live.
+      The editor is a plain TEXTAREA (`lib/legal/policy-text.ts`, pure +
+      tested): merchants write prose, `plainToHtml` escapes it into `<p>`
+      blocks. **`htmlToPlain` returns null for anything richer than paragraphs**
+      and the card sends them to the builder instead — the same page can be
+      edited there, and loading headings or lists into a textarea would destroy
+      them on the next save. The prompts are PROMPTS, never pre-written prose:
+      a generated policy nobody read looks authoritative and says things the
+      merchant never agreed to.
+    - **SHOPPER CONSENT: SIGNUP AND CHECKOUT.** The box is written server-side
+      at the two moments that matter — `upsertCustomerProfile` on a genuine
+      first insert (the same `xmax = 0` signal the signup event uses) and
+      `placeOrder` AFTER the order is safely persisted (the shopper agreed by
+      placing it; a consent write that could roll back a paid order would be
+      the tail wagging the dog). Checkout names only Terms + Refund
+      (`atCheckout` in the registry) — the privacy policy in a sentence about
+      paying is noise. `recordStorePolicyConsent` re-reads the live text and
+      HASHES it; the client never says which policy or which wording it agreed
+      to. **The box renders only when the store has published something**: one
+      naming documents nobody can read would manufacture a record of agreement
+      to a blank page, so `PolicyConsent` returns null and the caller must not
+      gate its button on a box that isn't there.
+    - **AN ACCEPTANCE IS ANCHORED TO EXACTLY ONE THING**
+      (`supabase/legal_02_store_consent.sql`): a platform `document_id`
+      (immutable, versioned) or a `policy_slug` + `policy_checksum`, enforced by
+      a CHECK — a row anchored to nothing records agreement to something
+      unspecified, which is worth less than no row. The checksum, not a
+      snapshot: 64 bytes answers "has this text changed since they agreed?",
+      and if it hasn't, the live page IS the evidence. Store-policy rows get
+      their OWN unique index `(user_id, store_id, policy_slug)` — the old
+      `(user_id, document_id)` key silently stops working when document_id is
+      NULL — and the append-only trigger gains one narrow exception so
+      re-accepting a reworded policy refreshes the checksum instead of throwing.
+      Identity (user/store/policy/actor) still can't change, and platform
+      acceptances remain fully immutable.
+    - **NOT YET BUILT:** consent at sign-in, an operator UI to publish v2 (the
+      script is the tool today), and seeding starter policy pages at signup —
+      until that lands, a new store's footer links to policy pages that do not
+      exist yet.
 
 ## 6. Commands
 
@@ -1595,6 +1970,16 @@ npm run format      # prettier --write
   Deploy wiring is per-env (`_POS_SESSION_SECRET_SECRET` → the
   `POS_SESSION_SECRET_STAGING`/`_PROD` Secret Manager entries) — see
   `docs/gcp-ci-cd.md`.
+- **Google Maps** (signup location step, §19): **`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`**
+  — a Maps JavaScript API key from Google Cloud. Needs a billing account with a
+  card even to stay inside the free allowance, and the key is public by nature
+  (it ships to the browser), so restrict it by HTTP referrer to the app's hosts
+  and enable only Maps JavaScript + Geocoding. **Entirely optional at runtime**:
+  `app/platform/signup/location-picker.tsx` renders the map only when the key is
+  set and falls back to the plain country/city form when it is missing, blocked,
+  or rejected — location is a REQUIRED signup step, so the map must never be
+  able to stop someone signing up. "Use my current location" is the browser's
+  own Geolocation API: free, keyless, and works with the map switched off.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&

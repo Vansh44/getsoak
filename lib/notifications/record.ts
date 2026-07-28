@@ -41,6 +41,7 @@ import {
   type PreferenceOverride,
 } from "./events";
 import { renderNotification } from "./render";
+import type { EmailOrderSummary } from "@/lib/email/line-items";
 import { digestSendAfter } from "./digest";
 import { selectRecipients } from "./routing";
 import { resolveNotification, type AudienceKey } from "./config";
@@ -86,6 +87,16 @@ export interface EmitEventInput {
    * any event with a `customer` audience — without it there is nobody to tell.
    */
   customerId?: string | null;
+  /**
+   * DISPLAY-ONLY extras for the EMAIL channel — today, an order summary.
+   *
+   * Deliberately separate from `payload`: that one is the audit record, kept
+   * small and scalar on purpose (sanitizePayload drops objects and arrays), and
+   * it feeds the bell, the activity feed and merchant {{tokens}}. A line-item
+   * list is none of those things — it's one channel's layout — so it rides its
+   * own field and is snapshotted onto the queue row at enqueue.
+   */
+  email?: EmailOrderSummary;
 }
 
 // Payload guards. The column is jsonb and store admins can read every event of
@@ -114,6 +125,38 @@ function sanitizePayload(
     // needs nesting is a sign the data belongs in its own table.
   }
   return out;
+}
+
+/**
+ * Bound the order summary before it is stored.
+ *
+ * Same reasoning as sanitizePayload: this is a jsonb column written from a call
+ * site, so it needs a ceiling and a known shape rather than whatever an emitter
+ * happens to pass. Names are capped, quantities and money coerced to finite
+ * numbers, and the row count limited — a 500-line order must not turn one queue
+ * row into a document.
+ */
+const MAX_SUMMARY_ITEMS = 50;
+
+function sanitizeSummary(summary: EmailOrderSummary): EmailOrderSummary {
+  const num = (v: unknown): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    items: (summary.items ?? []).slice(0, MAX_SUMMARY_ITEMS).map((i) => ({
+      name: String(i.name ?? "").slice(0, 200),
+      variant: i.variant ? String(i.variant).slice(0, 100) : null,
+      quantity: num(i.quantity) ?? 0,
+      total: num(i.total),
+    })),
+    currency: summary.currency ? String(summary.currency).slice(0, 8) : null,
+    subtotal: num(summary.subtotal),
+    discount: num(summary.discount),
+    tax: num(summary.tax),
+    shipping: num(summary.shipping),
+    total: num(summary.total),
+  };
 }
 
 function trim(value: string | null | undefined, max = 300): string | null {
@@ -482,6 +525,9 @@ async function fanOut(
           // order confirmation must never be Cc'd to the team.
           cc: isStaff ? (audienceConfig?.templates.email?.cc ?? null) : null,
           bcc: isStaff ? (audienceConfig?.templates.email?.bcc ?? null) : null,
+          // Snapshotted like the copy above, so a receipt keeps the prices it
+          // was written with even if the order is edited before it sends.
+          lineItems: input.email ? sanitizeSummary(input.email) : null,
           sendAfter: digestSendAfter(channels.digest).toISOString(),
         });
       }

@@ -17,10 +17,23 @@ export type CatalogItem = PosCatalogItem;
 export interface CatalogIndex {
   /** Every sellable SKU, in the order the server returned them. */
   all: CatalogItem[];
+  /** `all`, with sold-out SKUs moved to the end (stable otherwise). This is
+   *  what the register's idle grid shows: a cashier reaching for a product
+   *  should not have to scroll past things they cannot sell. */
+  ordered: CatalogItem[];
   /** A code can map to SEVERAL SKUs — mislabelled supplier barcodes are
    *  common in retail, so the register disambiguates rather than guessing. */
   byBarcode: Map<string, CatalogItem[]>;
   bySku: Map<string, CatalogItem[]>;
+}
+
+/**
+ * Can this SKU be sold right now? The single definition of "sold out" for the
+ * register — the grid's disabled state and the ordering below must agree, or
+ * the greyed-out cards won't be the ones at the end.
+ */
+export function isOutOfStock(i: CatalogItem): boolean {
+  return i.trackInventory && !i.allowBackorder && (i.stock ?? 0) <= 0;
 }
 
 export const itemKey = (i: {
@@ -55,7 +68,13 @@ export function buildIndex(items: CatalogItem[]): CatalogIndex {
     pushInto(byBarcode, it.barcode, it);
     pushInto(bySku, it.sku, it);
   }
-  return { all: items, byBarcode, bySku };
+  // Stable partition rather than a sort: equal-availability items keep the
+  // catalog's own order, so the grid doesn't reshuffle between syncs.
+  const inStock: CatalogItem[] = [];
+  const soldOut: CatalogItem[] = [];
+  for (const it of items) (isOutOfStock(it) ? soldOut : inStock).push(it);
+
+  return { all: items, ordered: inStock.concat(soldOut), byBarcode, bySku };
 }
 
 export const EMPTY_INDEX: CatalogIndex = buildIndex([]);
@@ -113,7 +132,7 @@ export function searchLocal(
   limit = 24,
 ): CatalogItem[] {
   const q = normText(query ?? "");
-  if (!q) return index.all.slice(0, limit);
+  if (!q) return index.ordered.slice(0, limit);
 
   const qCode = normCode(query);
   const tokens = q.split(/\s+/).filter(Boolean);
@@ -123,8 +142,15 @@ export function searchLocal(
     const score = scoreItem(item, qCode, tokens);
     if (score > 0) hits.push({ item, score, i });
   }
-  // Ties keep catalog order, so the grid doesn't reshuffle as the cashier types.
-  hits.sort((a, b) => b.score - a.score || a.i - b.i);
+  // Availability first, then relevance, then catalog order. A sold-out exact
+  // match still appears — the cashier may need to tell the customer it's gone —
+  // just never above something they can actually ring up.
+  hits.sort(
+    (a, b) =>
+      Number(isOutOfStock(a.item)) - Number(isOutOfStock(b.item)) ||
+      b.score - a.score ||
+      a.i - b.i,
+  );
   return hits.slice(0, limit).map((h) => h.item);
 }
 
@@ -144,4 +170,92 @@ export function applyStockDeltas(
     if (!qty || it.stock === null) return it;
     return { ...it, stock: Math.max(0, it.stock - qty) };
   });
+}
+
+// ---- Manager-arranged layout ------------------------------------------------
+
+/** One slot in a manager's register layout (supabase/pos_09_register_layout.sql). */
+export interface LayoutEntry {
+  productId: string;
+  variantId: string | null;
+}
+
+export const layoutKey = (e: LayoutEntry): string =>
+  `${e.productId}:${e.variantId ?? ""}`;
+
+/**
+ * Order the idle grid the way the manager arranged it.
+ *
+ * An EMPTY layout means "not configured" and shows the whole catalogue — the
+ * feature must never blank a register that predates it, and a manager who
+ * removes every tile has almost certainly not asked for an empty till.
+ *
+ * Otherwise only laid-out products appear, in the manager's order, EXCEPT that
+ * sold-out ones drop to the end. That shift is computed here at render time
+ * rather than written back to the layout, which is what makes a restock restore
+ * a product to its original slot with no edit and no bookkeeping.
+ *
+ * Entries the catalogue no longer contains are skipped, so deleting a product
+ * quietly removes its tile instead of leaving a hole or throwing.
+ */
+export function applyLayout(
+  items: CatalogItem[],
+  layout: LayoutEntry[],
+): CatalogItem[] {
+  if (layout.length === 0) {
+    const inStock: CatalogItem[] = [];
+    const soldOut: CatalogItem[] = [];
+    for (const it of items) (isOutOfStock(it) ? soldOut : inStock).push(it);
+    return inStock.concat(soldOut);
+  }
+
+  const byKey = new Map(items.map((i) => [itemKey(i), i]));
+  const placed: CatalogItem[] = [];
+  const placedSoldOut: CatalogItem[] = [];
+  for (const entry of layout) {
+    const item = byKey.get(layoutKey(entry));
+    if (!item) continue; // deleted or unpublished since the layout was saved
+    (isOutOfStock(item) ? placedSoldOut : placed).push(item);
+  }
+  return placed.concat(placedSoldOut);
+}
+
+/**
+ * How many of the store's sellable SKUs the layout actually shows — the
+ * "12 of 20" the register puts above the grid, so a manager can see at a
+ * glance that eight products are reachable only by search or scan.
+ *
+ * Counts against the live catalogue, so an entry whose product was deleted
+ * stops being counted rather than inflating the figure forever.
+ */
+export function layoutCoverage(
+  items: CatalogItem[],
+  layout: LayoutEntry[],
+): { shown: number; total: number; configured: boolean } {
+  const total = items.length;
+  if (layout.length === 0) return { shown: total, total, configured: false };
+  const present = new Set(items.map(itemKey));
+  const seen = new Set<string>();
+  for (const e of layout) {
+    const k = layoutKey(e);
+    if (present.has(k)) seen.add(k);
+  }
+  return { shown: seen.size, total, configured: true };
+}
+
+/** Drop entries whose product is gone, and de-duplicate, preserving order. */
+export function pruneLayout(
+  items: CatalogItem[],
+  layout: LayoutEntry[],
+): LayoutEntry[] {
+  const present = new Set(items.map(itemKey));
+  const seen = new Set<string>();
+  const out: LayoutEntry[] = [];
+  for (const e of layout) {
+    const k = layoutKey(e);
+    if (!present.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    out.push(e);
+  }
+  return out;
 }

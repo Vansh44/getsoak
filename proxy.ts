@@ -147,8 +147,18 @@ export async function proxy(request: NextRequest) {
       }
     }
 
-    // --- Gate for /auth/set-password: must be authenticated ---
-    if (pathname === "/auth/set-password" && !user) {
+    // --- Gate for the "authenticated, but not yet allowed onward" screens ---
+    // /auth/set-password  — a forced password reset (claim-driven, above).
+    // /auth/policy-update — a policy published at a new version since this
+    //                       person last agreed. Which documents are outstanding
+    //                       needs a DB query, so the REDIRECT to here lives in
+    //                       the dashboard layout; the proxy only enforces that
+    //                       you can't reach the screen signed out.
+    if (
+      (pathname === "/auth/set-password" ||
+        pathname === "/auth/policy-update") &&
+      !user
+    ) {
       return redirectTo("/auth/login");
     }
 

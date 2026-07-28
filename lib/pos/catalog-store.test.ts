@@ -28,8 +28,15 @@ describe("catalogKey", () => {
   // Stock is per-location and a browser can be shared between stores, so a
   // cache entry may never be reused across either boundary.
   it("scopes the cache to one store AND one location", () => {
-    expect(catalogKey("s1", "l1")).toBe("s1:l1");
+    expect(catalogKey("s1", "l1")).toContain("s1:l1");
     expect(catalogKey("s1", "l1")).not.toBe(catalogKey("s1", "l2"));
     expect(catalogKey("s1", "l1")).not.toBe(catalogKey("s2", "l1"));
+  });
+
+  // A CatalogItem shape change must strand old entries rather than serve items
+  // missing a field the register now depends on (v2 = taxClassId, which the
+  // sell screen resolves into the total it quotes the customer).
+  it("carries a schema version so an older cached shape is never served", () => {
+    expect(catalogKey("s1", "l1")).toMatch(/^v\d+:/);
   });
 });

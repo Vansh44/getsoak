@@ -29,6 +29,11 @@ import {
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import {
+  recordStorePolicyConsent,
+  getCheckoutPolicies,
+} from "@/lib/legal/store-consent";
+import { summariseItems } from "@/lib/notifications/format";
+import {
   rowToBillingSettings,
   rowToTaxClass,
   type BillingSettings,
@@ -965,6 +970,19 @@ export async function placeOrder(
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";
 
+  // Consent to the store's payment + refund terms, recorded against the order
+  // that triggered it. Deliberately AFTER the order is safely persisted: the
+  // shopper agreed by placing it, and a consent write that could roll back a
+  // paid order would be the tail wagging the dog. Best-effort, like every
+  // other bookkeeping write below.
+  await recordStorePolicyConsent({
+    userId: user.id,
+    email: user.email ?? null,
+    storeId,
+    context: "checkout",
+    policies: await getCheckoutPolicies(storeId),
+  });
+
   // The order exists and its items are saved — from here it is a real order, so
   // record it. Emitted for BOTH payment methods (an unpaid razorpay order is
   // still a placed order, exactly as the dashboard list shows it); the separate
@@ -987,8 +1005,24 @@ export async function placeOrder(
     payload: {
       total,
       currency: "INR",
-      items: orderItemsToInsert.length,
+      items: summariseItems(orderItemsToInsert),
       paymentMethod,
+    },
+    // The order summary the email renders as a table. Separate from `payload`
+    // on purpose — see EmitEventInput.email.
+    email: {
+      currency: "INR",
+      items: orderItemsToInsert.map((i) => ({
+        name: i.name,
+        variant: i.variantName,
+        quantity: i.quantity,
+        total: i.total,
+      })),
+      subtotal,
+      discount,
+      tax,
+      shipping,
+      total,
     },
   });
 

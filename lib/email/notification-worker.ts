@@ -38,6 +38,7 @@ import {
   renderNotificationEmail,
   type NotificationEmailItem,
 } from "@/lib/email/notification-emails";
+import type { EmailOrderSummary } from "@/lib/email/line-items";
 import type { Digest } from "@/lib/notifications/events";
 import type { StoreBrand } from "@/lib/store/brand";
 
@@ -75,6 +76,9 @@ interface QueueRow {
   id: string;
   store_id: string | null;
   recipient_id: string;
+  /** 'customer' | 'admin' | 'operator'. Decides whether this reads as team
+   *  mail or as a shopper's receipt — see isTeamRow below. */
+  recipient_type: string;
   email: string;
   cc: string | null;
   bcc: string | null;
@@ -85,6 +89,7 @@ interface QueueRow {
   severity: string;
   attempts: number;
   created_at: string;
+  line_items: EmailOrderSummary | null;
 }
 
 function getResend(): Resend | null {
@@ -123,11 +128,20 @@ async function resolveBase(
   }
 }
 
-/** Group claimed rows by the (store, recipient) pair that shares one email. */
+/**
+ * Group claimed rows by what can share ONE email: the same store, the same
+ * recipient, AND the same recipient type.
+ *
+ * Type is part of the key because one person can be both — an owner who orders
+ * from their own store is staff for "New order" and a customer for their own
+ * confirmation. Grouped without it, those two land in a single digest rendered
+ * with whichever row happened to sort first, so half the contents would carry
+ * the wrong footer and the wrong button.
+ */
 function groupRows(rows: QueueRow[]): Map<string, QueueRow[]> {
   const groups = new Map<string, QueueRow[]>();
   for (const row of rows) {
-    const key = `${row.store_id ?? "platform"}::${row.recipient_id}`;
+    const key = `${row.store_id ?? "platform"}::${row.recipient_id}::${row.recipient_type}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(row);
     else groups.set(key, [row]);
@@ -144,6 +158,16 @@ function splitAddresses(raw: string | null): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Is this row staff mail? Anything that isn't a CUSTOMER is: an operator's
+ * platform notification reads like team mail and belongs on the same footer.
+ * Defaulting the other way would mean a missing/unknown type silently turns a
+ * shopper's receipt into staff mail again, which is the bug this replaced.
+ */
+function isTeamRow(row: QueueRow): boolean {
+  return row.recipient_type !== "customer";
+}
+
 function toItem(row: QueueRow): NotificationEmailItem {
   return {
     title: row.title,
@@ -151,6 +175,7 @@ function toItem(row: QueueRow): NotificationEmailItem {
     url: row.url,
     severity: row.severity,
     createdAt: row.created_at,
+    summary: row.line_items,
   };
 }
 
@@ -232,18 +257,26 @@ export async function processNotificationEmails(
     const ordered = [...rows].sort((a, b) =>
       b.created_at.localeCompare(a.created_at),
     );
+    // WHO this is for, which decides the button label and the footer. Omitting
+    // it defaulted every email to team mail, so a shopper's order confirmation
+    // arrived with a "View in dashboard" button and a footer inviting them to
+    // "change what you get emailed about" — on a staff-only page they cannot
+    // open, about transactional mail that isn't switchable in the first place.
+    const isTeam = isTeamRow(ordered[0]);
     const rendered =
       ordered.length === 1
         ? renderNotificationEmail({
             item: toItem(ordered[0]),
             brand: ctx.brand,
             baseUrl: ctx.baseUrl,
+            isTeam,
           })
         : renderNotificationDigest({
             items: ordered.map(toItem),
             brand: ctx.brand,
             baseUrl: ctx.baseUrl,
             digest: (ordered[0].digest as Digest) ?? "instant",
+            isTeam,
           });
 
     // Cc/Bcc come from the OLDEST row in the group: they were snapshotted at

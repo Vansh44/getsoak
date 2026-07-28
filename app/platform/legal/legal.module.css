@@ -1,0 +1,118 @@
+/* StoreMink's own policy pages. Deliberately plain: a legal document is read,
+   not browsed, so the design gets out of the way — one column, generous line
+   height, no chrome competing with the text. */
+.page {
+  min-height: 100vh;
+  background: #ffffff;
+  padding: 64px 24px 96px;
+}
+
+.doc {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: 24px;
+  font-size: 14px;
+  color: #6b7280;
+  text-decoration: none;
+}
+
+.back:hover {
+  color: #111827;
+}
+
+.title {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.6px;
+  color: #111827;
+  line-height: 1.15;
+}
+
+.lede {
+  margin-top: 12px;
+  font-size: 16px;
+  line-height: 1.6;
+  color: #4b5563;
+}
+
+.meta {
+  margin-top: 10px;
+  font-size: 13.5px;
+  color: #6b7280;
+}
+
+/* Long-form legal text: 16px and 1.75 so a wall of clauses stays readable. */
+.body {
+  margin-top: 32px;
+  font-size: 16px;
+  line-height: 1.75;
+  color: #374151;
+}
+
+.body :global(h2) {
+  margin: 34px 0 10px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: #111827;
+}
+
+.body :global(p) {
+  margin: 0 0 14px;
+}
+
+.body :global(strong) {
+  color: #111827;
+  font-weight: 600;
+}
+
+.body :global(a) {
+  color: #4f46e5;
+  text-decoration: underline;
+}
+
+.body :global(em) {
+  color: #6b7280;
+  font-style: normal;
+  font-size: 14px;
+}
+
+.list {
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  display: block;
+  padding: 18px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+
+.card:hover {
+  border-color: #c7cad1;
+}
+
+.cardTitle {
+  display: block;
+  font-size: 16px;
+  font-weight: 650;
+  color: #111827;
+}
+
+.cardSummary {
+  display: block;
+  margin-top: 3px;
+  font-size: 14px;
+  color: #6b7280;
+}

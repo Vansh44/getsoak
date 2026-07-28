@@ -19,6 +19,7 @@
 
 import { getEventDef } from "./events";
 import { BASE_VARIABLES, variablesFor } from "./variables";
+import { HIDDEN_VARIABLES } from "./format";
 
 /** Which audience the copy is written for. Team and customer read completely
  *  differently — "New order · ₹1,240 · from Priya S." vs "Thanks, we've got
@@ -26,6 +27,24 @@ import { BASE_VARIABLES, variablesFor } from "./variables";
 export type TemplateAudience = "team" | "customer";
 
 const BASE_NAMES = new Set(BASE_VARIABLES.map((v) => v.name));
+
+/**
+ * Events whose email carries a rendered order summary (the emitter passes
+ * `email:` to emitEvent — see EmitEventInput). For these the table below is the
+ * detail, so the fact list must not repeat it.
+ */
+const HAS_ORDER_SUMMARY = new Set(["order.placed"]);
+
+/** What that table already shows. Still valid {{tokens}} for a merchant who
+ *  wants them; simply not repeated in the built-in copy. */
+const SUMMARY_OWNED = new Set([
+  "items",
+  "total",
+  "subtotal",
+  "discount",
+  "tax",
+  "shipping",
+]);
 
 /** Opening line per event. Falls back to the registry description, which is
  *  already written as a sentence. */
@@ -93,6 +112,34 @@ const CUSTOMER_SUBJECT: Record<string, string> = {
   "blog.rejected": "About your post",
 };
 
+/**
+ * Events whose copy is HAND-WRITTEN rather than generated from their variables.
+ *
+ * The generated shape — an intro, then a Reference/Who/When fact list — is
+ * right for a report ("stock is low", "a payment failed") and wrong for
+ * anything a person is meant to feel something about. A welcome rendered as a
+ * fact list reads like a receipt for having existed.
+ *
+ * Keep this map small. If an event only needs a better opening line, put it in
+ * INTRO; this is for the handful that need a different SHAPE.
+ */
+const BESPOKE: Record<string, { subject: string; body: string }> = {
+  "store.created": {
+    subject: "{{subject_label}} is live on StoreMink",
+    body: [
+      "<p>Your store is ready — here it is:</p>",
+      '<p><a href="{{store_url}}">{{store_url}}</a></p>',
+      "<p>Three things worth doing next:</p>",
+      "<ol>",
+      "  <li><strong>Add your first product</strong> so there's something to sell.</li>",
+      "  <li><strong>Make it yours</strong> — logo, colours and pages live in the website builder.</li>",
+      "  <li><strong>Take a test order</strong> to see the whole flow end to end.</li>",
+      "</ol>",
+      "<p>Everything is editable later, including the store name and address.</p>",
+    ].join("\n"),
+  },
+};
+
 /** Human label for a variable in the details list ("order_ref" → "Order ref"). */
 function labelFor(name: string): string {
   return name
@@ -128,6 +175,10 @@ export function defaultEmailTemplate(
   const label = def?.label ?? "Notification";
   const isCustomer = audience === "customer";
 
+  // Hand-written copy wins over the generated fact list (see BESPOKE).
+  const bespoke = !isCustomer ? BESPOKE[eventKey] : undefined;
+  if (bespoke) return bespoke;
+
   const intro = isCustomer
     ? (CUSTOMER_INTRO[eventKey] ?? "There's an update on your order.")
     : (INTRO[eventKey] ??
@@ -135,10 +186,28 @@ export function defaultEmailTemplate(
       "Something happened in your store.");
 
   // Event-specific facts, in the order the variable catalog declares them.
+  //
+  // Two things are filtered out. HIDDEN_VARIABLES drops values folded into
+  // another — `currency` rides on every amount, so a "Currency: INR" row is the
+  // email saying it twice. SUMMARY_OWNED drops the ones the rendered order
+  // summary already shows in full (lib/email/line-items.ts): listing "Items:
+  // 4 items · Amul Taaza…" and "Total ₹343.00" directly above a table of the
+  // same items and the same total is the duplication that makes an email look
+  // auto-generated. The fact list keeps what the table doesn't carry —
+  // reference, payment method, when.
+  const summaryOwned = HAS_ORDER_SUMMARY.has(eventKey)
+    ? SUMMARY_OWNED
+    : new Set<string>();
+
   const facts: { label: string; token: string }[] = [
     { label: "Reference", token: "subject_label" },
     ...variablesFor(eventKey)
-      .filter((v) => !BASE_NAMES.has(v.name))
+      .filter(
+        (v) =>
+          !BASE_NAMES.has(v.name) &&
+          !HIDDEN_VARIABLES.has(v.name) &&
+          !summaryOwned.has(v.name),
+      )
       .map((v) => ({ label: labelFor(v.name), token: v.name })),
     // A shopper knows who they are; the team needs to know who acted.
     ...(isCustomer ? [] : [{ label: "Who", token: "actor_name" }]),
@@ -149,7 +218,10 @@ export function defaultEmailTemplate(
     .map((f) => `  <li><strong>${f.label}</strong><br />{{${f.token}}}</li>`)
     .join("\n");
 
-  const closing = isCustomer
+  // No call-to-action here on purpose: renderNotificationEmail already appends
+  // a real button (emailButton) from the notification's own url, so putting a
+  // link in the editable copy too would give every email two of them.
+  const action = isCustomer
     ? `<p>If anything looks wrong, just reply to this email and we'll sort it out.</p>`
     : `<p>Open it in your dashboard to take the next step.</p>`;
 
@@ -157,6 +229,6 @@ export function defaultEmailTemplate(
     subject: isCustomer
       ? `${CUSTOMER_SUBJECT[eventKey] ?? label} · {{subject_label}}`
       : `${label}: {{subject_label}}`,
-    body: [`<p>${intro}</p>`, "<ul>", rows, "</ul>", closing].join("\n"),
+    body: [`<p>${intro}</p>`, "<ul>", rows, "</ul>", action].join("\n"),
   };
 }
