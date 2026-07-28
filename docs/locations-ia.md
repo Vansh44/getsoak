@@ -1,6 +1,6 @@
 # Locations & Fulfilment — Information Architecture
 
-**Status:** proposal, for review before any code is written.
+**Status:** decisions settled (§6); building in the order at §7.
 **Companion to:** `docs/pos-plan.md` (POS phases), `CODEBASE.md` §22.
 
 ---
@@ -241,33 +241,58 @@ server-side, not merely hidden.
 
 ---
 
-## 6. Open decisions — these need your call
+## 6. Decisions — SETTLED
 
-1. **Does pickup require Pro?** Locations are Pro-gated today because POS is.
-   If click-and-collect depends on locations, it inherits that gate. Reasonable
-   either way: pickup is a strong Pro incentive, but it's also a storefront
-   feature a Basic store might expect. **This decides whether Locations is
-   Pro-gated or free.**
+1. **Pickup requires Pro.** It inherits the gate from Locations, which inherits
+   it from POS. Consequence: a Basic store never sees the Locations section, has
+   exactly one location, and gets neither click-and-collect nor returns-in-store.
+   Consistent, since a Basic store cannot have a second location anyway.
 
-2. **Default capabilities for existing stores.** Every store has one auto-created
-   "Main" location. Proposal: it gets **everything enabled** — that's exactly
-   today's behaviour, so nothing changes for anyone until they add a second
-   location.
+2. **Capabilities are OFF by default — with one exception that must not be got
+   wrong.** There are two different questions here and conflating them breaks
+   live stores:
 
-3. **Does `Locations` show for a single-location store?** Proposal above says
-   hide it until it's useful. The alternative — always show it — is more
-   discoverable but adds a section most merchants never need.
+   **New locations** — only the basics are on. Nothing customer-facing is
+   assumed:
 
-4. **Type — free text or fixed list?** Fixed (Shop / Warehouse / Dark store)
-   lets the UI pick sensible default capabilities per type. Free text is
-   flexible and means nothing to the system. Proposal: fixed.
+   | Capability           | Shop | Warehouse | Dark store |
+   | -------------------- | :--: | :-------: | :--------: |
+   | Sell here (POS)      |  ✅  |    ❌     |     ❌     |
+   | Fulfil online orders |  ❌  |    ✅     |     ✅     |
+   | Customer pickup      |  ❌  |    ❌     |     ❌     |
+   | Accept returns       |  ❌  |    ❌     |     ❌     |
+   | Receive stock        |  ✅  |    ✅     |     ✅     |
+   | Stock transfers      |  ✅  |    ✅     |     ✅     |
 
----
+   A merchant adding a second shop must deliberately turn on online fulfilment
+   and pickup. Neither should start happening because they created a location.
+
+   **The EXISTING "Main" location is a backfill, not a default.** Its
+   capabilities must describe what that store already does today, or the
+   migration silently breaks it:
+
+   | Capability           |    Backfill     | Why                                                                          |
+   | -------------------- | :-------------: | ---------------------------------------------------------------------------- |
+   | Sell here (POS)      | = `pos.enabled` | Match reality                                                                |
+   | Fulfil online orders |     **✅**      | It is where online orders already fulfil from. OFF here stops checkout dead. |
+   | Customer pickup      |       ❌        | New feature, opt in                                                          |
+   | Accept returns       |       ❌        | New feature, opt in                                                          |
+   | Receive stock        |       ✅        | `/dashboard/inventory` already writes here                                   |
+   | Stock transfers      |       ✅        | Already permitted                                                            |
+
+   The rule: **a capability that describes existing behaviour is backfilled ON;
+   a capability that introduces new behaviour is backfilled OFF.** Only pickup
+   and returns are genuinely new.
+
+3. **A single-location store does not see the Locations section.** It appears
+   when the store has 2+ locations, or POS is enabled. Reachable from the
+   Inventory location selector regardless, so it is never a dead end.
+
+4. **Location type is a fixed list:** `shop` | `warehouse` | `dark_store`.
+   Fixed lets the editor propose the defaults in the table above when a type is
+   chosen, which free text cannot.
 
 ## 7. Build order
-
-Nothing here is worth building until §6.1 and §6.2 are settled, since they
-decide the gating and the migration.
 
 1. `location_capabilities` columns + backfill everything-on for existing rows
 2. `/dashboard/locations` + editor; redirect the old POS route
