@@ -2151,6 +2151,27 @@ export const posLayouts = pgTable(
   ],
 );
 
+// Per-location receipt numbers (supabase/pos_06_sell_path.sql). Allocated
+// ONLY through the next_pos_receipt_no() RPC — a single atomic UPDATE, the
+// same allocator pattern as next_order_no — so nothing reads or writes this
+// table through Drizzle. Declared for completeness: a live counter leaks sales
+// volume, which is why it is service-role only, and a schema file that omits
+// it invites someone to "add" it later with different semantics.
+export const posLocationCounters = pgTable(
+  "pos_location_counters",
+  {
+    locationId: uuid("location_id").primaryKey().notNull(),
+    receiptSeq: integer("receipt_seq").default(0).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_location_counters_location_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 // POS Phase 3 — one cash-drawer accounting period per location
 // (supabase/pos_10_shifts.sql). At most one open at a time, enforced by a
 // partial unique index rather than by application logic.
