@@ -50,6 +50,7 @@ import PhoneInput, { isValidPhoneNumber } from "react-phone-number-input";
 import "react-phone-number-input/style.css";
 import { customPhoneLabels } from "@/lib/phone-labels";
 import { CountrySelect } from "@/components/ui/phone-country-select";
+import { LocationPicker, type PickedLocation } from "./location-picker";
 
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -63,12 +64,21 @@ type Step =
   | "phone"
   | "name"
   | "store"
+  | "location"
   | "theme"
   | "plan"
   | "creating";
 
 // Progress stages shown in the stepper (Account folds email+password).
-const STAGES = ["Account", "Phone", "You", "Store", "Theme", "Plan"] as const;
+const STAGES = [
+  "Account",
+  "Phone",
+  "You",
+  "Store",
+  "Location",
+  "Theme",
+  "Plan",
+] as const;
 function stageOf(step: Step): number {
   switch (step) {
     case "email":
@@ -80,10 +90,12 @@ function stageOf(step: Step): number {
       return 2;
     case "store":
       return 3;
-    case "theme":
+    case "location":
       return 4;
+    case "theme":
+      return 5;
     default:
-      return 5; // plan / creating
+      return 6; // plan / creating
   }
 }
 
@@ -170,6 +182,15 @@ export default function SignupPage() {
   const [name, setName] = useState("");
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
   const [city, setCity] = useState("");
+  // The map pin, when the merchant captured one. Optional by design: geolocation
+  // can be declined and the map can fail to load, and neither may block signup.
+  const [place, setPlace] = useState<PickedLocation>({
+    lat: null,
+    lng: null,
+    address: "",
+    city: "",
+    countryCode: "",
+  });
   const [check, setCheck] = useState<CheckState>({ status: "idle" });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const seq = useRef(0);
@@ -379,6 +400,9 @@ export default function SignupPage() {
       lastName,
       country,
       city,
+      address: place.address,
+      lat: place.lat ?? undefined,
+      lng: place.lng ?? undefined,
     });
     if (res.error || !res.storeId || !res.slug) {
       setError(res.error ?? "Could not create your store.");
@@ -464,7 +488,8 @@ export default function SignupPage() {
   const BACK: Partial<Record<Step, Step>> = {
     password: "email",
     store: "name",
-    theme: "store",
+    location: "store",
+    theme: "location",
     plan: "theme",
   };
 
@@ -808,7 +833,7 @@ export default function SignupPage() {
                   e.preventDefault();
                   if (!isNameAvailable) return;
                   setError("");
-                  setStep("theme");
+                  setStep("location");
                 }}
                 className="flex flex-col gap-5"
               >
@@ -833,41 +858,6 @@ export default function SignupPage() {
                   https://{currentSlug}.{ROOT_DOMAIN}
                 </div>
 
-                {/* Location — where the merchant sells from */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
-                      Where do you sell from?
-                    </label>
-                    <select
-                      className="stq-input h-12 bg-white"
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                    >
-                      {COUNTRIES.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
-                      City{" "}
-                      <span className="font-normal text-gray-400">
-                        (optional)
-                      </span>
-                    </label>
-                    <input
-                      className="stq-input h-12"
-                      placeholder="E.g., Mumbai"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      maxLength={80}
-                    />
-                  </div>
-                </div>
-
                 <div className="mt-2 flex items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 shadow-sm">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-100 bg-white text-xl shadow-sm">
                     🎉
@@ -886,6 +876,96 @@ export default function SignupPage() {
                   type="submit"
                   disabled={!isNameAvailable}
                   className="stq-btn stq-btn-primary w-full h-12 flex items-center justify-center gap-2"
+                >
+                  Continue <ChevronRight className="w-5 h-5" />
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* ── Location ──────────────────────────────────────────────
+              Its own step, and REQUIRED: this address prints on every invoice
+              the store issues, and it decides tax treatment. Bolted onto the
+              "name your store" screen with an optional city, it was the field
+              everyone skipped. */}
+          {step === "location" && (
+            <div className="animate-in fade-in slide-in-from-right-2 duration-300">
+              <h1 className="text-2xl font-bold text-gray-900 mb-1">
+                Where do you sell from?
+              </h1>
+              <p className="text-gray-500 mb-8">
+                Your business address appears on invoices. You can change it
+                later in Settings.
+              </p>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!country) {
+                    setError("Please choose the country you sell from.");
+                    return;
+                  }
+                  if (!city.trim()) {
+                    setError("Please enter the city you sell from.");
+                    return;
+                  }
+                  setError("");
+                  setStep("theme");
+                }}
+                className="flex flex-col gap-5"
+              >
+                <LocationPicker
+                  value={place}
+                  onChange={(next) => {
+                    setPlace(next);
+                    // The pin fills the fields, it doesn't lock them — a
+                    // reverse-geocode is often a suburb off and the merchant
+                    // gets the final word.
+                    if (next.city) setCity(next.city);
+                    if (
+                      next.countryCode &&
+                      COUNTRIES.some((c) => c.code === next.countryCode)
+                    ) {
+                      setCountry(next.countryCode);
+                    }
+                  }}
+                />
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-semibold text-gray-700">
+                      Country
+                    </label>
+                    <select
+                      className="stq-input h-12 bg-white"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                    >
+                      {COUNTRIES.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-semibold text-gray-700">
+                      City
+                    </label>
+                    <input
+                      className="stq-input h-12"
+                      placeholder="E.g., Mumbai"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      maxLength={80}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="stq-btn stq-btn-primary flex h-12 w-full items-center justify-center gap-2"
                 >
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>

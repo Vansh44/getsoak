@@ -187,8 +187,14 @@ export interface CreateStoreInput {
   lastName?: string;
   /** ISO country code the merchant sells from (settings.business.country). */
   country?: string;
-  /** City the merchant sells from (settings.business.city; optional). */
+  /** City the merchant sells from (settings.business.city). Required. */
   city?: string;
+  /** Free-text address line, when the merchant confirmed a map pin. */
+  address?: string;
+  /** Pin coordinates, when captured. Stored as numbers, not strings, so the
+   *  eventual "stores near you" query doesn't have to parse them back. */
+  lat?: number;
+  lng?: number;
 }
 
 export interface CreateStoreResult {
@@ -248,9 +254,31 @@ export async function createStore(
   // under `business` (never a secret — convention #9).
   const country = (input.country || "").trim().slice(0, 2).toUpperCase();
   const city = (input.city || "").trim().slice(0, 80);
-  const business: Record<string, string> = {};
-  if (country) business.country = country;
-  if (city) business.city = city;
+  const address = (input.address || "").trim().slice(0, 300);
+
+  // Required server-side, not just in the wizard: a client can post whatever it
+  // likes, and every invoice this store ever prints carries this address.
+  if (!country) return { error: "Please choose the country you sell from." };
+  if (!city) return { error: "Please enter the city you sell from." };
+
+  const business: Record<string, string | number> = { country, city };
+  if (address) business.address = address;
+
+  // Coordinates are optional — they come from the map pin or the browser's
+  // geolocation, and a merchant who declines the permission prompt must still
+  // be able to finish signing up. Bounds-checked so a bad client can't store
+  // nonsense that later breaks a distance query.
+  const lat = Number(input.lat);
+  const lng = Number(input.lng);
+  if (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180
+  ) {
+    business.lat = lat;
+    business.lng = lng;
+  }
 
   // Create the store.
   let store: { id: string; slug: string };

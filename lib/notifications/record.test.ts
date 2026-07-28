@@ -586,11 +586,34 @@ describe("recordEvent", () => {
     const mail = queuedEmails(mock)[0];
     expect(mail.title).toContain("ORD10010004");
     expect(mail.body).toContain("You've received a new order.");
-    expect(mail.body).toContain("<strong>Total</strong>");
-    expect(mail.body).toContain("1240");
     expect(mail.body).toContain("Priya S.");
+    // Money and items are NOT in the fact list for an order: the rendered
+    // order summary (lib/email/line-items.ts) shows them in full, and printing
+    // "Total ₹1,240.00" directly above a table ending in the same total is the
+    // duplication that makes an email look auto-generated.
+    expect(mail.body).not.toContain("<strong>Total</strong>");
+    expect(mail.body).not.toContain("<strong>Items</strong>");
     // The bell stays short — one line, no markup.
     expect(fannedOut(mock)[0].body).not.toContain("<ul>");
+  });
+
+  // The exclusion above is scoped to events the summary table actually covers.
+  // An event without one keeps every fact it declares, or hiding rows for
+  // order.placed would have quietly emptied other emails too.
+  it("keeps its fact rows for an event with no order summary", async () => {
+    const mock = setupDb({ staff: [superadmin] });
+
+    await recordEvent({
+      type: "order.payment_failed",
+      storeId: STORE,
+      actor: { type: "system" },
+      subject: { type: "order", id: "o1", label: "ORD10010004" },
+      payload: { reason: "Card declined" },
+    });
+
+    const mail = queuedEmails(mock)[0];
+    expect(mail.body).toContain("<strong>Reason</strong>");
+    expect(mail.body).toContain("Card declined");
   });
 
   // The body is HTML, so substituted values must be escaped — a customer name

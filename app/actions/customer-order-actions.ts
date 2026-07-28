@@ -17,7 +17,7 @@
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { withUser } from "@/lib/db/client";
-import { orderItems, orders } from "@/drizzle/schema";
+import { orderItems, orders, products } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
@@ -34,6 +34,9 @@ export interface MyOrderRow {
   item_count: number;
   /** First line item's name, for the list's summary line. */
   first_item: string | null;
+  /** Up to three product images, so the list is scannable by sight rather than
+   *  by reading order references. Nulls kept out — the UI shows a placeholder. */
+  thumbnails: string[];
 }
 
 export interface MyOrderItem {
@@ -43,9 +46,12 @@ export interface MyOrderItem {
   quantity: number;
   price: number;
   total: number;
+  /** Product photo, or null once the product is gone — the line keeps its
+   *  snapshotted name either way. */
+  image: string | null;
 }
 
-export interface MyOrderDetail extends MyOrderRow {
+export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
   subtotal: number;
   tax: number;
   shipping: number;
@@ -98,8 +104,12 @@ export async function getMyOrders(): Promise<{
             orderId: orderItems.orderId,
             name: orderItems.name,
             quantity: orderItems.quantity,
+            // Left-joined: a product deleted since the order was placed still
+            // has its snapshotted name on the line, and simply shows no photo.
+            image: products.imageUrl,
           })
           .from(orderItems)
+          .leftJoin(products, eq(products.id, orderItems.productId))
           .where(
             inArray(
               orderItems.orderId,
@@ -110,12 +120,20 @@ export async function getMyOrders(): Promise<{
 
         const byOrder = new Map<
           string,
-          { count: number; first: string | null }
+          { count: number; first: string | null; thumbnails: string[] }
         >();
         for (const item of summaries) {
-          const entry = byOrder.get(item.orderId) ?? { count: 0, first: null };
+          const entry = byOrder.get(item.orderId) ?? {
+            count: 0,
+            first: null,
+            thumbnails: [],
+          };
           entry.count += item.quantity;
           if (!entry.first) entry.first = item.name;
+          // Three is what fits before the stack stops reading as a stack.
+          if (item.image && entry.thumbnails.length < 3) {
+            entry.thumbnails.push(item.image);
+          }
           byOrder.set(item.orderId, entry);
         }
 
@@ -124,6 +142,7 @@ export async function getMyOrders(): Promise<{
             ...row,
             item_count: byOrder.get(row.id)?.count ?? 0,
             first_item: byOrder.get(row.id)?.first ?? null,
+            thumbnails: byOrder.get(row.id)?.thumbnails ?? [],
           })),
         };
       },
@@ -186,8 +205,12 @@ export async function getMyOrder(
             quantity: orderItems.quantity,
             price: orderItems.price,
             total: orderItems.total,
+            // Left join: a product deleted since the order still shows its
+            // snapshotted name and price, just without a photo.
+            image: products.imageUrl,
           })
           .from(orderItems)
+          .leftJoin(products, eq(products.id, orderItems.productId))
           .where(eq(orderItems.orderId, orderId))
           .orderBy(asc(orderItems.createdAt));
 

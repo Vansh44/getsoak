@@ -1497,6 +1497,160 @@ group, span}` (span = columns of the 4-wide desktop grid),
       offline outbox (9).
       See `docs/pos-plan.md`.
 
+23. **Notifications & email — one event log, registry-driven fan-out, one way
+    out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
+    decision lives, how to add one, troubleshooting). This section restores the
+    summary the POS merge overwrote.
+    - **EVERY action emits an EVENT** into append-only `activity_events` — the
+      audit trail, complete by construction, rendered at `/dashboard/activity`.
+      Only events with a non-empty `audiences` entry FAN OUT into per-recipient
+      `notifications` rows; `audiences: {}` is audit-only, which is how a busy
+      store gets full history without 400 badges a day.
+    - **ONE EVENT, TWO AUDIENCES.** "Order placed" tells the TEAM ("New order
+      ORD10011027 · ₹1,240") and the CUSTOMER ("Thanks for your order") — same
+      trigger, nothing else shared. Config is **per audience**
+      (`notification_settings.channels`/`templates` keyed `{team, customer}`),
+      because turning off team email must never stop a shopper's confirmation.
+      That was a real bug; there is a regression test.
+    - **Configuration resolves in THREE layers**, the settings-registry shape
+      (convention #9): code registry (`lib/notifications/events.ts`) ←
+      `notification_definitions` (operators) ← `notification_settings` (the
+      merchant). An empty database behaves exactly like the code defaults.
+      Console at **Settings → Notifications**, gated on the `notifications`
+      section; personal opt-outs at `…/notifications/me`.
+    - **EVERY registry entry HAS AN EMITTER — CI-enforced.**
+      `lib/notifications/coverage.test.ts` fails unless each key is emitted from
+      `app/`/`lib/` or listed in `PENDING` with the unbuilt feature it waits on.
+      27 of 38 were dead before it existed. **Its limit:** it asserts a key is
+      emitted SOMEWHERE, not that every path which should emit it does — which
+      is how POS sales stayed silent (§22).
+    - **`recordEvent` in crons/webhooks, `emitEvent` in server actions** —
+      `after()` has nothing to defer onto once a cron response is sent.
+    - **THRESHOLD EVENTS FIRE ON THE CROSSING, NOT THE STATE**, or a merchant
+      gets one mail per sale and stops reading all of them: `stockAlertFor`
+      (`lib/inventory/alerts.ts`), `aiWarnAt` (`lib/ai/quota.ts` — at 3 left
+      AND at 0, because the FREE plan's whole cap IS 3 and a single trigger
+      would have skipped the entire tier), `expiryWarnWindow` (`lib/plans.ts`,
+      24-hour bands at 7 and 1 days out), `campaign.sent` (conditional → done
+      claim), `customer.signed_up` (`xmax = 0`, so an upsert that only UPDATED
+      isn't a signup). All pure and tested.
+    - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+      entry is in-app only: `plan.changed` + `subscription.payment_failed`
+      leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
+      email — nothing else warns before a lapse.
+    - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
+      sends AND logs, never throws into its caller, and records failures as
+      readily as successes. There were EIGHT scattered `resend.emails.send`
+      calls and none recorded anything. **`send-coverage.test.ts` fails if a
+      ninth appears.** Batch workers can't use the single-message path without
+      losing batching, so they call `sendEmailBatch` + `logEmail` explicitly.
+    - **A BATCH ERROR IS NOT A VERDICT ON THE BATCH** (`lib/email/send-batch.ts`).
+      Resend validates the whole request, so one bad recipient errors all 100 —
+      and both workers used to mark all 100 failed, permanently in the campaign
+      worker, which has no retry. It now re-sends a failed slice message by
+      message so only the real culprit fails; three failures in a row is an
+      outage, not a poison pill, so it stops probing.
+    - **SENDING ≠ DELIVERY.** `/api/webhooks/resend` (Svix-verified,
+      `RESEND_WEBHOOK_SECRET`) writes permanent bounces + complaints to
+      **`email_suppressions`** — GLOBAL, no `store_id`, the one table here that
+      isn't tenant-scoped, because a hard bounce bounces for everyone and the
+      shared sending domain's reputation is the platform's. Only PERMANENT
+      signals suppress; an unknown bounce sub-type is treated as soft. Both
+      workers filter, failing OPEN. Failed rows surface in a panel on the
+      notifications page (`getDeliveryHealth` + `retryFailedEmail`) that renders
+      only when mail actually failed.
+    - **"INSTANT" RESTS ON THE WORKER KICK.** The cron heartbeat is DAILY, so if
+      `triggerEmailWorker` doesn't land, mail waits up to 24 h — silently.
+      The origin is **the current request's host** (`getRequestOrigin()`), not a
+      configured one: resolving it from env made a local dev order POST the kick
+      to `https://staging.storemink.com`, telling another environment to drain a
+      queue that wasn't ours. `PLATFORM_URL` remains the fallback for callers
+      with no request scope (the cron chaining itself).
+    - **EMAIL LOGS** at `/dashboard/activity/email-logs` (a child of Activity
+      Logs, same `activity` permission): To / From / Type / Provider / Status /
+      Sent at, filterable, with the body in a **sandboxed iframe** (no
+      `allow-same-origin`, no `allow-scripts`). `supabase/email_logs.sql`,
+      service-role only, pruned at 90 days. `lib/email/mailers.ts` is the
+      mail-TYPE catalog and marks `password_reset`, `staff_invite`,
+      `pos_staff_invite` and `pos_credential_reset` **sensitive** — their bodies
+      carry a working credential and are not stored. **`operator_otp` is
+      deliberately NOT redacted** (owner's decision, 2026-07-27): the code is
+      stored in full so a sign-in that "never arrived" can be checked. It's
+      platform mail (`store_id NULL`), so it only appears on the storemink.com
+      console — but an operator can read another operator's live code. Flipping
+      one flag reverses it; both behaviours are pinned by tests.
+    - **VALUES ARE FORMATTED FOR READING** (`lib/notifications/format.ts`, pure
+      - tested). Every value used to reach the email as `String(value)`, so an
+        order confirmation read "Total 281.4 / Currency INR / Payment method cod /
+        When 28/7/2026, 12:20:46 am" — four tells that nobody had looked at it,
+        while the variable catalog had been advertising `sample: "₹1,240.00"` all
+        along, so the console previewed something the send could never produce.
+        `formatVariable` maps by variable NAME (`items` and `total` are both
+        numbers; only one is a price): money → `₹281.40` via Intl with Indian
+        grouping, `payment_method` → "Cash on delivery", `status` → title case,
+        dates → "28 July 2026 at 5:50 am", `days_left` → "7 days". `link` passes
+        through untouched — formatting would corrupt a URL. `HIDDEN_VARIABLES`
+        drops `currency` from the summary: it rides on every amount, so its own
+        row was the email saying it twice. `summariseItems` replaces the bare
+        count with what was bought ("3 items · Amul Taaza Toned Milk (1 L), Tata
+        Salt × 2"), capped at three names — the difference between a receipt and a
+        log line. The CTA button is renderer chrome (`emailButton` from the
+        notification's url), not editable copy, so a body can never end up with
+        two of them.
+    - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
+      `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
+      passed it, so EVERY email rendered as team mail: a shopper's order
+      confirmation arrived with a "View in dashboard" button and a footer
+      inviting them to "change what you get emailed about" — linking to a
+      staff-only page they cannot open, about transactional mail that isn't
+      switchable in the first place (the customer audience has no preference
+      layer, by design). `isTeamRow` now derives it from the row, defaulting to
+      TEAM only for non-customer types so an unknown type can't silently turn a
+      receipt back into staff mail. `groupRows` keys on recipient_type too:
+      one person can be BOTH (an owner ordering from their own store), and
+      grouped without it their staff and customer rows shared one digest
+      rendered with whichever sorted first. Regression-tested in both
+      directions. - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
+      pure + tested). It cannot come through the merchant template system:
+      template values are ESCAPED strings — that escaping is the XSS boundary —
+      so a table would arrive as visible markup. It renders between the body and
+      the CTA button, like the button itself. All `<table>` with inline styles
+      and explicit widths, the only layout Outlook, Gmail clipping and a 320px
+      phone agree on. Items + totals ladder, discounts shown NEGATIVE (bare,
+      they read as another charge and the totals visibly stop adding up), capped
+      at 20 rows with "+N more", names escaped, and `""` when there's nothing to
+      show — the block is attached to every notification email and an empty
+      frame on "Blog approved" would look broken. - **THE ITEMS RIDE THEIR OWN FIELD, NOT THE PAYLOAD.** `EmitEventInput.email`
+      is display-only data for the email channel, snapshotted onto
+      `notification_email_queue.line_items`
+      (`supabase/notifications_06_email_items.sql`) at enqueue. It is separate
+      from `payload` because that one is the AUDIT record — kept small and
+      scalar on purpose (`sanitizePayload` drops objects and arrays) and read by
+      the bell, the activity feed and merchant `{{tokens}}`. Snapshotting (like
+      title/body/url) means the worker needs no joins and a receipt keeps the
+      prices it was written with. `sanitizeSummary` bounds it: 50 items, capped
+      names, coerced numbers. Emitted by `placeOrder` and `placePosSale`, so an
+      in-store customer's emailed copy and their printed receipt agree line for
+      line. - **The fact list and the table must not both carry the same thing.**
+      `HAS_ORDER_SUMMARY` + `SUMMARY_OWNED` (default-templates.ts) drop items
+      and every money row from the built-in copy for events that render a
+      summary — printing "Total ₹343.00" directly above a table ending in
+      ₹343.00 is what makes an email look auto-generated. The fact list keeps
+      what the table doesn't: reference, payment method, when. The tokens stay
+      declared, so a merchant who wants them can still use them. - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): the same neutral
+      palette for every store — white card, near-black text, one dark button.
+      The storefront accent is deliberately unused: pushed into an email it must
+      survive colour-managed clients and forced dark mode, and the failure mode
+      is a customer receiving something that looks broken. Identity comes from
+      the logo. Every email type routes through it.
+    - **Email is a QUEUE, never an inline send** (`notification_email_queue`):
+      the fan-out enqueues, `lib/email/notification-worker.ts` drains it from
+      `/api/cron/send-emails`. A Resend round-trip must never sit on a
+      checkout's code path. Retries back off (5/15/45 min, 3 attempts).
+      **Digests** date each row to the END of its window (clock-aligned, so one
+      window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
+      heartbeat is 00:00 UTC — **move it if the cron moves.**
+
 ## 6. Commands
 
 ```bash
@@ -1636,6 +1790,16 @@ npm run format      # prettier --write
   Deploy wiring is per-env (`_POS_SESSION_SECRET_SECRET` → the
   `POS_SESSION_SECRET_STAGING`/`_PROD` Secret Manager entries) — see
   `docs/gcp-ci-cd.md`.
+- **Google Maps** (signup location step, §19): **`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`**
+  — a Maps JavaScript API key from Google Cloud. Needs a billing account with a
+  card even to stay inside the free allowance, and the key is public by nature
+  (it ships to the browser), so restrict it by HTTP referrer to the app's hosts
+  and enable only Maps JavaScript + Geocoding. **Entirely optional at runtime**:
+  `app/platform/signup/location-picker.tsx` renders the map only when the key is
+  set and falls back to the plain country/city form when it is missing, blocked,
+  or rejected — location is a REQUIRED signup step, so the map must never be
+  able to stop someone signing up. "Use my current location" is the browser's
+  own Geolocation API: free, keyless, and works with the map switched off.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&

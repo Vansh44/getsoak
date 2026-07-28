@@ -58,6 +58,161 @@ a.card:hover {
   transform: translateY(-1px);
 }
 
+/* ── Order list ────────────────────────────────────────────────────────────
+   One row per order, laid out as a grid: thumbnails → what it was → what it
+   cost → chevron. The old card gave a full stacked block to four short facts,
+   so three orders filled a screen and none of them was scannable. Products
+   lead because that's what a shopper recognises an order by; the reference is
+   a support handle and reads as metadata. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.list .card {
+  margin-bottom: 0;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Overlapping stack: three photos in the width of about one and a half, which
+   reads as "several things" without becoming a gallery. */
+.thumbs {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--sm-radius-sm);
+  object-fit: cover;
+  background: var(--sm-cream);
+  border: 2px solid var(--sm-surface);
+  box-shadow: 0 1px 3px rgba(var(--sm-shadow-rgb), 0.12);
+}
+
+.thumb + .thumb {
+  margin-left: -18px;
+}
+
+.thumbFallback {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--sm-radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sm-cream);
+  color: var(--sm-ink-faint);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.08);
+}
+
+.info {
+  min-width: 0;
+}
+
+.itemName {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--sm-ink);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  font-weight: 400;
+  color: var(--sm-ink-soft);
+}
+
+.trailing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.chevron {
+  color: var(--sm-ink-faint);
+  flex-shrink: 0;
+}
+
+.dot {
+  margin: 0 6px;
+  opacity: 0.5;
+}
+
+/* Phones: the price and status move under the name rather than squeezing the
+   product into two words. The thumbnail stays — it's the fastest way to find
+   the right order on a small screen. */
+@media (max-width: 560px) {
+  .list .card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "thumbs info chevron"
+      "thumbs trailing chevron";
+    row-gap: 8px;
+    /* A nowrap pill next to a nowrap price has a min-content width the middle
+       column can exceed, which pushed the price off-screen and gave the whole
+       page a horizontal scrollbar. Smaller thumbs and tighter gaps buy back
+       the room; the clip is the last line of defence. */
+    padding: 12px 14px;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .thumb,
+  .thumbFallback {
+    width: 44px;
+    height: 44px;
+  }
+
+  .thumb + .thumb {
+    margin-left: -15px;
+  }
+
+  .thumbs {
+    grid-area: thumbs;
+  }
+  .info {
+    grid-area: info;
+  }
+  .trailing {
+    grid-area: trailing;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .list .total {
+    font-size: 16px;
+  }
+
+  /* Truncate rather than wrap: "ORD100110311 · 28 Jul / 2026" split the date
+     across lines and made one fact look like two. */
+  .list .meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chevron {
+    grid-area: chevron;
+  }
+}
+
 .row {
   display: flex;
   align-items: flex-start;
@@ -70,6 +225,16 @@ a.card:hover {
   font-size: 16px;
   font-weight: 600;
   color: var(--sm-ink);
+}
+
+/* In the LIST the reference is metadata, not a heading — the product name is
+   the title now. Scoped so the detail page, where the reference IS the
+   subject, keeps its own weight. */
+.list .ref {
+  font-size: inherit;
+  font-weight: 500;
+  color: var(--sm-ink-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .meta {
@@ -101,7 +266,10 @@ a.card:hover {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.2px;
-  text-transform: capitalize;
+  white-space: nowrap;
+  /* No text-transform: the labels are already written the way they should read
+     (CUSTOMER_STATUS_LABEL). `capitalize` title-cased whole sentences, so
+     "On the way" was rendering as "On The Way". */
 }
 
 .pillPending {
@@ -283,4 +451,191 @@ a.card:hover {
 
 .link:hover {
   text-decoration: underline;
+}
+
+/* ── Order detail ──────────────────────────────────────────────────────────
+   Two columns on desktop: progress + items on the left, money + address on
+   the right. Three stacked full-width cards made a four-line order scroll
+   like a document, with the total — the thing people check — below the fold. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.main,
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The summary follows you down a long item list — it's what the page is for. */
+.side {
+  position: sticky;
+  top: 24px;
+}
+
+.layout .card {
+  margin-bottom: 0;
+}
+
+@media (max-width: 860px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .side {
+    position: static;
+  }
+}
+
+/* Four labels across a phone is genuinely tight; smaller type keeps most of
+   them on one line without dropping the ones the shopper hasn't reached. */
+@media (max-width: 560px) {
+  .trackLabel {
+    font-size: 11.5px;
+  }
+}
+
+/* ---- Horizontal progress tracker ----
+   The vertical list spent a whole card on four words. Horizontal reads as a
+   journey and takes one line, which is what a tracker is for. */
+.track {
+  display: flex;
+  list-style: none;
+  margin: 6px 0 2px;
+  padding: 0;
+}
+
+.trackStep {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  text-align: center;
+}
+
+/* The connector sits behind the dots, drawn from each step to the next. */
+.trackStep::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: -50%;
+  width: 100%;
+  height: 2px;
+  background: rgba(var(--sm-shadow-rgb), 0.12);
+}
+
+.trackStep:first-child::before {
+  display: none;
+}
+
+.trackStepDone::before {
+  background: var(--sm-accent);
+}
+
+.trackDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(var(--sm-shadow-rgb), 0.18);
+  background: var(--sm-surface);
+  position: relative;
+  z-index: 1;
+}
+
+.trackStepDone .trackDot {
+  border-color: var(--sm-accent);
+  background: var(--sm-accent);
+}
+
+.trackLabel {
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--sm-ink-faint);
+}
+
+.trackStepDone .trackLabel {
+  color: var(--sm-ink);
+  font-weight: 600;
+}
+
+/* ---- Line items ---- */
+.itemList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.itemList .item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(var(--sm-shadow-rgb), 0.07);
+}
+
+.itemList .item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.itemThumb,
+.itemThumbFallback {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--sm-radius-sm);
+  flex-shrink: 0;
+}
+
+.itemThumb {
+  object-fit: cover;
+  background: var(--sm-cream);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.08);
+}
+
+.itemThumbFallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sm-cream);
+  color: var(--sm-ink-faint);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.08);
+}
+
+.itemInfo {
+  min-width: 0;
+}
+
+.itemTotal {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sm-ink);
+  white-space: nowrap;
+}
+
+/* A real button, not a link buried under the address. */
+.invoiceBtn {
+  display: block;
+  margin-top: 16px;
+  padding: 11px 16px;
+  border-radius: var(--sm-radius-control);
+  border: 1px solid rgba(var(--sm-shadow-rgb), 0.16);
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+
+.invoiceBtn:hover {
+  border-color: rgba(var(--sm-shadow-rgb), 0.32);
 }

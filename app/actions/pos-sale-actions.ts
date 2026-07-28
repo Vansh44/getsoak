@@ -33,6 +33,7 @@ import {
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { summariseItems } from "@/lib/notifications/format";
 import { posCan } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
@@ -1086,9 +1087,30 @@ export async function placePosSale(
     payload: {
       total,
       currency: "INR",
-      items: lines.length,
+      items: summariseItems(
+        priced.map((l) => ({
+          name: l.name,
+          variantName: l.variant_name,
+          quantity: l.quantity,
+        })),
+      ),
       paymentMethod: "pos",
       channel: "In-store",
+    },
+    // Same order summary the thermal receipt prints, so an attached customer's
+    // emailed copy and the paper in their hand agree line for line.
+    email: {
+      currency: "INR",
+      items: priced.map((l) => ({
+        name: l.name,
+        variant: l.variant_name,
+        quantity: l.quantity,
+        total: l.amount,
+      })),
+      subtotal: totals.subtotal,
+      discount: totals.discount,
+      tax: totals.tax,
+      total: totals.total,
     },
   });
 

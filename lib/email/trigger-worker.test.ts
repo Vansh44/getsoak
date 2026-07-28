@@ -10,6 +10,10 @@ vi.mock("@/lib/store/host", () => ({
   PLATFORM_URL: "https://storemink.com",
   ROOT_DOMAIN: "storemink.com",
 }));
+const requestOrigin = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("@/lib/request-url", () => ({
+  getRequestOrigin: vi.fn(async () => requestOrigin.value),
+}));
 
 import { triggerEmailWorker } from "./trigger-worker";
 import { logWarn } from "@/lib/observability/logger";
@@ -22,6 +26,7 @@ describe("triggerEmailWorker", () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.stubEnv("CRON_SECRET", "s3cret");
+    requestOrigin.value = null;
   });
 
   afterEach(() => {
@@ -51,6 +56,20 @@ describe("triggerEmailWorker", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://storemink.com/api/cron/send-emails",
+    );
+  });
+
+  // REGRESSION. Resolving the origin from env alone sent the kick to whatever
+  // NEXT_PUBLIC_ROOT_DOMAIN said — so an order placed on a local dev server
+  // POSTed to https://staging.storemink.com, telling ANOTHER environment to
+  // drain a queue that wasn't ours. The kick has to land on THIS process.
+  it("kicks the host serving the current request, not the configured one", async () => {
+    requestOrigin.value = "http://echos.localhost:3000";
+
+    await triggerEmailWorker();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://echos.localhost:3000/api/cron/send-emails",
     );
   });
 

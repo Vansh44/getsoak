@@ -3279,6 +3279,9 @@ export const notificationEmailQueue = pgTable(
     // Snapshotted at enqueue, like subject/body — see notifications_04_email_cc.sql.
     cc: text(),
     bcc: text(),
+    // Display-only order summary, snapshotted at enqueue — see
+    // supabase/notifications_06_email_items.sql for why it isn't in the payload.
+    lineItems: jsonb("line_items"),
     status: text().default("pending").notNull(),
     sendAfter: timestamp("send_after", {
       withTimezone: true,

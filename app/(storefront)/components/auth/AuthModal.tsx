@@ -54,14 +54,31 @@ export default function AuthModal() {
   const verifierRef = useRef<RecaptchaVerifier | null>(null);
   const confirmationRef = useRef<ConfirmationResult | null>(null);
 
+  /**
+   * A FRESH reCAPTCHA verifier for every send attempt.
+   *
+   * A RecaptchaVerifier is SINGLE-USE: once signInWithPhoneNumber solves it,
+   * that instance can never be handed to Firebase again. This used to memoise
+   * one and only tear it down when the modal CLOSED, which produced a dead end
+   * the user couldn't escape:
+   *
+   *   • First send fails (a mistyped number, say). The verifier is already
+   *     spent. Correct the number, press Continue → the same spent verifier
+   *     goes back to Firebase → fails again, with the same opaque message,
+   *     forever. "Please try again" was advice that could not work.
+   *   • "Resend code" had it too: it reused the verifier the initial send
+   *     consumed, so resending never once succeeded.
+   *
+   * Recreating per attempt costs nothing — the widget is invisible and the
+   * container is reused — and removes the whole class of problem.
+   */
   const getVerifier = useCallback((): RecaptchaVerifier => {
-    if (!verifierRef.current) {
-      verifierRef.current = new RecaptchaVerifier(
-        getFirebaseAuth(),
-        recaptchaRef.current!,
-        { size: "invisible" },
-      );
-    }
+    verifierRef.current?.clear();
+    verifierRef.current = new RecaptchaVerifier(
+      getFirebaseAuth(),
+      recaptchaRef.current!,
+      { size: "invisible" },
+    );
     return verifierRef.current;
   }, []);
 

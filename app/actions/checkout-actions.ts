@@ -28,6 +28,7 @@ import {
 } from "@/lib/payments/razorpay";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { summariseItems } from "@/lib/notifications/format";
 import {
   rowToBillingSettings,
   rowToTaxClass,
@@ -987,8 +988,24 @@ export async function placeOrder(
     payload: {
       total,
       currency: "INR",
-      items: orderItemsToInsert.length,
+      items: summariseItems(orderItemsToInsert),
       paymentMethod,
+    },
+    // The order summary the email renders as a table. Separate from `payload`
+    // on purpose — see EmitEventInput.email.
+    email: {
+      currency: "INR",
+      items: orderItemsToInsert.map((i) => ({
+        name: i.name,
+        variant: i.variantName,
+        quantity: i.quantity,
+        total: i.total,
+      })),
+      subtotal,
+      discount,
+      tax,
+      shipping,
+      total,
     },
   });
 
