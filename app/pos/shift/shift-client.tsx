@@ -9,9 +9,11 @@
 // into it.
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowDownToLine,
+  ArrowLeft,
   ArrowUpFromLine,
   Banknote,
   Loader2,
@@ -486,10 +488,23 @@ function Shell({
 }) {
   return (
     <div className="mx-auto w-full max-w-2xl p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Banknote className="h-5 w-5" strokeWidth={2} />
-        <h1 className="text-lg font-semibold">Cash drawer</h1>
-        <span className="text-sm text-white/50">· {locationName}</span>
+      {/* The drawer is a detour from selling, so the way back has to be
+          obvious — this screen had no exit at all on first build. */}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Banknote className="h-5 w-5 shrink-0" strokeWidth={2} />
+          <h1 className="truncate text-lg font-semibold">Cash drawer</h1>
+          <span className="truncate text-sm text-white/50">
+            · {locationName}
+          </span>
+        </div>
+        <Link
+          href="/pos/sell"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-white/20"
+        >
+          <ArrowLeft className="h-4 w-4" strokeWidth={2} />
+          Back to register
+        </Link>
       </div>
       {children}
     </div>
