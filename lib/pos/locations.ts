@@ -9,10 +9,12 @@ import { storeLocations } from "@/drizzle/schema";
 import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 
+import type { LocationType } from "@/lib/locations/capabilities";
+
 export interface StoreLocation {
   id: string;
   name: string;
-  type: "shop" | "warehouse";
+  type: LocationType;
   gstin: string | null;
   stateCode: string | null;
   receiptPrefix: string | null;

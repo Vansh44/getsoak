@@ -459,6 +459,16 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
+│   │                          # (sellable-online total, trigger-maintained)
+│   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
+│   │                          # dashboard admins (NO ROWS = unrestricted)
+│   ├── locations_01_capabilities.sql  # ★ store_locations.capabilities (jsonb) —
+│   │                          # what a location may DO; registry in lib/locations/
+│   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
+│   │                          # a store's locations, atomically (one plpgsql txn)
+│   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
+│   │                          # (one open shift per LOCATION, partial unique index)
 │   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
 │   │                          # per location (no row = show the whole catalogue)
 │   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
@@ -482,6 +492,8 @@ wholesip/
 │   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
 │   │                          # (platform rows = store_id NULL). Service-role
 │   │                          # only; bodies redacted for credential mailers
+│   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
+│   │                          # — 'store' (default) | 'event_location'
 │   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
 │   │                          # (GLOBAL — no store_id, by design: a hard bounce
 │   │                          # bounces for everyone and the shared sending
@@ -1489,15 +1501,155 @@ group, span}` (span = columns of the 4-wide desktop grid),
         products left off would be unsellable. Entries are not FK-checked, so
         a deleted product silently drops its tile; the header shows
         "12 of 20 products" once configured.
-    - **Not yet built:** shifts & cash reconciliation (Phase 3), POS-native
-      inventory (4 — note `adjust_stock` from `/dashboard/inventory` still
-      writes to the DEFAULT location, so a multi-location store cannot yet
-      correct stock at a specific shop), returns/store credit (5), Twilio
-      receipts (6), metered extra-location billing (7), omnichannel/BOPIS (8),
-      offline outbox (9).
-      See `docs/pos-plan.md`.
+    - **Phase 3 (done) = shifts & cash reconciliation.** A shift is one
+      accounting period for a location's cash drawer:
+      `expected = float + net cash sales + paid-ins − payouts − drops`, and
+      `variance = counted − expected` (negative = short). `lib/pos/shifts.ts`
+      is the PURE math (tested); `app/actions/pos-shift-actions.ts` is the
+      gate; `/pos/shift` is the screen, which shows the whole equation rather
+      than just the answer — "expected ₹1,895" is only trustworthy if you can
+      see what fed it.
+      - **Per LOCATION, not per device.** Owners are not device-bound
+        (`resolvePosOperator` resolves them with no device), so a per-device
+        shift would have no home for an owner's cash sale. Every operator has a
+        `locationId`. A store running several drawers per shop wants a
+        `device_id` column and a wider partial unique index; nothing else
+        changes.
+      - **ONE open shift per location, enforced by a partial unique index** —
+        not by application logic. Two managers tapping "Open" at the same
+        moment cannot split a day's cash across two drawers; the loser gets a
+        friendly "already open" rather than a raw constraint error. Closing
+        claims the open→closed transition CONDITIONALLY (the order-cancellation
+        pattern), so a second tap can't overwrite the first count.
+      - **`orders.shift_id` is stamped at sale time**, not inferred from a time
+        window — a sale rung a second before midnight must not land in
+        tomorrow's drawer. If the drawer lookup fails the sale still completes
+        and goes unattributed, which reconciliation surfaces rather than hides.
+      - **★ Change is subtracted ONCE per order.** `placePosSale` writes the
+        SALE's `change_due` onto EVERY cash tender row, so a sale settled with
+        two cash tenders carries it twice. Summing would deduct it twice and
+        report the drawer short by that amount every time — a small, consistent
+        discrepancy that gets blamed on a cashier. `netCashFromSales` groups by
+        order and takes the max; `totalsByMethod` delegates to it rather than
+        re-implementing. Both directions are tested.
+      - Settings (convention #9): `pos.requireOpenShift` (default **off** —
+        turning it on can stop a till, so it stays the merchant's call) and
+        `pos.cashVarianceTolerance` (a hand-counted drawer is never exact to
+        the paise). Capabilities: `open_close_shift` to open/close,
+        `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
+        declare what was in it. A CLOSED shift reports the figures snapshotted
+        at close, so an old Z-report can't drift when an order is later edited.
+    - **Phase 4 (done) = inventory from the shop floor.** `/pos/inventory`
+      (`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`, so
+      a cashier sells stock but never declares how much exists). Search or
+      scan, then three actions per row: **receive/correct** a delta, **count**
+      to an absolute figure, or **send** stock to another location. The
+      location is ALWAYS the operator's session — the only location a caller
+      may name is a transfer's destination, verified against the store here
+      AND again inside the RPC.
+      - **A count is stored as a DELTA, not an absolute write.** It goes
+        through the same atomic `adjust_stock_at` and leaves the same ledger
+        row as any other correction — and a sale rung while someone was
+        counting the shelf isn't silently erased. A count that matches writes
+        nothing, so confirming a figure doesn't litter the history.
+      - **★ `transfer_stock` is ONE RPC because it touches TWO locations**
+        (`supabase/pos_11_transfer_stock.sql`). The app has no cross-statement
+        transaction over the pool — that's why placeOrder/placePosSale carry
+        manual rollback chains — so doing this as two adjustments could
+        decrement the source, fail to credit the destination, and the units
+        would simply cease to exist on the store's books. A plpgsql body is
+        one transaction, so both legs commit or neither does. The source
+        decrement is CONDITIONAL on having the stock, so two managers moving
+        the last 5 units can't both win. Writes paired `transfer_out` /
+        `transfer_in` ledger rows so each location's history explains its own
+        balance. **If `reserved` is ever brought into use, the guard must
+        become `on_hand - reserved >= qty`** or a transfer will ship units
+        already promised to an online order.
+      - Adjustments feed `reportStockChanges`, so a manual correction to zero
+        still fires the low/out-of-stock crossing (§22) rather than alerting
+        nobody.
+23. **Locations own capabilities; POS is one of them.** Locations used to live
+    under Point of Sale. They don't: a warehouse is a location with POS
+    switched off, and pickup/online-fulfilment/returns are storefront features
+    that merely depend on a location. So **`/dashboard/locations`** is its own
+    Workspace section (above Point of Sale), `/dashboard/pos/locations`
+    redirects to it, and `pos-location-actions.ts` became
+    `location-actions.ts`. Full design: `docs/locations-ia.md`; the phased
+    build: `docs/inventory-fulfilment-roadmap.md`.
+    - **`lib/locations/capabilities.ts` is a REGISTRY, not columns.** Six
+      capabilities (`pos`, `online_fulfil`, `pickup`, `returns`,
+      `receive_stock`, `transfer_stock`) with labels, `requires`, `minPlan` and
+      per-type creation defaults, stored in `store_locations.capabilities`
+      (jsonb, `locations_01_capabilities.sql`). Six boolean columns would make
+      a seventh capability a migration plus a check to forget in every
+      consumer; as jsonb it's one registry entry and `normalizeCapabilities()`
+      gives existing rows a sensible value with no migration — the same trade
+      `stores.settings.features` makes. **PUBLIC** — the storefront reads it to
+      decide whether to offer pickup, so no secrets.
+    - **`locationCan()` is the only read.** Three gates: the stored flag, every
+      capability in `requires`, and the plan. `pickup`/`returns` require `pos`
+      (someone has to hand the goods over) and are `minPlan: pro`.
+      `applyCapability()` cascades a switch-off to dependants so the stored
+      state can never disagree with what `locationCan` reports.
+    - **Two rules enforced server-side** in `saveLocationCapabilities` — a
+      disabled checkbox is not a permission: a capability whose dependency is
+      off is stored off, and **the last location fulfilling online orders
+      cannot be switched off** (the store would advertise products it has no
+      way to ship, and every checkout would fail with no visible cause).
+    - **The backfill is NOT the creation defaults.** A migration may not change
+      what a live store does, so a capability describing EXISTING behaviour is
+      backfilled ON (`online_fulfil` on the default location — the
+      `reserve_stock` wrapper sends every online order there) and one
+      introducing NEW behaviour is backfilled OFF (`pickup`, `returns`).
+    - **Location CRUD no longer requires POS to be switched on** — only Pro. A
+      warehouse that fulfils online orders needs no till. The sidebar entry is
+      hidden until the store has 2+ locations or POS is on, so a
+      single-location store never sees it.
+    - **The desk view can now target a shop (Phase C).**
+      `/dashboard/inventory` gained a location selector: **All locations** shows
+      the cross-location total and is READ-ONLY (you cannot adjust a sum), while
+      a specific shop is editable and routes every write through
+      `adjust_stock_at`. Omitting the location keeps the compatibility wrapper,
+      so a single-location store is untouched and never sees the selector.
+      Three things had to move together or the page would lie: the list reads
+      `inventory_levels.on_hand` at that shop instead of the `products.stock`
+      aggregate; **`setStock` computes its delta against THAT shelf** (against
+      the aggregate it would write a wildly wrong correction); and `bulkAdjust`
+      does the same for its batch baseline, treating a shop that has never
+      carried a SKU as zero rather than skipping it — which is the normal case
+      when stocking a new shop. The selector is also scope-aware (§B2): a
+      location-bound admin sees only their shops, and naming another one in the
+      URL is refused server-side.
+    - **Online orders are ROUTED to a location (Phase D).** Checkout used to
+      call the `reserve_stock` wrapper, which always targets the store's
+      DEFAULT location — so a store with stock in a second shop advertised it
+      and then failed the order. `lib/fulfilment/resolve.ts` now picks a
+      location and `placeOrder` reserves there and stamps `orders.location_id`,
+      which also brings online orders inside the §B2 location scope.
+      - **`lib/fulfilment/strategies.ts` is a REGISTRY** (roadmap §1.2), not a
+        switch. v1 registers `priority`; `nearest`/`most_stock`/`cheapest` each
+        become a file that registers itself, and checkout never learns their
+        names. An unknown strategy id resolves to the default rather than
+        stopping a store selling.
+      - **Falling back is deliberate.** No rules row, no eligible location, or
+        a failed query ⇒ null ⇒ the wrapper's default location, exactly as
+        before. Routing must never be the reason a sale is refused. A store
+        with one location short-circuits entirely.
+      - **★ `products.online_stock` is what the STOREFRONT promises.**
+        `products.stock` stays the all-locations total (the dashboard and POS
+        want that); `online_stock` is the same sum restricted to locations with
+        `online_fulfil` that are active. Both are maintained by the SAME
+        `_recompute_stock_aggregate`, so there is one place stock totals are
+        derived. A second trigger recomputes on a capability or `active`
+        change — without it, enabling fulfilment at a shop would leave the
+        website saying "out of stock" until something else touched that SKU.
+        The migration's guard FAILS if `online_stock > stock`, which can only
+        mean the capability filter is wrong.
+    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
+      metered extra-location billing (7), omnichannel/BOPIS (8), offline
+      outbox (9). See `docs/pos-plan.md`.
 
-23. **Notifications & email — one event log, registry-driven fan-out, one way
+24. **Notifications & email — one event log, registry-driven fan-out, one way
     out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
     decision lives, how to add one, troubleshooting). This section restores the
     summary the POS merge overwrote.
@@ -1550,6 +1702,26 @@ group, span}` (span = columns of the 4-wide desktop grid),
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
+    - **ROUTING HAS A LOCATION AXIS, AND IT IS A SCOPE NOT A MODE.**
+      `RoutingRule` was `mode: permission | roles | admins` with no idea where
+      anyone worked, so a manager bound to one shop was still emailed about
+      every other one. `scope` (`store` | `event_location`) COMPOSES with all
+      three modes — "people with the orders permission, AT this order's
+      location" is a mode AND a scope, and making location a fourth mode would
+      multiply the list every time another axis appears. It can only ever
+      NARROW what the mode selected. Two rules keep it from black-holing mail:
+      an event with **no** location is never narrowed by one (an online order
+      before routing resolves a shop, a blog comment, a plan change), and
+      **unrestricted staff still hear everything** — absence is not
+      restriction, the same contract as `lib/locations/scope.ts`. Defaults to
+      `store`, so nothing changes until a merchant switches an event over.
+      `EmitEventInput.locationId` carries it; `placePosSale` passes the
+      register's location and `placeOrder` the resolved fulfilment one.
+      The console renders it as a second **Where** section in the same
+      recipient popover (it composes with the mode, so it is a second
+      question, not more entries in the first list), shown ONLY when the
+      store has 2+ locations AND `EventDef.hasLocation` is set — a switch
+      that would do nothing is worse than no switch.
     - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
       sends AND logs, never throws into its caller, and records failures as
       readily as successes. There were EIGHT scattered `resend.emails.send`
@@ -1663,7 +1835,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
       heartbeat is 00:00 UTC — **move it if the cron moves.**
 
-24. **Legal & consent — versioned policies, and consent as evidence.**
+25. **Legal & consent — versioned policies, and consent as evidence.**
     - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,
       Privacy, Acceptable Use) live in **`legal_documents`** — platform-global,
       no `store_id`, the `platform_admins`/`help_categories` model. A MERCHANT's

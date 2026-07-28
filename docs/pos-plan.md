@@ -492,17 +492,26 @@ invisibility.
 **Ships:** a real in-store sale end to end; appears in `/dashboard/orders` +
 analytics alongside online orders.
 
-### Phase 3 — Shifts & cash reconciliation
+### Phase 3 — Shifts & cash reconciliation — **DONE**
 
-`pos_shifts` + `pos_cash_movements`; open/close (float → expected vs counted →
-variance), cash drop/payout/paid-in, X-report (mid-shift) / Z-report (EOD).
-`pos-shift-actions.ts`. Manager/owner only.
+`pos_shifts` + `pos_cash_movements` (supabase/pos_10_shifts.sql) +
+`orders.shift_id`; open/close (float → expected vs counted → variance), cash
+drop/payout/paid-in, live X-report and the closed Z-report at `/pos/shift`.
+`pos-shift-actions.ts`, gated on `open_close_shift` / `cash_drop`. Pure math in
+`lib/pos/shifts.ts`. One open shift per LOCATION, enforced by a partial unique
+index. Settings: `pos.requireOpenShift`, `pos.cashVarianceTolerance`.
 
-### Phase 4 — POS-native inventory management (manager, location-scoped) + transfers
+### Phase 4 — POS-native inventory management — **DONE**
 
-Inventory screens **inside `/pos`** scoped to the operator's assigned location(s):
-counts, adjust (`adjust_stock_at`), receive stock, low-stock, `transfer_stock`
-between locations. Location-scope enforced server-side.
+`/pos/inventory` scoped to the operator's location: search/scan, low-stock
+filter, receive/correct (`adjust_stock_at`), count (stored as a delta), and
+`transfer_stock` between locations (supabase/pos_11_transfer_stock.sql — one
+RPC, so both legs of a transfer commit or neither does).
+`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`.
+Location-scope enforced server-side from the session.
+
+REMAINING: `/dashboard/inventory` still writes to the store's DEFAULT location,
+so the desk view cannot yet target a specific shop.
 
 ### Phase 5 — Returns/BORIS + store credit + gift cards
 

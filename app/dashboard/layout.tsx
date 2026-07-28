@@ -11,7 +11,7 @@ import { getViewerContext } from "./lib/access";
 import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
 import { getLowStockAlertCount } from "./inventory/data";
-import { getPosState } from "@/lib/pos/locations";
+import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
@@ -153,6 +153,16 @@ export default async function DashboardLayout({
   // POS sidebar three-state: "Included in Pro" (upgrade) → "Enable POS" → live.
   const posState = getPosState(store);
 
+  // Locations appears only once it is useful: a single-location store has
+  // nothing to decide there (docs/locations-ia.md §6.3). Shown on Pro once the
+  // store either has a second location or has switched POS on — both are the
+  // moment "which location?" starts being a real question.
+  const locationCount = posState.posAvailable
+    ? (await getStoreLocations(store.id)).length
+    : 0;
+  const showLocations =
+    posState.posAvailable && (locationCount > 1 || posState.posEnabled);
+
   // Build the sidebar from the permission catalog: a section appears only when
   // the viewer can view it. The Dashboard home is always shown so everyone has
   // a landing page. Empty groups are dropped. The enquiries item gets a live
@@ -162,6 +172,7 @@ export default async function DashboardLayout({
     items: SECTIONS.filter(
       (s) =>
         s.group === group &&
+        (s.key !== "locations" || showLocations) &&
         (s.key === "dashboard" ||
           can(permissions, s.key, "view", isSuperadmin)),
     ).map((s) => {

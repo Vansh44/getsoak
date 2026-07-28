@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Store, MapPin, ExternalLink, Gem, Check, Loader2 } from "lucide-react";
-import { enablePos, disablePos } from "@/app/actions/pos-location-actions";
+import { enablePos, disablePos } from "@/app/actions/location-actions";
 import { PLAN_META } from "@/lib/plans";
 import type { PosState } from "@/lib/pos/locations";
 

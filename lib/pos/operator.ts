@@ -13,7 +13,7 @@
 import { and, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { withService } from "@/lib/db/client";
-import { posStaff, posStaffLocations } from "@/drizzle/schema";
+import { admins, posStaff, posStaffLocations } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
@@ -53,7 +53,11 @@ export async function resolvePosOperator(): Promise<PosOperator | null> {
         storeId,
         locationId,
         staffId: null,
-        name: ownerIdentity.email ?? "Owner",
+        name: await ownerDisplayName(
+          ownerIdentity.uid,
+          storeId,
+          ownerIdentity.email,
+        ),
         source: "owner",
         deviceAuthorized: !!device,
       };
@@ -111,6 +115,39 @@ export async function resolvePosOperator(): Promise<PosOperator | null> {
   }
 
   return null;
+}
+
+/**
+ * A human name for the owner, for receipts, shift records and the "opened by"
+ * line — an email address there reads like a system log, and it is printed in
+ * front of customers.
+ *
+ * Signup writes admins.first_name / last_name (CODEBASE §19); the email is the
+ * fallback for a legacy row with neither, and "Owner" the last resort so this
+ * can never render blank.
+ */
+async function ownerDisplayName(
+  uid: string,
+  storeId: string,
+  email: string | null,
+): Promise<string> {
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ first: admins.firstName, last: admins.lastName })
+        .from(admins)
+        .where(and(eq(admins.id, uid), eq(admins.storeId, storeId)))
+        .limit(1),
+    );
+    const name = [rows[0]?.first, rows[0]?.last]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    if (name) return name;
+  } catch {
+    // A name lookup must never be able to lock an owner out of the register.
+  }
+  return email || "Owner";
 }
 
 interface ActiveStaff {

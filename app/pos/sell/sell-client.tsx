@@ -8,6 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Loader2,
@@ -25,6 +26,8 @@ import {
   UserPlus,
   UserRound,
   LayoutGrid,
+  Banknote,
+  Boxes,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -37,6 +40,7 @@ import {
 } from "@/app/actions/pos-sale-actions";
 import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
+import { endSession } from "@/lib/auth/firebase-client";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import { useCatalog } from "@/lib/pos/use-catalog";
 import {
@@ -390,7 +394,11 @@ export function SellClient({
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <IdleLock minutes={idleLockMinutes} />
+      {/* Owners are exempt, as on the POS home: idle-lock targets the
+          walked-away-from-a-shared-till risk, and since posLock now ends the
+          Firebase session it would otherwise sign an owner out of the
+          dashboard for standing still. */}
+      {config.role !== "owner" && <IdleLock minutes={idleLockMinutes} />}
 
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-2 font-semibold">
@@ -436,6 +444,24 @@ export function SellClient({
               <span className="hidden sm:inline">Edit layout</span>
             </button>
           )}
+          {canEditLayout && (
+            <Link
+              href="/pos/inventory"
+              title="Stock at this location"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+            >
+              <Boxes className="h-4 w-4" strokeWidth={2} />
+              <span className="hidden sm:inline">Stock</span>
+            </Link>
+          )}
+          <Link
+            href="/pos/shift"
+            title="Cash drawer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+          >
+            <Banknote className="h-4 w-4" strokeWidth={2} />
+            <span className="hidden sm:inline">Drawer</span>
+          </Link>
           <span className="flex items-center gap-1.5 text-white/70">
             <MapPin className="h-4 w-4" strokeWidth={2} />
             {config.locationName}
@@ -447,6 +473,9 @@ export function SellClient({
             type="button"
             onClick={async () => {
               await posLock();
+              // Also sign the Firebase SDK out locally, so nothing can re-mint
+              // a session for the person who just walked away.
+              await endSession();
               router.replace("/pos/login");
               router.refresh();
             }}

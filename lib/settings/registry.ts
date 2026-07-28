@@ -39,6 +39,8 @@ export const SETTING_KEYS = [
   "pos.allowPriceOverride",
   "pos.requireManagerForDiscount",
   "pos.maxDiscountPercent",
+  "pos.requireOpenShift",
+  "pos.cashVarianceTolerance",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -194,6 +196,30 @@ export const SETTINGS: readonly SettingDef[] = [
     max: 100,
     minPlan: "pro",
     dependsOn: "pos.requireManagerForDiscount",
+  },
+  {
+    key: "pos.requireOpenShift",
+    label: "Require an open shift to sell",
+    description:
+      "Cashiers must open the drawer with a counted float before ringing a sale. Off by default — turning it on can stop a till, so it is the merchant's call.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.cashVarianceTolerance",
+    label: "Cash variance tolerance",
+    description:
+      "Rupees a closing count may differ from expected before it is flagged as over or short. A drawer counted by hand is rarely exact.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    minPlan: "pro",
   },
 ];
 

@@ -82,6 +82,13 @@ export interface EventDef {
    */
   audiences: Partial<Record<Audience, ChannelDefaults>>;
   /**
+   * True when this event can carry a `locationId` — i.e. some emitter passes
+   * one. Only these can meaningfully use the `event_location` routing scope,
+   * so the console hides that control for everything else rather than offering
+   * a switch that would do nothing (lib/notifications/routing.ts).
+   */
+  hasLocation?: boolean;
+  /**
    * False = the merchant cannot switch it off. Reserved for events a store
    * owner must not be able to go blind on (role changes, failed billing,
    * password changes) — the ones that matter in a dispute or a breach.
@@ -155,6 +162,9 @@ export const EVENTS: readonly EventDef[] = [
     label: "New order",
     description: "A shopper completed checkout.",
     group: "Orders",
+    // placePosSale passes the register's location; placeOrder passes the
+    // fulfilment location Phase D resolves.
+    hasLocation: true,
     section: "orders",
     severity: "success",
     audiences: { "store-admins": BOTH, customer: BOTH },
@@ -236,6 +246,8 @@ export const EVENTS: readonly EventDef[] = [
   },
   {
     key: "inventory.adjusted",
+    // POS inventory and the dashboard's location selector both target a shop.
+    hasLocation: true,
     label: "Stock adjusted",
     description: "Stock was changed manually or in bulk. Recorded for audit.",
     group: "Inventory",

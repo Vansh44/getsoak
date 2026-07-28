@@ -21,12 +21,24 @@ import type {
   AudienceMember,
   AudienceRole,
 } from "@/app/actions/notification-actions";
-import type { RoutingMode, RoutingRule } from "@/lib/notifications/routing";
+import type {
+  RoutingMode,
+  RoutingRule,
+  RoutingScope,
+} from "@/lib/notifications/routing";
 
 const MODE_LABEL: Record<RoutingMode, string> = {
   permission: "Everyone who can view",
   roles: "Specific roles",
   admins: "Specific people",
+};
+
+// Scope COMPOSES with the mode above — "specific roles, at the location it
+// happened" is both. It is a second question, hence a second section rather
+// than more entries in the first list.
+const SCOPE_LABEL: Record<RoutingScope, string> = {
+  store: "Anywhere in the store",
+  event_location: "Only where it happened",
 };
 
 /** One-line summary for the collapsed row. */
@@ -52,6 +64,11 @@ export function routingSummary(
   if (!names.length) return `Everyone who can view ${sectionLabel}`;
   if (names.length <= 2) return names.join(", ");
   return `${names[0]}, ${names[1]} +${names.length - 2}`;
+}
+
+/** Appended to the summary so a narrowed rule is visible while collapsed. */
+export function scopeSuffix(rule: RoutingRule): string {
+  return rule.scope === "event_location" ? " · at that location" : "";
 }
 
 function Row({
@@ -120,6 +137,7 @@ export function RecipientPicker({
   members,
   disabled,
   onChange,
+  showScope = false,
 }: {
   rule: RoutingRule;
   sectionLabel: string;
@@ -128,6 +146,10 @@ export function RecipientPicker({
   members: AudienceMember[];
   disabled?: boolean;
   onChange: (next: RoutingRule) => void;
+  /** Offer the location scope. False for a single-location store, and for
+   *  events that never carry a location — a switch that does nothing is worse
+   *  than no switch. */
+  showScope?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -191,6 +213,7 @@ export function RecipientPicker({
   );
 
   const setMode = (mode: RoutingMode) => onChange({ ...rule, mode });
+  const setScope = (scope: RoutingScope) => onChange({ ...rule, scope });
 
   const toggleRole = (slug: string) => {
     const next = rule.roles.includes(slug)
@@ -206,7 +229,9 @@ export function RecipientPicker({
     onChange({ ...rule, mode: "admins", admins: next });
   };
 
-  const summary = routingSummary(rule, sectionLabel, roles, members);
+  const summary =
+    routingSummary(rule, sectionLabel, roles, members) +
+    (showScope ? scopeSuffix(rule) : "");
 
   return (
     <div className="relative">
@@ -332,6 +357,43 @@ export function RecipientPicker({
                         />
                       );
                     })
+                  )}
+                </div>
+              )}
+
+              {showScope && (
+                <div className="mt-1.5 border-t border-[var(--dash-border)] pt-1.5">
+                  <div className="px-2 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">
+                    Where
+                  </div>
+                  {(Object.keys(SCOPE_LABEL) as RoutingScope[]).map((scope) => (
+                    <button
+                      key={scope}
+                      type="button"
+                      onClick={() => setScope(scope)}
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-[var(--dash-surface-2)] ${
+                        rule.scope === scope
+                          ? "font-semibold text-[var(--dash-text)]"
+                          : "text-[var(--dash-text-2)]"
+                      }`}
+                    >
+                      <span
+                        className={`h-3 w-3 shrink-0 rounded-full border-[3px] ${
+                          rule.scope === scope
+                            ? "border-[var(--dash-accent)]"
+                            : "border-[var(--dash-border-strong)]"
+                        }`}
+                        aria-hidden
+                      />
+                      {SCOPE_LABEL[scope]}
+                    </button>
+                  ))}
+                  {rule.scope === "event_location" && (
+                    <p className="px-2 pb-1 pt-1 text-[11.5px] leading-snug text-[var(--dash-text-3)]">
+                      Staff assigned to a location hear only about theirs.
+                      Anyone not assigned to a location still hears everything,
+                      and an event with no location reaches everyone.
+                    </p>
                   )}
                 </div>
               )}

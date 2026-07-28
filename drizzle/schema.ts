@@ -1147,6 +1147,10 @@ export const orderPayments = pgTable(
 export const orders = pgTable(
   "orders",
   {
+    // Which cash-drawer period this sale belongs to (pos_10_shifts.sql).
+    // Explicit rather than inferred from a time window: a sale rung a second
+    // before midnight must not land in tomorrow's drawer.
+    shiftId: uuid("shift_id"),
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
     // Nullable since pos_06: a walk-in POS sale has no account and no
@@ -1415,6 +1419,11 @@ export const productVariants = pgTable(
     productId: uuid("product_id").notNull(),
     name: text().notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     sku: text().notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1548,6 +1557,11 @@ export const products = pgTable(
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     sku: text().notNull(),
@@ -1864,6 +1878,13 @@ export const storeLocations = pgTable(
     gstin: text(),
     stateCode: text("state_code"),
     receiptPrefix: text("receipt_prefix"),
+    // What this location may DO (supabase/locations_01_capabilities.sql).
+    // jsonb rather than one boolean per capability so a new capability is a
+    // registry entry in lib/locations/capabilities.ts, not a migration plus a
+    // check to forget in every consumer. Read it through
+    // normalizeCapabilities() — never index into the raw blob.
+    // PUBLIC: the storefront reads it to decide whether to offer pickup.
+    capabilities: jsonb().default({}).notNull(),
     isDefault: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
@@ -2121,6 +2142,77 @@ export const posDevices = pgTable(
 // NO ROW = NO LAYOUT = show the whole catalogue, so adding this feature could
 // not blank an existing register. `items` is deliberately not FK-checked —
 // a deleted product drops out at render rather than wedging the layout.
+// Restricts a dashboard admin to specific locations (locations_02_admin_scope.sql).
+// NO ROWS = UNRESTRICTED — absence is not restriction, so this changes nothing
+// until a merchant deliberately assigns someone. Read through
+// lib/locations/scope.ts getViewerLocations(), never inline.
+export const adminLocations = pgTable(
+  "admin_locations",
+  {
+    adminId: text("admin_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("admin_locations_admin_idx").using(
+      "btree",
+      table.adminId.asc().nullsLast().op("text_ops"),
+    ),
+    index("admin_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.adminId],
+      foreignColumns: [admins.id],
+      name: "admin_locations_admin_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "admin_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "admin_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.adminId, table.locationId],
+      name: "admin_locations_pkey",
+    }),
+  ],
+);
+
+// Where online orders ship from (supabase/locations_03_fulfilment.sql).
+// `strategy` names a resolver in lib/fulfilment/strategies.ts, so adding
+// "nearest" later needs no schema change. `priority` is an ordered array of
+// location ids, deliberately not FK-checked: a deleted location drops out of
+// the order rather than blocking the delete. NO ROW = fall back to the default
+// location, which is every store's behaviour before Phase D.
+export const storeFulfilmentRules = pgTable(
+  "store_fulfilment_rules",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    strategy: text().default("priority").notNull(),
+    priority: jsonb().default([]).notNull(),
+    skipInactive: boolean("skip_inactive").default(true).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_fulfilment_rules_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const posLayouts = pgTable(
   "pos_layouts",
   {
@@ -2147,6 +2239,129 @@ export const posLayouts = pgTable(
       foreignColumns: [storeLocations.id],
       name: "pos_layouts_location_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// Per-location receipt numbers (supabase/pos_06_sell_path.sql). Allocated
+// ONLY through the next_pos_receipt_no() RPC — a single atomic UPDATE, the
+// same allocator pattern as next_order_no — so nothing reads or writes this
+// table through Drizzle. Declared for completeness: a live counter leaks sales
+// volume, which is why it is service-role only, and a schema file that omits
+// it invites someone to "add" it later with different semantics.
+export const posLocationCounters = pgTable(
+  "pos_location_counters",
+  {
+    locationId: uuid("location_id").primaryKey().notNull(),
+    receiptSeq: integer("receipt_seq").default(0).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_location_counters_location_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// POS Phase 3 — one cash-drawer accounting period per location
+// (supabase/pos_10_shifts.sql). At most one open at a time, enforced by a
+// partial unique index rather than by application logic.
+export const posShifts = pgTable(
+  "pos_shifts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    status: text().default("open").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    openedBy: text("opened_by"),
+    // Denormalised so a report still names whoever opened it after that staff
+    // member is deleted — the audit outlives the employment.
+    openedByName: text("opened_by_name"),
+    openingFloat: numeric("opening_float", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "string" }),
+    closedBy: text("closed_by"),
+    closedByName: text("closed_by_name"),
+    // Snapshotted at close so a historical Z-report can never drift.
+    countedCash: numeric("counted_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    expectedCash: numeric("expected_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    variance: numeric({ precision: 12, scale: 2, mode: "number" }),
+    note: text(),
+  },
+  (table) => [
+    index("idx_pos_shifts_store_opened").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_shifts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_shifts_location_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_shifts_status_check",
+      sql`status = ANY (ARRAY['open'::text, 'closed'::text])`,
+    ),
+  ],
+);
+
+// Cash into or out of the drawer that ISN'T a sale. `amount` is always
+// positive; `type` carries the direction.
+export const posCashMovements = pgTable(
+  "pos_cash_movements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    shiftId: uuid("shift_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    type: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    reason: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    createdBy: text("created_by"),
+    createdByName: text("created_by_name"),
+  },
+  (table) => [
+    index("idx_pos_cash_movements_shift").using(
+      "btree",
+      table.shiftId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.shiftId],
+      foreignColumns: [posShifts.id],
+      name: "pos_cash_movements_shift_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_cash_movements_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_cash_movements_type_check",
+      sql`type = ANY (ARRAY['drop'::text, 'payout'::text, 'paid_in'::text])`,
+    ),
   ],
 );
 
@@ -3439,6 +3654,10 @@ export const notificationSettings = pgTable(
     channels: jsonb().default({}).notNull(),
     /** permission | roles | admins. Targeting NARROWS, never widens. */
     routing: text().default("permission").notNull(),
+    // Location axis for routing (supabase/notifications_07_routing_scope.sql).
+    // 'store' (default) = today's behaviour; 'event_location' = only staff
+    // assigned where the event happened. See lib/notifications/routing.ts.
+    routingScope: text("routing_scope").default("store").notNull(),
     targetRoles: text("target_roles").array().default([]).notNull(),
     targetAdmins: text("target_admins").array().default([]).notNull(),
     /** Merchant copy per channel; absent channels use the built-in copy. */

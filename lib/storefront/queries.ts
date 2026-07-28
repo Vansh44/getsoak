@@ -125,7 +125,7 @@ export const getPublishedProducts = unstable_cache(
             sort_order: products.sortOrder,
             card_color: products.cardColor,
             track_inventory: products.trackInventory,
-            stock: products.stock,
+            stock: products.onlineStock,
             low_stock_threshold: products.lowStockThreshold,
             allow_backorder: products.allowBackorder,
             category: categories.name,
@@ -152,7 +152,7 @@ export const getPublishedProducts = unstable_cache(
             special_price: productVariants.specialPrice,
             sort_order: productVariants.sortOrder,
             track_inventory: productVariants.trackInventory,
-            stock: productVariants.stock,
+            stock: productVariants.onlineStock,
             low_stock_threshold: productVariants.lowStockThreshold,
             allow_backorder: productVariants.allowBackorder,
           })

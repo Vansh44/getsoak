@@ -38,6 +38,10 @@ import {
   newDeviceNonce,
   rotateDeviceNonce,
 } from "@/lib/pos/devices";
+import {
+  SESSION_COOKIE,
+  sessionCookieOptions,
+} from "@/lib/auth/session-cookie";
 import { posAudit } from "@/lib/pos/audit";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { hashPin, verifyPin, isValidPinFormat } from "@/lib/pos/pin";
@@ -621,8 +625,31 @@ export async function posLoginWithPin(
   return { success: true, operator: { name: staff.name, role: staff.role } };
 }
 
+/**
+ * Hand the till over: end BOTH credentials so the next person gets the login
+ * screen.
+ *
+ * Clearing only the operator cookie was not enough. An owner (and any staff who
+ * signed in with a password rather than a PIN) holds a Firebase `sm_session`,
+ * and resolvePosOperator checks that FIRST — so after "Lock" they still
+ * resolved, /pos/login redirected them straight back to the register, and the
+ * device could never actually be handed to a cashier.
+ *
+ * Yes, this signs an owner out of the dashboard too: it is the same
+ * .storemink.com cookie. That is the correct reading of "I am walking away
+ * from this shared till" — leaving dashboard access alive on a counter tablet
+ * is the outcome nobody wants.
+ */
 export async function posLock(): Promise<ActionResult> {
-  (await cookies()).delete(POS_OPERATOR_COOKIE);
+  const jar = await cookies();
+  jar.delete(POS_OPERATOR_COOKIE);
+
+  // The delete must carry the SAME domain/path the cookie was set with, or the
+  // cross-subdomain cookie survives (see app/api/auth/signout/route.ts).
+  const h = await headers();
+  const host = h.get("x-forwarded-host") || h.get("host");
+  jar.set(SESSION_COOKIE, "", { ...sessionCookieOptions(host), maxAge: 0 });
+
   return { success: true };
 }
 

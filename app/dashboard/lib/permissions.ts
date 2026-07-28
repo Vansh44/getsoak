@@ -110,6 +110,18 @@ export const SECTIONS: DashboardSection[] = [
     actions: ["view", "manage"],
   },
   {
+    // Locations are NOT a POS feature — POS is one capability OF a location,
+    // and a warehouse is a location with POS switched off (docs/locations-ia.md).
+    // Sits above Point of Sale: places first, then what you do there.
+    // Hidden for stores that can't use it — see app/dashboard/layout.tsx.
+    key: "locations",
+    label: "Locations",
+    href: "/dashboard/locations",
+    icon: "location",
+    group: "Workspace",
+    actions: ["view", "manage"],
+  },
+  {
     // Point of Sale. Plan-gated (Pro): the sidebar shows an "Included in Pro"
     // upgrade state on free/basic and an "Enable POS" state on Pro until it's
     // switched on (see app/dashboard/layout.tsx). Children are only surfaced
@@ -122,11 +134,6 @@ export const SECTIONS: DashboardSection[] = [
     actions: ["view", "manage"],
     children: [
       { label: "Overview", href: "/dashboard/pos", icon: "pos" },
-      {
-        label: "Locations",
-        href: "/dashboard/pos/locations",
-        icon: "location",
-      },
       { label: "Staff", href: "/dashboard/pos/staff", icon: "customers" },
       { label: "Devices", href: "/dashboard/pos/devices", icon: "channels" },
       {

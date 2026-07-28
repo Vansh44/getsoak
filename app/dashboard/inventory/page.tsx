@@ -7,6 +7,8 @@ import {
 } from "@/app/actions/inventory-actions";
 import { withService } from "@/lib/db/client";
 import { categories } from "@/drizzle/schema";
+import { getStoreLocations } from "@/lib/pos/locations";
+import { getViewerLocations } from "@/lib/locations/scope";
 import { InventoryManagementView } from "./inventory-management-view";
 import { RealtimeRefresher } from "../components/realtime-refresher";
 
@@ -32,6 +34,16 @@ export default async function InventoryPage({
   const pageSize = DASHBOARD_PAGE_SIZE;
 
   const storeId = await getActingStoreId();
+  const locationParam = pickParam(sp.location) || "all";
+
+  // Which shops this viewer may pick from. A location-bound admin (Phase B2)
+  // sees only theirs; everyone else sees all of the store's.
+  const scope = await getViewerLocations();
+  const allLocations = await getStoreLocations(storeId);
+  const locations =
+    scope === null
+      ? allLocations
+      : allLocations.filter((l) => scope.includes(l.id));
 
   const [inventoryRes, categoryList] = await Promise.all([
     getInventory({
@@ -40,6 +52,7 @@ export default async function InventoryPage({
       filter,
       q,
       categoryId: categoryId === "all" ? undefined : categoryId,
+      locationId: locationParam,
     }),
     withService((db) =>
       db
@@ -78,6 +91,8 @@ export default async function InventoryPage({
         filter={filter}
         categoryFilter={categoryId}
         storeLowStockThreshold={inventoryRes.lowStockThreshold}
+        locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+        locationId={inventoryRes.locationId}
       />
     </>
   );

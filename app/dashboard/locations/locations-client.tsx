@@ -9,13 +9,21 @@ import {
   updateLocation,
   deleteLocation,
   type LocationInput,
-} from "@/app/actions/pos-location-actions";
-import type { StoreLocation } from "@/lib/pos/locations";
+} from "@/app/actions/location-actions";
+import Link from "next/link";
+import type { LocationWithCapabilities } from "@/app/actions/location-actions";
+import {
+  LOCATION_TYPES,
+  LOCATION_TYPE_LABEL,
+  enabledCapabilityLabels,
+  type LocationType,
+} from "@/lib/locations/capabilities";
+import type { Plan } from "@/lib/plans";
 
 interface FormState {
   id: string | null; // null = creating
   name: string;
-  type: "shop" | "warehouse";
+  type: LocationType;
   gstin: string;
   stateCode: string;
   receiptPrefix: string;
@@ -35,10 +43,12 @@ const INPUT_CLS =
 
 export function LocationsClient({
   initialLocations,
+  plan,
   canManage,
   locationsIncluded,
 }: {
-  initialLocations: StoreLocation[];
+  initialLocations: LocationWithCapabilities[];
+  plan: Plan;
   canManage: boolean;
   locationsIncluded: number;
 }) {
@@ -50,7 +60,7 @@ export function LocationsClient({
   const atCap = count >= locationsIncluded;
 
   const openCreate = () => setForm({ ...BLANK });
-  const openEdit = (l: StoreLocation) =>
+  const openEdit = (l: LocationWithCapabilities) =>
     setForm({
       id: l.id,
       name: l.name,
@@ -83,7 +93,7 @@ export function LocationsClient({
     });
   };
 
-  const remove = (l: StoreLocation) => {
+  const remove = (l: LocationWithCapabilities) => {
     if (!confirm(`Delete "${l.name}"? This can't be undone.`)) return;
     start(async () => {
       const res = await deleteLocation(l.id);
@@ -124,6 +134,15 @@ export function LocationsClient({
         )}
       </header>
 
+      {initialLocations.length > 1 && (
+        <Link
+          href="/dashboard/locations/fulfilment"
+          className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[#111827] underline underline-offset-4"
+        >
+          Online fulfilment order
+        </Link>
+      )}
+
       <div className="mt-2 text-xs font-medium text-[#9aa1ab]">
         {count} of {locationsIncluded} included locations used
         {atCap && " · additional locations are ₹1,000/mo (coming soon)"}
@@ -148,7 +167,7 @@ export function LocationsClient({
                     </span>
                   )}
                   <span className="text-[11px] uppercase tracking-wide text-[#9aa1ab]">
-                    {l.type}
+                    {LOCATION_TYPE_LABEL[l.type] ?? l.type}
                   </span>
                 </div>
                 <div className="text-xs text-[#5b6472]">
@@ -156,12 +175,41 @@ export function LocationsClient({
                   {l.stateCode ? ` · State ${l.stateCode}` : ""}
                   {l.receiptPrefix ? ` · Receipts ${l.receiptPrefix}` : ""}
                 </div>
+                {/* What this location may DO — chips list only what actually
+                    takes effect, so a Pro-gated capability on a lapsed plan
+                    doesn't claim to be working. */}
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {enabledCapabilityLabels(l.capabilities, { plan }).map(
+                    (label) => (
+                      <span
+                        key={label}
+                        className="rounded-full bg-[#111827]/5 px-2 py-0.5 text-[11px] font-medium text-[#5b6472]"
+                      >
+                        {label}
+                      </span>
+                    ),
+                  )}
+                  {enabledCapabilityLabels(l.capabilities, { plan }).length ===
+                    0 && (
+                    <span className="text-[11px] text-[#9aa1ab]">
+                      No capabilities enabled
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             {canManage && (
               <div className="flex items-center gap-1">
+                <Link
+                  href={`/dashboard/locations/${l.id}`}
+                  title="Edit location and capabilities"
+                  className="rounded-lg p-2 text-[#5b6472] transition-colors hover:bg-[#111827]/5 hover:text-[#111827]"
+                >
+                  <Pencil className="h-4 w-4" strokeWidth={2} />
+                </Link>
                 <button
                   type="button"
+                  hidden
                   onClick={() => openEdit(l)}
                   className="rounded-md p-2 text-[#5b6472] transition-colors hover:bg-[#f2f3f5] hover:text-[#111827]"
                   aria-label="Edit"
@@ -230,8 +278,11 @@ export function LocationsClient({
                     })
                   }
                 >
-                  <option value="shop">Shop</option>
-                  <option value="warehouse">Warehouse</option>
+                  {LOCATION_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {LOCATION_TYPE_LABEL[t]}
+                    </option>
+                  ))}
                 </select>
               </Field>
 
