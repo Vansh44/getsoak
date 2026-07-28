@@ -190,6 +190,18 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
   "ai.credits_purchased": [
     { name: "credits", description: "Credits added.", sample: "60" },
   ],
+  "store.created": [
+    {
+      name: "store_url",
+      description: "The store's public address.",
+      sample: "https://acme.storemink.com",
+    },
+    {
+      name: "plan",
+      description: "The plan it started on.",
+      sample: "free",
+    },
+  ],
   "platform.store_created": [
     { name: "slug", description: "The new store's subdomain.", sample: "acme" },
     { name: "plan", description: "The plan it signed up on.", sample: "free" },

@@ -18,6 +18,10 @@ import {
 } from "@/app/actions/customer-profile";
 import { useAuth } from "./AuthProvider";
 import { useBrand } from "@/app/(storefront)/components/brand-provider";
+import {
+  PolicyConsent,
+  usePolicyLinks,
+} from "@/app/(storefront)/components/policy-consent";
 import styles from "./AuthModal.module.css";
 import PhoneInput from "react-phone-number-input";
 import "react-phone-number-input/style.css";
@@ -37,6 +41,13 @@ export default function AuthModal() {
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState<string | undefined>("");
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(""));
+  // Consent to the STORE's own policies. The box only appears when the store
+  // has published some — see PolicyConsent for why naming an unreadable
+  // policy would be worse than naming none.
+  const { links: policyLinks, required: policyRequired } =
+    usePolicyLinks("all");
+  const [policyAgreed, setPolicyAgreed] = useState(false);
+
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -294,6 +305,12 @@ export default function AuthModal() {
       setError("First name is required.");
       return;
     }
+    // The real record is written server-side in upsertCustomerProfile; this
+    // just stops someone submitting without having been asked.
+    if (policyRequired && !policyAgreed) {
+      setError("Please accept the store policies to continue.");
+      return;
+    }
 
     setError("");
     setLoading(true);
@@ -539,10 +556,19 @@ export default function AuthModal() {
         />
       </div>
 
+      <PolicyConsent
+        links={policyLinks}
+        checked={policyAgreed}
+        onChange={setPolicyAgreed}
+        className={styles.policyConsent}
+      />
+
       <button
         className={styles.primaryBtn}
         onClick={handleSaveProfile}
-        disabled={loading || !firstName.trim()}
+        disabled={
+          loading || !firstName.trim() || (policyRequired && !policyAgreed)
+        }
         id="auth-save-profile-btn"
       >
         {loading ? (

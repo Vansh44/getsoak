@@ -522,3 +522,10 @@
     width: 100%;
   }
 }
+
+/* Store-policy consent, above "Get Started". Sits flush with the button so it
+   reads as part of the same action, not a detached footnote. */
+.policyConsent {
+  margin: 0 0 0.9rem;
+  text-align: left;
+}

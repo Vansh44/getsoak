@@ -112,6 +112,34 @@ const CUSTOMER_SUBJECT: Record<string, string> = {
   "blog.rejected": "About your post",
 };
 
+/**
+ * Events whose copy is HAND-WRITTEN rather than generated from their variables.
+ *
+ * The generated shape — an intro, then a Reference/Who/When fact list — is
+ * right for a report ("stock is low", "a payment failed") and wrong for
+ * anything a person is meant to feel something about. A welcome rendered as a
+ * fact list reads like a receipt for having existed.
+ *
+ * Keep this map small. If an event only needs a better opening line, put it in
+ * INTRO; this is for the handful that need a different SHAPE.
+ */
+const BESPOKE: Record<string, { subject: string; body: string }> = {
+  "store.created": {
+    subject: "{{subject_label}} is live on StoreMink",
+    body: [
+      "<p>Your store is ready — here it is:</p>",
+      '<p><a href="{{store_url}}">{{store_url}}</a></p>',
+      "<p>Three things worth doing next:</p>",
+      "<ol>",
+      "  <li><strong>Add your first product</strong> so there's something to sell.</li>",
+      "  <li><strong>Make it yours</strong> — logo, colours and pages live in the website builder.</li>",
+      "  <li><strong>Take a test order</strong> to see the whole flow end to end.</li>",
+      "</ol>",
+      "<p>Everything is editable later, including the store name and address.</p>",
+    ].join("\n"),
+  },
+};
+
 /** Human label for a variable in the details list ("order_ref" → "Order ref"). */
 function labelFor(name: string): string {
   return name
@@ -146,6 +174,10 @@ export function defaultEmailTemplate(
   const def = getEventDef(eventKey);
   const label = def?.label ?? "Notification";
   const isCustomer = audience === "customer";
+
+  // Hand-written copy wins over the generated fact list (see BESPOKE).
+  const bespoke = !isCustomer ? BESPOKE[eventKey] : undefined;
+  if (bespoke) return bespoke;
 
   const intro = isCustomer
     ? (CUSTOMER_INTRO[eventKey] ?? "There's an update on your order.")

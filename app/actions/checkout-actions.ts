@@ -28,6 +28,10 @@ import {
 } from "@/lib/payments/razorpay";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import {
+  recordStorePolicyConsent,
+  getCheckoutPolicies,
+} from "@/lib/legal/store-consent";
 import { summariseItems } from "@/lib/notifications/format";
 import {
   rowToBillingSettings,
@@ -965,6 +969,19 @@ export async function placeOrder(
   }
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";
+
+  // Consent to the store's payment + refund terms, recorded against the order
+  // that triggered it. Deliberately AFTER the order is safely persisted: the
+  // shopper agreed by placing it, and a consent write that could roll back a
+  // paid order would be the tail wagging the dog. Best-effort, like every
+  // other bookkeeping write below.
+  await recordStorePolicyConsent({
+    userId: user.id,
+    email: user.email ?? null,
+    storeId,
+    context: "checkout",
+    policies: await getCheckoutPolicies(storeId),
+  });
 
   // The order exists and its items are saved — from here it is a real order, so
   // record it. Emitted for BOTH payment methods (an unpaid razorpay order is

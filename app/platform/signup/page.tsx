@@ -51,6 +51,8 @@ import "react-phone-number-input/style.css";
 import { customPhoneLabels } from "@/lib/phone-labels";
 import { CountrySelect } from "@/components/ui/phone-country-select";
 import { LocationPicker, type PickedLocation } from "./location-picker";
+import { acceptPlatformPolicies } from "@/app/actions/legal-actions";
+import { signupRequiredDocs } from "@/lib/legal/documents";
 
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -118,6 +120,18 @@ function dashboardUrl(slug: string): string {
     : `https://${slug}.${ROOT_DOMAIN}/dashboard`;
 }
 
+// The documents the consent box covers, straight from the registry — the same
+// list the server writes acceptance rows for. Adding one to lib/legal/documents
+// changes the sentence, the acceptance write and the re-acceptance gate
+// together, which is the only way they can't drift apart.
+const CONSENT_DOCS = signupRequiredDocs();
+/** "the Terms of Service, Privacy Policy and Acceptable Use Policy" */
+const CONSENT_DOC_NAMES = CONSENT_DOCS.map((d, i) =>
+  i === 0
+    ? `the ${d.title}`
+    : `${i === CONSENT_DOCS.length - 1 ? " and " : ", "}${d.title}`,
+).join("");
+
 // Short marketing bullets per plan (derived from the plan catalog; kept concise
 // for the signup card, not the full feature matrix).
 const PLAN_BULLETS: Record<Plan, string[]> = {
@@ -182,6 +196,11 @@ export default function SignupPage() {
   const [name, setName] = useState("");
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
   const [city, setCity] = useState("");
+  // Consent. `agreed` gates BOTH signup paths (email and Google) because both
+  // start from the same screen; `marketing` is the optional box beneath it and
+  // gates nothing.
+  const [agreed, setAgreed] = useState(false);
+  const [marketing, setMarketing] = useState(false);
   // The map pin, when the merchant captured one. Optional by design: geolocation
   // can be declined and the map can fail to load, and neither may block signup.
   const [place, setPlace] = useState<PickedLocation>({
@@ -274,6 +293,13 @@ export default function SignupPage() {
       setError("Enter a valid email address.");
       return;
     }
+    // Checked here as well as via the disabled button: `disabled` is a UI
+    // affordance, and this is the only client-side gate before an account is
+    // created. (The real guarantee is the server-side acceptance write.)
+    if (!agreed) {
+      setError(`Please accept ${CONSENT_DOC_NAMES} to continue.`);
+      return;
+    }
     setError("");
     setStep("password");
   }
@@ -291,6 +317,10 @@ export default function SignupPage() {
         setError(sessErr);
         return;
       }
+      // The account now exists and a session cookie is set, so the server can
+      // observe who is consenting. Before this point there is no identity to
+      // attach it to.
+      await acceptPlatformPolicies({ marketingOptIn: marketing });
       await resumeWizard();
       setGoogleLoading(false);
     } catch (err) {
@@ -330,11 +360,15 @@ export default function SignupPage() {
     }
     // Exchange the fresh ID token for the session cookie the server reads.
     const sessErr = await establishSession();
-    setBusy(false);
     if (sessErr) {
+      setBusy(false);
       setError(sessErr);
       return;
     }
+    // Same as the Google path: consent is recorded server-side the moment
+    // there is an identity to attach it to.
+    await acceptPlatformPolicies({ marketingOptIn: marketing });
+    setBusy(false);
     setStep("phone");
   }
 
@@ -555,7 +589,7 @@ export default function SignupPage() {
               <button
                 type="button"
                 onClick={handleGoogle}
-                disabled={googleLoading}
+                disabled={googleLoading || !agreed}
                 className="w-full h-12 flex items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60"
               >
                 {googleLoading ? (
@@ -594,16 +628,67 @@ export default function SignupPage() {
                 </div>
                 <button
                   type="submit"
-                  className="stq-btn stq-btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2"
+                  disabled={!agreed}
+                  className="stq-btn stq-btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2 disabled:opacity-60"
                 >
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>
               </form>
 
-              <p className="mt-6 text-center text-xs text-gray-400 leading-relaxed">
-                By continuing you agree to StoreMink&apos;s Terms and
-                acknowledge our Privacy Policy.
-              </p>
+              {/* Consent. Replaces a passive "by continuing you agree…" line that
+                  named no documents, linked to nothing, and left no record —
+                  which is not consent, it's a notice. Both buttons above are
+                  disabled until this is ticked, so there is no path into an
+                  account that skips it. */}
+              <div className="mt-7 flex flex-col gap-3 rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={agreed}
+                    onChange={(e) => setAgreed(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-indigo-600"
+                  />
+                  {/* Driven by the REGISTRY, not hardcoded: the same list
+                      (signupRequiredDocs) decides what this sentence names,
+                      what recordSignupConsent writes a row for, and what the
+                      re-acceptance gate checks. Hardcoding it here is how a
+                      merchant ends up ticking a box for two documents while
+                      the server records three. */}
+                  <span className="text-[13px] leading-relaxed text-gray-700">
+                    I agree to StoreMink&apos;s{" "}
+                    {CONSENT_DOCS.map((doc, i) => (
+                      <span key={doc.kind}>
+                        {i > 0 &&
+                          (i === CONSENT_DOCS.length - 1 ? " and " : ", ")}
+                        <a
+                          href={`/legal/${doc.slug}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-semibold text-indigo-600 underline"
+                        >
+                          {doc.title}
+                        </a>
+                      </span>
+                    ))}
+                    .
+                  </span>
+                </label>
+
+                {/* Optional, and visibly so: unticked by default, gating
+                    nothing. A pre-ticked marketing box is not consent either. */}
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={marketing}
+                    onChange={(e) => setMarketing(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-indigo-600"
+                  />
+                  <span className="text-[13px] leading-relaxed text-gray-500">
+                    Send me product updates and selling tips.{" "}
+                    <span className="text-gray-400">(Optional)</span>
+                  </span>
+                </label>
+              </div>
             </div>
           )}
 

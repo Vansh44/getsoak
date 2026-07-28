@@ -1534,7 +1534,19 @@ group, span}` (span = columns of the 4-wide desktop grid),
       24-hour bands at 7 and 1 days out), `campaign.sent` (conditional → done
       claim), `customer.signed_up` (`xmax = 0`, so an upsert that only UPDATED
       isn't a signup). All pure and tested.
-    - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+    - **A NEW MERCHANT GETS A WELCOME.** Store creation used to emit only
+      `platform.store_created` — operators, in-app — so the person who had just
+      finished signup received NOTHING: no confirmation, no store address, no
+      next step. `createStore` now emits **`store.created`** as well
+      (store-scoped, `store-admins`, BOTH channels, `configurable: false` —
+      nobody can have turned it off before they had an account). The two are
+      the same moment for different audiences, which is the §23 rule working as
+      intended, not duplication. - **SOME COPY IS HAND-WRITTEN** (`BESPOKE` in default-templates.ts). The
+      generated shape — intro, then a Reference/Who/When fact list — is right
+      for a report and wrong for anything a person should feel something about;
+      a welcome rendered as a fact list reads like a receipt for existing. Keep
+      the map small: an event that only needs a better opening line belongs in
+      `INTRO`. - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
@@ -1650,6 +1662,174 @@ group, span}` (span = columns of the 4-wide desktop grid),
       **Digests** date each row to the END of its window (clock-aligned, so one
       window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
       heartbeat is 00:00 UTC — **move it if the cron moves.**
+
+24. **Legal & consent — versioned policies, and consent as evidence.**
+    - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,
+      Privacy, Acceptable Use) live in **`legal_documents`** — platform-global,
+      no `store_id`, the `platform_admins`/`help_categories` model. A MERCHANT's
+      own store policies are ordinary `store_pages` rows at the existing
+      `terms`/`privacy-policy`/`refund-policy` slugs, written by a guided
+      editor: the deliberate decision NOT to build a second CMS when the website
+      builder already renders and versions pages.
+    - **A VERSION AND A CHECKSUM, OR IT'S WORTHLESS.** "They accepted the terms"
+      means nothing without "…which said THIS". Each version stores its exact
+      body plus a sha256, and an acceptance references the version id. So a
+      published row is **IMMUTABLE, enforced by a DB trigger** — a change is a
+      new version, never an UPDATE — and published rows cannot be deleted
+      because acceptances point at them. `legal_documents_current_key` (partial
+      unique on `is_current`) guarantees "what must be accepted right now?" has
+      exactly one answer per kind.
+    - **CONSENT IS NEVER A CLIENT BOOLEAN.** A checkbox is a UI affordance:
+      anyone can POST `accepted: true` and a form can be replayed. The row is
+      written SERVER-SIDE by `recordSignupConsent` (`lib/legal/store.ts`) from
+      the REQUEST's own IP and user agent, against the versions the server
+      re-reads — the client never says which version it agreed to.
+      `legal_acceptances` is **append-only, trigger-enforced**, service-role
+      writes only; retracting consent is a future event, never an edit to the
+      past. Idempotent on `(user_id, document_id)`, so the safety-net write in
+      `createStore` (for a wizard resumed past the account step) is a no-op when
+      the first one landed.
+    - **CONTENT LIVES IN CODE, TRUTH LIVES IN THE DB.** `lib/legal/content.ts`
+      holds v1 so it is reviewable in a diff; `scripts/seed-legal.ts` publishes
+      it idempotently (the `ensureHomepage` pattern). Once published the DB row
+      is authoritative and immutable — editing the file changes what the NEXT
+      version says, never what anyone already accepted. `/legal/[slug]` renders
+      the DB row with its version and effective date, because an acceptance
+      references a version and the reader must see which one.
+    - **THE TWO BOXES ARE DIFFERENT THINGS.** The mandatory tick names and links
+      the actual documents and gates BOTH signup paths (email and Google start
+      from the same screen). The optional product-updates box is unticked,
+      gates nothing, and writes to `admins.marketing_opt_in` — a preference on
+      the PERSON, kept apart from `legal_acceptances` because conflating a
+      contract with a mailing preference is what makes a consent record
+      arguable later.
+    - **ONE BOX, EVERY REQUIRED DOCUMENT — AND THE LIST COMES FROM THE
+      REGISTRY.** All three (Terms, Privacy, **Acceptable Use**) are
+      `requiredAtSignup`, so all three get a real acceptance row. The AUP was
+      briefly excluded on the theory that it rides along via the Terms clause
+      "which forms part of these Terms" — but one tick box names every required
+      document, so including it costs the merchant nothing: a third name in the
+      sentence, not a third box. And it is the document you actually ENFORCE
+      against when suspending a store, which is a bad thing to hold only by
+      reference from another document. The signup sentence, the acceptance
+      write and the re-acceptance gate all read `signupRequiredDocs()` —
+      hardcoding the names in the UI is how a merchant ends up ticking a box
+      for two documents while the server records three.
+    - **FAIL OPEN ON THE GATE, LOUD ON THE WRITE.** `outstandingDocs` (the
+      re-acceptance check) returns empty on a DB error — a hiccup must not lock
+      every merchant behind a consent screen they cannot pass. But a consent
+      write that finds no published documents logs an ERROR: an account created
+      with no recorded agreement is exactly what this exists to prevent.
+    - **⚠ THE POLICY TEXT IS NOT LAWYER-REVIEWED.** It covers the shields this
+      product structurally needs — platform-not-seller, funds settling directly
+      to merchants (§18), merchant-as-controller, "as is", liability capped at
+      12 months' fees, merchant indemnity — and carries `⚠ REVIEW` markers on
+      the clauses where wording most affects exposure. Get counsel on it before
+      taking real money.
+    - **EDITING A POLICY MEANS PUBLISHING A NEW VERSION.** There is no other
+      way, and three things enforce it: the DB trigger rejects an UPDATE to a
+      published body, `ensureLegalSeeded` skips a kind that already has a
+      current version, and `publishLegalVersion` refuses a version that isn't
+      strictly higher than the current one. Flow: edit the body in
+      `lib/legal/content.ts`, bump its `version`, run
+      `scripts/publish-legal.ts --publish`. The const is `LEGAL_CONTENT`, NOT
+      `_V1` — someone writing v2 must not be editing something named for v1.
+      **The retire and the insert are ONE transaction** (`withService` wraps in
+      BEGIN/COMMIT): `legal_documents_current_key` allows one current row per
+      kind, so insert-first violates it — and retire-first that dies before the
+      insert would leave the policy with NO current version, which makes the
+      signup screen nameless and `recordSignupConsent` log "no published
+      documents" for every new account. Order is pinned by a test.
+    - **THE PUBLISH SCRIPT IS DRY-RUN BY DEFAULT.** It cannot be undone and, with
+      the gate live, it interrupts every merchant on their next dashboard load.
+      It also **detects a body edited WITHOUT a version bump** by comparing the
+      checksum — otherwise that edit silently does nothing and whoever made it
+      believes the policy changed. (This is why `PublishedDoc` carries
+      `checksum`.)
+    - **THE RE-ACCEPTANCE GATE LIVES IN THE DASHBOARD LAYOUT, NOT `proxy.ts`.**
+      The proxy reads its claims straight from the verified session cookie and
+      does no DB query at all — that is its design — and "which documents has
+      this user not accepted?" cannot be answered from a cookie. Claims can't
+      carry it either: a claim set server-side doesn't reach an EXISTING session
+      until the cookie is re-minted, which is precisely the population a v2 must
+      reach. So the layout, which already resolves the viewer from the database,
+      calls `outstandingDocs(ctx.userId)` and redirects to
+      **`/auth/policy-update`** — under `/auth` because a route inside
+      `/dashboard` would be wrapped by the same layout and redirect to itself
+      forever, and because that is where the analogous `force_password_reset`
+      screen already lives. The gate sits AFTER the outage and no-access
+      branches: an unreachable database must never present as a consent demand.
+      `getSignupDocsCached` (60s, tag `LEGAL_TAG`, busted on publish) keeps it
+      to ONE indexed query per dashboard load; the consent WRITE path stays
+      uncached, because recording an acceptance against a superseded version is
+      the exact failure this feature exists to prevent.
+      **`unstable_cache` THROWS ("Invariant: incrementalCache missing") when
+      there is no render scope** — a server action, a route handler, a script.
+      `outstandingDocs` is called from the layout (has one) AND from
+      `acceptUpdatedPolicies` (does not), so the cached read is wrapped in a
+      try/catch that falls through to the uncached query. The cache is an
+      OPTIMISATION, never an input to correctness. Unguarded, the accept action
+      rejected and the screen hung on "Saving…" forever — which is also why the
+      client wraps the action in try/catch: **a thrown action inside
+      `startTransition` leaves `pending` true permanently and surfaces
+      nothing.** Both are regression-tested.
+    - **THE GATE CATCHES INVITED STAFF TOO**, not just owners — they reach the
+      dashboard through `/auth/set-password`, never the signup wizard, so they
+      had agreed to nothing at all. The screen has a **"Sign out instead"**
+      escape: someone who won't agree must be able to leave rather than be
+      stuck on a screen with one button. And `acceptUpdatedPolicies` re-derives
+      what is outstanding and VERIFIES the write stuck — `recordSignupConsent`
+      swallows its errors by design, so without the re-check a failure would
+      bounce the merchant back to the gate with no explanation.
+    - **A STORE'S OWN POLICIES ARE ORDINARY PAGES.** Settings → Policies
+      (`/dashboard/settings/policies`) edits Terms, Refund, Shipping and
+      Privacy as `store_pages` rows at the slugs the footer ALREADY links to —
+      so writing one fixes the dead link rather than adding a second address
+      for the same document. The registry is `lib/legal/store-policies.ts`.
+      Deliberately NOT the versioned/checksummed/immutable machinery of
+      `legal_documents`: that exists so you can prove what a merchant agreed to
+      years later, whereas a shop owner should be able to reword their returns
+      policy on a Tuesday without a release process. Saving PUBLISHES — a
+      draft-only refund policy is a broken link and an unreadable consent box —
+      and emptying one unpublishes rather than leaving a blank page live.
+      The editor is a plain TEXTAREA (`lib/legal/policy-text.ts`, pure +
+      tested): merchants write prose, `plainToHtml` escapes it into `<p>`
+      blocks. **`htmlToPlain` returns null for anything richer than paragraphs**
+      and the card sends them to the builder instead — the same page can be
+      edited there, and loading headings or lists into a textarea would destroy
+      them on the next save. The prompts are PROMPTS, never pre-written prose:
+      a generated policy nobody read looks authoritative and says things the
+      merchant never agreed to.
+    - **SHOPPER CONSENT: SIGNUP AND CHECKOUT.** The box is written server-side
+      at the two moments that matter — `upsertCustomerProfile` on a genuine
+      first insert (the same `xmax = 0` signal the signup event uses) and
+      `placeOrder` AFTER the order is safely persisted (the shopper agreed by
+      placing it; a consent write that could roll back a paid order would be
+      the tail wagging the dog). Checkout names only Terms + Refund
+      (`atCheckout` in the registry) — the privacy policy in a sentence about
+      paying is noise. `recordStorePolicyConsent` re-reads the live text and
+      HASHES it; the client never says which policy or which wording it agreed
+      to. **The box renders only when the store has published something**: one
+      naming documents nobody can read would manufacture a record of agreement
+      to a blank page, so `PolicyConsent` returns null and the caller must not
+      gate its button on a box that isn't there.
+    - **AN ACCEPTANCE IS ANCHORED TO EXACTLY ONE THING**
+      (`supabase/legal_02_store_consent.sql`): a platform `document_id`
+      (immutable, versioned) or a `policy_slug` + `policy_checksum`, enforced by
+      a CHECK — a row anchored to nothing records agreement to something
+      unspecified, which is worth less than no row. The checksum, not a
+      snapshot: 64 bytes answers "has this text changed since they agreed?",
+      and if it hasn't, the live page IS the evidence. Store-policy rows get
+      their OWN unique index `(user_id, store_id, policy_slug)` — the old
+      `(user_id, document_id)` key silently stops working when document_id is
+      NULL — and the append-only trigger gains one narrow exception so
+      re-accepting a reworded policy refreshes the checksum instead of throwing.
+      Identity (user/store/policy/actor) still can't change, and platform
+      acceptances remain fully immutable.
+    - **NOT YET BUILT:** consent at sign-in, an operator UI to publish v2 (the
+      script is the tool today), and seeding starter policy pages at signup —
+      until that lands, a new store's footer links to policy pages that do not
+      exist yet.
 
 ## 6. Commands
 

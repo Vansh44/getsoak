@@ -736,3 +736,9 @@
     width: 100%;
   }
 }
+
+/* Payment + refund consent, directly above the pay button — the terms and the
+   action they bind should be readable in one glance, not a page apart. */
+.policyConsent {
+  margin: 0 0 0.75rem;
+}

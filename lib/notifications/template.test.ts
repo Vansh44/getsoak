@@ -260,7 +260,21 @@ describe("default template HTML", () => {
   });
 
   it("only uses tags the email shell knows how to style", () => {
-    const allowed = new Set(["p", "ul", "li", "strong", "br", "h2", "h3", "a"]);
+    // Mirrors TAG_STYLES in lib/email/shell.ts, plus `br` — a void element
+    // that needs no styling. A tag the shell doesn't style arrives unstyled in
+    // the inbox, which is why this list exists; keep the two in step.
+    const allowed = new Set([
+      "p",
+      "ul",
+      "ol",
+      "li",
+      "strong",
+      "br",
+      "h2",
+      "h3",
+      "a",
+      "hr",
+    ]);
     for (const def of EVENTS) {
       for (const audience of ["team", "customer"] as const) {
         const body = defaultEmailTemplate(def.key, audience).body;

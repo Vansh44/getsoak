@@ -7,6 +7,7 @@ import { withUser } from "@/lib/db/client";
 import { emitEvent } from "@/lib/notifications/record";
 import { users } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
+import { recordStorePolicyConsent } from "@/lib/legal/store-consent";
 
 export interface MyCustomer {
   id: string;
@@ -119,6 +120,18 @@ export async function updateCustomerProfile(formData: FormData) {
   }
 
   if (isNewCustomer) {
+    // Consent is recorded HERE, not from the tick box, and only on a genuine
+    // first insert — the same `xmax = 0` signal the signup event uses. The
+    // shopper agreed to the store's policies as they read at this moment; the
+    // server re-reads and hashes them rather than trusting anything sent.
+    // Best-effort: a failed audit row must never block someone's account.
+    await recordStorePolicyConsent({
+      userId: user.id,
+      email: user.email ?? trimmedEmail,
+      storeId,
+      context: "signup",
+    });
+
     emitEvent({
       type: "customer.signed_up",
       storeId,
