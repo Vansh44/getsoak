@@ -2129,6 +2129,51 @@ export const posDevices = pgTable(
 // NO ROW = NO LAYOUT = show the whole catalogue, so adding this feature could
 // not blank an existing register. `items` is deliberately not FK-checked —
 // a deleted product drops out at render rather than wedging the layout.
+// Restricts a dashboard admin to specific locations (locations_02_admin_scope.sql).
+// NO ROWS = UNRESTRICTED — absence is not restriction, so this changes nothing
+// until a merchant deliberately assigns someone. Read through
+// lib/locations/scope.ts getViewerLocations(), never inline.
+export const adminLocations = pgTable(
+  "admin_locations",
+  {
+    adminId: text("admin_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("admin_locations_admin_idx").using(
+      "btree",
+      table.adminId.asc().nullsLast().op("text_ops"),
+    ),
+    index("admin_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.adminId],
+      foreignColumns: [admins.id],
+      name: "admin_locations_admin_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "admin_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "admin_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.adminId, table.locationId],
+      name: "admin_locations_pkey",
+    }),
+  ],
+);
+
 export const posLayouts = pgTable(
   "pos_layouts",
   {

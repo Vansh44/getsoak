@@ -13,6 +13,11 @@ vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(),
   getActingStoreId: vi.fn(async () => STORE),
 }));
+// Location scope is mocked at its own seam: these tests care about "restricted
+// or not", not how the binding is resolved (that is scope.test.ts).
+vi.mock("@/lib/locations/scope", () => ({
+  getViewerLocations: vi.fn(async () => null),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -31,6 +36,7 @@ import {
   getManagerIdentity,
   getManagerUserId,
 } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 
 const STORE = "a0000000-0000-4000-8000-000000000001";
 
@@ -99,6 +105,40 @@ describe("order-actions", () => {
     // the FULL identity — uid AND email — because the platform-operator branch
     // of the orders RLS policy (is_platform_admin) matches by auth.email().
     // A uid-only identity silently empties the list for platform operators.
+    // Phase B2: staff see only their location(s); owners see everything.
+    describe("location scope", () => {
+      it("adds no location filter for an unrestricted viewer", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(null);
+        await getOrders();
+        // Only the store filter (+ no location predicate) reaches the query.
+        expect(sqlText(dbHolder.current.calls.where[0])).not.toMatch(
+          /in |null/,
+        );
+      });
+
+      it("filters to the viewer's locations when restricted", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(["loc-1", "loc-2"]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/is null|in /);
+      });
+
+      // An order belonging to no shop (every online order until Phase D) stays
+      // visible, or location-bound staff lose the whole online order book.
+      it("keeps location-less orders visible to restricted staff", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/is null/);
+      });
+
+      // Assigned only to locations that have since been deleted: show NOTHING,
+      // never silently promote them to seeing the whole store.
+      it("shows nothing when the scope resolves to an empty list", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue([]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/false/);
+      });
+    });
+
     it("opens the user scope with the full identity (uid + email)", async () => {
       const { withUser } = await import("@/lib/db/client");
       await getOrders();

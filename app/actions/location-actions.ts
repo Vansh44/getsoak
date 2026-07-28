@@ -19,7 +19,12 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
-import { inventoryLevels, storeLocations, stores } from "@/drizzle/schema";
+import {
+  adminLocations,
+  inventoryLevels,
+  storeLocations,
+  stores,
+} from "@/drizzle/schema";
 import {
   getActingStoreId,
   getManagerIdentity,
@@ -503,5 +508,104 @@ export async function saveLocationCapabilities(
 
   revalidatePath("/dashboard/locations");
   revalidateTag(STORE_TAG, "max");
+  return { success: true };
+}
+
+// ---- Admin location bindings (Phase B2) -----------------------------------
+
+export interface AdminLocationBinding {
+  adminId: string;
+  locationIds: string[];
+}
+
+/**
+ * Which locations each admin is restricted to.
+ *
+ * An admin absent from this map is UNRESTRICTED — absence is not restriction
+ * (see lib/locations/scope.ts). The editor shows that as "All locations".
+ */
+export async function listAdminLocations(): Promise<{
+  bindings: Record<string, string[]>;
+  error?: string;
+}> {
+  const admin = await getManagerIdentity("admins");
+  if (!admin) return { bindings: {}, error: "You don't have permission." };
+  const storeId = await getActingStoreId();
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          admin_id: adminLocations.adminId,
+          location_id: adminLocations.locationId,
+        })
+        .from(adminLocations)
+        .where(eq(adminLocations.storeId, storeId)),
+    );
+    const bindings: Record<string, string[]> = {};
+    for (const r of rows) {
+      (bindings[r.admin_id] ??= []).push(r.location_id);
+    }
+    return { bindings };
+  } catch (err) {
+    return {
+      bindings: {},
+      error: dbErrorMessage(err, "Couldn't load location access."),
+    };
+  }
+}
+
+/**
+ * Restrict an admin to `locationIds`, or pass an empty array to remove every
+ * binding and return them to seeing the whole store.
+ *
+ * Gated on the `admins` section — deciding who sees which shop is a staff
+ * permission, not a locations one.
+ */
+export async function setAdminLocations(
+  adminId: string,
+  locationIds: string[],
+): Promise<ActionResult> {
+  const admin = await getManagerIdentity("admins");
+  if (!admin) return { error: "You don't have permission to do this." };
+  const storeId = await getActingStoreId();
+  if (typeof adminId !== "string" || !adminId)
+    return { error: "Invalid user." };
+
+  const wanted = Array.isArray(locationIds)
+    ? Array.from(new Set(locationIds.filter((v) => typeof v === "string" && v)))
+    : [];
+
+  try {
+    // Only locations of THIS store — an id from another tenant must not be
+    // storable, even though reading it later would filter to nothing anyway.
+    const valid = await withService((db) =>
+      db
+        .select({ id: storeLocations.id })
+        .from(storeLocations)
+        .where(eq(storeLocations.storeId, storeId)),
+    );
+    const allowed = new Set(valid.map((v) => v.id));
+    const rows = wanted.filter((id) => allowed.has(id));
+
+    await withService(async (db) => {
+      await db
+        .delete(adminLocations)
+        .where(
+          and(
+            eq(adminLocations.adminId, adminId),
+            eq(adminLocations.storeId, storeId),
+          ),
+        );
+      if (rows.length > 0) {
+        await db
+          .insert(adminLocations)
+          .values(rows.map((id) => ({ adminId, locationId: id, storeId })));
+      }
+    });
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save location access.") };
+  }
+
+  revalidatePath("/dashboard/admins");
   return { success: true };
 }

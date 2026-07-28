@@ -1,6 +1,17 @@
 "use server";
 
-import { and, count, desc, eq, gte, ilike, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -15,6 +26,7 @@ import {
   getManagerIdentity,
   getManagerUserId,
 } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import {
   DASHBOARD_PAGE_SIZE,
   sanitizeSearch,
@@ -181,6 +193,28 @@ export async function getOrders(
   const dateFrom = dateFloor(params.dateRange ?? "");
   const baseConds = [eq(orders.storeId, storeId)];
   if (dateFrom) baseConds.push(gte(orders.createdAt, dateFrom));
+
+  // Location scope — the second tenancy dimension (roadmap Phase B2). Derived
+  // from the VIEWER, never from a parameter: a filter the client can set is
+  // not a permission boundary. null = unrestricted (owner, superadmin, or an
+  // admin nobody has assigned), which is every store's behaviour until
+  // someone is deliberately bound to a shop.
+  //
+  // Orders with no location (every online order until fulfilment routing lands
+  // in Phase D) stay visible to everyone — they belong to no shop, and hiding
+  // them would take the entire online order book away from location-bound
+  // staff.
+  const locationScope = await getViewerLocations();
+  if (locationScope !== null) {
+    baseConds.push(
+      or(
+        isNull(orders.locationId),
+        locationScope.length > 0
+          ? inArray(orders.locationId, locationScope)
+          : sql`false`,
+      )!,
+    );
+  }
 
   const conds = [...baseConds];
   if (status) conds.push(eq(orders.status, status));
