@@ -240,9 +240,13 @@ export default async function DashboardLayout({
               <div className="dash-content flex-1 overflow-y-auto relative z-10">
                 {children}
               </div>
+              {/* Full-view Mink AI takeover — overlays the content region only,
+                  leaving the topbar + left nav visible (Shopify Sidekick). */}
+              <DashboardChat variant="overlay" />
             </div>
 
-            <DashboardChat />
+            {/* Narrow side-panel Mink AI (topbar button). */}
+            <DashboardChat variant="panel" />
           </div>
         </MobileNavProvider>
       </ChatProvider>

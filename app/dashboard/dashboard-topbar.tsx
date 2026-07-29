@@ -132,7 +132,7 @@ export function DashboardTopbar({
           type="button"
           onClick={toggleChat}
           className={`relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0 ${isChatOpen ? "bg-slate-700 text-white" : ""}`}
-          aria-label="AI Assistant"
+          aria-label="Mink AI"
         >
           <MessageSquare className="h-[18px] w-[18px]" />
         </button>
