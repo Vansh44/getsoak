@@ -25,12 +25,17 @@ import {
 import {
   CAPABILITY_REGISTRY,
   LOCATION_CAPABILITIES,
+  LOCATION_TYPES,
   LOCATION_TYPE_LABEL,
   applyCapability,
   type CapabilityMap,
   type LocationCapability,
 } from "@/lib/locations/capabilities";
 import { planAllows, type Plan } from "@/lib/plans";
+
+const LBL = "mb-1 block text-xs font-medium text-[#5b6472]";
+const INPUT =
+  "w-full rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 text-sm text-[#111827] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#111827] disabled:opacity-60";
 
 export function LocationEditor({
   location,
@@ -58,30 +63,46 @@ export function LocationEditor({
 
   // The shop's street address. Nothing collected this before, so a shopper was
   // told to collect from a named shop and never told where it was.
+  // Every editable field of the location lives here. The list page's pencil
+  // links straight to this page (the products convention: edit is a full page,
+  // only "New" is a dialog), so if the name isn't on it, it cannot be changed
+  // at all — which is exactly what happened.
   const addr = (location.address ?? {}) as Record<string, string>;
-  const [form, setForm] = useState({
+  const initial = {
+    name: location.name,
+    type: location.type as string,
     line1: addr.line1 ?? "",
     line2: addr.line2 ?? "",
     city: addr.city ?? "",
     state: addr.state ?? "",
     postalCode: addr.postalCode ?? "",
-  });
+    gstin: location.gstin ?? "",
+    stateCode: location.stateCode ?? "",
+    receiptPrefix: location.receiptPrefix ?? "",
+  };
+  const [form, setForm] = useState(initial);
   const [savingAddr, setSavingAddr] = useState(false);
-  const addrDirty = (
-    ["line1", "line2", "city", "state", "postalCode"] as const
-  ).some((k) => form[k] !== (addr[k] ?? ""));
+  const set = (k: keyof typeof initial, v: string) =>
+    setForm((f) => ({ ...f, [k]: v }));
+  const addrDirty = (Object.keys(initial) as (keyof typeof initial)[]).some(
+    (k) => form[k] !== initial[k],
+  );
 
-  const saveAddress = async () => {
+  const saveDetails = async () => {
+    if (!form.name.trim()) {
+      toast.error("Give the location a name.");
+      return;
+    }
     setSavingAddr(true);
-    // Send the location's other fields back unchanged: updateLocation replaces
-    // the whole row, and sanitizeInput defaults a missing type to "shop" —
-    // which would silently turn a warehouse into a shop.
+    // updateLocation replaces the whole row, so every field goes together —
+    // sending a partial one would blank the rest, and a missing type silently
+    // turns a warehouse into a shop.
     const res = await updateLocation(location.id, {
-      name: location.name,
-      type: location.type,
-      gstin: location.gstin,
-      stateCode: location.stateCode,
-      receiptPrefix: location.receiptPrefix,
+      name: form.name.trim(),
+      type: form.type,
+      gstin: form.gstin.trim() || null,
+      stateCode: form.stateCode.trim() || null,
+      receiptPrefix: form.receiptPrefix.trim() || null,
       address: {
         line1: form.line1.trim(),
         line2: form.line2.trim(),
@@ -93,7 +114,7 @@ export function LocationEditor({
     setSavingAddr(false);
     if (res.error) toast.error(res.error);
     else {
-      toast.success("Address saved");
+      toast.success("Location saved");
       router.refresh();
     }
   };
@@ -156,12 +177,44 @@ export function LocationEditor({
       </header>
 
       <section className="mt-5 max-w-2xl rounded-xl border border-[#e5e5e5] bg-white p-5">
-        <h2 className="font-semibold text-[#111827]">Address</h2>
+        <h2 className="font-semibold text-[#111827]">Details</h2>
         <p className="mt-1 text-sm text-[#5b6472]">
-          Shown to shoppers choosing where to collect, and on the invoice.
+          The name staff see, and the address shown to shoppers choosing where
+          to collect.
         </p>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="loc-name" className={LBL}>
+              Name
+            </label>
+            <input
+              id="loc-name"
+              value={form.name}
+              disabled={!canManage}
+              onChange={(e) => set("name", e.target.value)}
+              className={INPUT}
+            />
+          </div>
+          <div>
+            <label htmlFor="loc-type" className={LBL}>
+              Type
+            </label>
+            <select
+              id="loc-type"
+              value={form.type}
+              disabled={!canManage}
+              onChange={(e) => set("type", e.target.value)}
+              className={INPUT}
+            >
+              {LOCATION_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {LOCATION_TYPE_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {(
             [
               ["line1", "Street address", "sm:col-span-2"],
@@ -172,35 +225,66 @@ export function LocationEditor({
             ] as const
           ).map(([key, label, span]) => (
             <div key={key} className={span}>
-              <label
-                htmlFor={`loc-${key}`}
-                className="mb-1 block text-xs font-medium text-[#5b6472]"
-              >
+              <label htmlFor={`loc-${key}`} className={LBL}>
                 {label}
               </label>
               <input
                 id={`loc-${key}`}
                 value={form[key]}
                 disabled={!canManage}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, [key]: e.target.value }))
-                }
-                className="w-full rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 text-sm text-[#111827] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#111827] disabled:opacity-60"
+                onChange={(e) => set(key, e.target.value)}
+                className={INPUT}
               />
             </div>
           ))}
         </div>
 
+        <div className="mt-5 border-t border-[#f0f0f0] pt-4">
+          <h3 className="text-sm font-semibold text-[#111827]">
+            Tax &amp; receipts
+          </h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                ["gstin", "GSTIN"],
+                ["stateCode", "GST state code"],
+                ["receiptPrefix", "Receipt prefix"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key}>
+                <label htmlFor={`loc-${key}`} className={LBL}>
+                  {label}
+                </label>
+                <input
+                  id={`loc-${key}`}
+                  value={form[key]}
+                  disabled={!canManage}
+                  onChange={(e) => set(key, e.target.value)}
+                  className={INPUT}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
         {canManage && (
-          <div className="mt-4 flex justify-end">
+          <div className="mt-4 flex justify-end gap-2">
             <button
               type="button"
               disabled={!addrDirty || savingAddr}
-              onClick={saveAddress}
+              onClick={() => setForm(initial)}
+              className="rounded-lg border border-[#e5e5e5] px-4 py-2 text-sm font-medium text-[#5b6472] transition-colors hover:bg-[#111827]/5 disabled:opacity-50"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              disabled={!addrDirty || savingAddr}
+              onClick={saveDetails}
               className="inline-flex items-center gap-2 rounded-lg bg-[#111827] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {savingAddr && <Loader2 className="h-4 w-4 animate-spin" />}
-              Save address
+              Save details
             </button>
           </div>
         )}

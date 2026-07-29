@@ -81,6 +81,19 @@ On a store that existed before `locations_01`: check the default location.
 happening), **Customer pickup and Accept returns OFF** (they introduce new
 behaviour). A migration may not change what a live store does.
 
+**PS-2.7 — Rename a location**
+Open a location → Details → change the name → Save details.
+**Expect:** saved, and the heading and list both update. Type, address, GSTIN,
+GST state code and receipt prefix are all editable on the same card and save
+together — the location editor is the full page, matching the products
+convention (edit is a page, only "New" is a dialog).
+
+**PS-2.8 ★ — Saving details doesn't blank the rest**
+Change only the name and save.
+**Expect:** type, address and tax fields are unchanged. `updateLocation`
+replaces the whole row, so a partial send would wipe them — and a missing type
+would silently turn a warehouse into a shop.
+
 **PS-2.6 — Pickup and returns are Pro-only**
 On a Basic store (if you can reach the page).
 **Expect:** a padlock on Customer pickup and Accept returns.
