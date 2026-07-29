@@ -93,6 +93,16 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "That shop's address. Empty for delivery.",
       sample: "12 Radial Road, New Delhi",
     },
+    {
+      name: "ready_on",
+      description: "When a collection order will be ready. Empty for delivery.",
+      sample: "Ready today",
+    },
+    {
+      name: "delivery_address",
+      description: "Where a delivery order is going. Empty for a collection.",
+      sample: "hostel D, Thapar University, Patiala, Punjab 147004",
+    },
   ],
   "order.ready_for_pickup": [
     {

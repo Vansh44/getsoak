@@ -370,6 +370,46 @@ Check the pickup order's confirmation email and `/orders/[id]`.
 **Expect:** the shop's name and the deadline, not a delivery address they never
 gave. A delivery order's email is unchanged.
 
+**PS-8.13 — Billing address**
+Ship → the Billing Address card.
+**Expect:** "Same as my delivery address" ticked by default. Untick it and a
+form appears; the entered address prints as **Bill To** on the invoice while
+Ship To stays the delivery address. Ticked ⇒ nothing stored, and the invoice
+falls back to shipping as it always did. The card does not appear for a pickup —
+there is no delivery address for it to differ from.
+
+**PS-8.14 — Three stores, then "See all N"**
+Pickup with 7 pickup-capable shops.
+**Expect:** three shop cards inline with address and "Ready …", then
+"See all 7 stores" opening the searchable dialog.
+
+**PS-8.15 — Pickup details**
+Select a store.
+**Expect:** a summary block — Collect from / Address / Ready / Held for — so
+what was agreed to is visible before placing the order.
+
+**PS-8.16 ★ — Pay at store replaces COD**
+Choose Pickup.
+**Expect:** the cash option reads "Pay at store · Pay at the counter when you
+collect", the button reads "Place Order (Pay at store)", and the order stores
+`payment_method: pay_at_store`. Choosing it for a DELIVERY order is refused
+server-side — otherwise an order could be placed that nobody ever pays for.
+
+**PS-8.17 ★ — Handing over settles the payment**
+Collect a pay-at-store order at `/pos/pickups`.
+**Expect:** payment_status flips pending → paid. An order already paid online is
+untouched, and a failed payment is not marked paid by a hand-over.
+
+**PS-8.18 ★ — The hold starts when it's READY**
+Set ready = 3 days, hold = 5 days, place a pickup order.
+**Expect:** `pickup_expires_at` is 8 days out, not 5. Otherwise a slow shop eats
+the customer's collection window, and the busier the shop the shorter it gets.
+
+**PS-8.19 — The confirmation email names the right address**
+Place one delivery order and one pickup order.
+**Expect:** delivery says where it's going; pickup says which shop, its address
+and when it'll be ready. Neither carries the other's rows.
+
 **PS-8.11 — Expiry**
 Let a pickup pass `pickup_expires_at`, then run
 `/api/cron/expire-pending-payments`.

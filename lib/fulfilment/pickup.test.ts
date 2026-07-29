@@ -41,6 +41,8 @@ const {
   pickupHoldDays,
   hoursUntil,
   PICKUP_WARN_HOURS,
+  readyLabel,
+  readyShort,
 } = await import("./pickup");
 
 const shop = (id: string, caps: Record<string, boolean>) => ({
@@ -160,5 +162,18 @@ describe("PICKUP_WARN_HOURS", () => {
   // slip between two runs and expire with no warning at all.
   it("is at least the cron interval", () => {
     expect(PICKUP_WARN_HOURS).toBeGreaterThanOrEqual(24);
+  });
+});
+
+describe("readyLabel / readyShort", () => {
+  it("reads naturally on its own", () => {
+    expect(readyLabel(0)).toBe("Ready today");
+    expect(readyLabel(1)).toBe("Ready tomorrow");
+    expect(readyLabel(3)).toBe("Ready in 3 days");
+  });
+
+  it("drops the word when the row is already labelled Ready", () => {
+    expect(readyShort(0)).toBe("Today");
+    expect(readyShort(3)).toBe("In 3 days");
   });
 });

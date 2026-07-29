@@ -41,6 +41,7 @@ const MONEY = new Set([
 const PAYMENT_METHODS: Record<string, string> = {
   cod: "Cash on delivery",
   cash_on_delivery: "Cash on delivery",
+  pay_at_store: "Pay at store",
   razorpay: "Paid online",
   pos: "Paid in store",
   cash: "Cash",

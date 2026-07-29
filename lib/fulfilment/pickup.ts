@@ -67,6 +67,28 @@ export async function pickupHoldDays(): Promise<number> {
   }
 }
 
+/** How long until a collection order is ready. 0 = same day. */
+export async function pickupReadyDays(): Promise<number> {
+  try {
+    const n = Number((await getStoreSettings())["fulfilment.pickupReadyDays"]);
+    return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** "Ready today" / "Ready in 3 days" — the first thing a shopper wants. */
+export function readyLabel(days: number): string {
+  return `Ready ${readyShort(days).toLowerCase()}`;
+}
+
+/** The same fact without the word "Ready", for a row already labelled Ready. */
+export function readyShort(days: number): string {
+  if (days <= 0) return "Today";
+  if (days === 1) return "Tomorrow";
+  return `In ${days} days`;
+}
+
 /**
  * Shops a shopper could collect this basket from.
  *

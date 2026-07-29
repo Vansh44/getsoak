@@ -55,7 +55,9 @@ is — so this is finishing what F shipped, not new scope.
    serviceability (F.1) was **removed**: the shopper knows where they are and
    the merchant cannot, so every shop that can hand the basket over is listed
    and they search it.
-2. **Bespoke copy for the three pickup emails.** `order.ready_for_pickup`,
+2. ~~Bespoke copy for the three pickup emails~~ — **done**, along with the
+   billing address, the 3-up store list, pay-at-store, and the configurable
+   ready-by date. Remaining: `order.ready_for_pickup`,
    `order.collected` and `order.pickup_expiring` have no `CUSTOMER_INTRO`
    entry, so "your order is ready to collect" — the payoff of the whole
    feature — opens with the generic "There's an update on your order."

@@ -984,3 +984,79 @@
     max-height: 92vh;
   }
 }
+
+/* ---- Shop list, pickup details, billing --------------------------------- */
+.shopList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shopCard {
+  cursor: pointer;
+}
+.shopCard:hover {
+  border-color: var(--sm-ink-faint, #8b939f);
+}
+.shopCard:has(input:checked) {
+  border-color: var(--sm-ink, #111827);
+  box-shadow: 0 0 0 1px var(--sm-ink, #111827) inset;
+}
+.shopCardOut {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.shopMore {
+  margin-top: 8px;
+  border-radius: var(--sm-radius-control, 10px);
+  border-top: 1px solid var(--sm-border, #e5e5e5);
+}
+
+.pickupDetails {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: var(--sm-radius-control, 10px);
+  background: rgba(var(--sm-shadow-rgb, 20 25 35), 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pickupDetailRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13.5px;
+  color: var(--sm-ink-soft, #5b6472);
+}
+.pickupDetailRow strong {
+  color: var(--sm-ink, #111827);
+  font-weight: 600;
+  text-align: right;
+}
+
+.billingCheck {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14.5px;
+  color: var(--sm-ink, #111827);
+  cursor: pointer;
+}
+.billingCheck input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--sm-ink, #111827);
+}
+.billingGrid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.billingFull {
+  grid-column: 1 / -1;
+}
+@media (max-width: 560px) {
+  .billingGrid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -124,6 +124,19 @@ export default function CheckoutPage() {
   const [pickupId, setPickupId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
+  // Billing defaults to the delivery address — that's true for almost every
+  // order, so the common case is one already-ticked box and no extra typing.
+  const [billingSame, setBillingSame] = useState(true);
+  const [billing, setBilling] = useState({
+    firstName: "",
+    lastName: "",
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    postalCode: "",
+    phone: "",
+  });
   const [payMethod, setPayMethod] = useState<PaymentMethod>("cod");
   // A placed-but-unpaid online order (modal dismissed / payment failed). Kept
   // so "Retry payment" reopens the SAME Razorpay order instead of placing a
@@ -199,6 +212,9 @@ export default function CheckoutPage() {
   // Plain substring match over what a person would type: shop name, street,
   // city or postcode. A store has a handful of shops, all already loaded, so
   // this needs no geocoding and no round trip.
+  // Three shops in front, the rest behind "See all N" — a wall of twenty
+  // addresses is not a choice, it's a search problem.
+  const INLINE_SHOPS = 3;
   const pickerResults = (pickup?.locations ?? []).filter((l) => {
     const q = pickerQuery.trim().toLowerCase();
     if (!q) return true;
@@ -503,8 +519,13 @@ export default function CheckoutPage() {
       form,
       cart.items,
       cart.appliedCoupon?.code,
-      payMethod,
+      fulfilment === "pickup" && payMethod === "cod"
+        ? "pay_at_store"
+        : payMethod,
       fulfilment === "pickup" ? (chosenShop?.id ?? null) : null,
+      // A collection has no delivery address to differ from, so the billing
+      // question is only asked — and only sent — for a shipped order.
+      fulfilment === "delivery" && !billingSame ? billing : null,
     );
 
     if ("error" in result) {
@@ -616,39 +637,73 @@ export default function CheckoutPage() {
                         : `There are ${pickup.inStockCount} locations with your items`}
                     </p>
 
-                    {chosenShop && (
-                      <div className={styles.shopCard}>
-                        <div className={styles.shopMain}>
-                          <div className={styles.shopName}>
-                            {chosenShop.name}
-                          </div>
-                          {chosenShop.address && (
-                            <div className={styles.shopAddr}>
-                              {chosenShop.address}
-                            </div>
-                          )}
-                          <div className={styles.shopMeta}>
-                            {chosenShop.hasStock
-                              ? pickup.holdDays > 0
-                                ? `Held for ${pickup.holdDays} days once ready`
-                                : "Ready soon"
-                              : "Not everything in your bag is in stock here"}
-                          </div>
-                        </div>
-                        <span className={styles.shopFree}>FREE</span>
-                      </div>
-                    )}
+                    <div className={styles.shopList}>
+                      {pickup.locations.slice(0, INLINE_SHOPS).map((l) => (
+                        <label
+                          key={l.id}
+                          className={`${styles.shopCard}${l.hasStock ? "" : ` ${styles.shopCardOut}`}`}
+                        >
+                          <input
+                            type="radio"
+                            name="pickup-shop"
+                            checked={chosenShop?.id === l.id}
+                            disabled={!l.hasStock}
+                            onChange={() => setPickupId(l.id)}
+                            className={styles.pickerRadio}
+                          />
+                          <span className={styles.shopMain}>
+                            <span className={styles.shopName}>{l.name}</span>
+                            {l.address && (
+                              <span className={styles.shopAddr}>
+                                {l.address}
+                              </span>
+                            )}
+                            <span className={styles.shopMeta}>
+                              {l.hasStock
+                                ? pickup.readyLabel
+                                : "Not everything in your bag is in stock here"}
+                            </span>
+                          </span>
+                          <span className={styles.shopFree}>FREE</span>
+                        </label>
+                      ))}
+                    </div>
 
-                    {pickup.locations.length > 1 && (
+                    {pickup.locations.length > INLINE_SHOPS && (
                       <button
                         type="button"
                         className={styles.shopMore}
                         onClick={() => setPickerOpen(true)}
                       >
-                        {pickup.locations.length - 1} more location
-                        {pickup.locations.length - 1 === 1 ? "" : "s"}
+                        See all {pickup.locations.length} stores
                         <ChevronRight size={16} />
                       </button>
+                    )}
+
+                    {/* What they've actually agreed to, once a shop is picked. */}
+                    {chosenShop && (
+                      <div className={styles.pickupDetails}>
+                        <div className={styles.pickupDetailRow}>
+                          <span>Collect from</span>
+                          <strong>{chosenShop.name}</strong>
+                        </div>
+                        {chosenShop.address && (
+                          <div className={styles.pickupDetailRow}>
+                            <span>Address</span>
+                            <strong>{chosenShop.address}</strong>
+                          </div>
+                        )}
+                        <div className={styles.pickupDetailRow}>
+                          <span>Ready</span>
+                          <strong>{pickup.readyShort}</strong>
+                        </div>
+                        {pickup.holdDays > 0 && (
+                          <div className={styles.pickupDetailRow}>
+                            <span>Held for</span>
+                            <strong>{pickup.holdDays} days once ready</strong>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
@@ -931,6 +986,60 @@ export default function CheckoutPage() {
               )}
             </section>
 
+            {/* Billing address. Ticked by default because it matches the
+                delivery address on almost every order; only a shipped order
+                has one to differ from. */}
+            {fulfilment === "delivery" && (
+              <section className={styles.card}>
+                <div className={styles.sectionHead}>
+                  <h2 className={styles.sectionTitle}>Billing Address</h2>
+                </div>
+
+                <label className={styles.billingCheck}>
+                  <input
+                    type="checkbox"
+                    checked={billingSame}
+                    onChange={(e) => setBillingSame(e.target.checked)}
+                  />
+                  <span>Same as my delivery address</span>
+                </label>
+
+                {!billingSame && (
+                  <div className={styles.billingGrid}>
+                    {(
+                      [
+                        ["firstName", "First name", ""],
+                        ["lastName", "Last name", ""],
+                        ["addressLine1", "Address", "full"],
+                        ["addressLine2", "Apartment, suite (optional)", "full"],
+                        ["city", "City", ""],
+                        ["state", "State", ""],
+                        ["postalCode", "Postcode", ""],
+                        ["phone", "Phone (optional)", ""],
+                      ] as const
+                    ).map(([key, label, span]) => (
+                      <div
+                        key={key}
+                        className={span === "full" ? styles.billingFull : ""}
+                      >
+                        <label className={styles.label} htmlFor={`bill-${key}`}>
+                          {label}
+                        </label>
+                        <input
+                          id={`bill-${key}`}
+                          className={styles.input}
+                          value={billing[key]}
+                          onChange={(e) =>
+                            setBilling((b) => ({ ...b, [key]: e.target.value }))
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Step 2 — Payment */}
             <section className={styles.card}>
               <div className={styles.sectionHead}>
@@ -950,9 +1059,15 @@ export default function CheckoutPage() {
                       <Banknote size={22} />
                     </span>
                     <div>
-                      <div className={styles.payName}>Cash on Delivery</div>
+                      <div className={styles.payName}>
+                        {fulfilment === "pickup"
+                          ? "Pay at store"
+                          : "Cash on Delivery"}
+                      </div>
                       <div className={styles.payDesc}>
-                        Pay with cash when your order arrives at your doorstep.
+                        {fulfilment === "pickup"
+                          ? "Pay at the counter when you collect your order."
+                          : "Pay with cash when your order arrives at your doorstep."}
                       </div>
                     </div>
                     <span className={styles.payCheck}>
@@ -985,9 +1100,15 @@ export default function CheckoutPage() {
                     <Banknote size={22} />
                   </span>
                   <div>
-                    <div className={styles.payName}>Cash on Delivery</div>
+                    <div className={styles.payName}>
+                      {fulfilment === "pickup"
+                        ? "Pay at store"
+                        : "Cash on Delivery"}
+                    </div>
                     <div className={styles.payDesc}>
-                      Pay with cash when your order arrives at your doorstep.
+                      {fulfilment === "pickup"
+                        ? "Pay at the counter when you collect your order."
+                        : "Pay with cash when your order arrives at your doorstep."}
                     </div>
                   </div>
                   <span className={styles.payCheck}>
@@ -998,7 +1119,9 @@ export default function CheckoutPage() {
 
               <div className={styles.field} style={{ marginTop: 18 }}>
                 <label className={styles.label} htmlFor="notes">
-                  Delivery instructions (Optional)
+                  {fulfilment === "pickup"
+                    ? "Notes for the shop (Optional)"
+                    : "Delivery instructions (Optional)"}
                 </label>
                 <input
                   id="notes"
@@ -1115,11 +1238,15 @@ export default function CheckoutPage() {
                     ? "Retry Payment"
                     : payMethod === "razorpay"
                       ? "Pay & Place Order"
-                      : "Place Order (COD)"}
+                      : fulfilment === "pickup"
+                        ? "Place Order (Pay at store)"
+                        : "Place Order (COD)"}
               </button>
               {!selected && (
                 <p className={styles.placeHint}>
-                  Add a delivery address to continue
+                  {fulfilment === "pickup"
+                    ? "Choose a store to continue"
+                    : "Add a delivery address to continue"}
                 </p>
               )}
             </div>
@@ -1130,13 +1257,18 @@ export default function CheckoutPage() {
                 secure
               </div>
               <div className={styles.trustItem}>
-                <Truck size={16} /> Free delivery on this order
+                <Truck size={16} />{" "}
+                {fulfilment === "pickup"
+                  ? "Free to collect in store"
+                  : "Free delivery on this order"}
               </div>
               <div className={styles.trustItem}>
                 <Lock size={16} />{" "}
                 {payMethod === "razorpay"
                   ? "Payments secured by Razorpay"
-                  : "No payment needed until delivery"}
+                  : fulfilment === "pickup"
+                    ? "No payment needed until you collect"
+                    : "No payment needed until delivery"}
               </div>
             </div>
           </aside>

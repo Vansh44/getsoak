@@ -97,6 +97,14 @@ const CUSTOMER_INTRO: Record<string, string> = {
     "Your order has been cancelled. If you paid online, your refund is on its way back to your original payment method.",
   "order.refund_issued":
     "Your refund is on its way. Banks usually take 5–7 working days to show it.",
+  "order.ready_for_pickup":
+    "Your order is packed and waiting for you. Bring your order number when you come.",
+  "order.collected":
+    "You've picked up your order — thanks for shopping with us.",
+  "order.pickup_expiring":
+    "Your order is still waiting to be collected. Please come by before it's returned to the shelf.",
+  "order.pickup_expired":
+    "Nobody collected this order in time, so we've cancelled it and put the items back on sale.",
   "blog.approved": "Your post has been approved and is now live.",
   "blog.rejected":
     "Thanks for your submission — it wasn't published this time.",

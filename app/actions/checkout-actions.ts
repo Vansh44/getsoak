@@ -32,7 +32,10 @@ import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import {
   pickupEnabled,
   pickupHoldDays,
+  pickupReadyDays,
   pickupLocationsFor,
+  readyLabel,
+  readyShort,
 } from "@/lib/fulfilment/pickup";
 import { holdStock, releaseHold } from "@/lib/inventory/reservations";
 import {
@@ -111,7 +114,27 @@ export interface CheckoutFormData {
   notes?: string;
 }
 
-export type PaymentMethod = "cod" | "razorpay";
+/** A separate billing address, when it differs from where the order goes. */
+export interface BillingAddressInput {
+  firstName: string;
+  lastName: string;
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country?: string;
+  phone?: string;
+}
+
+/**
+ * `pay_at_store` is COD's counterpart for a collection: the money changes
+ * hands at the counter instead of the doorstep. It is a separate method rather
+ * than reusing "cod" because the invoice, the confirmation email and the till
+ * all have to say the right thing — "Pay with cash when your order arrives at
+ * your doorstep" is wrong for an order nobody is delivering.
+ */
+export type PaymentMethod = "cod" | "razorpay" | "pay_at_store";
 
 export type CheckoutResult =
   | {
@@ -525,6 +548,12 @@ export interface PickupOptions {
    *  your item" line. */
   inStockCount: number;
   holdDays: number;
+  /** 0 = same day. */
+  readyDays: number;
+  /** "Ready in 2 days" — for a card with no label of its own. */
+  readyLabel: string;
+  /** "In 2 days" — for the details row already labelled "Ready". */
+  readyShort: string;
 }
 
 /**
@@ -543,6 +572,9 @@ export async function getPickupOptions(
     locations: [],
     inStockCount: 0,
     holdDays: 0,
+    readyDays: 0,
+    readyLabel: "",
+    readyShort: "",
   };
   if (!Array.isArray(items) || items.length === 0) return off;
   if (!(await pickupEnabled())) return off;
@@ -598,6 +630,7 @@ export async function getPickupOptions(
         };
       });
 
+    const ready = await pickupReadyDays();
     const locations = await pickupLocationsFor(storeId, lines);
     // Shops that have the whole basket first. Short ones are still listed —
     // shown disabled at the end — because a missing shop is confusing while
@@ -623,6 +656,9 @@ export async function getPickupOptions(
         };
       }),
       holdDays: await pickupHoldDays(),
+      readyDays: ready,
+      readyLabel: readyLabel(ready),
+      readyShort: readyShort(ready),
     };
   } catch (err) {
     // Pickup is an extra way to buy — never the reason checkout breaks.
@@ -649,6 +685,9 @@ export async function placeOrder(
    *  Re-validated server-side — the client naming a location is a request, not
    *  a fact. */
   pickupLocationId?: string | null,
+  /** Only when it differs from the delivery address. Null = same as shipping,
+   *  which is what the invoice already falls back to. */
+  billingInput?: BillingAddressInput | null,
 ): Promise<CheckoutResult> {
   // Authenticate the shopper via the identity seam (session-backed).
   const user = await getServerUser();
@@ -670,8 +709,17 @@ export async function placeOrder(
     };
   }
 
-  if (paymentMethod !== "cod" && paymentMethod !== "razorpay") {
+  if (
+    paymentMethod !== "cod" &&
+    paymentMethod !== "razorpay" &&
+    paymentMethod !== "pay_at_store"
+  ) {
     return { error: "Invalid payment method." };
+  }
+  // Paying at the counter only makes sense for something being collected.
+  // Without this a delivery order could be placed that nobody ever pays for.
+  if (paymentMethod === "pay_at_store" && !pickupLocationId) {
+    return { error: "Pay at store is only available for collection orders." };
   }
 
   if (items.length === 0) {
@@ -1014,6 +1062,31 @@ export async function placeOrder(
   const fulfilmentLocationId =
     pickupAt ?? (await resolveFulfilmentLocation(storeId, routingLines));
   const holdDays = pickupAt ? await pickupHoldDays() : 0;
+  const readyDays = pickupAt ? await pickupReadyDays() : 0;
+
+  // A separate billing address is optional and trimmed/capped exactly like the
+  // shipping one — it prints on the invoice, so it is merchant-visible text
+  // from an untrusted source.
+  let billingAddress: Record<string, string> | null = null;
+  if (billingInput && typeof billingInput === "object") {
+    const b = (v: unknown, max = 120) =>
+      typeof v === "string" ? v.trim().slice(0, max) : "";
+    const line1 = b(billingInput.addressLine1);
+    const city = b(billingInput.city, 60);
+    if (line1 && city) {
+      billingAddress = {
+        firstName: b(billingInput.firstName, 60),
+        lastName: b(billingInput.lastName, 60),
+        addressLine1: line1,
+        addressLine2: b(billingInput.addressLine2),
+        city,
+        state: b(billingInput.state, 60),
+        postalCode: b(billingInput.postalCode, 20),
+        country: b(billingInput.country, 60) || "India",
+        phone: b(billingInput.phone, 20),
+      };
+    }
+  }
 
   const orderRows = await withService((db) =>
     db
@@ -1027,10 +1100,16 @@ export async function placeOrder(
         customerId: user.id,
         status: "pending",
         paymentMethod:
-          paymentMethod === "razorpay" ? "razorpay" : "cash_on_delivery",
+          paymentMethod === "razorpay"
+            ? "razorpay"
+            : paymentMethod === "pay_at_store"
+              ? "pay_at_store"
+              : "cash_on_delivery",
         paymentStatus: "pending",
         shippingAddress,
-        billingAddress: null, // COD uses shipping as billing essentially
+        // Null means "same as shipping" — the invoice already falls back, so
+        // storing a copy would just be a second thing to keep in step.
+        billingAddress,
         subtotal,
         tax,
         taxInclusive: billing.pricesIncludeTax,
@@ -1043,8 +1122,13 @@ export async function placeOrder(
         fulfilmentType: pickupAt ? "pickup" : "delivery",
         pickupLocationId: pickupAt,
         pickupStatus: pickupAt ? "awaiting" : null,
+        pickupReadyAt: pickupAt
+          ? sql`now() + make_interval(days => ${readyDays})`
+          : null,
+        // From READY, not from now: a shop that takes three days to pick must
+        // not eat three days of the customer's collection window.
         pickupExpiresAt: pickupAt
-          ? sql`now() + make_interval(days => ${holdDays})`
+          ? sql`now() + make_interval(days => ${readyDays + holdDays})`
           : null,
         notes,
         // This order goes through the reserve flow below; mark it so that
@@ -1260,13 +1344,28 @@ export async function placeOrder(
       paymentMethod,
       // Only on a pickup. A delivery order's fact list is unchanged — an empty
       // "Pickup location" row on every confirmation would be noise.
+      // A delivery confirmation names where it's going; a collection names
+      // where to come and when. Only one of these is ever present, so the
+      // email never carries an empty row for the mode it isn't.
       ...(pickupAt
         ? {
             fulfilment: "pickup",
             pickupLocation: pickupShop?.name ?? "",
             pickupAddress: pickupShop?.address ?? "",
+            readyOn: readyLabel(readyDays),
           }
-        : {}),
+        : {
+            fulfilment: "delivery",
+            deliveryAddress: [
+              shippingAddress.addressLine1,
+              shippingAddress.addressLine2,
+              shippingAddress.city,
+              shippingAddress.state,
+              shippingAddress.postalCode,
+            ]
+              .filter(Boolean)
+              .join(", "),
+          }),
     },
     // The order summary the email renders as a table. Separate from `payload`
     // on purpose — see EmitEventInput.email.
