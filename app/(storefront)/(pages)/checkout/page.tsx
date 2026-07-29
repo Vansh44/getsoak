@@ -15,6 +15,7 @@ import {
   Truck,
   Lock,
   ShoppingBag,
+  Store,
 } from "lucide-react";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
@@ -22,6 +23,8 @@ import {
   placeOrder,
   getCartStock,
   getCheckoutConfig,
+  getPickupOptions,
+  type PickupOptions,
   confirmOnlinePayment,
   CheckoutFormData,
   type CheckoutConfig,
@@ -109,6 +112,13 @@ export default function CheckoutPage() {
   // Payment method. Online payments render only when the store's gateway is
   // connected + enabled + plan-allowed (server-computed; placeOrder re-checks).
   const [payConfig, setPayConfig] = useState<CheckoutConfig | null>(null);
+  // Pick up in store (roadmap Phase F). Absent/disabled ⇒ the section never
+  // renders and checkout behaves exactly as before.
+  const [pickup, setPickup] = useState<PickupOptions | null>(null);
+  const [fulfilmentChoice, setFulfilment] = useState<"delivery" | "pickup">(
+    "delivery",
+  );
+  const [pickupId, setPickupId] = useState<string | null>(null);
   const [payMethod, setPayMethod] = useState<PaymentMethod>("cod");
   // A placed-but-unpaid online order (modal dismissed / payment failed). Kept
   // so "Retry payment" reopens the SAME Razorpay order instead of placing a
@@ -136,6 +146,43 @@ export default function CheckoutPage() {
       active = false;
     };
   }, []);
+
+  // Which shops could hand this basket over. Re-fetched when the cart changes
+  // because "has stock" is a property of the basket, not of the store.
+  const items = cart.items;
+  useEffect(() => {
+    let active = true;
+    // An empty cart bounces off this page anyway — nothing to clear.
+    if (!items.length) return;
+    getPickupOptions(items)
+      .then((opts) => {
+        if (active) {
+          setPickup(opts);
+          // A shop that dropped out of the list (sold its last unit while the
+          // shopper hesitated) must not stay selected and fail at placeOrder.
+          setPickupId((cur) =>
+            cur && opts.locations.some((l) => l.id === cur && l.hasStock)
+              ? cur
+              : null,
+          );
+        }
+      })
+      .catch(() => {
+        // Delivery still works; pickup is the extra.
+      });
+    return () => {
+      active = false;
+    };
+    // `items` is cart state: a new array only when the cart actually changes,
+    // which is exactly when "which shop has this?" needs re-asking.
+  }, [items]);
+
+  // Derived, not stored: if the last shop selling this basket sells out while
+  // the shopper hesitates, the choice silently reverts to delivery rather than
+  // being "corrected" by an effect a render later.
+  const fulfilment: "delivery" | "pickup" = pickup?.enabled
+    ? fulfilmentChoice
+    : "delivery";
 
   // A retryable unpaid order is only valid for the exact cart it was priced
   // from — any cart/coupon change invalidates it (a fresh order gets placed
@@ -413,6 +460,10 @@ export default function CheckoutPage() {
       toast.error("Please accept the store policies to place your order.");
       return;
     }
+    if (fulfilment === "pickup" && !pickupId) {
+      toast.error("Choose the shop you'd like to collect from.");
+      return;
+    }
     setPlacing(true);
 
     // Retry path: an online order was already placed for this exact cart —
@@ -430,6 +481,7 @@ export default function CheckoutPage() {
       cart.items,
       cart.appliedCoupon?.code,
       payMethod,
+      fulfilment === "pickup" ? pickupId : null,
     );
 
     if ("error" in result) {
@@ -500,11 +552,101 @@ export default function CheckoutPage() {
         <div className={styles.layout}>
           {/* ---- Left: steps ---- */}
           <div className={styles.main}>
-            {/* Step 1 — Delivery address */}
+            {/* Pick up in store — only when the store offers it AND a shop
+                can actually cover this basket. */}
+            {pickup?.enabled && (
+              <section className={styles.card}>
+                <div className={styles.sectionHead}>
+                  <h2 className={styles.sectionTitle}>
+                    How would you like it?
+                  </h2>
+                </div>
+                <div className={styles.payStack}>
+                  <button
+                    type="button"
+                    className={`${styles.payOption}${fulfilment === "delivery" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() => setFulfilment("delivery")}
+                    aria-pressed={fulfilment === "delivery"}
+                  >
+                    <span className={styles.payIcon}>
+                      <Truck size={22} />
+                    </span>
+                    <div>
+                      <div className={styles.payName}>Deliver to me</div>
+                      <div className={styles.payDesc}>
+                        Sent to the address below.
+                      </div>
+                    </div>
+                    <span className={styles.payCheck}>
+                      <Check size={20} />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.payOption}${fulfilment === "pickup" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() => setFulfilment("pickup")}
+                    aria-pressed={fulfilment === "pickup"}
+                  >
+                    <span className={styles.payIcon}>
+                      <Store size={22} />
+                    </span>
+                    <div>
+                      <div className={styles.payName}>Pick up in store</div>
+                      <div className={styles.payDesc}>
+                        Collect from one of our shops
+                        {pickup.holdDays > 0
+                          ? ` — held for ${pickup.holdDays} days`
+                          : ""}
+                        .
+                      </div>
+                    </div>
+                    <span className={styles.payCheck}>
+                      <Check size={20} />
+                    </span>
+                  </button>
+                </div>
+
+                {fulfilment === "pickup" && (
+                  <div className={styles.payStack} style={{ marginTop: 14 }}>
+                    {pickup.locations.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        disabled={!l.hasStock}
+                        className={`${styles.payOption}${pickupId === l.id ? "" : ` ${styles.payOptionMuted}`}`}
+                        onClick={() => setPickupId(l.id)}
+                        aria-pressed={pickupId === l.id}
+                      >
+                        <span className={styles.payIcon}>
+                          <MapPin size={22} />
+                        </span>
+                        <div>
+                          <div className={styles.payName}>{l.name}</div>
+                          <div className={styles.payDesc}>
+                            {l.hasStock
+                              ? l.address || "Collect here"
+                              : "Not everything in your bag is in stock here."}
+                          </div>
+                        </div>
+                        <span className={styles.payCheck}>
+                          <Check size={20} />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* Step 1 — Delivery address (contact details when collecting) */}
             <section className={styles.card}>
               <div className={styles.sectionHead}>
                 <span className={styles.stepNum}>1</span>
-                <h2 className={styles.sectionTitle}>Delivery Address</h2>
+                <h2 className={styles.sectionTitle}>
+                  {fulfilment === "pickup"
+                    ? "Contact Details"
+                    : "Delivery Address"}
+                </h2>
                 {addresses.length > 0 && !formOpen && (
                   <span className={styles.sectionHint}>
                     {addresses.length} saved

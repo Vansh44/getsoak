@@ -30,11 +30,14 @@ export function FulfilmentClient({
   rules,
   plan,
   canManage,
+  children,
 }: {
   locations: Loc[];
   rules: FulfilmentRules;
   plan: Plan;
   canManage: boolean;
+  /** Server-rendered cards shown under the routing panel (pickup settings). */
+  children?: React.ReactNode;
 }) {
   const eligible = locations.filter((l) => l.fulfilsOnline);
   const ineligible = locations.filter((l) => !l.fulfilsOnline);
@@ -233,6 +236,8 @@ export function FulfilmentClient({
           </>
         )}
       </section>
+
+      {children}
     </div>
   );
 }

@@ -78,6 +78,47 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "How the shopper paid.",
       sample: "cod",
     },
+    {
+      name: "fulfilment",
+      description: "Delivery or collection.",
+      sample: "pickup",
+    },
+    {
+      name: "pickup_location",
+      description: "The shop the order is collected from. Empty for delivery.",
+      sample: "Connaught Place",
+    },
+    {
+      name: "pickup_address",
+      description: "That shop's address. Empty for delivery.",
+      sample: "12 Radial Road, New Delhi",
+    },
+  ],
+  "order.ready_for_pickup": [
+    {
+      name: "pickup_location",
+      description: "The shop it's waiting at.",
+      sample: "Connaught Place",
+    },
+    {
+      name: "pickup_address",
+      description: "That shop's address.",
+      sample: "12 Radial Road, New Delhi",
+    },
+  ],
+  "order.collected": [
+    {
+      name: "pickup_location",
+      description: "Where it was handed over.",
+      sample: "Connaught Place",
+    },
+  ],
+  "order.pickup_expired": [
+    {
+      name: "pickup_location",
+      description: "The shop it was waiting at.",
+      sample: "Connaught Place",
+    },
   ],
   "order.status_changed": [
     { name: "status", description: "The new order status.", sample: "shipped" },

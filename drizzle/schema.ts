@@ -1186,6 +1186,23 @@ export const orders = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    // Pick up in store (supabase/locations_05_pickup.sql). fulfilment_type is
+    // TEXT, not a boolean — ship-from-store and lockers are on the roadmap.
+    // pickupLocationId is where the shopper COLLECTS, distinct from locationId
+    // (where stock came from); for a pickup they match, for ship-from-store
+    // they will not.
+    fulfilmentType: text("fulfilment_type").default("delivery").notNull(),
+    pickupLocationId: uuid("pickup_location_id"),
+    pickupStatus: text("pickup_status"),
+    pickupExpiresAt: timestamp("pickup_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedAt: timestamp("collected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedBy: text("collected_by"),
     stockStatus: text("stock_status").default("none").notNull(),
     orderNo: integer("order_no").notNull(),
     orderRef: text("order_ref").notNull(),

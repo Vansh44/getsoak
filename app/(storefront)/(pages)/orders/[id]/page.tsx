@@ -194,8 +194,46 @@ export default async function MyOrderDetailPage({
               </Link>
             </div>
 
+            {order.fulfilment_type === "pickup" && (
+              <div className={styles.card}>
+                <div className={styles.sectionTitle}>
+                  {order.pickup_status === "collected"
+                    ? "Collected from"
+                    : "Collect from"}
+                </div>
+                <div className={styles.address}>
+                  <div>
+                    <strong>{order.pickup_location_name ?? "Our shop"}</strong>
+                  </div>
+                  {addressLines(order.pickup_location_address ?? {}).map(
+                    (line, i) => (
+                      <div key={i}>{line}</div>
+                    ),
+                  )}
+                </div>
+                <p className={styles.summary} style={{ marginTop: 14 }}>
+                  {order.pickup_status === "ready"
+                    ? "Packed and waiting for you."
+                    : order.pickup_status === "collected"
+                      ? "Handed over — thank you."
+                      : order.pickup_status === "expired"
+                        ? "This order wasn't collected in time and was cancelled."
+                        : "We'll let you know as soon as it's ready."}
+                  {order.pickup_expires_at &&
+                  order.pickup_status !== "collected" &&
+                  order.pickup_status !== "expired"
+                    ? ` Held until ${new Date(order.pickup_expires_at).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}.`
+                    : ""}
+                </p>
+              </div>
+            )}
+
             <div className={styles.card}>
-              <div className={styles.sectionTitle}>Delivery address</div>
+              <div className={styles.sectionTitle}>
+                {order.fulfilment_type === "pickup"
+                  ? "Contact details"
+                  : "Delivery address"}
+              </div>
               <div className={styles.address}>
                 {addressLines(order.shipping_address).map((line, i) => (
                   <div key={i}>{line}</div>

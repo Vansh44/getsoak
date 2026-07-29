@@ -261,16 +261,42 @@ the physical count, which is what the dashboard and POS want.
 
 ---
 
-### Phase F — Pickup (click & collect)
+### Phase F — Pickup (click & collect) — **DONE**
 
-**Ships:** pickup option at checkout for locations with the capability and
-stock; order state `awaiting_collection`; `/pos/pickups` queue with
-scan-verify-hand-over; hold-expiry sweep that cancels, refunds and releases.
+**Shipped:** `supabase/locations_05_pickup.sql` (fulfilment_type /
+pickup_location_id / pickup_status / pickup_expires_at / collected_at /
+collected_by on `orders`, three CHECKs, the queue index);
+`lib/fulfilment/pickup.ts` (`pickupLocationsFor` — capability + plan + stock,
+`sweepExpiredPickups`); `getPickupOptions` + a pickup step at checkout;
+`placeOrder` **holds** instead of reserving; `/pos/pickups` (queue, mark ready,
+hand over) + a Collections tile on the POS home; four notification events; the
+sweep folded into `/api/cron/expire-pending-payments`.
 
 **Rule from the spec, kept:** a customer-chosen pickup location **overrides**
 the fulfilment strategy entirely.
 
-**Config, not code:** hold days, whether pickup is offered at all.
+**Config, not code:** `fulfilment.offerPickup` + `fulfilment.pickupHoldDays`
+(registry, section `locations`, rendered on Locations → Online fulfilment).
+
+**Three things that had to move together**, or the feature would lie:
+
+1. **A pickup HOLDS, it does not sell.** The goods are on that shop's shelf
+   until someone hands them over. `reserve_stock_at` would empty the shelf on
+   screen while the box is still physically on it, and the shop would reorder
+   stock it already has.
+2. **Therefore the order carries `stock_status: 'none'`.** The cancel path's
+   reserved→released claim restocks — running it on a pickup would ADD units
+   that never left. Cancelling a pickup releases its holds instead
+   (`order-actions.ts`), which is idempotent, so a second cancel is a no-op.
+3. **Availability is `on_hand − reserved`.** Offering a shop whose only unit is
+   already held for somebody else's collection is how two people are promised
+   the same box.
+
+**Deliberately not built:** automatic refunds on expiry. The order is cancelled
+and the stock comes back; moving money on a schedule waits for the returns
+machinery that records it (Phase G). Also `order.pickup_expiring` — the
+pre-expiry nudge is registered and PENDING, because the sweep only fires on the
+deadline itself.
 
 ---
 

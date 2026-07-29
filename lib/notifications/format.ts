@@ -131,6 +131,11 @@ export function formatVariable(
   if (name === "payment_method") {
     return PAYMENT_METHODS[value.toLowerCase()] ?? humanize(value);
   }
+  // "pickup" on its own reads like a typo in a sentence; the shopper is being
+  // told how they get their order.
+  if (name === "fulfilment") {
+    return value.toLowerCase() === "pickup" ? "Pick up in store" : "Delivery";
+  }
   if (name === "status" || name === "payment_status") {
     return ORDER_STATUSES[value.toLowerCase()] ?? humanize(value);
   }

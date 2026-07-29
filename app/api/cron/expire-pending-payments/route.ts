@@ -5,6 +5,7 @@ import { recordEvent } from "@/lib/notifications/record";
 import { orderItems, orders } from "@/drizzle/schema";
 import { getStoreGateway } from "@/lib/payments/provider";
 import { sweepExpiredHolds } from "@/lib/inventory/reservations";
+import { sweepExpiredPickups } from "@/lib/fulfilment/pickup";
 import {
   capturedPayment,
   rzpFetchOrderPayments,
@@ -26,7 +27,8 @@ import {
 //      conditional claim, exactly-once), release the coupon use, and cancel
 //      the order.
 //
-// It ALSO sweeps expired stock holds (roadmap Phase E). Same job because it is
+// It ALSO cancels pickups nobody collected (Phase F) and sweeps expired stock
+// holds (roadmap Phase E). Same job because it is
 // the same shape of problem — units set aside for something that never
 // completed — and a hold nobody ends would make stock unsellable forever.
 // Independent of the payment work below: the sweep runs even when there are no
@@ -265,10 +267,16 @@ async function handle(request: Request) {
     }
   }
 
+  // Pickups first: cancelling an uncollected order releases its own holds, so
+  // running the generic sweep afterwards finds a tidier table (and anything the
+  // pickup pass failed to release still lapses here on TTL).
+  const pickupsExpired = await sweepExpiredPickups();
+
   return NextResponse.json({
     ok: true,
     paid,
     expired,
+    pickupsExpired,
     holdsFreed: await sweepExpiredHolds(),
   });
 }

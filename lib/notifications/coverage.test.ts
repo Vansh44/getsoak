@@ -30,6 +30,8 @@ const PENDING: Record<string, string> = {
     "Order cancellation isn't built yet (see docs/ — cancellation phase).",
   "order.refund_issued":
     "Refunds are out of scope until the cancellation phase (CODEBASE.md §18).",
+  "order.pickup_expiring":
+    "The pre-expiry warning job isn't built — the sweeper only fires pickup_expired (roadmap Phase F).",
 };
 
 /**

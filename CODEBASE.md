@@ -1647,6 +1647,56 @@ group, span}` (span = columns of the 4-wide desktop grid),
         website saying "out of stock" until something else touched that SKU.
         The migration's guard FAILS if `online_stock > stock`, which can only
         mean the capability filter is wrong.
+    - **Stock can be HELD as well as sold (Phase E).**
+      `supabase/locations_04_reservations.sql` puts
+      `inventory_levels.reserved` to work — it had been carried since pos_01
+      and never read — so **`available = on_hand − reserved`**, and every
+      existing guard (`reserve_stock_at`, `transfer_stock`) now subtracts it.
+      `stock_reservations` says WHOSE hold it is and when it lapses, which the
+      bare counter cannot. `lib/inventory/reservations.ts` is the API:
+      `holdStock` (reserved += qty, on_hand untouched — the goods are still on
+      the shelf), `commitHold` (the sale happened), `releaseHold` (it didn't),
+      `sweepExpiredHolds`. Purely ADDITIVE: nothing that existed changed
+      behaviour, because a store with no holds has `reserved = 0` everywhere.
+    - **Pick up in store (Phase F).** A shopper buys online and collects at a
+      shop. `supabase/locations_05_pickup.sql` adds `fulfilment_type` /
+      `pickup_location_id` / `pickup_status` / `pickup_expires_at` /
+      `collected_at` / `collected_by` to `orders` — columns, not a side table,
+      because a pickup IS an order (same money, items, invoice, history) and a
+      side table would mean every order read either joins it or silently
+      ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
+      where; `/pos/pickups` hands it over; the sweep rides on
+      `/api/cron/expire-pending-payments`. Config:
+      `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
+      `locations`, rendered on Locations → Online fulfilment).
+      - **A pickup HOLDS, it does not sell** — `placeOrder` calls `holdStock`
+        instead of `reserve_stock_at`. Selling would empty the shelf on screen
+        while the box is still physically on it, and the shop would reorder
+        stock it already has. Handing over commits the holds; cancelling or
+        expiring releases them.
+      - **★ SO THE ORDER CARRIES `stock_status: 'none'`.** The cancel path's
+        reserved→released claim RESTOCKS, and running it on a pickup would ADD
+        units that never left — inflating that shop's count on every
+        cancellation. `updateOrderStatus` releases the order's pickup holds
+        instead, which is idempotent, so a second cancel is a no-op.
+      - **A shop is offered only if it can actually serve the basket**:
+        the `pickup` capability (which itself `requires` `pos` — someone has to
+        hand the goods over — and is Pro), active, and enough **available**
+        (`on_hand − reserved`) stock. Offering a shop whose last unit is
+        already held for somebody else's collection is how two people are
+        promised the same box. A short shop is still LISTED, flagged and
+        disabled, rather than hidden — "not everything is in stock here" is
+        information; a silently missing shop is confusing.
+      - **The customer's choice OVERRIDES routing** (Phase D), and the chosen
+        shop's name + address ride into the `order.placed` payload, so the
+        confirmation tells them where to go instead of quoting a delivery
+        address they never gave. Delivery orders are untouched — the pickup
+        variables are only added when there IS a pickup.
+      - **Expiry cancels, it does not refund.** `sweepExpiredPickups` claims
+        awaiting/ready → expired per order, then releases the holds (that
+        order, so a hand-over racing the sweep can't lose). Refunds wait for
+        the returns machinery that records them (roadmap Phase G) — quietly
+        moving money on a schedule ahead of that is not a thing to build.
     - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
       metered extra-location billing (7), omnichannel/BOPIS (8), offline
       outbox (9). See `docs/pos-plan.md`.

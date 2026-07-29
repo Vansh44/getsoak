@@ -20,7 +20,9 @@ import {
   orders,
   products,
   productVariants,
+  stockReservations,
 } from "@/drizzle/schema";
+import { releaseHold } from "@/lib/inventory/reservations";
 import {
   getActingStoreId,
   getManagerIdentity,
@@ -385,6 +387,33 @@ export async function updateOrderStatus(
           ),
         );
       }
+    }
+  }
+
+  // A PICKUP order's units were never taken off the shelf — they are held
+  // (locations_04). Cancelling it therefore releases the holds instead of
+  // restocking, which is why such orders carry stock_status 'none' and the
+  // claim above matches nothing. Releasing is idempotent, so a second cancel
+  // is a no-op rather than a double-free.
+  if (status === "cancelled") {
+    try {
+      const holds = await withService((db) =>
+        db
+          .select({ id: stockReservations.id })
+          .from(stockReservations)
+          .where(
+            and(
+              eq(stockReservations.storeId, storeId),
+              eq(stockReservations.ownerType, "pickup"),
+              eq(stockReservations.ownerId, orderId),
+              eq(stockReservations.status, "held"),
+            ),
+          ),
+      );
+      for (const h of holds) await releaseHold(h.id);
+    } catch (err) {
+      // Never block the cancellation over a hold. The TTL sweep is the backstop.
+      console.error("release pickup holds:", err);
     }
   }
 

@@ -30,6 +30,12 @@ import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import {
+  pickupEnabled,
+  pickupHoldDays,
+  pickupLocationsFor,
+} from "@/lib/fulfilment/pickup";
+import { holdStock, releaseHold } from "@/lib/inventory/reservations";
+import {
   recordStorePolicyConsent,
   getCheckoutPolicies,
 } from "@/lib/legal/store-consent";
@@ -504,11 +510,114 @@ export async function getCheckoutConfig(): Promise<CheckoutConfig> {
   };
 }
 
+export interface PickupOptions {
+  enabled: boolean;
+  locations: { id: string; name: string; address: string; hasStock: boolean }[];
+  holdDays: number;
+}
+
+/**
+ * Shops this cart could be collected from.
+ *
+ * Takes the cart so it can say which shops actually have the goods — offering
+ * a shop that would then refuse the basket is worse than not offering pickup.
+ * Purely for DISPLAY: `placeOrder` re-validates the chosen id (`canCollectAt`),
+ * because a client naming a location is a request, not a fact.
+ */
+export async function getPickupOptions(
+  items: CartItem[],
+): Promise<PickupOptions> {
+  const off: PickupOptions = { enabled: false, locations: [], holdDays: 0 };
+  if (!Array.isArray(items) || items.length === 0) return off;
+  if (!(await pickupEnabled())) return off;
+
+  try {
+    const storeId = await getCurrentStoreId();
+    const productIds = Array.from(
+      new Set(
+        items
+          .map((i) => i.productId)
+          .filter((id): id is string => typeof id === "string"),
+      ),
+    ).slice(0, MAX_LINE_ITEMS);
+    if (productIds.length === 0) return off;
+
+    // Whether a line needs stock at all is DB truth, not a cart claim — an
+    // untracked or backorderable SKU must never disqualify a shop.
+    const [prodRows, varRows] = await withService(async (db) => [
+      await db
+        .select({
+          id: products.id,
+          track_inventory: products.trackInventory,
+          allow_backorder: products.allowBackorder,
+        })
+        .from(products)
+        .where(
+          and(eq(products.storeId, storeId), inArray(products.id, productIds)),
+        ),
+      await db
+        .select({
+          id: productVariants.id,
+          track_inventory: productVariants.trackInventory,
+          allow_backorder: productVariants.allowBackorder,
+        })
+        .from(productVariants)
+        .where(inArray(productVariants.productId, productIds)),
+    ]);
+    const pMap = new Map(prodRows.map((r) => [r.id, r]));
+    const vMap = new Map(varRows.map((r) => [r.id, r]));
+
+    const lines = items
+      .filter((i) => pMap.has(i.productId))
+      .map((i) => {
+        const v = i.variantId ? vMap.get(i.variantId) : null;
+        const p = pMap.get(i.productId);
+        const tracked = v ? v.track_inventory : p?.track_inventory;
+        const backorder = v ? v.allow_backorder : p?.allow_backorder;
+        return {
+          productId: i.productId,
+          variantId: i.variantId ?? null,
+          quantity: Math.max(1, Math.trunc(Number(i.quantity) || 1)),
+          needsStock: !!tracked && !backorder,
+        };
+      });
+
+    const locations = await pickupLocationsFor(storeId, lines);
+    return {
+      enabled: locations.length > 0,
+      locations: locations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        address: formatPickupAddress(l.address),
+        hasStock: l.hasStock,
+      })),
+      holdDays: await pickupHoldDays(),
+    };
+  } catch (err) {
+    // Pickup is an extra way to buy — never the reason checkout breaks.
+    console.error("getPickupOptions:", errMsg(err));
+    return off;
+  }
+}
+
+/** The shop's address as one readable line. */
+function formatPickupAddress(a: Record<string, unknown> | null): string {
+  if (!a) return "";
+  return ["line1", "line2", "city", "state", "postalCode"]
+    .map((k) => (typeof a[k] === "string" ? (a[k] as string).trim() : ""))
+    .filter(Boolean)
+    .join(", ");
+}
+
 export async function placeOrder(
   form: CheckoutFormData,
   items: CartItem[],
   couponCode?: string | null,
   paymentMethod: PaymentMethod = "cod",
+  /** Collect at this shop instead of having it delivered (roadmap Phase F).
+   *  Re-validated server-side — the client naming a location is a request, not
+   *  a fact. */
+  pickupLocationId?: string | null,
 ): Promise<CheckoutResult> {
   // Authenticate the shopper via the identity seam (session-backed).
   const user = await getServerUser();
@@ -835,22 +944,45 @@ export async function placeOrder(
   // wrapper — so a store with stock in a second shop advertised it and then
   // failed the order. null means "no better answer": the wrapper's default
   // location, exactly as before. Routing must never be why a sale is refused.
-  const fulfilmentLocationId = await resolveFulfilmentLocation(
-    storeId,
-    validItems.map((it) => {
-      const p = productsMap.get(it.product_id);
-      const v = it.variant_id ? variantsMap.get(it.variant_id) : null;
-      const tracked = v ? v.track_inventory : p?.track_inventory;
-      const backorder = v ? v.allow_backorder : p?.allow_backorder;
+  // A CUSTOMER-CHOSEN pickup shop overrides routing entirely: they are driving
+  // there. Validated against capability AND stock, because the client only
+  // sends an id.
+  const routingLines = validItems.map((it) => {
+    const p = productsMap.get(it.product_id);
+    const v = it.variant_id ? variantsMap.get(it.variant_id) : null;
+    const tracked = v ? v.track_inventory : p?.track_inventory;
+    const backorder = v ? v.allow_backorder : p?.allow_backorder;
+    return {
+      productId: it.product_id,
+      variantId: it.variant_id,
+      quantity: it.quantity,
+      needsStock: !!tracked && !backorder,
+    };
+  });
+
+  let pickupAt: string | null = null;
+  let pickupShop: { name: string; address: string } | null = null;
+  if (typeof pickupLocationId === "string" && pickupLocationId) {
+    const options = await pickupLocationsFor(storeId, routingLines);
+    const chosen = options.find((o) => o.id === pickupLocationId && o.hasStock);
+    if (!chosen) {
       return {
-        productId: it.product_id,
-        variantId: it.variant_id,
-        quantity: it.quantity,
-        // Untracked or backorderable SKUs never disqualify a location.
-        needsStock: !!tracked && !backorder,
+        error:
+          "That shop can't fulfil this order for collection. Choose another, or switch to delivery.",
       };
-    }),
-  );
+    }
+    pickupAt = chosen.id;
+    // Carried into the confirmation so the shopper is told WHERE to collect —
+    // the whole point of the email changing for a pickup.
+    pickupShop = {
+      name: chosen.name,
+      address: formatPickupAddress(chosen.address),
+    };
+  }
+
+  const fulfilmentLocationId =
+    pickupAt ?? (await resolveFulfilmentLocation(storeId, routingLines));
+  const holdDays = pickupAt ? await pickupHoldDays() : 0;
 
   const orderRows = await withService((db) =>
     db
@@ -877,12 +1009,21 @@ export async function placeOrder(
         currency: "INR",
         appliedCouponCode: couponCode || null,
         locationId: fulfilmentLocationId,
+        fulfilmentType: pickupAt ? "pickup" : "delivery",
+        pickupLocationId: pickupAt,
+        pickupStatus: pickupAt ? "awaiting" : null,
+        pickupExpiresAt: pickupAt
+          ? sql`now() + make_interval(days => ${holdDays})`
+          : null,
         notes,
         // This order goes through the reserve flow below; mark it so that
         // cancellation restocks it exactly once (and never restocks legacy
         // orders, which stay 'none'). If the reserve loop fails, the order row
         // is deleted, so this value only ever persists on a fully-reserved order.
-        stockStatus: "reserved",
+        // A pickup's units are HELD, not taken: cancelling it releases the
+        // holds instead of restocking, so it must not claim the
+        // reserved→released restock path (order-actions).
+        stockStatus: pickupAt ? "none" : "reserved",
       } as typeof orders.$inferInsert)
       .returning({ id: orders.id, order_ref: orders.orderRef }),
   ).catch((err) => {
@@ -917,6 +1058,17 @@ export async function placeOrder(
     }
   };
 
+  // Holds taken for a pickup order (Phase F). Released, not restocked, on a
+  // rollback — nothing left the shelf, so there is nothing to put back.
+  const heldIds: string[] = [];
+  const releaseHolds = async () => {
+    for (const id of heldIds) {
+      await releaseHold(id).catch((err) =>
+        console.error("release_stock_hold:", errMsg(err)),
+      );
+    }
+  };
+
   // Best-effort rollback delete of the order row (no cross-statement txn; the
   // caller has already released stock first so the movements still wrote).
   const deleteOrder = async () => {
@@ -929,21 +1081,43 @@ export async function placeOrder(
     let reserved: boolean | null | undefined;
     let reserveFailed = false;
     try {
-      const res = await withService((db) =>
-        db.execute(
-          fulfilmentLocationId
-            ? sql`select reserve_stock_at(p_store => ${storeId}, p_location => ${fulfilmentLocationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`
-            : sql`select reserve_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`,
-        ),
-      );
-      reserved = (res.rows[0] as { reserved: boolean | null } | undefined)
-        ?.reserved;
+      if (pickupAt) {
+        // A pickup HOLDS the units: they stay on that shop's shelf until
+        // somebody hands them over (locations_04). Selling them now would show
+        // the shelf empty while the goods are still physically on it.
+        const holdId = await holdStock({
+          storeId,
+          locationId: pickupAt,
+          productId: item.product_id,
+          variantId: item.variant_id,
+          quantity: item.quantity,
+          owner: "pickup",
+          ownerId: order.id,
+          // The order's own expiry is the hold's expiry — one deadline, so the
+          // stock can never come back while the order still promises it.
+          ttlMinutes: holdDays * 24 * 60,
+        });
+        if (holdId) heldIds.push(holdId);
+        reserved = !!holdId;
+      } else {
+        const res = await withService((db) =>
+          db.execute(
+            fulfilmentLocationId
+              ? sql`select reserve_stock_at(p_store => ${storeId}, p_location => ${fulfilmentLocationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`
+              : sql`select reserve_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${order.id}) as reserved`,
+          ),
+        );
+        reserved = (res.rows[0] as { reserved: boolean | null } | undefined)
+          ?.reserved;
+      }
     } catch (err) {
       console.error("reserve_stock:", errMsg(err));
       reserveFailed = true;
     }
 
     if (reserveFailed || !reserved) {
+      await releaseHolds();
+      await releaseHolds();
       await releaseStock();
       await deleteOrder();
       await releaseCoupon();
@@ -966,11 +1140,15 @@ export async function placeOrder(
             : `${label} just sold out. Please remove it from your cart and try again.`,
       };
     }
-    reservedStockItems.push({
-      product_id: item.product_id,
-      variant_id: item.variant_id,
-      qty: item.quantity,
-    });
+    // Only a real reserve is restockable. A held line is undone by releasing
+    // the hold — putting it here too would ADD units that never left.
+    if (!pickupAt) {
+      reservedStockItems.push({
+        product_id: item.product_id,
+        variant_id: item.variant_id,
+        qty: item.quantity,
+      });
+    }
   }
 
   // 5. Create order items. If this fails, roll back everything: release the
@@ -1000,6 +1178,7 @@ export async function placeOrder(
   }
 
   if (itemsFailed) {
+    await releaseHolds();
     await releaseStock();
     await deleteOrder();
     await releaseCoupon();
@@ -1048,6 +1227,15 @@ export async function placeOrder(
       currency: "INR",
       items: summariseItems(orderItemsToInsert),
       paymentMethod,
+      // Only on a pickup. A delivery order's fact list is unchanged — an empty
+      // "Pickup location" row on every confirmation would be noise.
+      ...(pickupAt
+        ? {
+            fulfilment: "pickup",
+            pickupLocation: pickupShop?.name ?? "",
+            pickupAddress: pickupShop?.address ?? "",
+          }
+        : {}),
     },
     // The order summary the email renders as a table. Separate from `payload`
     // on purpose — see EmitEventInput.email.
@@ -1090,6 +1278,7 @@ export async function placeOrder(
   if (paymentMethod === "razorpay" && gatewayCreds) {
     const amountPaise = Math.round(total * 100);
     const rollback = async () => {
+      await releaseHolds();
       await releaseStock();
       await deleteOrder();
       await releaseCoupon();

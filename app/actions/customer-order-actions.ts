@@ -15,9 +15,9 @@
 // the human-readable order_ref is display only, never a lookup key).
 // ---------------------------------------------------------------------------
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { withUser } from "@/lib/db/client";
-import { orderItems, orders, products } from "@/drizzle/schema";
+import { orderItems, orders, products, storeLocations } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
@@ -59,6 +59,12 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
   applied_coupon_code: string | null;
   shipping_address: Record<string, unknown>;
   notes: string | null;
+  /** 'delivery' for everything that isn't a collection. */
+  fulfilment_type: string;
+  pickup_status: string | null;
+  pickup_expires_at: string | null;
+  pickup_location_name: string | null;
+  pickup_location_address: Record<string, unknown> | null;
   items: MyOrderItem[];
 }
 
@@ -183,6 +189,17 @@ export async function getMyOrder(
             applied_coupon_code: orders.appliedCouponCode,
             shipping_address: orders.shippingAddress,
             notes: orders.notes,
+            fulfilment_type: orders.fulfilmentType,
+            pickup_status: orders.pickupStatus,
+            pickup_expires_at: orders.pickupExpiresAt,
+            pickup_location_name: sql<string | null>`(
+              select l.name from ${storeLocations} l
+               where l.id = ${orders.pickupLocationId}
+            )`,
+            pickup_location_address: sql<Record<string, unknown> | null>`(
+              select l.address from ${storeLocations} l
+               where l.id = ${orders.pickupLocationId}
+            )`,
           })
           .from(orders)
           .where(
