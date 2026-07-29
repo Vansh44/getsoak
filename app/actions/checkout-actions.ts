@@ -511,8 +511,19 @@ export async function getCheckoutConfig(): Promise<CheckoutConfig> {
 }
 
 export interface PickupOptions {
+  /** Offer the pickup choice at all. False when nothing serves this shopper —
+   *  a Chennai shopper being shown a Mumbai-only option is pure noise. */
   enabled: boolean;
-  locations: { id: string; name: string; address: string; hasStock: boolean }[];
+  locations: {
+    id: string;
+    name: string;
+    address: string;
+    hasStock: boolean;
+    servesArea: boolean;
+  }[];
+  /** True when some shop can collect but none covers their postcode — the
+   *  checkout offers those behind a disclosure instead of hiding them. */
+  hasOtherAreas: boolean;
   holdDays: number;
 }
 
@@ -526,8 +537,16 @@ export interface PickupOptions {
  */
 export async function getPickupOptions(
   items: CartItem[],
+  /** The shopper's postcode, from the address they've selected. Unknown is
+   *  fine — every shop then counts as serving them. */
+  pincode?: string | null,
 ): Promise<PickupOptions> {
-  const off: PickupOptions = { enabled: false, locations: [], holdDays: 0 };
+  const off: PickupOptions = {
+    enabled: false,
+    locations: [],
+    hasOtherAreas: false,
+    holdDays: 0,
+  };
   if (!Array.isArray(items) || items.length === 0) return off;
   if (!(await pickupEnabled())) return off;
 
@@ -582,15 +601,25 @@ export async function getPickupOptions(
         };
       });
 
-    const locations = await pickupLocationsFor(storeId, lines);
+    const locations = await pickupLocationsFor(storeId, lines, pincode);
+    // Serving shops first, then the rest — the checkout shows the tail behind a
+    // disclosure rather than dropping it (see PickupLocation.servesArea).
+    const near = locations.filter((l) => l.servesArea);
     return {
-      enabled: locations.length > 0,
-      locations: locations.map((l) => ({
-        id: l.id,
-        name: l.name,
-        address: formatPickupAddress(l.address),
-        hasStock: l.hasStock,
-      })),
+      // Nothing near ⇒ don't offer collection at all. This is the one place
+      // geography HIDES something, and it hides the toggle, never a shop the
+      // shopper has already chosen to look for.
+      enabled: near.length > 0,
+      hasOtherAreas: near.length < locations.length,
+      locations: [...near, ...locations.filter((l) => !l.servesArea)].map(
+        (l) => ({
+          id: l.id,
+          name: l.name,
+          address: formatPickupAddress(l.address),
+          hasStock: l.hasStock,
+          servesArea: l.servesArea,
+        }),
+      ),
       holdDays: await pickupHoldDays(),
     };
   } catch (err) {

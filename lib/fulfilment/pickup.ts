@@ -29,6 +29,7 @@ import {
   normalizeCapabilities,
   isLocationType,
 } from "@/lib/locations/capabilities";
+import { matchesPincode } from "@/lib/locations/pincodes";
 import { effectivePlan } from "@/lib/plans";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -43,6 +44,16 @@ export interface PickupLocation {
   /** False when this shop can't cover the whole basket — shown greyed, or
    *  hidden, but never silently offered. */
   hasStock: boolean;
+  /**
+   * Does this shop collect to the shopper's postcode?
+   *
+   * A FLAG, not a filter. Shops that don't serve their area are still returned
+   * so the checkout can put them behind "Collecting somewhere else?" —
+   * postcode lists are merchant-typed and will have gaps, and people collect
+   * near work, near family, on a route. Their delivery postcode is a good
+   * guess at where they are, never a fact about where they will drive.
+   */
+  servesArea: boolean;
 }
 
 /** Is pickup switched on for this store at all? */
@@ -73,6 +84,10 @@ export async function pickupHoldDays(): Promise<number> {
 export async function pickupLocationsFor(
   storeId: string,
   lines: OrderLineForRouting[],
+  /** The shopper's postcode, when we know it. Unknown ⇒ every shop counts as
+   *  serving them (pincodes.ts) — hiding collection from someone who hasn't
+   *  typed an address yet is the failure this must not have. */
+  pincode?: string | null,
 ): Promise<PickupLocation[]> {
   if (!(await pickupEnabled())) return [];
 
@@ -90,6 +105,7 @@ export async function pickupLocationsFor(
           address: storeLocations.address,
           active: storeLocations.active,
           capabilities: storeLocations.capabilities,
+          pickup_pincodes: storeLocations.pickupPincodes,
         })
         .from(storeLocations)
         .where(
@@ -153,6 +169,7 @@ export async function pickupLocationsFor(
         name: l.name,
         address: (l.address as Record<string, unknown> | null) ?? null,
         hasStock,
+        servesArea: matchesPincode(l.pickup_pincodes, pincode),
       });
     }
     return out;

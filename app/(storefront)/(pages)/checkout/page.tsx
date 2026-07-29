@@ -119,6 +119,7 @@ export default function CheckoutPage() {
     "delivery",
   );
   const [pickupId, setPickupId] = useState<string | null>(null);
+  const [showFarShops, setShowFarShops] = useState(false);
   const [payMethod, setPayMethod] = useState<PaymentMethod>("cod");
   // A placed-but-unpaid online order (modal dismissed / payment failed). Kept
   // so "Retry payment" reopens the SAME Razorpay order instead of placing a
@@ -150,11 +151,13 @@ export default function CheckoutPage() {
   // Which shops could hand this basket over. Re-fetched when the cart changes
   // because "has stock" is a property of the basket, not of the store.
   const items = cart.items;
+  const pincode =
+    addresses.find((a) => a.id === selectedId)?.postal_code ?? null;
   useEffect(() => {
     let active = true;
     // An empty cart bounces off this page anyway — nothing to clear.
     if (!items.length) return;
-    getPickupOptions(items)
+    getPickupOptions(items, pincode)
       .then((opts) => {
         if (active) {
           setPickup(opts);
@@ -174,8 +177,9 @@ export default function CheckoutPage() {
       active = false;
     };
     // `items` is cart state: a new array only when the cart actually changes,
-    // which is exactly when "which shop has this?" needs re-asking.
-  }, [items]);
+    // which is exactly when "which shop has this?" needs re-asking. The
+    // postcode is the other input — switching to a Pune address must re-ask.
+  }, [items, pincode]);
 
   // Derived, not stored: if the last shop selling this basket sells out while
   // the shopper hesitates, the choice silently reverts to delivery rather than
@@ -552,92 +556,6 @@ export default function CheckoutPage() {
         <div className={styles.layout}>
           {/* ---- Left: steps ---- */}
           <div className={styles.main}>
-            {/* Pick up in store — only when the store offers it AND a shop
-                can actually cover this basket. */}
-            {pickup?.enabled && (
-              <section className={styles.card}>
-                <div className={styles.sectionHead}>
-                  <h2 className={styles.sectionTitle}>
-                    How would you like it?
-                  </h2>
-                </div>
-                <div className={styles.payStack}>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${fulfilment === "delivery" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setFulfilment("delivery")}
-                    aria-pressed={fulfilment === "delivery"}
-                  >
-                    <span className={styles.payIcon}>
-                      <Truck size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>Deliver to me</div>
-                      <div className={styles.payDesc}>
-                        Sent to the address below.
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${fulfilment === "pickup" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setFulfilment("pickup")}
-                    aria-pressed={fulfilment === "pickup"}
-                  >
-                    <span className={styles.payIcon}>
-                      <Store size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>Pick up in store</div>
-                      <div className={styles.payDesc}>
-                        Collect from one of our shops
-                        {pickup.holdDays > 0
-                          ? ` — held for ${pickup.holdDays} days`
-                          : ""}
-                        .
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
-                </div>
-
-                {fulfilment === "pickup" && (
-                  <div className={styles.payStack} style={{ marginTop: 14 }}>
-                    {pickup.locations.map((l) => (
-                      <button
-                        key={l.id}
-                        type="button"
-                        disabled={!l.hasStock}
-                        className={`${styles.payOption}${pickupId === l.id ? "" : ` ${styles.payOptionMuted}`}`}
-                        onClick={() => setPickupId(l.id)}
-                        aria-pressed={pickupId === l.id}
-                      >
-                        <span className={styles.payIcon}>
-                          <MapPin size={22} />
-                        </span>
-                        <div>
-                          <div className={styles.payName}>{l.name}</div>
-                          <div className={styles.payDesc}>
-                            {l.hasStock
-                              ? l.address || "Collect here"
-                              : "Not everything in your bag is in stock here."}
-                          </div>
-                        </div>
-                        <span className={styles.payCheck}>
-                          <Check size={20} />
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-
             {/* Step 1 — Delivery address (contact details when collecting) */}
             <section className={styles.card}>
               <div className={styles.sectionHead}>
@@ -913,6 +831,110 @@ export default function CheckoutPage() {
                 </form>
               )}
             </section>
+
+            {/* Pick up in store. BELOW the address on purpose: which shops
+                can collect depends on the shopper's postcode, so the question
+                cannot be asked before we know it. Renders only when the store
+                offers pickup AND a shop near them can cover the basket. */}
+            {pickup?.enabled && (
+              <section className={styles.card}>
+                <div className={styles.sectionHead}>
+                  <h2 className={styles.sectionTitle}>
+                    How would you like it?
+                  </h2>
+                </div>
+                <div className={styles.payStack}>
+                  <button
+                    type="button"
+                    className={`${styles.payOption}${fulfilment === "delivery" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() => setFulfilment("delivery")}
+                    aria-pressed={fulfilment === "delivery"}
+                  >
+                    <span className={styles.payIcon}>
+                      <Truck size={22} />
+                    </span>
+                    <div>
+                      <div className={styles.payName}>Deliver to me</div>
+                      <div className={styles.payDesc}>
+                        Sent to the address below.
+                      </div>
+                    </div>
+                    <span className={styles.payCheck}>
+                      <Check size={20} />
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.payOption}${fulfilment === "pickup" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() => setFulfilment("pickup")}
+                    aria-pressed={fulfilment === "pickup"}
+                  >
+                    <span className={styles.payIcon}>
+                      <Store size={22} />
+                    </span>
+                    <div>
+                      <div className={styles.payName}>Pick up in store</div>
+                      <div className={styles.payDesc}>
+                        Collect from one of our shops
+                        {pickup.holdDays > 0
+                          ? ` — held for ${pickup.holdDays} days`
+                          : ""}
+                        .
+                      </div>
+                    </div>
+                    <span className={styles.payCheck}>
+                      <Check size={20} />
+                    </span>
+                  </button>
+                </div>
+
+                {fulfilment === "pickup" && (
+                  <div className={styles.payStack} style={{ marginTop: 14 }}>
+                    {pickup.locations
+                      .filter((l) => l.servesArea || showFarShops)
+                      .map((l) => (
+                        <button
+                          key={l.id}
+                          type="button"
+                          disabled={!l.hasStock}
+                          className={`${styles.payOption}${pickupId === l.id ? "" : ` ${styles.payOptionMuted}`}`}
+                          onClick={() => setPickupId(l.id)}
+                          aria-pressed={pickupId === l.id}
+                        >
+                          <span className={styles.payIcon}>
+                            <MapPin size={22} />
+                          </span>
+                          <div>
+                            <div className={styles.payName}>{l.name}</div>
+                            <div className={styles.payDesc}>
+                              {l.hasStock
+                                ? l.address || "Collect here"
+                                : "Not everything in your bag is in stock here."}
+                            </div>
+                          </div>
+                          <span className={styles.payCheck}>
+                            <Check size={20} />
+                          </span>
+                        </button>
+                      ))}
+
+                    {/* Shops outside their area are DISCLOSED, not dropped.
+                        Postcode lists are merchant-typed and will have gaps,
+                        and people collect near work or family — so a shopper
+                        who wants a further shop must be able to reach it. */}
+                    {pickup.hasOtherAreas && !showFarShops && (
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => setShowFarShops(true)}
+                      >
+                        Collecting somewhere else?
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* Step 2 — Payment */}
             <section className={styles.card}>

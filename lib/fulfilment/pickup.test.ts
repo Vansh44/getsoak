@@ -43,13 +43,18 @@ const {
   PICKUP_WARN_HOURS,
 } = await import("./pickup");
 
-const shop = (id: string, caps: Record<string, boolean>) => ({
+const shop = (
+  id: string,
+  caps: Record<string, boolean>,
+  pincodes: string[] | null = null,
+) => ({
   id,
   name: `Shop ${id}`,
   type: "shop",
   address: { line1: "1 High St", city: "Delhi" },
   active: true,
   capabilities: caps,
+  pickup_pincodes: pincodes,
 });
 
 const level = (loc: string, onHand: number, reserved = 0) => ({
@@ -136,6 +141,46 @@ describe("pickupLocationsFor", () => {
       { productId: "p1", variantId: null, quantity: 2, needsStock: false },
     ]);
     expect(out[0].hasStock).toBe(true);
+  });
+});
+
+describe("pickupLocationsFor — postcode serviceability (Phase F.1)", () => {
+  it("flags a shop that serves the shopper's area", async () => {
+    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
+    const out = await pickupLocationsFor("s1", basket, "400072");
+    expect(out[0].servesArea).toBe(true);
+  });
+
+  it("★ STILL RETURNS a shop outside their area — it is a flag, not a filter", async () => {
+    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
+    const out = await pickupLocationsFor("s1", basket, "600001");
+    expect(out).toHaveLength(1);
+    expect(out[0].servesArea).toBe(false);
+  });
+
+  it("★ NO RULES = serves everyone, so an unconfigured store is untouched", async () => {
+    mocks.locRows = [shop("a", { pos: true, pickup: true }, null)];
+    const out = await pickupLocationsFor("s1", basket, "600001");
+    expect(out[0].servesArea).toBe(true);
+  });
+
+  it("★ AN UNKNOWN POSTCODE serves everyone — a first-time shopper has typed no address", async () => {
+    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
+    const out = await pickupLocationsFor("s1", basket, null);
+    expect(out[0].servesArea).toBe(true);
+  });
+
+  it("separates a Mumbai shop from a Pune warehouse for a Mumbai shopper", async () => {
+    mocks.locRows = [
+      shop("mumbai", { pos: true, pickup: true }, ["400*"]),
+      shop("pune", { pos: true, pickup: true }, ["411*"]),
+    ];
+    mocks.levelRows = [level("mumbai", 5), level("pune", 5)];
+    const out = await pickupLocationsFor("s1", basket, "400072");
+    expect(out.map((o) => [o.id, o.servesArea])).toEqual([
+      ["mumbai", true],
+      ["pune", false],
+    ]);
   });
 });
 

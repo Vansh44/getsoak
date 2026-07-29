@@ -304,6 +304,34 @@ whole window between two runs and expire unwarned. Reminders run AFTER the
 expiry sweep: telling someone to hurry and collect an order we just cancelled
 is worse than saying nothing.
 
+**Phase F.1 — postcode serviceability (DONE).** A warehouse in Pune and a shop
+in Mumbai should not both be offered to a Chennai shopper.
+`store_locations.pickup_pincodes` (text[], `locations_07`) holds merchant-typed
+rules in three forms — exact `400001`, prefix `400*`, range `400001-400104` —
+parsed and matched by the pure `lib/locations/pincodes.ts`. Prefixes are what
+make it usable: Mumbai is a hundred postcodes, and a merchant who can only type
+exact codes will type five and blame the feature.
+
+It **fails open in both directions**: no rules = offered everywhere (so the
+column changes nothing for existing stores), and an unknown postcode matches
+(a first-time shopper hasn't typed an address yet). It decides what is OFFERED,
+never what is permitted — `placeOrder` still validates capability, store and
+stock and deliberately does NOT refuse on a postcode. A merchant forgetting a
+suburb should cost them a listing, not a sale.
+
+Geography HIDES exactly one thing: the pickup toggle, when no shop serves the
+shopper. Within pickup, shops outside their area are **disclosed behind
+"Collecting somewhere else?", not dropped** — people collect near work, near
+family, on a route home, and their delivery postcode is a good guess at where
+they are rather than a fact about where they will drive. This also forced the
+chooser BELOW the address step: which shops can collect depends on a postcode,
+so the question cannot be asked before we know it.
+
+**Deliberately not built:** radius from lat/lng. It is the more correct answer
+and it puts a geocoding call on the checkout render path — cost, latency, and a
+failure mode on the one page that must never break. Revisit when a merchant has
+enough shops that prefix lists stop scaling.
+
 **Deliberately not built:** automatic refunds on expiry. The order is cancelled
 and the stock comes back; moving money on a schedule waits for the returns
 machinery that records it (Phase G).

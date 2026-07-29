@@ -29,6 +29,10 @@ import {
   type CapabilityMap,
   type LocationCapability,
 } from "@/lib/locations/capabilities";
+import {
+  formatPincodeRules,
+  parsePincodeRules,
+} from "@/lib/locations/pincodes";
 import { planAllows, type Plan } from "@/lib/plans";
 
 export function LocationEditor({
@@ -44,11 +48,17 @@ export function LocationEditor({
 }) {
   const router = useRouter();
   const [caps, setCaps] = useState<CapabilityMap>(location.capabilities);
+  const [pincodeText, setPincodeText] = useState(
+    formatPincodeRules(location.pickupPincodes),
+  );
   const [pending, start] = useTransition();
 
-  const dirty = LOCATION_CAPABILITIES.some(
-    (c) => caps[c] !== location.capabilities[c],
-  );
+  // Parsed live, so a typo is visible while typing rather than after a save.
+  const parsed = parsePincodeRules(pincodeText);
+  const savedRules = formatPincodeRules(location.pickupPincodes);
+  const dirty =
+    LOCATION_CAPABILITIES.some((c) => caps[c] !== location.capabilities[c]) ||
+    (caps.pickup && formatPincodeRules(parsed.rules) !== savedRules);
 
   /** Why this capability can't be changed right now, or null. */
   const blockedReason = (cap: LocationCapability): string | null => {
@@ -77,12 +87,24 @@ export function LocationEditor({
 
   const save = () =>
     start(async () => {
-      const res = await saveLocationCapabilities(location.id, caps);
+      const res = await saveLocationCapabilities(
+        location.id,
+        caps,
+        pincodeText,
+      );
       if (res.error) {
         toast.error(res.error);
         return;
       }
-      toast.success("Capabilities saved");
+      if (res.invalidPincodes?.length) {
+        // Saved, but say what didn't stick. A rule the merchant believes is in
+        // force and isn't is worse than a rejected save.
+        toast.warning(
+          `Saved. Couldn't read: ${res.invalidPincodes.slice(0, 5).join(", ")}`,
+        );
+      } else {
+        toast.success("Capabilities saved");
+      }
       router.refresh();
     });
 
@@ -160,12 +182,55 @@ export function LocationEditor({
           })}
         </div>
 
+        {/* Where this shop hands goods over. Only meaningful once pickup is
+            on, so it appears with the checkbox rather than sitting there
+            greyed out asking to be misread as broken. */}
+        {caps.pickup && (
+          <div className="mt-3 rounded-lg border border-[#e5e5e5] bg-[#111827]/[0.02] p-3">
+            <label
+              htmlFor="pickup-pincodes"
+              className="text-sm font-medium text-[#111827]"
+            >
+              Postcodes that can collect here
+            </label>
+            <p className="mt-0.5 text-xs text-[#5b6472]">
+              Leave empty to offer collection to everyone. Use{" "}
+              <code className="rounded bg-[#111827]/5 px-1">400*</code> for a
+              whole area,{" "}
+              <code className="rounded bg-[#111827]/5 px-1">400001-400104</code>{" "}
+              for a range, or list exact codes.
+            </p>
+            <textarea
+              id="pickup-pincodes"
+              rows={3}
+              disabled={!canManage}
+              value={pincodeText}
+              onChange={(e) => setPincodeText(e.target.value)}
+              placeholder="400*, 401001-401107, 400072"
+              className="mt-2 w-full rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 font-mono text-sm text-[#111827] outline-none transition-colors placeholder:font-sans placeholder:text-[#9ca3af] focus:border-[#111827] disabled:opacity-60"
+            />
+            <p className="mt-1.5 text-xs text-[#5b6472]">
+              {parsed.rules.length === 0
+                ? "Anyone can collect from this location."
+                : `${parsed.rules.length} rule${parsed.rules.length === 1 ? "" : "s"} — everyone else sees delivery only.`}
+              {parsed.invalid.length > 0 && (
+                <span className="ml-1 font-medium text-[#b42318]">
+                  Can&apos;t read: {parsed.invalid.slice(0, 5).join(", ")}
+                </span>
+              )}
+            </p>
+          </div>
+        )}
+
         {canManage && (
           <div className="mt-5 flex justify-end gap-2">
             <button
               type="button"
               disabled={!dirty || pending}
-              onClick={() => setCaps(location.capabilities)}
+              onClick={() => {
+                setCaps(location.capabilities);
+                setPincodeText(savedRules);
+              }}
               className="rounded-lg border border-[#e5e5e5] px-4 py-2 text-sm font-medium text-[#5b6472] transition-colors hover:bg-[#111827]/5 disabled:opacity-50"
             >
               Reset
