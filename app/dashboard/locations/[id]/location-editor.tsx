@@ -37,11 +37,16 @@ export function LocationEditor({
   plan,
   canManage,
   isOnlyFulfilmentLocation,
+  pickupOfferedAtCheckout,
 }: {
   location: LocationWithCapabilities;
   plan: Plan;
   canManage: boolean;
   isOnlyFulfilmentLocation: boolean;
+  /** The STORE-level switch. Ticking a location's pickup box does nothing
+   *  until this is on, and a capability that silently does nothing reads as a
+   *  bug — the same reason the blocked-capability reasons are shown inline. */
+  pickupOfferedAtCheckout: boolean;
 }) {
   const router = useRouter();
   const [caps, setCaps] = useState<CapabilityMap>(location.capabilities);
@@ -253,6 +258,20 @@ export function LocationEditor({
             );
           })}
         </div>
+
+        {caps.pickup && !pickupOfferedAtCheckout && (
+          <p className="mt-3 rounded-lg border border-[#f0e2c0] bg-[#fdf8ec] px-3 py-2.5 text-xs text-[#8a6210]">
+            This location can hand orders over, but pickup isn&apos;t offered at
+            checkout yet.{" "}
+            <Link
+              href="/dashboard/locations/fulfilment"
+              className="font-semibold underline underline-offset-2"
+            >
+              Turn it on in Online fulfilment &amp; pickup
+            </Link>
+            .
+          </p>
+        )}
 
         {canManage && (
           <div className="mt-5 flex justify-end gap-2">

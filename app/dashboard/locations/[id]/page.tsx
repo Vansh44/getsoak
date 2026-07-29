@@ -3,6 +3,7 @@ import { requireSectionAccess } from "../../lib/access";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { getPosState } from "@/lib/pos/locations";
 import { listLocations } from "@/app/actions/location-actions";
+import { getStoreSettings } from "@/lib/settings/resolve";
 import { LocationEditor } from "./location-editor";
 
 export const metadata = { title: "Location" };
@@ -17,7 +18,10 @@ export default async function LocationPage({
   const store = await getCurrentStore();
   if (!getPosState(store).posAvailable) redirect("/dashboard/pos");
 
-  const { locations, plan } = await listLocations();
+  const [{ locations, plan }, settings] = await Promise.all([
+    listLocations(),
+    getStoreSettings(),
+  ]);
   const location = locations.find((l) => l.id === id);
   if (!location) notFound();
 
@@ -34,6 +38,7 @@ export default async function LocationPage({
       plan={plan}
       canManage={access.can("locations", "manage")}
       isOnlyFulfilmentLocation={!otherFulfils}
+      pickupOfferedAtCheckout={settings["fulfilment.offerPickup"] === true}
     />
   );
 }

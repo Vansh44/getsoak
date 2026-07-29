@@ -87,10 +87,11 @@ export function FulfilmentClient({
           Locations
         </Link>
         <h1 className="text-xl font-semibold text-[#111827]">
-          Online fulfilment
+          Online fulfilment &amp; pickup
         </h1>
         <p className="mt-1 text-sm text-[#5b6472]">
-          Which locations ship website orders, and which is tried first.
+          Which locations ship website orders, which is tried first, and whether
+          shoppers can collect in store.
         </p>
       </header>
 
