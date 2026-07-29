@@ -131,6 +131,13 @@ export async function markCollected(
           collectedAt: sql`now()`,
           collectedBy: op.staffId ?? op.name,
           status: "completed",
+          // "Pay at store" means the money changes hands at the counter — so
+          // handing the order over IS the payment. Only that method is
+          // settled here: an order already paid online must not be touched,
+          // and one that failed must not be marked paid by a hand-over.
+          paymentStatus: sql`case when ${orders.paymentMethod} = 'pay_at_store'
+                                  and ${orders.paymentStatus} = 'pending'
+                             then 'paid' else ${orders.paymentStatus} end`,
         })
         .where(
           and(

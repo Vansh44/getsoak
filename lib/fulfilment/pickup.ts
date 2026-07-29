@@ -7,8 +7,11 @@ import "server-only";
 //
 //   1. Pickup is offered ONLY at locations that carry the capability — which
 //      itself requires `pos`, because someone has to hand the goods over.
-//   2. A shop with no stock is not offered. Driving to a shop to be told it
-//      isn't there is worse than not seeing the option.
+//   2. Every pickup-capable shop is LISTED; the shopper picks. Geography is
+//      the shopper's business, not the merchant's — they know whether they
+//      collect near home, near work, or on a route. Shops that can't cover the
+//      basket are shown last and disabled rather than hidden, because "not
+//      everything is in stock here" is information and a missing shop is not.
 //   3. The customer's chosen location OVERRIDES fulfilment routing entirely.
 //      They are driving to a specific shop; no strategy gets to second-guess
 //      that.
@@ -29,7 +32,6 @@ import {
   normalizeCapabilities,
   isLocationType,
 } from "@/lib/locations/capabilities";
-import { matchesPincode } from "@/lib/locations/pincodes";
 import { effectivePlan } from "@/lib/plans";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -44,16 +46,6 @@ export interface PickupLocation {
   /** False when this shop can't cover the whole basket — shown greyed, or
    *  hidden, but never silently offered. */
   hasStock: boolean;
-  /**
-   * Does this shop collect to the shopper's postcode?
-   *
-   * A FLAG, not a filter. Shops that don't serve their area are still returned
-   * so the checkout can put them behind "Collecting somewhere else?" —
-   * postcode lists are merchant-typed and will have gaps, and people collect
-   * near work, near family, on a route. Their delivery postcode is a good
-   * guess at where they are, never a fact about where they will drive.
-   */
-  servesArea: boolean;
 }
 
 /** Is pickup switched on for this store at all? */
@@ -75,6 +67,54 @@ export async function pickupHoldDays(): Promise<number> {
   }
 }
 
+/** How long until a collection order is ready. 0 = same day. */
+export async function pickupReadyDays(): Promise<number> {
+  try {
+    const n = Number((await getStoreSettings())["fulfilment.pickupReadyDays"]);
+    return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * When a collection order will be ready, as a DATE.
+ *
+ * "Ready in 2 days" makes the shopper count forward on a calendar to work out
+ * what it means; a date doesn't. Same-day is called out separately because it
+ * is the thing a shop is competing on — a shopper choosing collection over
+ * delivery is usually choosing speed.
+ *
+ * Formatted SERVER-side against the same clock that stamps
+ * `orders.pickup_ready_at`, so the date quoted at checkout is the date stored
+ * on the order — no timezone drift between the two.
+ */
+export function readyOn(
+  days: number,
+  now = new Date(),
+): { today: boolean; date: string; long: string } {
+  if (days <= 0) {
+    return { today: true, date: "", long: "Today" };
+  }
+  const d = new Date(now);
+  d.setDate(d.getDate() + days);
+  return {
+    today: false,
+    // "Fri, 1 Aug" — short enough for a card, unambiguous unlike "01/08".
+    date: d.toLocaleDateString("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }),
+    // Spelled out for the email, where there is room and no surrounding UI.
+    long: d.toLocaleDateString("en-IN", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    }),
+  };
+}
+
 /**
  * Shops a shopper could collect this basket from.
  *
@@ -84,10 +124,6 @@ export async function pickupHoldDays(): Promise<number> {
 export async function pickupLocationsFor(
   storeId: string,
   lines: OrderLineForRouting[],
-  /** The shopper's postcode, when we know it. Unknown ⇒ every shop counts as
-   *  serving them (pincodes.ts) — hiding collection from someone who hasn't
-   *  typed an address yet is the failure this must not have. */
-  pincode?: string | null,
 ): Promise<PickupLocation[]> {
   if (!(await pickupEnabled())) return [];
 
@@ -105,7 +141,6 @@ export async function pickupLocationsFor(
           address: storeLocations.address,
           active: storeLocations.active,
           capabilities: storeLocations.capabilities,
-          pickup_pincodes: storeLocations.pickupPincodes,
         })
         .from(storeLocations)
         .where(
@@ -169,7 +204,6 @@ export async function pickupLocationsFor(
         name: l.name,
         address: (l.address as Record<string, unknown> | null) ?? null,
         hasStock,
-        servesArea: matchesPincode(l.pickup_pincodes, pincode),
       });
     }
     return out;

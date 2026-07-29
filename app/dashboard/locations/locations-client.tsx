@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MapPin, Plus, Pencil, Trash2, Loader2, X } from "lucide-react";
+import { MapPin, Plus, Pencil, Trash2, Loader2, X, Truck } from "lucide-react";
 import {
   createLocation,
   updateLocation,
@@ -60,16 +60,6 @@ export function LocationsClient({
   const atCap = count >= locationsIncluded;
 
   const openCreate = () => setForm({ ...BLANK });
-  const openEdit = (l: LocationWithCapabilities) =>
-    setForm({
-      id: l.id,
-      name: l.name,
-      type: l.type,
-      gstin: l.gstin ?? "",
-      stateCode: l.stateCode ?? "",
-      receiptPrefix: l.receiptPrefix ?? "",
-    });
-
   const save = () => {
     if (!form) return;
     const payload: LocationInput = {
@@ -134,14 +124,18 @@ export function LocationsClient({
         )}
       </header>
 
-      {initialLocations.length > 1 && (
-        <Link
-          href="/dashboard/locations/fulfilment"
-          className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-[#111827] underline underline-offset-4"
-        >
-          Online fulfilment order
-        </Link>
-      )}
+      {/* Shown for ANY number of locations: a single-shop merchant can offer
+          collection too, and gating this on 2+ locations made the pickup
+          switch unreachable for them. Named for everything the page holds —
+          "Online fulfilment order" read as the ORDER locations are used in, so
+          nobody would look there for a checkout setting. */}
+      <Link
+        href="/dashboard/locations/fulfilment"
+        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#e5e5e5] px-3 py-2 text-sm font-medium text-[#111827] transition-colors hover:bg-[#111827]/[0.03]"
+      >
+        <Truck className="h-4 w-4" strokeWidth={2} />
+        Online fulfilment &amp; pickup
+      </Link>
 
       <div className="mt-2 text-xs font-medium text-[#9aa1ab]">
         {count} of {locationsIncluded} included locations used
@@ -207,15 +201,6 @@ export function LocationsClient({
                 >
                   <Pencil className="h-4 w-4" strokeWidth={2} />
                 </Link>
-                <button
-                  type="button"
-                  hidden
-                  onClick={() => openEdit(l)}
-                  className="rounded-md p-2 text-[#5b6472] transition-colors hover:bg-[#f2f3f5] hover:text-[#111827]"
-                  aria-label="Edit"
-                >
-                  <Pencil className="h-4 w-4" strokeWidth={2} />
-                </button>
                 {!l.isDefault && (
                   <button
                     type="button"

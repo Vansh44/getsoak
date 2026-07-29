@@ -41,20 +41,16 @@ const {
   pickupHoldDays,
   hoursUntil,
   PICKUP_WARN_HOURS,
+  readyOn,
 } = await import("./pickup");
 
-const shop = (
-  id: string,
-  caps: Record<string, boolean>,
-  pincodes: string[] | null = null,
-) => ({
+const shop = (id: string, caps: Record<string, boolean>) => ({
   id,
   name: `Shop ${id}`,
   type: "shop",
   address: { line1: "1 High St", city: "Delhi" },
   active: true,
   capabilities: caps,
-  pickup_pincodes: pincodes,
 });
 
 const level = (loc: string, onHand: number, reserved = 0) => ({
@@ -144,46 +140,6 @@ describe("pickupLocationsFor", () => {
   });
 });
 
-describe("pickupLocationsFor — postcode serviceability (Phase F.1)", () => {
-  it("flags a shop that serves the shopper's area", async () => {
-    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
-    const out = await pickupLocationsFor("s1", basket, "400072");
-    expect(out[0].servesArea).toBe(true);
-  });
-
-  it("★ STILL RETURNS a shop outside their area — it is a flag, not a filter", async () => {
-    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
-    const out = await pickupLocationsFor("s1", basket, "600001");
-    expect(out).toHaveLength(1);
-    expect(out[0].servesArea).toBe(false);
-  });
-
-  it("★ NO RULES = serves everyone, so an unconfigured store is untouched", async () => {
-    mocks.locRows = [shop("a", { pos: true, pickup: true }, null)];
-    const out = await pickupLocationsFor("s1", basket, "600001");
-    expect(out[0].servesArea).toBe(true);
-  });
-
-  it("★ AN UNKNOWN POSTCODE serves everyone — a first-time shopper has typed no address", async () => {
-    mocks.locRows = [shop("a", { pos: true, pickup: true }, ["400*"])];
-    const out = await pickupLocationsFor("s1", basket, null);
-    expect(out[0].servesArea).toBe(true);
-  });
-
-  it("separates a Mumbai shop from a Pune warehouse for a Mumbai shopper", async () => {
-    mocks.locRows = [
-      shop("mumbai", { pos: true, pickup: true }, ["400*"]),
-      shop("pune", { pos: true, pickup: true }, ["411*"]),
-    ];
-    mocks.levelRows = [level("mumbai", 5), level("pune", 5)];
-    const out = await pickupLocationsFor("s1", basket, "400072");
-    expect(out.map((o) => [o.id, o.servesArea])).toEqual([
-      ["mumbai", true],
-      ["pune", false],
-    ]);
-  });
-});
-
 describe("hoursUntil", () => {
   const now = new Date("2026-08-01T12:00:00Z");
 
@@ -205,5 +161,27 @@ describe("PICKUP_WARN_HOURS", () => {
   // slip between two runs and expire with no warning at all.
   it("is at least the cron interval", () => {
     expect(PICKUP_WARN_HOURS).toBeGreaterThanOrEqual(24);
+  });
+});
+
+describe("readyOn", () => {
+  const now = new Date("2026-07-29T10:00:00Z"); // a Wednesday
+
+  it("calls out same-day rather than printing today's date", () => {
+    const r = readyOn(0, now);
+    expect(r.today).toBe(true);
+    expect(r.date).toBe("");
+    expect(r.long).toBe("Today");
+  });
+
+  it("gives a real date, not a countdown the shopper has to work out", () => {
+    const r = readyOn(2, now);
+    expect(r.today).toBe(false);
+    expect(r.date).toBe("Fri, 31 Jul");
+    expect(r.long).toBe("Friday, 31 July");
+  });
+
+  it("rolls over a month boundary", () => {
+    expect(readyOn(3, now).date).toBe("Sat, 1 Aug");
   });
 });

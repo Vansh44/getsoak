@@ -19,46 +19,105 @@ import { toast } from "sonner";
 import { ArrowLeft, Loader2, Lock } from "lucide-react";
 import {
   saveLocationCapabilities,
+  updateLocation,
   type LocationWithCapabilities,
 } from "@/app/actions/location-actions";
 import {
   CAPABILITY_REGISTRY,
   LOCATION_CAPABILITIES,
+  LOCATION_TYPES,
   LOCATION_TYPE_LABEL,
   applyCapability,
   type CapabilityMap,
   type LocationCapability,
 } from "@/lib/locations/capabilities";
-import {
-  formatPincodeRules,
-  parsePincodeRules,
-} from "@/lib/locations/pincodes";
 import { planAllows, type Plan } from "@/lib/plans";
+
+const LBL = "mb-1 block text-xs font-medium text-[#5b6472]";
+const INPUT =
+  "w-full rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 text-sm text-[#111827] outline-none transition-colors placeholder:text-[#9ca3af] focus:border-[#111827] disabled:opacity-60";
 
 export function LocationEditor({
   location,
   plan,
   canManage,
   isOnlyFulfilmentLocation,
+  pickupOfferedAtCheckout,
 }: {
   location: LocationWithCapabilities;
   plan: Plan;
   canManage: boolean;
   isOnlyFulfilmentLocation: boolean;
+  /** The STORE-level switch. Ticking a location's pickup box does nothing
+   *  until this is on, and a capability that silently does nothing reads as a
+   *  bug — the same reason the blocked-capability reasons are shown inline. */
+  pickupOfferedAtCheckout: boolean;
 }) {
   const router = useRouter();
   const [caps, setCaps] = useState<CapabilityMap>(location.capabilities);
-  const [pincodeText, setPincodeText] = useState(
-    formatPincodeRules(location.pickupPincodes),
-  );
   const [pending, start] = useTransition();
 
-  // Parsed live, so a typo is visible while typing rather than after a save.
-  const parsed = parsePincodeRules(pincodeText);
-  const savedRules = formatPincodeRules(location.pickupPincodes);
-  const dirty =
-    LOCATION_CAPABILITIES.some((c) => caps[c] !== location.capabilities[c]) ||
-    (caps.pickup && formatPincodeRules(parsed.rules) !== savedRules);
+  const dirty = LOCATION_CAPABILITIES.some(
+    (c) => caps[c] !== location.capabilities[c],
+  );
+
+  // The shop's street address. Nothing collected this before, so a shopper was
+  // told to collect from a named shop and never told where it was.
+  // Every editable field of the location lives here. The list page's pencil
+  // links straight to this page (the products convention: edit is a full page,
+  // only "New" is a dialog), so if the name isn't on it, it cannot be changed
+  // at all — which is exactly what happened.
+  const addr = (location.address ?? {}) as Record<string, string>;
+  const initial = {
+    name: location.name,
+    type: location.type as string,
+    line1: addr.line1 ?? "",
+    line2: addr.line2 ?? "",
+    city: addr.city ?? "",
+    state: addr.state ?? "",
+    postalCode: addr.postalCode ?? "",
+    gstin: location.gstin ?? "",
+    stateCode: location.stateCode ?? "",
+    receiptPrefix: location.receiptPrefix ?? "",
+  };
+  const [form, setForm] = useState(initial);
+  const [savingAddr, setSavingAddr] = useState(false);
+  const set = (k: keyof typeof initial, v: string) =>
+    setForm((f) => ({ ...f, [k]: v }));
+  const addrDirty = (Object.keys(initial) as (keyof typeof initial)[]).some(
+    (k) => form[k] !== initial[k],
+  );
+
+  const saveDetails = async () => {
+    if (!form.name.trim()) {
+      toast.error("Give the location a name.");
+      return;
+    }
+    setSavingAddr(true);
+    // updateLocation replaces the whole row, so every field goes together —
+    // sending a partial one would blank the rest, and a missing type silently
+    // turns a warehouse into a shop.
+    const res = await updateLocation(location.id, {
+      name: form.name.trim(),
+      type: form.type,
+      gstin: form.gstin.trim() || null,
+      stateCode: form.stateCode.trim() || null,
+      receiptPrefix: form.receiptPrefix.trim() || null,
+      address: {
+        line1: form.line1.trim(),
+        line2: form.line2.trim(),
+        city: form.city.trim(),
+        state: form.state.trim(),
+        postalCode: form.postalCode.trim(),
+      },
+    });
+    setSavingAddr(false);
+    if (res.error) toast.error(res.error);
+    else {
+      toast.success("Location saved");
+      router.refresh();
+    }
+  };
 
   /** Why this capability can't be changed right now, or null. */
   const blockedReason = (cap: LocationCapability): string | null => {
@@ -87,24 +146,12 @@ export function LocationEditor({
 
   const save = () =>
     start(async () => {
-      const res = await saveLocationCapabilities(
-        location.id,
-        caps,
-        pincodeText,
-      );
+      const res = await saveLocationCapabilities(location.id, caps);
       if (res.error) {
         toast.error(res.error);
         return;
       }
-      if (res.invalidPincodes?.length) {
-        // Saved, but say what didn't stick. A rule the merchant believes is in
-        // force and isn't is worse than a rejected save.
-        toast.warning(
-          `Saved. Couldn't read: ${res.invalidPincodes.slice(0, 5).join(", ")}`,
-        );
-      } else {
-        toast.success("Capabilities saved");
-      }
+      toast.success("Capabilities saved");
       router.refresh();
     });
 
@@ -128,6 +175,120 @@ export function LocationEditor({
           </p>
         </div>
       </header>
+
+      <section className="mt-5 max-w-2xl rounded-xl border border-[#e5e5e5] bg-white p-5">
+        <h2 className="font-semibold text-[#111827]">Details</h2>
+        <p className="mt-1 text-sm text-[#5b6472]">
+          The name staff see, and the address shown to shoppers choosing where
+          to collect.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label htmlFor="loc-name" className={LBL}>
+              Name
+            </label>
+            <input
+              id="loc-name"
+              value={form.name}
+              disabled={!canManage}
+              onChange={(e) => set("name", e.target.value)}
+              className={INPUT}
+            />
+          </div>
+          <div>
+            <label htmlFor="loc-type" className={LBL}>
+              Type
+            </label>
+            <select
+              id="loc-type"
+              value={form.type}
+              disabled={!canManage}
+              onChange={(e) => set("type", e.target.value)}
+              className={INPUT}
+            >
+              {LOCATION_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {LOCATION_TYPE_LABEL[t]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {(
+            [
+              ["line1", "Street address", "sm:col-span-2"],
+              ["line2", "Apartment, unit, floor (optional)", "sm:col-span-2"],
+              ["city", "City", ""],
+              ["state", "State", ""],
+              ["postalCode", "Postcode", ""],
+            ] as const
+          ).map(([key, label, span]) => (
+            <div key={key} className={span}>
+              <label htmlFor={`loc-${key}`} className={LBL}>
+                {label}
+              </label>
+              <input
+                id={`loc-${key}`}
+                value={form[key]}
+                disabled={!canManage}
+                onChange={(e) => set(key, e.target.value)}
+                className={INPUT}
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 border-t border-[#f0f0f0] pt-4">
+          <h3 className="text-sm font-semibold text-[#111827]">
+            Tax &amp; receipts
+          </h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                ["gstin", "GSTIN"],
+                ["stateCode", "GST state code"],
+                ["receiptPrefix", "Receipt prefix"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key}>
+                <label htmlFor={`loc-${key}`} className={LBL}>
+                  {label}
+                </label>
+                <input
+                  id={`loc-${key}`}
+                  value={form[key]}
+                  disabled={!canManage}
+                  onChange={(e) => set(key, e.target.value)}
+                  className={INPUT}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {canManage && (
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={!addrDirty || savingAddr}
+              onClick={() => setForm(initial)}
+              className="rounded-lg border border-[#e5e5e5] px-4 py-2 text-sm font-medium text-[#5b6472] transition-colors hover:bg-[#111827]/5 disabled:opacity-50"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              disabled={!addrDirty || savingAddr}
+              onClick={saveDetails}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#111827] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {savingAddr && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save details
+            </button>
+          </div>
+        )}
+      </section>
 
       <section className="mt-5 max-w-2xl rounded-xl border border-[#e5e5e5] bg-white p-5">
         <h2 className="font-semibold text-[#111827]">Capabilities</h2>
@@ -182,44 +343,18 @@ export function LocationEditor({
           })}
         </div>
 
-        {/* Where this shop hands goods over. Only meaningful once pickup is
-            on, so it appears with the checkbox rather than sitting there
-            greyed out asking to be misread as broken. */}
-        {caps.pickup && (
-          <div className="mt-3 rounded-lg border border-[#e5e5e5] bg-[#111827]/[0.02] p-3">
-            <label
-              htmlFor="pickup-pincodes"
-              className="text-sm font-medium text-[#111827]"
+        {caps.pickup && !pickupOfferedAtCheckout && (
+          <p className="mt-3 rounded-lg border border-[#f0e2c0] bg-[#fdf8ec] px-3 py-2.5 text-xs text-[#8a6210]">
+            This location can hand orders over, but pickup isn&apos;t offered at
+            checkout yet.{" "}
+            <Link
+              href="/dashboard/locations/fulfilment"
+              className="font-semibold underline underline-offset-2"
             >
-              Postcodes that can collect here
-            </label>
-            <p className="mt-0.5 text-xs text-[#5b6472]">
-              Leave empty to offer collection to everyone. Use{" "}
-              <code className="rounded bg-[#111827]/5 px-1">400*</code> for a
-              whole area,{" "}
-              <code className="rounded bg-[#111827]/5 px-1">400001-400104</code>{" "}
-              for a range, or list exact codes.
-            </p>
-            <textarea
-              id="pickup-pincodes"
-              rows={3}
-              disabled={!canManage}
-              value={pincodeText}
-              onChange={(e) => setPincodeText(e.target.value)}
-              placeholder="400*, 401001-401107, 400072"
-              className="mt-2 w-full rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 font-mono text-sm text-[#111827] outline-none transition-colors placeholder:font-sans placeholder:text-[#9ca3af] focus:border-[#111827] disabled:opacity-60"
-            />
-            <p className="mt-1.5 text-xs text-[#5b6472]">
-              {parsed.rules.length === 0
-                ? "Anyone can collect from this location."
-                : `${parsed.rules.length} rule${parsed.rules.length === 1 ? "" : "s"} — everyone else sees delivery only.`}
-              {parsed.invalid.length > 0 && (
-                <span className="ml-1 font-medium text-[#b42318]">
-                  Can&apos;t read: {parsed.invalid.slice(0, 5).join(", ")}
-                </span>
-              )}
-            </p>
-          </div>
+              Turn it on in Online fulfilment &amp; pickup
+            </Link>
+            .
+          </p>
         )}
 
         {canManage && (
@@ -227,10 +362,7 @@ export function LocationEditor({
             <button
               type="button"
               disabled={!dirty || pending}
-              onClick={() => {
-                setCaps(location.capabilities);
-                setPincodeText(savedRules);
-              }}
+              onClick={() => setCaps(location.capabilities)}
               className="rounded-lg border border-[#e5e5e5] px-4 py-2 text-sm font-medium text-[#5b6472] transition-colors hover:bg-[#111827]/5 disabled:opacity-50"
             >
               Reset

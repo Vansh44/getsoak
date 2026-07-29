@@ -16,6 +16,9 @@ import {
   Lock,
   ShoppingBag,
   Store,
+  ChevronRight,
+  Search,
+  X,
 } from "lucide-react";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
@@ -119,7 +122,21 @@ export default function CheckoutPage() {
     "delivery",
   );
   const [pickupId, setPickupId] = useState<string | null>(null);
-  const [showFarShops, setShowFarShops] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
+  // Billing defaults to the delivery address — that's true for almost every
+  // order, so the common case is one already-ticked box and no extra typing.
+  const [billingSame, setBillingSame] = useState(true);
+  const [billing, setBilling] = useState({
+    firstName: "",
+    lastName: "",
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    postalCode: "",
+    phone: "",
+  });
   const [payMethod, setPayMethod] = useState<PaymentMethod>("cod");
   // A placed-but-unpaid online order (modal dismissed / payment failed). Kept
   // so "Retry payment" reopens the SAME Razorpay order instead of placing a
@@ -151,13 +168,11 @@ export default function CheckoutPage() {
   // Which shops could hand this basket over. Re-fetched when the cart changes
   // because "has stock" is a property of the basket, not of the store.
   const items = cart.items;
-  const pincode =
-    addresses.find((a) => a.id === selectedId)?.postal_code ?? null;
   useEffect(() => {
     let active = true;
     // An empty cart bounces off this page anyway — nothing to clear.
     if (!items.length) return;
-    getPickupOptions(items, pincode)
+    getPickupOptions(items)
       .then((opts) => {
         if (active) {
           setPickup(opts);
@@ -177,9 +192,8 @@ export default function CheckoutPage() {
       active = false;
     };
     // `items` is cart state: a new array only when the cart actually changes,
-    // which is exactly when "which shop has this?" needs re-asking. The
-    // postcode is the other input — switching to a Pune address must re-ask.
-  }, [items, pincode]);
+    // which is exactly when "which shop has this?" needs re-asking.
+  }, [items]);
 
   // Derived, not stored: if the last shop selling this basket sells out while
   // the shopper hesitates, the choice silently reverts to delivery rather than
@@ -187,6 +201,27 @@ export default function CheckoutPage() {
   const fulfilment: "delivery" | "pickup" = pickup?.enabled
     ? fulfilmentChoice
     : "delivery";
+
+  // Pre-select the first shop that has the whole basket, so choosing "Pickup"
+  // shows a real shop rather than an empty slot the shopper must go and fill.
+  const chosenShop =
+    pickup?.locations.find((l) => l.id === pickupId) ??
+    pickup?.locations.find((l) => l.hasStock) ??
+    null;
+
+  // Plain substring match over what a person would type: shop name, street,
+  // city or postcode. A store has a handful of shops, all already loaded, so
+  // this needs no geocoding and no round trip.
+  // Three shops in front, the rest behind "See all N" — a wall of twenty
+  // addresses is not a choice, it's a search problem.
+  const INLINE_SHOPS = 3;
+  const pickerResults = (pickup?.locations ?? []).filter((l) => {
+    const q = pickerQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (l.name + " " + l.address + " " + l.city + " " + l.postalCode)
+      .toLowerCase()
+      .includes(q);
+  });
 
   // A retryable unpaid order is only valid for the exact cart it was priced
   // from — any cart/coupon change invalidates it (a fresh order gets placed
@@ -464,7 +499,7 @@ export default function CheckoutPage() {
       toast.error("Please accept the store policies to place your order.");
       return;
     }
-    if (fulfilment === "pickup" && !pickupId) {
+    if (fulfilment === "pickup" && !chosenShop) {
       toast.error("Choose the shop you'd like to collect from.");
       return;
     }
@@ -484,8 +519,13 @@ export default function CheckoutPage() {
       form,
       cart.items,
       cart.appliedCoupon?.code,
-      payMethod,
-      fulfilment === "pickup" ? pickupId : null,
+      fulfilment === "pickup" && payMethod === "cod"
+        ? "pay_at_store"
+        : payMethod,
+      fulfilment === "pickup" ? (chosenShop?.id ?? null) : null,
+      // A collection has no delivery address to differ from, so the billing
+      // question is only asked — and only sent — for a shipped order.
+      fulfilment === "delivery" && !billingSame ? billing : null,
     );
 
     if ("error" in result) {
@@ -556,6 +596,126 @@ export default function CheckoutPage() {
         <div className={styles.layout}>
           {/* ---- Left: steps ---- */}
           <div className={styles.main}>
+            {/* Delivery method — asked FIRST, because it decides what the rest
+                of the step needs: a shipping address, or a shop. Every shop
+                that can hand the basket over is listed and the SHOPPER picks —
+                geography is their business, not the merchant's: they know
+                whether they collect near home, near work, or on a route. Ship
+                the default and needs one. */}
+            {pickup?.enabled && (
+              <section className={styles.card}>
+                <div className={styles.sectionHead}>
+                  <h2 className={styles.sectionTitle}>Delivery</h2>
+                </div>
+
+                <div className={styles.methodToggle} role="group">
+                  <button
+                    type="button"
+                    className={`${styles.methodBtn}${fulfilment === "delivery" ? ` ${styles.methodBtnOn}` : ""}`}
+                    onClick={() => setFulfilment("delivery")}
+                    aria-pressed={fulfilment === "delivery"}
+                  >
+                    <Truck size={17} />
+                    Ship
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.methodBtn}${fulfilment === "pickup" ? ` ${styles.methodBtnOn}` : ""}`}
+                    onClick={() => setFulfilment("pickup")}
+                    aria-pressed={fulfilment === "pickup"}
+                  >
+                    <Store size={17} />
+                    Pickup
+                  </button>
+                </div>
+
+                {fulfilment === "pickup" && (
+                  <div className={styles.pickupBox}>
+                    <p className={styles.pickupCount}>
+                      {pickup.inStockCount === 1
+                        ? "There is 1 location with your items"
+                        : `There are ${pickup.inStockCount} locations with your items`}
+                    </p>
+
+                    <div className={styles.shopList}>
+                      {pickup.locations.slice(0, INLINE_SHOPS).map((l) => (
+                        <label
+                          key={l.id}
+                          className={`${styles.shopCard}${l.hasStock ? "" : ` ${styles.shopCardOut}`}`}
+                        >
+                          <input
+                            type="radio"
+                            name="pickup-shop"
+                            checked={chosenShop?.id === l.id}
+                            disabled={!l.hasStock}
+                            onChange={() => setPickupId(l.id)}
+                            className={styles.pickerRadio}
+                          />
+                          <span className={styles.shopMain}>
+                            <span className={styles.shopName}>{l.name}</span>
+                            {l.address && (
+                              <span className={styles.shopAddr}>
+                                {l.address}
+                              </span>
+                            )}
+                            <span
+                              className={`${styles.shopMeta}${l.hasStock && pickup.readyToday ? ` ${styles.readyToday}` : ""}`}
+                            >
+                              {!l.hasStock
+                                ? "Not everything in your bag is in stock here"
+                                : pickup.readyToday
+                                  ? "Available today"
+                                  : `Ready ${pickup.readyDate}`}
+                            </span>
+                          </span>
+                          <span className={styles.shopFree}>FREE</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    {pickup.locations.length > INLINE_SHOPS && (
+                      <button
+                        type="button"
+                        className={styles.shopMore}
+                        onClick={() => setPickerOpen(true)}
+                      >
+                        See all {pickup.locations.length} stores
+                        <ChevronRight size={16} />
+                      </button>
+                    )}
+
+                    {/* What they've actually agreed to, once a shop is picked. */}
+                    {chosenShop && (
+                      <div className={styles.pickupDetails}>
+                        <div className={styles.pickupDetailRow}>
+                          <span>Collect from</span>
+                          <strong>{chosenShop.name}</strong>
+                        </div>
+                        {chosenShop.address && (
+                          <div className={styles.pickupDetailRow}>
+                            <span>Address</span>
+                            <strong>{chosenShop.address}</strong>
+                          </div>
+                        )}
+                        <div className={styles.pickupDetailRow}>
+                          <span>Ready</span>
+                          <strong
+                            className={
+                              pickup.readyToday ? styles.readyToday : undefined
+                            }
+                          >
+                            {pickup.readyToday
+                              ? "Available today"
+                              : pickup.readyDate}
+                          </strong>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Step 1 — Delivery address (contact details when collecting) */}
             <section className={styles.card}>
               <div className={styles.sectionHead}>
@@ -832,105 +992,55 @@ export default function CheckoutPage() {
               )}
             </section>
 
-            {/* Pick up in store. BELOW the address on purpose: which shops
-                can collect depends on the shopper's postcode, so the question
-                cannot be asked before we know it. Renders only when the store
-                offers pickup AND a shop near them can cover the basket. */}
-            {pickup?.enabled && (
+            {/* Billing address. Ticked by default because it matches the
+                delivery address on almost every order; only a shipped order
+                has one to differ from. */}
+            {fulfilment === "delivery" && (
               <section className={styles.card}>
                 <div className={styles.sectionHead}>
-                  <h2 className={styles.sectionTitle}>
-                    How would you like it?
-                  </h2>
-                </div>
-                <div className={styles.payStack}>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${fulfilment === "delivery" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setFulfilment("delivery")}
-                    aria-pressed={fulfilment === "delivery"}
-                  >
-                    <span className={styles.payIcon}>
-                      <Truck size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>Deliver to me</div>
-                      <div className={styles.payDesc}>
-                        Sent to the address below.
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${fulfilment === "pickup" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setFulfilment("pickup")}
-                    aria-pressed={fulfilment === "pickup"}
-                  >
-                    <span className={styles.payIcon}>
-                      <Store size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>Pick up in store</div>
-                      <div className={styles.payDesc}>
-                        Collect from one of our shops
-                        {pickup.holdDays > 0
-                          ? ` — held for ${pickup.holdDays} days`
-                          : ""}
-                        .
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
+                  <h2 className={styles.sectionTitle}>Billing Address</h2>
                 </div>
 
-                {fulfilment === "pickup" && (
-                  <div className={styles.payStack} style={{ marginTop: 14 }}>
-                    {pickup.locations
-                      .filter((l) => l.servesArea || showFarShops)
-                      .map((l) => (
-                        <button
-                          key={l.id}
-                          type="button"
-                          disabled={!l.hasStock}
-                          className={`${styles.payOption}${pickupId === l.id ? "" : ` ${styles.payOptionMuted}`}`}
-                          onClick={() => setPickupId(l.id)}
-                          aria-pressed={pickupId === l.id}
-                        >
-                          <span className={styles.payIcon}>
-                            <MapPin size={22} />
-                          </span>
-                          <div>
-                            <div className={styles.payName}>{l.name}</div>
-                            <div className={styles.payDesc}>
-                              {l.hasStock
-                                ? l.address || "Collect here"
-                                : "Not everything in your bag is in stock here."}
-                            </div>
-                          </div>
-                          <span className={styles.payCheck}>
-                            <Check size={20} />
-                          </span>
-                        </button>
-                      ))}
+                <label className={styles.billingCheck}>
+                  <input
+                    type="checkbox"
+                    checked={billingSame}
+                    onChange={(e) => setBillingSame(e.target.checked)}
+                  />
+                  <span>Same as my delivery address</span>
+                </label>
 
-                    {/* Shops outside their area are DISCLOSED, not dropped.
-                        Postcode lists are merchant-typed and will have gaps,
-                        and people collect near work or family — so a shopper
-                        who wants a further shop must be able to reach it. */}
-                    {pickup.hasOtherAreas && !showFarShops && (
-                      <button
-                        type="button"
-                        className={styles.linkBtn}
-                        onClick={() => setShowFarShops(true)}
+                {!billingSame && (
+                  <div className={styles.billingGrid}>
+                    {(
+                      [
+                        ["firstName", "First name", ""],
+                        ["lastName", "Last name", ""],
+                        ["addressLine1", "Address", "full"],
+                        ["addressLine2", "Apartment, suite (optional)", "full"],
+                        ["city", "City", ""],
+                        ["state", "State", ""],
+                        ["postalCode", "Postcode", ""],
+                        ["phone", "Phone (optional)", ""],
+                      ] as const
+                    ).map(([key, label, span]) => (
+                      <div
+                        key={key}
+                        className={span === "full" ? styles.billingFull : ""}
                       >
-                        Collecting somewhere else?
-                      </button>
-                    )}
+                        <label className={styles.label} htmlFor={`bill-${key}`}>
+                          {label}
+                        </label>
+                        <input
+                          id={`bill-${key}`}
+                          className={styles.input}
+                          value={billing[key]}
+                          onChange={(e) =>
+                            setBilling((b) => ({ ...b, [key]: e.target.value }))
+                          }
+                        />
+                      </div>
+                    ))}
                   </div>
                 )}
               </section>
@@ -955,9 +1065,15 @@ export default function CheckoutPage() {
                       <Banknote size={22} />
                     </span>
                     <div>
-                      <div className={styles.payName}>Cash on Delivery</div>
+                      <div className={styles.payName}>
+                        {fulfilment === "pickup"
+                          ? "Pay at store"
+                          : "Cash on Delivery"}
+                      </div>
                       <div className={styles.payDesc}>
-                        Pay with cash when your order arrives at your doorstep.
+                        {fulfilment === "pickup"
+                          ? "Pay at the counter when you collect your order."
+                          : "Pay with cash when your order arrives at your doorstep."}
                       </div>
                     </div>
                     <span className={styles.payCheck}>
@@ -990,9 +1106,15 @@ export default function CheckoutPage() {
                     <Banknote size={22} />
                   </span>
                   <div>
-                    <div className={styles.payName}>Cash on Delivery</div>
+                    <div className={styles.payName}>
+                      {fulfilment === "pickup"
+                        ? "Pay at store"
+                        : "Cash on Delivery"}
+                    </div>
                     <div className={styles.payDesc}>
-                      Pay with cash when your order arrives at your doorstep.
+                      {fulfilment === "pickup"
+                        ? "Pay at the counter when you collect your order."
+                        : "Pay with cash when your order arrives at your doorstep."}
                     </div>
                   </div>
                   <span className={styles.payCheck}>
@@ -1003,7 +1125,9 @@ export default function CheckoutPage() {
 
               <div className={styles.field} style={{ marginTop: 18 }}>
                 <label className={styles.label} htmlFor="notes">
-                  Delivery instructions (Optional)
+                  {fulfilment === "pickup"
+                    ? "Notes for the shop (Optional)"
+                    : "Delivery instructions (Optional)"}
                 </label>
                 <input
                   id="notes"
@@ -1066,7 +1190,9 @@ export default function CheckoutPage() {
                     </div>
                   )}
                 <div className={styles.row}>
-                  <span>Shipping</span>
+                  <span>
+                    {fulfilment === "pickup" ? "Pickup in store" : "Shipping"}
+                  </span>
                   <span className={styles.free}>Free</span>
                 </div>
                 {taxInfo?.enabled && taxInfo.tax > 0 && (
@@ -1118,11 +1244,15 @@ export default function CheckoutPage() {
                     ? "Retry Payment"
                     : payMethod === "razorpay"
                       ? "Pay & Place Order"
-                      : "Place Order (COD)"}
+                      : fulfilment === "pickup"
+                        ? "Place Order (Pay at store)"
+                        : "Place Order (COD)"}
               </button>
               {!selected && (
                 <p className={styles.placeHint}>
-                  Add a delivery address to continue
+                  {fulfilment === "pickup"
+                    ? "Choose a store to continue"
+                    : "Add a delivery address to continue"}
                 </p>
               )}
             </div>
@@ -1133,18 +1263,113 @@ export default function CheckoutPage() {
                 secure
               </div>
               <div className={styles.trustItem}>
-                <Truck size={16} /> Free delivery on this order
+                <Truck size={16} />{" "}
+                {fulfilment === "pickup"
+                  ? "Free to collect in store"
+                  : "Free delivery on this order"}
               </div>
               <div className={styles.trustItem}>
                 <Lock size={16} />{" "}
                 {payMethod === "razorpay"
                   ? "Payments secured by Razorpay"
-                  : "No payment needed until delivery"}
+                  : fulfilment === "pickup"
+                    ? "No payment needed until you collect"
+                    : "No payment needed until delivery"}
               </div>
             </div>
           </aside>
         </div>
       </div>
+
+      {/* Pickup location picker. A dialog, like ALDO/IKEA/Shopify: choosing a
+          shop is a decision with its own list and its own search, not a fifth
+          radio buried in the flow. */}
+      {pickerOpen && pickup && (
+        <div
+          className={styles.pickerOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pickup locations"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPickerOpen(false);
+          }}
+        >
+          <div className={styles.picker}>
+            <div className={styles.pickerHead}>
+              <h3 className={styles.pickerTitle}>Pickup locations</h3>
+              <button
+                type="button"
+                className={styles.pickerClose}
+                onClick={() => setPickerOpen(false)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.pickerSearch}>
+              <Search size={16} className={styles.pickerSearchIcon} />
+              <input
+                value={pickerQuery}
+                onChange={(e) => setPickerQuery(e.target.value)}
+                placeholder="Postcode, city or shop name"
+                className={styles.pickerInput}
+                autoFocus
+              />
+            </div>
+
+            <p className={styles.pickerCount}>
+              {pickerResults.length} of {pickup.locations.length} location
+              {pickup.locations.length === 1 ? "" : "s"}
+            </p>
+
+            <div className={styles.pickerList}>
+              {pickerResults.map((l) => (
+                <label
+                  key={l.id}
+                  className={`${styles.pickerRow}${l.hasStock ? "" : ` ${styles.pickerRowOut}`}`}
+                >
+                  <input
+                    type="radio"
+                    name="pickup-location"
+                    checked={chosenShop?.id === l.id}
+                    disabled={!l.hasStock}
+                    onChange={() => setPickupId(l.id)}
+                    className={styles.pickerRadio}
+                  />
+                  <span className={styles.shopMain}>
+                    <span className={styles.shopName}>{l.name}</span>
+                    {l.address && (
+                      <span className={styles.shopAddr}>{l.address}</span>
+                    )}
+                    {!l.hasStock && (
+                      <span className={styles.shopMeta}>
+                        Not everything in your bag is in stock here
+                      </span>
+                    )}
+                  </span>
+                  <span className={styles.shopFree}>FREE</span>
+                </label>
+              ))}
+              {pickerResults.length === 0 && (
+                <p className={styles.pickerEmpty}>
+                  No shops match that. Try a city or postcode.
+                </p>
+              )}
+            </div>
+
+            <div className={styles.pickerFoot}>
+              <button
+                type="button"
+                className={styles.pickerSave}
+                onClick={() => setPickerOpen(false)}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

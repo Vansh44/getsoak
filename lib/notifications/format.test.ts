@@ -127,3 +127,11 @@ describe("hours_left", () => {
     expect(formatVariable("hours_left", 1)).toBe("1 hour");
   });
 });
+
+describe("pay_at_store", () => {
+  it("reads as a method, not a database value", () => {
+    expect(formatVariable("payment_method", "pay_at_store")).toBe(
+      "Pay at store",
+    );
+  });
+});

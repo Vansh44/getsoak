@@ -1205,6 +1205,12 @@ export const orders = pgTable(
     collectedBy: text("collected_by"),
     // Claimed by the reminder job so the nudge fires exactly once
     // (locations_06_pickup_reminder.sql).
+    // When the shop expects it ready (locations_09). The hold window is
+    // measured FROM this, not from order time.
+    pickupReadyAt: timestamp("pickup_ready_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     pickupWarnedAt: timestamp("pickup_warned_at", {
       withTimezone: true,
       mode: "string",
@@ -1908,11 +1914,6 @@ export const storeLocations = pgTable(
     // normalizeCapabilities() — never index into the raw blob.
     // PUBLIC: the storefront reads it to decide whether to offer pickup.
     capabilities: jsonb().default({}).notNull(),
-    // Postcode rules for customer pickup (locations_07_pickup_pincodes.sql).
-    // NULL/empty = offered everywhere — the unconfigured state must behave
-    // exactly as it did before the column existed. Parse/match ONLY through
-    // lib/locations/pincodes.ts.
-    pickupPincodes: text("pickup_pincodes").array(),
     isDefault: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),

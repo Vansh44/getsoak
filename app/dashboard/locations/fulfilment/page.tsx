@@ -10,7 +10,7 @@ import { getStoreSettingsForEditor } from "@/app/actions/store-settings";
 import { FeatureToggles } from "@/app/dashboard/components/feature-toggles";
 import { FulfilmentClient } from "./fulfilment-client";
 
-export const metadata = { title: "Online fulfilment" };
+export const metadata = { title: "Online fulfilment & pickup" };
 
 export default async function FulfilmentPage() {
   const access = await requireSectionAccess("locations", "view");

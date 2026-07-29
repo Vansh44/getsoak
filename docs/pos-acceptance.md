@@ -14,16 +14,16 @@ stories are here.**
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                      | Why                                                                                        |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_07` applied as `postgres` | Column-not-found errors otherwise; `locations_07` is REQUIRED or the Locations page 500s   |
-| Store on the **Pro** plan                                                         | POS and Locations are Pro-gated                                                            |
-| `POS_SESSION_SECRET` set                                                          | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
-| `RESEND_*` configured                                                             | Staff invitations and pickup emails go nowhere otherwise                                   |
+| Prerequisite                                                                              | Why                                                                                        |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08` as `postgres` | Column-not-found errors otherwise                                                          |
+| Store on the **Pro** plan                                                                 | POS and Locations are Pro-gated                                                            |
+| `POS_SESSION_SECRET` set                                                                  | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
+| `RESEND_*` configured                                                                     | Staff invitations and pickup emails go nowhere otherwise                                   |
 
-**Status on staging:** `pos_00`–`pos_11` and `locations_01`–`locations_06`
-applied. **`locations_07` is NOT yet applied** — stories 8.7–8.10 are blocked
-and `/dashboard/locations` will error until it is.
+**Status on staging:** all applied — `pos_00`–`pos_11` and
+`locations_01`–`locations_09`. (`locations_07` added merchant postcode rules
+and `locations_08` removed them again; both ran.)
 
 ---
 
@@ -80,6 +80,19 @@ On a store that existed before `locations_01`: check the default location.
 **Expect:** **Fulfil online orders ON** (it describes what was already
 happening), **Customer pickup and Accept returns OFF** (they introduce new
 behaviour). A migration may not change what a live store does.
+
+**PS-2.7 — Rename a location**
+Open a location → Details → change the name → Save details.
+**Expect:** saved, and the heading and list both update. Type, address, GSTIN,
+GST state code and receipt prefix are all editable on the same card and save
+together — the location editor is the full page, matching the products
+convention (edit is a page, only "New" is a dialog).
+
+**PS-2.8 ★ — Saving details doesn't blank the rest**
+Change only the name and save.
+**Expect:** type, address and tax fields are unchanged. `updateLocation`
+replaces the whole row, so a partial send would wipe them — and a missing type
+would silently turn a warehouse into a shop.
 
 **PS-2.6 — Pickup and returns are Pro-only**
 On a Basic store (if you can reach the page).
@@ -317,8 +330,6 @@ Completing a sale still needs the server.
 
 ## 8. Pickup — click & collect
 
-> Stories 8.7–8.10 need `locations_07` applied.
-
 **PS-8.1 — Turn it on**
 Locations → Online fulfilment → Checkout → "Offer pick up in store"; give a
 shop the **Customer pickup** capability.
@@ -345,33 +356,82 @@ Cancel a pickup order from the dashboard.
 **Expect:** the holds are released and on-hand is **unchanged**. Restocking
 would add units that never left. Cancel twice — the second is a no-op.
 
+**PS-8.7 — Ship / Pickup toggle**
+Storefront checkout with pickup on.
+**Expect:** a two-button Ship / Pickup control ABOVE the address, like ALDO. Ship
+shows the address form; Pickup shows "There are N locations with your items",
+one shop card with its full address, and "N more locations".
+
+**PS-8.8 — The location picker**
+Tap "N more locations".
+**Expect:** a dialog with a search box, a radio list of every shop (address +
+FREE), and Save. Type a postcode or city — the list narrows. Out-of-stock shops
+are last and disabled.
+
+**PS-8.9 ★ — Pickup is offered to everyone**
+Check out from any address, anywhere.
+**Expect:** the Pickup option is always shown when a shop can hand the basket
+over. Geography is the SHOPPER's business — they know whether they collect near
+home, near work, or on a route; a delivery postcode never decides for them.
+
+**PS-8.10 — The summary drops shipping**
+Choose Pickup.
+**Expect:** the order summary row reads "Pickup in store", not "Shipping".
+
 **PS-8.6 ★ — The confirmation says where to go**
 Check the pickup order's confirmation email and `/orders/[id]`.
 **Expect:** the shop's name and the deadline, not a delivery address they never
 gave. A delivery order's email is unchanged.
 
-**PS-8.7 — Postcode rules** _(needs `locations_07`)_
-Location editor → tick Customer pickup → the box appears. Enter `400*, 411001`.
-**Expect:** "2 rules — everyone else sees delivery only". Enter `oops!!` →
-_"Can't read: oops!!"_.
+**PS-8.13 — Billing address**
+Ship → the Billing Address card.
+**Expect:** "Same as my delivery address" ticked by default. Untick it and a
+form appears; the entered address prints as **Bill To** on the invoice while
+Ship To stays the delivery address. Ticked ⇒ nothing stored, and the invoice
+falls back to shipping as it always did. The card does not appear for a pickup —
+there is no delivery address for it to differ from.
 
-**PS-8.8 ★ — Empty means everywhere** _(needs `locations_07`)_
-Leave the box empty.
-**Expect:** collection offered to everyone — exactly as before the field
-existed.
+**PS-8.14 — Three stores, then "See all N"**
+Pickup with 7 pickup-capable shops.
+**Expect:** three shop cards inline with address and "Ready …", then
+"See all 7 stores" opening the searchable dialog.
 
-**PS-8.9 ★ — Out-of-area hides the toggle, not the shop** _(needs `locations_07`)_
-With Mumbai set to `400*`: check out with a `600001` address, then a `400072`
-one.
-**Expect:** 600001 sees **no pickup option at all**; 400072 sees it. Then, from
-a 400072 address with a second Pune-only shop, choose pickup.
-**Expect:** Pune is behind _"Collecting somewhere else?"_ — disclosed, not
-dropped.
+**PS-8.15 — Pickup details**
+Select a store.
+**Expect:** a summary block — Collect from / Address / Ready — so what was
+agreed to is visible before placing the order. The hold window is NOT shown:
+it's the merchant's expiry policy, not something a shopper needs at the moment
+of buying.
 
-**PS-8.10 ★ — An unknown postcode fails open** _(needs `locations_07`)_
-Check out as a first-time shopper with no saved address.
-**Expect:** pickup is offered. Hiding it from someone who simply hasn't typed an
-address yet is the failure this must not have.
+**PS-8.20 ★ — A date, not a countdown**
+Set ready days to 2, then to 0.
+**Expect:** 2 ⇒ every store card reads "Ready Fri, 1 Aug" — an exact date, not
+"in 2 days" for the shopper to work out on a calendar. 0 ⇒ **"Available today"
+in green**, on the cards and in the details row, because same-day is the thing
+someone chooses collection FOR. The date is formatted server-side off the same
+clock that stamps `pickup_ready_at`, so the date quoted is the date stored.
+
+**PS-8.16 ★ — Pay at store replaces COD**
+Choose Pickup.
+**Expect:** the cash option reads "Pay at store · Pay at the counter when you
+collect", the button reads "Place Order (Pay at store)", and the order stores
+`payment_method: pay_at_store`. Choosing it for a DELIVERY order is refused
+server-side — otherwise an order could be placed that nobody ever pays for.
+
+**PS-8.17 ★ — Handing over settles the payment**
+Collect a pay-at-store order at `/pos/pickups`.
+**Expect:** payment_status flips pending → paid. An order already paid online is
+untouched, and a failed payment is not marked paid by a hand-over.
+
+**PS-8.18 ★ — The hold starts when it's READY**
+Set ready = 3 days, hold = 5 days, place a pickup order.
+**Expect:** `pickup_expires_at` is 8 days out, not 5. Otherwise a slow shop eats
+the customer's collection window, and the busier the shop the shorter it gets.
+
+**PS-8.19 — The confirmation email names the right address**
+Place one delivery order and one pickup order.
+**Expect:** delivery says where it's going; pickup says which shop, its address
+and when it'll be ready. Neither carries the other's rows.
 
 **PS-8.11 — Expiry**
 Let a pickup pass `pickup_expires_at`, then run
@@ -447,13 +507,14 @@ on the capability change.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                    | Status                                                                                                                                                  |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **No refunds anywhere**                                | Cancel returns stock and notifies; the money must be refunded by hand in Razorpay. Blocks returns and pickup-expiry refunds — first item on the roadmap |
-| **Location address is never collected**                | The editor asks for name/type/GSTIN/state only, so a pickup card shows the shop name with no address                                                    |
-| **`/dashboard/locations` errors until `locations_07`** | Applies to staging right now                                                                                                                            |
-| **`pos-pickup-actions.ts` has no test file**           | Every other POS action has one                                                                                                                          |
-| **Analytics has no location filter**                   | Store-wide figures only                                                                                                                                 |
-| **No dashboard view of pickup orders**                 | Only `/pos/pickups`; the orders list doesn't distinguish them                                                                                           |
-| **`order.pickup_expiring` email only**                 | No in-app pre-expiry banner                                                                                                                             |
-| **Offline selling**                                    | The catalogue is cached; completing a sale needs the server                                                                                             |
+| Gap                                                            | Status                                                                                                                                                    |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No refunds anywhere**                                        | Cancel returns stock and notifies; the money must be refunded by hand in Razorpay. Blocks returns and pickup-expiry refunds — first item on the roadmap   |
+| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                 |
+| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can |
+| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                      |
+| **Pickup has never been run end to end**                       | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                             |
+| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                            |
+| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                   |
+| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                               |
+| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                               |

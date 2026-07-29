@@ -742,3 +742,328 @@
 .policyConsent {
   margin: 0 0 0.75rem;
 }
+
+/* ---- Delivery method: Ship / Pickup ------------------------------------- */
+/* A segmented control, not two big cards: it is one question with two answers,
+   and the answer changes what the rest of the step asks for. */
+.methodToggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.methodBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 12px;
+  border: 1px solid var(--sm-border, #e5e5e5);
+  border-radius: var(--sm-radius-control, 10px);
+  background: var(--sm-surface, #fff);
+  color: var(--sm-ink-soft, #5b6472);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.methodBtn:hover {
+  color: var(--sm-ink, #111827);
+}
+.methodBtnOn {
+  border-color: var(--sm-ink, #111827);
+  color: var(--sm-ink, #111827);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--sm-ink, #111827) inset;
+}
+
+.pickupBox {
+  margin-top: 16px;
+}
+.pickupCount {
+  font-size: 14px;
+  color: var(--sm-ink-soft, #5b6472);
+  margin-bottom: 10px;
+}
+
+.shopCard,
+.pickerRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--sm-border, #e5e5e5);
+  border-radius: var(--sm-radius-control, 10px);
+  background: var(--sm-surface, #fff);
+}
+.shopMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.shopName {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--sm-ink, #111827);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.shopAddr {
+  font-size: 13.5px;
+  color: var(--sm-ink-soft, #5b6472);
+}
+.shopMeta {
+  font-size: 12.5px;
+  color: var(--sm-ink-faint, #8b939f);
+}
+.shopFree {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sm-ink, #111827);
+  white-space: nowrap;
+}
+
+.shopMore {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: -1px;
+  padding: 13px 14px;
+  border: 1px solid var(--sm-border, #e5e5e5);
+  border-top: 0;
+  border-radius: 0 0 var(--sm-radius-control, 10px)
+    var(--sm-radius-control, 10px);
+  background: var(--sm-surface, #fff);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sm-ink, #111827);
+  cursor: pointer;
+}
+.shopMore:hover {
+  background: rgba(var(--sm-shadow-rgb, 20 25 35), 0.03);
+}
+
+/* ---- Picker dialog ------------------------------------------------------ */
+.pickerOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(var(--sm-shadow-rgb, 20 25 35), 0.45);
+}
+.picker {
+  width: 100%;
+  max-width: 560px;
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--sm-surface, #fff);
+  border-radius: var(--sm-radius-card, 14px);
+  box-shadow: 0 24px 60px rgba(var(--sm-shadow-rgb, 20 25 35), 0.25);
+  overflow: hidden;
+}
+.pickerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 12px;
+}
+.pickerTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--sm-ink, #111827);
+}
+.pickerClose {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sm-ink-soft, #5b6472);
+  cursor: pointer;
+}
+.pickerClose:hover {
+  background: rgba(var(--sm-shadow-rgb, 20 25 35), 0.06);
+}
+
+.pickerSearch {
+  position: relative;
+  margin: 0 20px;
+}
+.pickerSearchIcon {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  transform: translateY(-50%);
+  color: var(--sm-ink-faint, #8b939f);
+  pointer-events: none;
+}
+.pickerInput {
+  width: 100%;
+  padding: 12px 14px 12px 38px;
+  border: 1px solid var(--sm-border, #e5e5e5);
+  border-radius: var(--sm-radius-control, 10px);
+  background: var(--sm-surface, #fff);
+  color: var(--sm-ink, #111827);
+  font-size: 15px;
+  outline: none;
+}
+.pickerInput:focus {
+  border-color: var(--sm-ink, #111827);
+}
+.pickerCount {
+  padding: 12px 20px 4px;
+  font-size: 13px;
+  color: var(--sm-ink-soft, #5b6472);
+}
+.pickerList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 20px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pickerRow {
+  cursor: pointer;
+}
+.pickerRow:hover {
+  border-color: var(--sm-ink-faint, #8b939f);
+}
+.pickerRow:has(.pickerRadio:checked) {
+  border-color: var(--sm-ink, #111827);
+  box-shadow: 0 0 0 1px var(--sm-ink, #111827) inset;
+}
+.pickerRowOut {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pickerRadio {
+  margin-top: 3px;
+  width: 17px;
+  height: 17px;
+  accent-color: var(--sm-ink, #111827);
+  flex-shrink: 0;
+}
+.pickerEmpty {
+  padding: 26px 4px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--sm-ink-soft, #5b6472);
+}
+.pickerFoot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px 18px;
+}
+.pickerSave {
+  padding: 12px 30px;
+  border: 0;
+  border-radius: var(--sm-radius-control, 10px);
+  background: var(--sm-ink, #111827);
+  color: var(--sm-on-ink, #fff);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pickerSave:hover {
+  opacity: 0.9;
+}
+
+@media (max-width: 520px) {
+  .picker {
+    max-height: 92vh;
+  }
+}
+
+/* ---- Shop list, pickup details, billing --------------------------------- */
+.shopList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shopCard {
+  cursor: pointer;
+}
+.shopCard:hover {
+  border-color: var(--sm-ink-faint, #8b939f);
+}
+.shopCard:has(input:checked) {
+  border-color: var(--sm-ink, #111827);
+  box-shadow: 0 0 0 1px var(--sm-ink, #111827) inset;
+}
+.shopCardOut {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.shopMore {
+  margin-top: 8px;
+  border-radius: var(--sm-radius-control, 10px);
+  border-top: 1px solid var(--sm-border, #e5e5e5);
+}
+
+.pickupDetails {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: var(--sm-radius-control, 10px);
+  background: rgba(var(--sm-shadow-rgb, 20 25 35), 0.03);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pickupDetailRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13.5px;
+  color: var(--sm-ink-soft, #5b6472);
+}
+.pickupDetailRow strong {
+  color: var(--sm-ink, #111827);
+  font-weight: 600;
+  text-align: right;
+}
+
+.billingCheck {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14.5px;
+  color: var(--sm-ink, #111827);
+  cursor: pointer;
+}
+.billingCheck input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--sm-ink, #111827);
+}
+.billingGrid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.billingFull {
+  grid-column: 1 / -1;
+}
+@media (max-width: 560px) {
+  .billingGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Same-day collection is what a shopper picks pickup FOR — it earns the
+   accent that "in 2 days" does not. */
+.readyToday {
+  color: var(--sm-success, #1e7a5a);
+  font-weight: 600;
+}

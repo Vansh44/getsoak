@@ -482,6 +482,7 @@ describe("blog-actions", () => {
         "pos.requireOpenShift": false,
         "pos.cashVarianceTolerance": 0,
         "fulfilment.offerPickup": false,
+        "fulfilment.pickupReadyDays": 0,
         "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);
@@ -508,6 +509,7 @@ describe("blog-actions", () => {
         "pos.requireOpenShift": false,
         "pos.cashVarianceTolerance": 0,
         "fulfilment.offerPickup": false,
+        "fulfilment.pickupReadyDays": 0,
         "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);

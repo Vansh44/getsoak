@@ -42,6 +42,7 @@ export const SETTING_KEYS = [
   "pos.requireOpenShift",
   "pos.cashVarianceTolerance",
   "fulfilment.offerPickup",
+  "fulfilment.pickupReadyDays",
   "fulfilment.pickupHoldDays",
 ] as const;
 
@@ -235,10 +236,24 @@ export const SETTINGS: readonly SettingDef[] = [
     minPlan: "pro",
   },
   {
+    key: "fulfilment.pickupReadyDays",
+    label: "Orders are ready for collection in",
+    description:
+      "0 means same-day collection. Shown at checkout and in the confirmation email, and the hold window starts from this date.",
+    group: "Checkout",
+    section: "locations",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 30,
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
+  },
+  {
     key: "fulfilment.pickupHoldDays",
     label: "Hold uncollected orders for",
     description:
-      "After this many days an uncollected order is cancelled, refunded, and its stock returned to the shelf.",
+      "Counted from the day it's ready. After this, an uncollected order is cancelled and its stock returns to the shelf.",
     group: "Checkout",
     section: "locations",
     type: "number",
