@@ -30,7 +30,7 @@ sequence; those are the specifications.**
 | —      | POS 4: inventory from the shop floor, transfers                     | ✅ done        |
 | —      | LOC A–C: capabilities, Locations section, scope, inventory selector | ✅ done        |
 | —      | LOC D–F.1: routing, reservations, pickup, postcode serviceability   | ✅ done        |
-| **1**  | **Close the open gaps**                                             | ⏭ next        |
+| **1**  | **Finish pickup + close the gaps**                                  | ⏭ next        |
 | **2**  | **Refunds & cancellation** — the money-out path                     | ⏭ blocks 3, 4 |
 | **3**  | Returns (POS 5 = LOC G)                                             | ⏳             |
 | **4**  | Store credit & gift cards                                           | ⏳             |
@@ -44,24 +44,36 @@ sequence; those are the specifications.**
 
 ---
 
-## Step 1 — Close the open gaps
+## Step 1 — Finish pickup, and close the open gaps
 
-Small, already-identified, and two of them are visible to customers today. Doing
-them first stops the polish debt compounding into the next phase.
+Most of these are **pickup's own unfinished edges**. The feature works end to
+end, but a shopper is told to collect from a named shop and never told where it
+is — so this is finishing what F shipped, not new scope.
 
 1. **Location address fields.** `store_locations.address` exists and
-   `saveLocation` accepts it, but no form ever sends one — so the pickup card
-   shows a shop name and no address. Pickup shipped telling people where to go
-   without ever having asked where the shop is.
-2. **Apply `locations_07` to staging.** `/dashboard/locations` errors until it
-   lands.
-3. **Tests for `pos-pickup-actions.ts`.** Every other POS action has a
+   `saveLocation` accepts it, but no form ever sends one — so the checkout
+   card, the confirmation email and the order page all name a shop with no
+   address. Pickup shipped telling people where to go without ever having
+   asked where the shop is. **Everything else here is cosmetic next to this.**
+2. **Bespoke copy for the three pickup emails.** `order.ready_for_pickup`,
+   `order.collected` and `order.pickup_expiring` have no `CUSTOMER_INTRO`
+   entry, so "your order is ready to collect" — the payoff of the whole
+   feature — opens with the generic "There's an update on your order."
+3. **Pickup on the success page.** Right after paying is when someone most
+   wants the address and the deadline; it shows only the reference.
+4. **Pickup in the dashboard.** The orders list and detail drawer have zero
+   pickup awareness, so office staff can't see that an order is a collection
+   or what state it's in. Only the till can.
+5. **The invoice knows it was collected.** It prints a shipping address for an
+   order nobody shipped.
+6. **Tests for `pos-pickup-actions.ts`.** Every other POS action has a
    co-located test; this one shipped without.
-4. **Pickup orders in the dashboard.** The orders list doesn't distinguish a
-   collection from a delivery, so office staff can't see one at all.
-5. **Location filter on analytics.** Every other surface is location-aware.
+7. **Apply `locations_07` to staging**, then run PS-8.1 – PS-8.12 in a
+   browser. The pickup flow has never been exercised end to end.
+8. **Location filter on analytics.** The one item unrelated to pickup.
 
-**Done when:** the acceptance doc's "Known gaps" table loses those five rows.
+**Done when:** the acceptance doc's Known gaps table loses those rows, and its
+section 8 has been run for real.
 
 ---
 
