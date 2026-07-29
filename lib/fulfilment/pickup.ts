@@ -77,16 +77,42 @@ export async function pickupReadyDays(): Promise<number> {
   }
 }
 
-/** "Ready today" / "Ready in 3 days" — the first thing a shopper wants. */
-export function readyLabel(days: number): string {
-  return `Ready ${readyShort(days).toLowerCase()}`;
-}
-
-/** The same fact without the word "Ready", for a row already labelled Ready. */
-export function readyShort(days: number): string {
-  if (days <= 0) return "Today";
-  if (days === 1) return "Tomorrow";
-  return `In ${days} days`;
+/**
+ * When a collection order will be ready, as a DATE.
+ *
+ * "Ready in 2 days" makes the shopper count forward on a calendar to work out
+ * what it means; a date doesn't. Same-day is called out separately because it
+ * is the thing a shop is competing on — a shopper choosing collection over
+ * delivery is usually choosing speed.
+ *
+ * Formatted SERVER-side against the same clock that stamps
+ * `orders.pickup_ready_at`, so the date quoted at checkout is the date stored
+ * on the order — no timezone drift between the two.
+ */
+export function readyOn(
+  days: number,
+  now = new Date(),
+): { today: boolean; date: string; long: string } {
+  if (days <= 0) {
+    return { today: true, date: "", long: "Today" };
+  }
+  const d = new Date(now);
+  d.setDate(d.getDate() + days);
+  return {
+    today: false,
+    // "Fri, 1 Aug" — short enough for a card, unambiguous unlike "01/08".
+    date: d.toLocaleDateString("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+    }),
+    // Spelled out for the email, where there is room and no surrounding UI.
+    long: d.toLocaleDateString("en-IN", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    }),
+  };
 }
 
 /**

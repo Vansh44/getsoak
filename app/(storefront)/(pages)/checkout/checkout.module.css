@@ -1060,3 +1060,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Same-day collection is what a shopper picks pickup FOR — it earns the
+   accent that "in 2 days" does not. */
+.readyToday {
+  color: var(--sm-success, #1e7a5a);
+  font-weight: 600;
+}

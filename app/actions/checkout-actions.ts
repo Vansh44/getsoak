@@ -34,8 +34,7 @@ import {
   pickupHoldDays,
   pickupReadyDays,
   pickupLocationsFor,
-  readyLabel,
-  readyShort,
+  readyOn,
 } from "@/lib/fulfilment/pickup";
 import { holdStock, releaseHold } from "@/lib/inventory/reservations";
 import {
@@ -550,10 +549,10 @@ export interface PickupOptions {
   holdDays: number;
   /** 0 = same day. */
   readyDays: number;
-  /** "Ready in 2 days" — for a card with no label of its own. */
-  readyLabel: string;
-  /** "In 2 days" — for the details row already labelled "Ready". */
-  readyShort: string;
+  /** Same-day collection is the selling point, so the UI can highlight it. */
+  readyToday: boolean;
+  /** "Fri, 1 Aug". Empty when it's ready today. */
+  readyDate: string;
 }
 
 /**
@@ -573,8 +572,8 @@ export async function getPickupOptions(
     inStockCount: 0,
     holdDays: 0,
     readyDays: 0,
-    readyLabel: "",
-    readyShort: "",
+    readyToday: true,
+    readyDate: "",
   };
   if (!Array.isArray(items) || items.length === 0) return off;
   if (!(await pickupEnabled())) return off;
@@ -657,8 +656,8 @@ export async function getPickupOptions(
       }),
       holdDays: await pickupHoldDays(),
       readyDays: ready,
-      readyLabel: readyLabel(ready),
-      readyShort: readyShort(ready),
+      readyToday: readyOn(ready).today,
+      readyDate: readyOn(ready).date,
     };
   } catch (err) {
     // Pickup is an extra way to buy — never the reason checkout breaks.
@@ -1352,7 +1351,7 @@ export async function placeOrder(
             fulfilment: "pickup",
             pickupLocation: pickupShop?.name ?? "",
             pickupAddress: pickupShop?.address ?? "",
-            readyOn: readyLabel(readyDays),
+            readyOn: readyOn(readyDays).long,
           }
         : {
             fulfilment: "delivery",

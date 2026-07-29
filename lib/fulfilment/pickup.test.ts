@@ -41,8 +41,7 @@ const {
   pickupHoldDays,
   hoursUntil,
   PICKUP_WARN_HOURS,
-  readyLabel,
-  readyShort,
+  readyOn,
 } = await import("./pickup");
 
 const shop = (id: string, caps: Record<string, boolean>) => ({
@@ -165,15 +164,24 @@ describe("PICKUP_WARN_HOURS", () => {
   });
 });
 
-describe("readyLabel / readyShort", () => {
-  it("reads naturally on its own", () => {
-    expect(readyLabel(0)).toBe("Ready today");
-    expect(readyLabel(1)).toBe("Ready tomorrow");
-    expect(readyLabel(3)).toBe("Ready in 3 days");
+describe("readyOn", () => {
+  const now = new Date("2026-07-29T10:00:00Z"); // a Wednesday
+
+  it("calls out same-day rather than printing today's date", () => {
+    const r = readyOn(0, now);
+    expect(r.today).toBe(true);
+    expect(r.date).toBe("");
+    expect(r.long).toBe("Today");
   });
 
-  it("drops the word when the row is already labelled Ready", () => {
-    expect(readyShort(0)).toBe("Today");
-    expect(readyShort(3)).toBe("In 3 days");
+  it("gives a real date, not a countdown the shopper has to work out", () => {
+    const r = readyOn(2, now);
+    expect(r.today).toBe(false);
+    expect(r.date).toBe("Fri, 31 Jul");
+    expect(r.long).toBe("Friday, 31 July");
+  });
+
+  it("rolls over a month boundary", () => {
+    expect(readyOn(3, now).date).toBe("Sat, 1 Aug");
   });
 });

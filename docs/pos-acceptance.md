@@ -385,8 +385,18 @@ Pickup with 7 pickup-capable shops.
 
 **PS-8.15 — Pickup details**
 Select a store.
-**Expect:** a summary block — Collect from / Address / Ready / Held for — so
-what was agreed to is visible before placing the order.
+**Expect:** a summary block — Collect from / Address / Ready — so what was
+agreed to is visible before placing the order. The hold window is NOT shown:
+it's the merchant's expiry policy, not something a shopper needs at the moment
+of buying.
+
+**PS-8.20 ★ — A date, not a countdown**
+Set ready days to 2, then to 0.
+**Expect:** 2 ⇒ every store card reads "Ready Fri, 1 Aug" — an exact date, not
+"in 2 days" for the shopper to work out on a calendar. 0 ⇒ **"Available today"
+in green**, on the cards and in the details row, because same-day is the thing
+someone chooses collection FOR. The date is formatted server-side off the same
+clock that stamps `pickup_ready_at`, so the date quoted is the date stored.
 
 **PS-8.16 ★ — Pay at store replaces COD**
 Choose Pickup.

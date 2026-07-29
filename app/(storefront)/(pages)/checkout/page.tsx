@@ -658,10 +658,14 @@ export default function CheckoutPage() {
                                 {l.address}
                               </span>
                             )}
-                            <span className={styles.shopMeta}>
-                              {l.hasStock
-                                ? pickup.readyLabel
-                                : "Not everything in your bag is in stock here"}
+                            <span
+                              className={`${styles.shopMeta}${l.hasStock && pickup.readyToday ? ` ${styles.readyToday}` : ""}`}
+                            >
+                              {!l.hasStock
+                                ? "Not everything in your bag is in stock here"
+                                : pickup.readyToday
+                                  ? "Available today"
+                                  : `Ready ${pickup.readyDate}`}
                             </span>
                           </span>
                           <span className={styles.shopFree}>FREE</span>
@@ -695,14 +699,16 @@ export default function CheckoutPage() {
                         )}
                         <div className={styles.pickupDetailRow}>
                           <span>Ready</span>
-                          <strong>{pickup.readyShort}</strong>
+                          <strong
+                            className={
+                              pickup.readyToday ? styles.readyToday : undefined
+                            }
+                          >
+                            {pickup.readyToday
+                              ? "Available today"
+                              : pickup.readyDate}
+                          </strong>
                         </div>
-                        {pickup.holdDays > 0 && (
-                          <div className={styles.pickupDetailRow}>
-                            <span>Held for</span>
-                            <strong>{pickup.holdDays} days once ready</strong>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
