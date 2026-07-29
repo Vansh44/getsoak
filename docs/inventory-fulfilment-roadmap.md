@@ -292,11 +292,21 @@ the fulfilment strategy entirely.
    already held for somebody else's collection is how two people are promised
    the same box.
 
+**The pre-expiry nudge** (`order.pickup_expiring`, `sweepPickupReminders`)
+fires once per order, 24 hours out, and the exactly-once property is a CLAIM on
+`orders.pickup_warned_at` (`locations_06_pickup_reminder.sql`) — not a
+schedule. The cron is a heartbeat, and `notifications`' UNIQUE on
+(event, recipient) can't dedupe it because each emit creates a NEW event row;
+without the claim a daily run would mail the same customer about the same box
+every day, which is how people learn to ignore a merchant's email.
+`PICKUP_WARN_HOURS` must stay ≥ the cron interval or an order can slip the
+whole window between two runs and expire unwarned. Reminders run AFTER the
+expiry sweep: telling someone to hurry and collect an order we just cancelled
+is worse than saying nothing.
+
 **Deliberately not built:** automatic refunds on expiry. The order is cancelled
 and the stock comes back; moving money on a schedule waits for the returns
-machinery that records it (Phase G). Also `order.pickup_expiring` — the
-pre-expiry nudge is registered and PENDING, because the sweep only fires on the
-deadline itself.
+machinery that records it (Phase G).
 
 ---
 

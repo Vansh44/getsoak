@@ -35,8 +35,13 @@ vi.mock("@/lib/db/client", () => ({
   }),
 }));
 
-const { pickupLocationsFor, pickupEnabled, pickupHoldDays } =
-  await import("./pickup");
+const {
+  pickupLocationsFor,
+  pickupEnabled,
+  pickupHoldDays,
+  hoursUntil,
+  PICKUP_WARN_HOURS,
+} = await import("./pickup");
 
 const shop = (id: string, caps: Record<string, boolean>) => ({
   id,
@@ -131,5 +136,29 @@ describe("pickupLocationsFor", () => {
       { productId: "p1", variantId: null, quantity: 2, needsStock: false },
     ]);
     expect(out[0].hasStock).toBe(true);
+  });
+});
+
+describe("hoursUntil", () => {
+  const now = new Date("2026-08-01T12:00:00Z");
+
+  it("rounds up — 90 minutes left is '2 hours', never '1'", () => {
+    expect(hoursUntil("2026-08-01T13:30:00Z", now)).toBe(2);
+  });
+
+  it("floors at zero rather than counting backwards past the deadline", () => {
+    expect(hoursUntil("2026-07-31T12:00:00Z", now)).toBe(0);
+  });
+
+  it("survives a nonsense date instead of emitting NaN into an email", () => {
+    expect(hoursUntil("not a date", now)).toBe(0);
+  });
+});
+
+describe("PICKUP_WARN_HOURS", () => {
+  // The reaper runs DAILY. A window shorter than the interval lets an order
+  // slip between two runs and expire with no warning at all.
+  it("is at least the cron interval", () => {
+    expect(PICKUP_WARN_HOURS).toBeGreaterThanOrEqual(24);
   });
 });

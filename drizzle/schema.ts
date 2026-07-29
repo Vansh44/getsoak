@@ -1203,6 +1203,12 @@ export const orders = pgTable(
       mode: "string",
     }),
     collectedBy: text("collected_by"),
+    // Claimed by the reminder job so the nudge fires exactly once
+    // (locations_06_pickup_reminder.sql).
+    pickupWarnedAt: timestamp("pickup_warned_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     stockStatus: text("stock_status").default("none").notNull(),
     orderNo: integer("order_no").notNull(),
     orderRef: text("order_ref").notNull(),

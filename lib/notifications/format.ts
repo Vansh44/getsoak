@@ -142,6 +142,12 @@ export function formatVariable(
   if (name === "date" || name.endsWith("_at") || name === "expires_on") {
     return formatDate(value);
   }
+  if (name === "hours_left") {
+    const hours = Number(raw);
+    return Number.isFinite(hours)
+      ? `${hours} hour${hours === 1 ? "" : "s"}`
+      : value;
+  }
   if (name === "days_left") {
     const days = Number(raw);
     return Number.isFinite(days)

@@ -5,7 +5,10 @@ import { recordEvent } from "@/lib/notifications/record";
 import { orderItems, orders } from "@/drizzle/schema";
 import { getStoreGateway } from "@/lib/payments/provider";
 import { sweepExpiredHolds } from "@/lib/inventory/reservations";
-import { sweepExpiredPickups } from "@/lib/fulfilment/pickup";
+import {
+  sweepExpiredPickups,
+  sweepPickupReminders,
+} from "@/lib/fulfilment/pickup";
 import {
   capturedPayment,
   rzpFetchOrderPayments,
@@ -271,12 +274,17 @@ async function handle(request: Request) {
   // running the generic sweep afterwards finds a tidier table (and anything the
   // pickup pass failed to release still lapses here on TTL).
   const pickupsExpired = await sweepExpiredPickups();
+  // Reminders AFTER the expiry sweep, never before: an order that just lapsed
+  // is no longer awaiting collection, and telling someone to hurry and collect
+  // something we have already cancelled is worse than saying nothing.
+  const pickupsWarned = await sweepPickupReminders();
 
   return NextResponse.json({
     ok: true,
     paid,
     expired,
     pickupsExpired,
+    pickupsWarned,
     holdsFreed: await sweepExpiredHolds(),
   });
 }

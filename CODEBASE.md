@@ -1697,6 +1697,19 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★ THE NUDGE IS A CLAIM, NOT A SCHEDULE.** `sweepPickupReminders`
+        warns 24 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ the cron
+        interval or an order slips the whole window between two runs and
+        expires unwarned) and claims `orders.pickup_warned_at` NULL → now() in
+        the same conditional UPDATE it selects with
+        (`locations_06_pickup_reminder.sql`). The cron is a HEARTBEAT — it
+        re-reads the same rows every run — and `notifications`' UNIQUE on
+        (event, recipient) cannot dedupe this because every emit creates a NEW
+        event row. Without the claim, a merchant mails the same customer about
+        the same box daily, which is how people learn to ignore their email.
+        Reminders run AFTER the expiry sweep: an order that just lapsed is no
+        longer awaiting collection, and telling someone to hurry and collect
+        something already cancelled is worse than saying nothing.
     - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
       metered extra-location billing (7), omnichannel/BOPIS (8), offline
       outbox (9). See `docs/pos-plan.md`.

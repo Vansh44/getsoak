@@ -16,7 +16,7 @@ import "server-only";
 // Stock is HELD, not sold (Phase E): the goods sit on that shop's shelf until
 // someone hands them over. This is the first real consumer of reservations.
 
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   inventoryLevels,
@@ -250,4 +250,126 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
   }
 
   return claimed.length;
+}
+
+/**
+ * How far ahead the nudge goes out.
+ *
+ * MUST be at least the cron's own interval, or an order can slip through the
+ * whole window between two runs and expire with no warning at all. The reaper
+ * runs daily (Vercel Hobby caps crons at once/day), so 24 hours is the floor,
+ * not a preference.
+ */
+export const PICKUP_WARN_HOURS = 24;
+
+/** Hours left, rounded the way a person would say it. */
+export function hoursUntil(expiresAt: string | Date, now = new Date()): number {
+  const ms = new Date(expiresAt).getTime() - now.getTime();
+  return Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 3_600_000)) : 0;
+}
+
+/**
+ * "Your order is still waiting — collect it by Friday."
+ *
+ * Fires on the CROSSING, not the state (§24): the claim on `pickup_warned_at`
+ * is what makes it once per order. Without it a daily heartbeat would mail the
+ * same customer about the same box every run until the deadline, which is how
+ * people learn to ignore a merchant's email.
+ *
+ * Run AFTER sweepExpiredPickups — an order the sweep just cancelled is no
+ * longer awaiting collection, so it must not be nudged about collecting it.
+ */
+export async function sweepPickupReminders(limit = 200): Promise<number> {
+  let claimed: Array<{
+    id: string;
+    store_id: string;
+    order_ref: string | null;
+    customer_id: string | null;
+    pickup_location_id: string | null;
+    pickup_expires_at: string | null;
+    location_name: string | null;
+    location_address: Record<string, unknown> | null;
+  }> = [];
+
+  try {
+    claimed = await withService((db) =>
+      db
+        .update(orders)
+        .set({ pickupWarnedAt: sql`now()` })
+        .where(
+          and(
+            eq(orders.fulfilmentType, "pickup"),
+            inArray(orders.pickupStatus, ["awaiting", "ready"]),
+            isNull(orders.pickupWarnedAt),
+            // Still in the future — a deadline already passed belongs to the
+            // expiry sweep, not to a reminder.
+            gt(orders.pickupExpiresAt, sql`now()`),
+            lt(
+              orders.pickupExpiresAt,
+              sql`now() + make_interval(hours => ${PICKUP_WARN_HOURS})`,
+            ),
+            sql`${orders.id} in (
+              select id from ${orders} o
+               where o.fulfilment_type = 'pickup'
+                 and o.pickup_status in ('awaiting','ready')
+                 and o.pickup_warned_at is null
+                 and o.pickup_expires_at > now()
+                 and o.pickup_expires_at < now() + make_interval(hours => ${PICKUP_WARN_HOURS})
+               order by o.pickup_expires_at
+               limit ${limit}
+            )`,
+          ),
+        )
+        .returning({
+          id: orders.id,
+          store_id: orders.storeId,
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+          pickup_location_id: orders.pickupLocationId,
+          pickup_expires_at: orders.pickupExpiresAt,
+          location_name: sql<string | null>`(
+            select l.name from ${storeLocations} l
+             where l.id = ${orders.pickupLocationId}
+          )`,
+          location_address: sql<Record<string, unknown> | null>`(
+            select l.address from ${storeLocations} l
+             where l.id = ${orders.pickupLocationId}
+          )`,
+        }),
+    );
+  } catch (err) {
+    console.error("sweepPickupReminders:", err);
+    return 0;
+  }
+
+  for (const order of claimed) {
+    recordEvent({
+      type: "order.pickup_expiring",
+      storeId: order.store_id,
+      locationId: order.pickup_location_id,
+      actor: { type: "system" },
+      subject: { type: "order", id: order.id, label: order.order_ref ?? "" },
+      customerId: order.customer_id,
+      payload: {
+        // Where to go and by when — a reminder without both is just anxiety.
+        pickupLocation: order.location_name ?? "",
+        pickupAddress: formatAddressLine(order.location_address),
+        expiresOn: order.pickup_expires_at ?? "",
+        hoursLeft: order.pickup_expires_at
+          ? hoursUntil(order.pickup_expires_at)
+          : 0,
+      },
+    });
+  }
+
+  return claimed.length;
+}
+
+/** The shop's address as one readable line. */
+function formatAddressLine(a: Record<string, unknown> | null): string {
+  if (!a) return "";
+  return ["line1", "line2", "city", "state", "postalCode"]
+    .map((k) => (typeof a[k] === "string" ? (a[k] as string).trim() : ""))
+    .filter(Boolean)
+    .join(", ");
 }

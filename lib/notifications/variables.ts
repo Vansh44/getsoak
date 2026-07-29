@@ -113,6 +113,28 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "Connaught Place",
     },
   ],
+  "order.pickup_expiring": [
+    {
+      name: "pickup_location",
+      description: "The shop it's waiting at.",
+      sample: "Connaught Place",
+    },
+    {
+      name: "pickup_address",
+      description: "That shop's address.",
+      sample: "12 Radial Road, New Delhi",
+    },
+    {
+      name: "expires_on",
+      description: "The collection deadline.",
+      sample: "2 August 2026 at 5:50 pm",
+    },
+    {
+      name: "hours_left",
+      description: "Hours until the hold lapses.",
+      sample: "18",
+    },
+  ],
   "order.pickup_expired": [
     {
       name: "pickup_location",

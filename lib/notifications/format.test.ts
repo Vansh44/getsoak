@@ -120,3 +120,10 @@ describe("summariseItems", () => {
     expect(summariseItems([])).toBe("");
   });
 });
+
+describe("hours_left", () => {
+  it("reads as a duration, not a bare number", () => {
+    expect(formatVariable("hours_left", 18)).toBe("18 hours");
+    expect(formatVariable("hours_left", 1)).toBe("1 hour");
+  });
+});
