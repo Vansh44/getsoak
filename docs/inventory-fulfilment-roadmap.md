@@ -239,7 +239,7 @@ _sellable_ stock — the sum across locations that can actually fulfil.
 
 ---
 
-### Phase E — Real reservations
+### Phase E — Real reservations — **DONE**
 
 **Ships:** `inventory_levels.reserved` finally used, a `reservations` table with
 an owner (order / pickup hold / channel) and a TTL, `reserve → confirm →
@@ -250,6 +250,14 @@ directly. That is correct and unoversellable for COD, but it cannot express
 "held for an unpaid order" or "held for a pickup nobody has collected".
 
 **Unblocks:** pickup holds, online payment-pending, marketplace sync.
+
+**Shipped ADDITIVE.** `reserve_stock_at` still decrements `on_hand` outright,
+so COD checkout, the POS register and cancellation restock are untouched
+(invariant 5). What changed for existing flows is only that both stock guards
+now subtract `reserved` — a hold genuinely protects units instead of being
+decorative — and `online_stock` became `on_hand - reserved` at fulfilling
+locations, so the storefront never promises held units. `products.stock` stays
+the physical count, which is what the dashboard and POS want.
 
 ---
 

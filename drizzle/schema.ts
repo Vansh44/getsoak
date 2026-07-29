@@ -2213,6 +2213,53 @@ export const storeFulfilmentRules = pgTable(
   ],
 );
 
+// Units held but not sold (supabase/locations_04_reservations.sql).
+// available = inventory_levels.on_hand - reserved. `owner_type` is text rather
+// than a column per kind so pickup, marketplace and anything later need no
+// migration. Every read/write goes through the atomic RPCs in
+// lib/inventory/reservations.ts — never UPDATE this from application code.
+export const stockReservations = pgTable(
+  "stock_reservations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    quantity: integer().notNull(),
+    ownerType: text("owner_type").notNull(),
+    ownerId: text("owner_id"),
+    status: text().default("held").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    index("stock_reservations_owner_idx").using(
+      "btree",
+      table.ownerType.asc().nullsLast().op("text_ops"),
+      table.ownerId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "stock_reservations_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_reservations_location_id_fkey",
+    }).onDelete("cascade"),
+    check("stock_reservations_qty_check", sql`quantity > 0`),
+    check(
+      "stock_reservations_status_check",
+      sql`status = ANY (ARRAY['held'::text, 'committed'::text, 'released'::text, 'expired'::text])`,
+    ),
+  ],
+);
+
 export const posLayouts = pgTable(
   "pos_layouts",
   {

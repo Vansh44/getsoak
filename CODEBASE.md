@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
+│   │                          # RPCs; available = on_hand - reserved
 │   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
 │   │                          # (sellable-online total, trigger-maintained)
 │   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
