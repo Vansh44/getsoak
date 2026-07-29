@@ -1,5 +1,11 @@
 # Inventory & Fulfilment — Phased Roadmap
 
+> **Ordering lives in `docs/roadmap.md`.** This document is the SPECIFICATION —
+> the extension points, invariants and per-phase design. What ships next, and
+> in what order, is decided in the roadmap, because these phases interleave
+> with the POS ones (locations G and POS 5 are the same returns work).
+> Acceptance tests: `docs/pos-acceptance.md`.
+
 **Goal:** grow from one shop to hundreds of locations and many sales channels
 **without rewriting the core**. Every behaviour that a merchant might want
 different is a registered, configurable thing — not an `if` branch.
