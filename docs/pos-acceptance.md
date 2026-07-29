@@ -21,9 +21,9 @@ stories are here.**
 | `POS_SESSION_SECRET` set                                                                  | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
 | `RESEND_*` configured                                                                     | Staff invitations and pickup emails go nowhere otherwise                                   |
 
-**Status on staging:** `pos_00`–`pos_11` and `locations_01`–`locations_06`
-applied; `locations_07` was applied and is now reverted by
-**`locations_08`, which must be run.**
+**Status on staging:** all applied — `pos_00`–`pos_11` and
+`locations_01`–`locations_09`. (`locations_07` added merchant postcode rules
+and `locations_08` removed them again; both ran.)
 
 ---
 
@@ -507,18 +507,14 @@ on the capability change.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                            | Status                                                                                                                                                                                                             |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **No refunds anywhere**                                        | Cancel returns stock and notifies; the money must be refunded by hand in Razorpay. Blocks returns and pickup-expiry refunds — first item on the roadmap                                                            |
-| **Location address is never collected**                        | The editor asks for name/type/GSTIN/state only, so the checkout card, the confirmation email and the order page all name a shop with **no address** — a collect-in-store feature that can't say where the store is |
-| **The pickup emails use generic copy**                         | `order.ready_for_pickup` / `order.collected` / `order.pickup_expiring` have no `CUSTOMER_INTRO` entry, so the most important message in the feature opens "There's an update on your order"                        |
-| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                                                                          |
-| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness at all: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can                                                   |
-| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                                                                               |
-| **Pickup has never been run end to end**                       | Blocked on `locations_07`; no browser verification of PS-8.1–PS-8.12                                                                                                                                               |
-| **`/dashboard/locations` errors until `locations_07`**         | Applies to staging right now                                                                                                                                                                                       |
-| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                                                                                     |
-| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                                                                            |
-| **No dashboard view of pickup orders**                         | Only `/pos/pickups`; the orders list doesn't distinguish them                                                                                                                                                      |
-| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                                                                                        |
-| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                                                                                        |
+| Gap                                                            | Status                                                                                                                                                    |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No refunds anywhere**                                        | Cancel returns stock and notifies; the money must be refunded by hand in Razorpay. Blocks returns and pickup-expiry refunds — first item on the roadmap   |
+| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                 |
+| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can |
+| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                      |
+| **Pickup has never been run end to end**                       | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                             |
+| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                            |
+| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                   |
+| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                               |
+| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                               |

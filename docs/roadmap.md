@@ -46,35 +46,34 @@ sequence; those are the specifications.**
 
 ## Step 1 — Finish pickup, and close the open gaps
 
-Most of these are **pickup's own unfinished edges**. The feature works end to
-end, but a shopper is told to collect from a named shop and never told where it
-is — so this is finishing what F shipped, not new scope.
+Pickup's own unfinished edges. Phases A–F built the machinery and the shopper's
+side of it; what's left is everywhere ELSE a collection order shows up.
 
-1. ~~Location address fields~~ — **done**, along with the ALDO-style
-   Ship/Pickup toggle and searchable location picker. Merchant-typed postcode
-   serviceability (F.1) was **removed**: the shopper knows where they are and
-   the merchant cannot, so every shop that can hand the basket over is listed
-   and they search it.
-2. ~~Bespoke copy for the three pickup emails~~ — **done**, along with the
-   billing address, the 3-up store list, pay-at-store, and the configurable
-   ready-by date. Remaining: `order.ready_for_pickup`,
-   `order.collected` and `order.pickup_expiring` have no `CUSTOMER_INTRO`
-   entry, so "your order is ready to collect" — the payoff of the whole
-   feature — opens with the generic "There's an update on your order."
-3. **Pickup on the success page.** Right after paying is when someone most
-   wants the address and the deadline; it shows only the reference.
-4. **Pickup in the dashboard.** The orders list and detail drawer have zero
+**Done so far:** location address fields, the ALDO-style Ship/Pickup toggle and
+searchable store picker (merchant-typed postcode serviceability was built as
+F.1 and then **removed** — the shopper knows where they are and the merchant
+cannot), the billing address, pay-at-store, the configurable ready-by date, and
+real copy for the four pickup emails.
+
+**Still open:**
+
+1. **Pickup on the success page.** Right after paying is when someone most
+   wants the address and the date; it shows only the order reference.
+2. **Pickup in the dashboard.** The orders list and detail drawer have zero
    pickup awareness, so office staff can't see that an order is a collection
-   or what state it's in. Only the till can.
-5. **The invoice knows it was collected.** It prints a shipping address for an
-   order nobody shipped.
-6. **Tests for `pos-pickup-actions.ts`.** Every other POS action has a
+   or what state it's in. Only the till can. **The biggest of these** — it is
+   the merchant's own view of their orders.
+3. **The invoice knows it was collected.** `invoice-data.ts` and
+   `InvoiceDocument` don't read `fulfilment_type`, so an invoice prints a
+   shipping address for an order nobody shipped.
+4. **Tests for `pos-pickup-actions.ts`.** Every other POS action has a
    co-located test; this one shipped without.
-7. **Apply `locations_07` to staging**, then run PS-8.1 – PS-8.12 in a
-   browser. The pickup flow has never been exercised end to end.
-8. **Location filter on analytics.** The one item unrelated to pickup.
+5. **Run PS-8.1 – PS-8.20 in a browser.** The pickup flow has never been
+   exercised end to end. Nothing blocks it now.
+6. **Location filter on analytics.** The one item unrelated to pickup.
 
 **Done when:** the acceptance doc's Known gaps table loses those rows, and its
+section 8 has been run for real.
 section 8 has been run for real.
 
 ---
