@@ -1186,6 +1186,29 @@ export const orders = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    // Pick up in store (supabase/locations_05_pickup.sql). fulfilment_type is
+    // TEXT, not a boolean — ship-from-store and lockers are on the roadmap.
+    // pickupLocationId is where the shopper COLLECTS, distinct from locationId
+    // (where stock came from); for a pickup they match, for ship-from-store
+    // they will not.
+    fulfilmentType: text("fulfilment_type").default("delivery").notNull(),
+    pickupLocationId: uuid("pickup_location_id"),
+    pickupStatus: text("pickup_status"),
+    pickupExpiresAt: timestamp("pickup_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedAt: timestamp("collected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedBy: text("collected_by"),
+    // Claimed by the reminder job so the nudge fires exactly once
+    // (locations_06_pickup_reminder.sql).
+    pickupWarnedAt: timestamp("pickup_warned_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     stockStatus: text("stock_status").default("none").notNull(),
     orderNo: integer("order_no").notNull(),
     orderRef: text("order_ref").notNull(),
@@ -1885,6 +1908,11 @@ export const storeLocations = pgTable(
     // normalizeCapabilities() — never index into the raw blob.
     // PUBLIC: the storefront reads it to decide whether to offer pickup.
     capabilities: jsonb().default({}).notNull(),
+    // Postcode rules for customer pickup (locations_07_pickup_pincodes.sql).
+    // NULL/empty = offered everywhere — the unconfigured state must behave
+    // exactly as it did before the column existed. Parse/match ONLY through
+    // lib/locations/pincodes.ts.
+    pickupPincodes: text("pickup_pincodes").array(),
     isDefault: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
@@ -2210,6 +2238,53 @@ export const storeFulfilmentRules = pgTable(
       foreignColumns: [stores.id],
       name: "store_fulfilment_rules_store_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// Units held but not sold (supabase/locations_04_reservations.sql).
+// available = inventory_levels.on_hand - reserved. `owner_type` is text rather
+// than a column per kind so pickup, marketplace and anything later need no
+// migration. Every read/write goes through the atomic RPCs in
+// lib/inventory/reservations.ts — never UPDATE this from application code.
+export const stockReservations = pgTable(
+  "stock_reservations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    quantity: integer().notNull(),
+    ownerType: text("owner_type").notNull(),
+    ownerId: text("owner_id"),
+    status: text().default("held").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    index("stock_reservations_owner_idx").using(
+      "btree",
+      table.ownerType.asc().nullsLast().op("text_ops"),
+      table.ownerId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "stock_reservations_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_reservations_location_id_fkey",
+    }).onDelete("cascade"),
+    check("stock_reservations_qty_check", sql`quantity > 0`),
+    check(
+      "stock_reservations_status_check",
+      sql`status = ANY (ARRAY['held'::text, 'committed'::text, 'released'::text, 'expired'::text])`,
+    ),
   ],
 );
 

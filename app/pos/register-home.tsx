@@ -12,6 +12,7 @@ import {
   Loader2,
   Banknote,
   Boxes,
+  PackageCheck,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
@@ -34,6 +35,7 @@ export function RegisterHome({
   canAuthorizeDevice,
   locations,
   idleLockMinutes,
+  pickupWaiting,
 }: {
   name: string;
   role: string;
@@ -43,6 +45,7 @@ export function RegisterHome({
   canAuthorizeDevice: boolean;
   locations: { id: string; name: string }[];
   idleLockMinutes: number;
+  pickupWaiting: number;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -182,6 +185,19 @@ export function RegisterHome({
             >
               <Boxes className="h-4 w-4" strokeWidth={2} />
               Stock
+            </Link>
+          )}
+
+          {pickupWaiting > 0 && (
+            <Link
+              href="/pos/pickups"
+              className="mt-3 ml-2 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+            >
+              <PackageCheck className="h-4 w-4" strokeWidth={2} />
+              Collections
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300">
+                {pickupWaiting}
+              </span>
             </Link>
           )}
 

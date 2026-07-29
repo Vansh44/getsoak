@@ -41,6 +41,8 @@ export const SETTING_KEYS = [
   "pos.maxDiscountPercent",
   "pos.requireOpenShift",
   "pos.cashVarianceTolerance",
+  "fulfilment.offerPickup",
+  "fulfilment.pickupHoldDays",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -220,6 +222,31 @@ export const SETTINGS: readonly SettingDef[] = [
     min: 0,
     max: 10000,
     minPlan: "pro",
+  },
+  {
+    key: "fulfilment.offerPickup",
+    label: "Offer pickup at checkout",
+    description:
+      "Shoppers can collect from a shop instead of having it delivered. Only locations with the Customer pickup capability are offered.",
+    group: "Checkout",
+    section: "locations",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+  },
+  {
+    key: "fulfilment.pickupHoldDays",
+    label: "Hold uncollected orders for",
+    description:
+      "After this many days an uncollected order is cancelled, refunded, and its stock returned to the shelf.",
+    group: "Checkout",
+    section: "locations",
+    type: "number",
+    defaultValue: 5,
+    min: 1,
+    max: 60,
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
   },
 ];
 

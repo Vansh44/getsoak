@@ -4,6 +4,11 @@ import { withService } from "@/lib/db/client";
 import { recordEvent } from "@/lib/notifications/record";
 import { orderItems, orders } from "@/drizzle/schema";
 import { getStoreGateway } from "@/lib/payments/provider";
+import { sweepExpiredHolds } from "@/lib/inventory/reservations";
+import {
+  sweepExpiredPickups,
+  sweepPickupReminders,
+} from "@/lib/fulfilment/pickup";
 import {
   capturedPayment,
   rzpFetchOrderPayments,
@@ -24,6 +29,13 @@ import {
 //      release the reserved stock (the existing reserved → released
 //      conditional claim, exactly-once), release the coupon use, and cancel
 //      the order.
+//
+// It ALSO cancels pickups nobody collected (Phase F) and sweeps expired stock
+// holds (roadmap Phase E). Same job because it is
+// the same shape of problem — units set aside for something that never
+// completed — and a hold nobody ends would make stock unsellable forever.
+// Independent of the payment work below: the sweep runs even when there are no
+// pending orders, and a failure in one must not skip the other.
 //
 // Auth: `Authorization: Bearer <CRON_SECRET>` (Vercel Cron sends it).
 
@@ -97,7 +109,12 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "read failed" }, { status: 500 });
   }
   if (!pending.length) {
-    return NextResponse.json({ ok: true, paid: 0, expired: 0 });
+    return NextResponse.json({
+      ok: true,
+      paid: 0,
+      expired: 0,
+      holdsFreed: await sweepExpiredHolds(),
+    });
   }
 
   // One gateway lookup (and decrypt) per store, not per order.
@@ -253,7 +270,23 @@ async function handle(request: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, paid, expired });
+  // Pickups first: cancelling an uncollected order releases its own holds, so
+  // running the generic sweep afterwards finds a tidier table (and anything the
+  // pickup pass failed to release still lapses here on TTL).
+  const pickupsExpired = await sweepExpiredPickups();
+  // Reminders AFTER the expiry sweep, never before: an order that just lapsed
+  // is no longer awaiting collection, and telling someone to hurry and collect
+  // something we have already cancelled is worse than saying nothing.
+  const pickupsWarned = await sweepPickupReminders();
+
+  return NextResponse.json({
+    ok: true,
+    paid,
+    expired,
+    pickupsExpired,
+    pickupsWarned,
+    holdsFreed: await sweepExpiredHolds(),
+  });
 }
 
 export const GET = handle;

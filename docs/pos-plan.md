@@ -1,5 +1,12 @@
 # StoreMink Point of Sale (POS) — Technical Design & Implementation Plan
 
+> **Ordering lives in `docs/roadmap.md`.** This document is the SPECIFICATION —
+> how the register, staff, devices and shifts work. Its phase list (§11) is
+> kept for the design detail, but what ships next, and in what order, is
+> decided in the roadmap: the POS and locations phase lists overlap (POS 5 and
+> locations G are the same returns work), so following either one alone
+> double-counts. Acceptance tests: `docs/pos-acceptance.md`.
+
 > An omnichannel, settings-based POS that unifies the online storefront with
 > physical retail. Built on StoreMink's existing multi-tenant, Cloud-SQL/Drizzle,
 > RLS, service-role-RPC, settings-registry and BYO-payment conventions.

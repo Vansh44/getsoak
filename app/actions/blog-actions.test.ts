@@ -481,6 +481,8 @@ describe("blog-actions", () => {
         "pos.maxDiscountPercent": 10,
         "pos.requireOpenShift": false,
         "pos.cashVarianceTolerance": 0,
+        "fulfilment.offerPickup": false,
+        "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.error).toMatch(/disabled/i);
@@ -505,6 +507,8 @@ describe("blog-actions", () => {
         "pos.maxDiscountPercent": 10,
         "pos.requireOpenShift": false,
         "pos.cashVarianceTolerance": 0,
+        "fulfilment.offerPickup": false,
+        "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.success).toBe(true);

@@ -459,6 +459,8 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
+│   │                          # RPCs; available = on_hand - reserved
 │   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
 │   │                          # (sellable-online total, trigger-maintained)
 │   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
@@ -1645,6 +1647,91 @@ group, span}` (span = columns of the 4-wide desktop grid),
         website saying "out of stock" until something else touched that SKU.
         The migration's guard FAILS if `online_stock > stock`, which can only
         mean the capability filter is wrong.
+    - **Stock can be HELD as well as sold (Phase E).**
+      `supabase/locations_04_reservations.sql` puts
+      `inventory_levels.reserved` to work — it had been carried since pos_01
+      and never read — so **`available = on_hand − reserved`**, and every
+      existing guard (`reserve_stock_at`, `transfer_stock`) now subtracts it.
+      `stock_reservations` says WHOSE hold it is and when it lapses, which the
+      bare counter cannot. `lib/inventory/reservations.ts` is the API:
+      `holdStock` (reserved += qty, on_hand untouched — the goods are still on
+      the shelf), `commitHold` (the sale happened), `releaseHold` (it didn't),
+      `sweepExpiredHolds`. Purely ADDITIVE: nothing that existed changed
+      behaviour, because a store with no holds has `reserved = 0` everywhere.
+    - **Pick up in store (Phase F).** A shopper buys online and collects at a
+      shop. `supabase/locations_05_pickup.sql` adds `fulfilment_type` /
+      `pickup_location_id` / `pickup_status` / `pickup_expires_at` /
+      `collected_at` / `collected_by` to `orders` — columns, not a side table,
+      because a pickup IS an order (same money, items, invoice, history) and a
+      side table would mean every order read either joins it or silently
+      ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
+      where; `/pos/pickups` hands it over; the sweep rides on
+      `/api/cron/expire-pending-payments`. Config:
+      `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
+      `locations`, rendered on Locations → Online fulfilment).
+      - **A pickup HOLDS, it does not sell** — `placeOrder` calls `holdStock`
+        instead of `reserve_stock_at`. Selling would empty the shelf on screen
+        while the box is still physically on it, and the shop would reorder
+        stock it already has. Handing over commits the holds; cancelling or
+        expiring releases them.
+      - **★ SO THE ORDER CARRIES `stock_status: 'none'`.** The cancel path's
+        reserved→released claim RESTOCKS, and running it on a pickup would ADD
+        units that never left — inflating that shop's count on every
+        cancellation. `updateOrderStatus` releases the order's pickup holds
+        instead, which is idempotent, so a second cancel is a no-op.
+      - **A shop is offered only if it can actually serve the basket**:
+        the `pickup` capability (which itself `requires` `pos` — someone has to
+        hand the goods over — and is Pro), active, and enough **available**
+        (`on_hand − reserved`) stock. Offering a shop whose last unit is
+        already held for somebody else's collection is how two people are
+        promised the same box. A short shop is still LISTED, flagged and
+        disabled, rather than hidden — "not everything is in stock here" is
+        information; a silently missing shop is confusing.
+      - **The customer's choice OVERRIDES routing** (Phase D), and the chosen
+        shop's name + address ride into the `order.placed` payload, so the
+        confirmation tells them where to go instead of quoting a delivery
+        address they never gave. Delivery orders are untouched — the pickup
+        variables are only added when there IS a pickup.
+      - **Expiry cancels, it does not refund.** `sweepExpiredPickups` claims
+        awaiting/ready → expired per order, then releases the holds (that
+        order, so a hand-over racing the sweep can't lose). Refunds wait for
+        the returns machinery that records them (roadmap Phase G) — quietly
+        moving money on a schedule ahead of that is not a thing to build.
+      - **★ WHICH POSTCODES A SHOP COLLECTS TO** (`pickup_pincodes` text[],
+        `locations_07`; pure rules in `lib/locations/pincodes.ts`). Merchant
+        text in three forms — exact `400001`, prefix `400*`, range
+        `400001-400104`. The prefix is what makes it usable: Mumbai is a
+        hundred postcodes, and a merchant who can only type exact codes will
+        type five and blame the feature. Parsed SERVER-side, and it validates
+        what was TYPED rather than what survives stripping — strip-then-check
+        turns `oops!!` into the perfectly valid-looking code `OOPS`. It **fails
+        OPEN both ways**: no rules = everywhere (so the column changes nothing
+        for an existing store — a migration may not change what a live store
+        does) and an unknown postcode matches (a first-time shopper has typed
+        no address). It decides what is OFFERED, never what is permitted:
+        `placeOrder` still validates capability, store and stock and
+        deliberately does NOT refuse on a postcode, because a merchant
+        forgetting a suburb should cost them a listing, not a sale. Geography
+        hides exactly ONE thing — the pickup toggle, when nothing serves them;
+        within pickup, far shops sit behind "Collecting somewhere else?"
+        rather than being dropped, since people collect near work or family
+        and a delivery postcode is a guess at where they are, not a fact about
+        where they will drive. That dependency is also why the chooser sits
+        BELOW the address step. Rules are KEPT when pickup is switched off
+        (inert, and retyping a hundred postcodes is a real cost).
+      - **★ THE NUDGE IS A CLAIM, NOT A SCHEDULE.** `sweepPickupReminders`
+        warns 24 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ the cron
+        interval or an order slips the whole window between two runs and
+        expires unwarned) and claims `orders.pickup_warned_at` NULL → now() in
+        the same conditional UPDATE it selects with
+        (`locations_06_pickup_reminder.sql`). The cron is a HEARTBEAT — it
+        re-reads the same rows every run — and `notifications`' UNIQUE on
+        (event, recipient) cannot dedupe this because every emit creates a NEW
+        event row. Without the claim, a merchant mails the same customer about
+        the same box daily, which is how people learn to ignore their email.
+        Reminders run AFTER the expiry sweep: an order that just lapsed is no
+        longer awaiting collection, and telling someone to hurry and collect
+        something already cancelled is worse than saying nothing.
     - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
       metered extra-location billing (7), omnichannel/BOPIS (8), offline
       outbox (9). See `docs/pos-plan.md`.

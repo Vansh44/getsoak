@@ -44,6 +44,7 @@ import {
   type LocationCapability,
   type LocationType,
 } from "@/lib/locations/capabilities";
+import { parsePincodeRules } from "@/lib/locations/pincodes";
 
 export interface ActionResult {
   success?: boolean;
@@ -368,6 +369,8 @@ export async function deleteLocation(id: string): Promise<ActionResult> {
 
 export interface LocationWithCapabilities extends StoreLocation {
   capabilities: CapabilityMap;
+  /** Canonical postcode rules for pickup. Empty = offered everywhere. */
+  pickupPincodes: string[];
 }
 
 export interface LocationsView {
@@ -391,19 +394,24 @@ export async function listLocations(): Promise<LocationsView> {
           .select({
             id: storeLocations.id,
             capabilities: storeLocations.capabilities,
+            pickup_pincodes: storeLocations.pickupPincodes,
           })
           .from(storeLocations)
           .where(eq(storeLocations.storeId, storeId)),
       ),
       readStoreRow(storeId),
     ]);
-    const capsById = new Map(rows.map((r) => [r.id, r.capabilities]));
+    const byId = new Map(rows.map((r) => [r.id, r]));
     const locations = await getStoreLocations(storeId);
     return {
       plan: effectivePlan(store ?? {}),
       locations: locations.map((l) => ({
         ...l,
-        capabilities: normalizeCapabilities(capsById.get(l.id), l.type),
+        capabilities: normalizeCapabilities(
+          byId.get(l.id)?.capabilities,
+          l.type,
+        ),
+        pickupPincodes: byId.get(l.id)?.pickup_pincodes ?? [],
       })),
     };
   } catch (err) {
@@ -430,7 +438,10 @@ export async function listLocations(): Promise<LocationsView> {
 export async function saveLocationCapabilities(
   id: string,
   input: Partial<CapabilityMap>,
-): Promise<ActionResult> {
+  /** Raw merchant text for the pickup postcode rules. `undefined` leaves them
+   *  alone; an empty string clears them (= offered everywhere). */
+  pickupPincodeText?: string,
+): Promise<ActionResult & { invalidPincodes?: string[] }> {
   const admin = await getManagerIdentity("locations");
   if (!admin) return { error: "You don't have permission to do this." };
   const storeId = await getActingStoreId();
@@ -495,11 +506,31 @@ export async function saveLocationCapabilities(
     }
   }
 
+  // Postcode rules are parsed server-side, never trusted from the client — the
+  // storefront matches against whatever is stored, so junk here would silently
+  // stop offering collection to real customers.
+  let pincodes: string[] | undefined;
+  let invalidPincodes: string[] = [];
+  if (typeof pickupPincodeText === "string") {
+    const parsed = parsePincodeRules(pickupPincodeText);
+    pincodes = parsed.rules;
+    invalidPincodes = parsed.invalid;
+  }
+
   try {
     await withService((db) =>
       db
         .update(storeLocations)
-        .set({ capabilities: next, updatedAt: new Date().toISOString() })
+        .set({
+          capabilities: next,
+          // KEPT when pickup is switched off, not cleared. The rules are inert
+          // while the capability is off (locationCan gates first), and a
+          // merchant who pauses collection for a week should not come back to
+          // a hundred postcodes they have to retype. They are shown in the box
+          // the moment pickup is re-ticked, so nothing springs back invisibly.
+          ...(pincodes !== undefined ? { pickupPincodes: pincodes } : {}),
+          updatedAt: new Date().toISOString(),
+        })
         .where(
           and(eq(storeLocations.id, id), eq(storeLocations.storeId, storeId)),
         ),
@@ -510,7 +541,11 @@ export async function saveLocationCapabilities(
 
   revalidatePath("/dashboard/locations");
   revalidateTag(STORE_TAG, "max");
-  return { success: true };
+  // Saved, but tell the merchant what didn't parse — a rule they think is in
+  // force and isn't is worse than a rejected save.
+  return invalidPincodes.length > 0
+    ? { success: true, invalidPincodes }
+    : { success: true };
 }
 
 // ---- Admin location bindings (Phase B2) -----------------------------------

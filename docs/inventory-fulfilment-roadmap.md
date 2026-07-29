@@ -1,5 +1,11 @@
 # Inventory & Fulfilment — Phased Roadmap
 
+> **Ordering lives in `docs/roadmap.md`.** This document is the SPECIFICATION —
+> the extension points, invariants and per-phase design. What ships next, and
+> in what order, is decided in the roadmap, because these phases interleave
+> with the POS ones (locations G and POS 5 are the same returns work).
+> Acceptance tests: `docs/pos-acceptance.md`.
+
 **Goal:** grow from one shop to hundreds of locations and many sales channels
 **without rewriting the core**. Every behaviour that a merchant might want
 different is a registered, configurable thing — not an `if` branch.
@@ -239,7 +245,7 @@ _sellable_ stock — the sum across locations that can actually fulfil.
 
 ---
 
-### Phase E — Real reservations
+### Phase E — Real reservations — **DONE**
 
 **Ships:** `inventory_levels.reserved` finally used, a `reservations` table with
 an owner (order / pickup hold / channel) and a TTL, `reserve → confirm →
@@ -251,18 +257,90 @@ directly. That is correct and unoversellable for COD, but it cannot express
 
 **Unblocks:** pickup holds, online payment-pending, marketplace sync.
 
+**Shipped ADDITIVE.** `reserve_stock_at` still decrements `on_hand` outright,
+so COD checkout, the POS register and cancellation restock are untouched
+(invariant 5). What changed for existing flows is only that both stock guards
+now subtract `reserved` — a hold genuinely protects units instead of being
+decorative — and `online_stock` became `on_hand - reserved` at fulfilling
+locations, so the storefront never promises held units. `products.stock` stays
+the physical count, which is what the dashboard and POS want.
+
 ---
 
-### Phase F — Pickup (click & collect)
+### Phase F — Pickup (click & collect) — **DONE**
 
-**Ships:** pickup option at checkout for locations with the capability and
-stock; order state `awaiting_collection`; `/pos/pickups` queue with
-scan-verify-hand-over; hold-expiry sweep that cancels, refunds and releases.
+**Shipped:** `supabase/locations_05_pickup.sql` (fulfilment_type /
+pickup_location_id / pickup_status / pickup_expires_at / collected_at /
+collected_by on `orders`, three CHECKs, the queue index);
+`lib/fulfilment/pickup.ts` (`pickupLocationsFor` — capability + plan + stock,
+`sweepExpiredPickups`); `getPickupOptions` + a pickup step at checkout;
+`placeOrder` **holds** instead of reserving; `/pos/pickups` (queue, mark ready,
+hand over) + a Collections tile on the POS home; four notification events; the
+sweep folded into `/api/cron/expire-pending-payments`.
 
 **Rule from the spec, kept:** a customer-chosen pickup location **overrides**
 the fulfilment strategy entirely.
 
-**Config, not code:** hold days, whether pickup is offered at all.
+**Config, not code:** `fulfilment.offerPickup` + `fulfilment.pickupHoldDays`
+(registry, section `locations`, rendered on Locations → Online fulfilment).
+
+**Three things that had to move together**, or the feature would lie:
+
+1. **A pickup HOLDS, it does not sell.** The goods are on that shop's shelf
+   until someone hands them over. `reserve_stock_at` would empty the shelf on
+   screen while the box is still physically on it, and the shop would reorder
+   stock it already has.
+2. **Therefore the order carries `stock_status: 'none'`.** The cancel path's
+   reserved→released claim restocks — running it on a pickup would ADD units
+   that never left. Cancelling a pickup releases its holds instead
+   (`order-actions.ts`), which is idempotent, so a second cancel is a no-op.
+3. **Availability is `on_hand − reserved`.** Offering a shop whose only unit is
+   already held for somebody else's collection is how two people are promised
+   the same box.
+
+**The pre-expiry nudge** (`order.pickup_expiring`, `sweepPickupReminders`)
+fires once per order, 24 hours out, and the exactly-once property is a CLAIM on
+`orders.pickup_warned_at` (`locations_06_pickup_reminder.sql`) — not a
+schedule. The cron is a heartbeat, and `notifications`' UNIQUE on
+(event, recipient) can't dedupe it because each emit creates a NEW event row;
+without the claim a daily run would mail the same customer about the same box
+every day, which is how people learn to ignore a merchant's email.
+`PICKUP_WARN_HOURS` must stay ≥ the cron interval or an order can slip the
+whole window between two runs and expire unwarned. Reminders run AFTER the
+expiry sweep: telling someone to hurry and collect an order we just cancelled
+is worse than saying nothing.
+
+**Phase F.1 — postcode serviceability (DONE).** A warehouse in Pune and a shop
+in Mumbai should not both be offered to a Chennai shopper.
+`store_locations.pickup_pincodes` (text[], `locations_07`) holds merchant-typed
+rules in three forms — exact `400001`, prefix `400*`, range `400001-400104` —
+parsed and matched by the pure `lib/locations/pincodes.ts`. Prefixes are what
+make it usable: Mumbai is a hundred postcodes, and a merchant who can only type
+exact codes will type five and blame the feature.
+
+It **fails open in both directions**: no rules = offered everywhere (so the
+column changes nothing for existing stores), and an unknown postcode matches
+(a first-time shopper hasn't typed an address yet). It decides what is OFFERED,
+never what is permitted — `placeOrder` still validates capability, store and
+stock and deliberately does NOT refuse on a postcode. A merchant forgetting a
+suburb should cost them a listing, not a sale.
+
+Geography HIDES exactly one thing: the pickup toggle, when no shop serves the
+shopper. Within pickup, shops outside their area are **disclosed behind
+"Collecting somewhere else?", not dropped** — people collect near work, near
+family, on a route home, and their delivery postcode is a good guess at where
+they are rather than a fact about where they will drive. This also forced the
+chooser BELOW the address step: which shops can collect depends on a postcode,
+so the question cannot be asked before we know it.
+
+**Deliberately not built:** radius from lat/lng. It is the more correct answer
+and it puts a geocoding call on the checkout render path — cost, latency, and a
+failure mode on the one page that must never break. Revisit when a merchant has
+enough shops that prefix lists stop scaling.
+
+**Deliberately not built:** automatic refunds on expiry. The order is cancelled
+and the stock comes back; moving money on a schedule waits for the returns
+machinery that records it (Phase G).
 
 ---
 
