@@ -1908,11 +1908,6 @@ export const storeLocations = pgTable(
     // normalizeCapabilities() — never index into the raw blob.
     // PUBLIC: the storefront reads it to decide whether to offer pickup.
     capabilities: jsonb().default({}).notNull(),
-    // Postcode rules for customer pickup (locations_07_pickup_pincodes.sql).
-    // NULL/empty = offered everywhere — the unconfigured state must behave
-    // exactly as it did before the column existed. Parse/match ONLY through
-    // lib/locations/pincodes.ts.
-    pickupPincodes: text("pickup_pincodes").array(),
     isDefault: boolean("is_default").default(false).notNull(),
     active: boolean().default(true).notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),

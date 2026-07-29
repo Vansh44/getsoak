@@ -50,11 +50,11 @@ Most of these are **pickup's own unfinished edges**. The feature works end to
 end, but a shopper is told to collect from a named shop and never told where it
 is — so this is finishing what F shipped, not new scope.
 
-1. **Location address fields.** `store_locations.address` exists and
-   `saveLocation` accepts it, but no form ever sends one — so the checkout
-   card, the confirmation email and the order page all name a shop with no
-   address. Pickup shipped telling people where to go without ever having
-   asked where the shop is. **Everything else here is cosmetic next to this.**
+1. ~~Location address fields~~ — **done**, along with the ALDO-style
+   Ship/Pickup toggle and searchable location picker. Merchant-typed postcode
+   serviceability (F.1) was **removed**: the shopper knows where they are and
+   the merchant cannot, so every shop that can hand the basket over is listed
+   and they search it.
 2. **Bespoke copy for the three pickup emails.** `order.ready_for_pickup`,
    `order.collected` and `order.pickup_expiring` have no `CUSTOMER_INTRO`
    entry, so "your order is ready to collect" — the payoff of the whole

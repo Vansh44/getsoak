@@ -7,8 +7,11 @@ import "server-only";
 //
 //   1. Pickup is offered ONLY at locations that carry the capability — which
 //      itself requires `pos`, because someone has to hand the goods over.
-//   2. A shop with no stock is not offered. Driving to a shop to be told it
-//      isn't there is worse than not seeing the option.
+//   2. Every pickup-capable shop is LISTED; the shopper picks. Geography is
+//      the shopper's business, not the merchant's — they know whether they
+//      collect near home, near work, or on a route. Shops that can't cover the
+//      basket are shown last and disabled rather than hidden, because "not
+//      everything is in stock here" is information and a missing shop is not.
 //   3. The customer's chosen location OVERRIDES fulfilment routing entirely.
 //      They are driving to a specific shop; no strategy gets to second-guess
 //      that.
@@ -29,7 +32,6 @@ import {
   normalizeCapabilities,
   isLocationType,
 } from "@/lib/locations/capabilities";
-import { matchesPincode } from "@/lib/locations/pincodes";
 import { effectivePlan } from "@/lib/plans";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -44,16 +46,6 @@ export interface PickupLocation {
   /** False when this shop can't cover the whole basket — shown greyed, or
    *  hidden, but never silently offered. */
   hasStock: boolean;
-  /**
-   * Does this shop collect to the shopper's postcode?
-   *
-   * A FLAG, not a filter. Shops that don't serve their area are still returned
-   * so the checkout can put them behind "Collecting somewhere else?" —
-   * postcode lists are merchant-typed and will have gaps, and people collect
-   * near work, near family, on a route. Their delivery postcode is a good
-   * guess at where they are, never a fact about where they will drive.
-   */
-  servesArea: boolean;
 }
 
 /** Is pickup switched on for this store at all? */
@@ -84,10 +76,6 @@ export async function pickupHoldDays(): Promise<number> {
 export async function pickupLocationsFor(
   storeId: string,
   lines: OrderLineForRouting[],
-  /** The shopper's postcode, when we know it. Unknown ⇒ every shop counts as
-   *  serving them (pincodes.ts) — hiding collection from someone who hasn't
-   *  typed an address yet is the failure this must not have. */
-  pincode?: string | null,
 ): Promise<PickupLocation[]> {
   if (!(await pickupEnabled())) return [];
 
@@ -105,7 +93,6 @@ export async function pickupLocationsFor(
           address: storeLocations.address,
           active: storeLocations.active,
           capabilities: storeLocations.capabilities,
-          pickup_pincodes: storeLocations.pickupPincodes,
         })
         .from(storeLocations)
         .where(
@@ -169,7 +156,6 @@ export async function pickupLocationsFor(
         name: l.name,
         address: (l.address as Record<string, unknown> | null) ?? null,
         hasStock,
-        servesArea: matchesPincode(l.pickup_pincodes, pincode),
       });
     }
     return out;

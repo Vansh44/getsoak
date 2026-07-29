@@ -14,16 +14,16 @@ stories are here.**
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                      | Why                                                                                        |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_07` applied as `postgres` | Column-not-found errors otherwise; `locations_07` is REQUIRED or the Locations page 500s   |
-| Store on the **Pro** plan                                                         | POS and Locations are Pro-gated                                                            |
-| `POS_SESSION_SECRET` set                                                          | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
-| `RESEND_*` configured                                                             | Staff invitations and pickup emails go nowhere otherwise                                   |
+| Prerequisite                                                                              | Why                                                                                        |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08` as `postgres` | Column-not-found errors otherwise                                                          |
+| Store on the **Pro** plan                                                                 | POS and Locations are Pro-gated                                                            |
+| `POS_SESSION_SECRET` set                                                                  | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
+| `RESEND_*` configured                                                                     | Staff invitations and pickup emails go nowhere otherwise                                   |
 
 **Status on staging:** `pos_00`–`pos_11` and `locations_01`–`locations_06`
-applied. **`locations_07` is NOT yet applied** — stories 8.7–8.10 are blocked
-and `/dashboard/locations` will error until it is.
+applied; `locations_07` was applied and is now reverted by
+**`locations_08`, which must be run.**
 
 ---
 
@@ -317,8 +317,6 @@ Completing a sale still needs the server.
 
 ## 8. Pickup — click & collect
 
-> Stories 8.7–8.10 need `locations_07` applied.
-
 **PS-8.1 — Turn it on**
 Locations → Online fulfilment → Checkout → "Offer pick up in store"; give a
 shop the **Customer pickup** capability.
@@ -345,33 +343,32 @@ Cancel a pickup order from the dashboard.
 **Expect:** the holds are released and on-hand is **unchanged**. Restocking
 would add units that never left. Cancel twice — the second is a no-op.
 
+**PS-8.7 — Ship / Pickup toggle**
+Storefront checkout with pickup on.
+**Expect:** a two-button Ship / Pickup control ABOVE the address, like ALDO. Ship
+shows the address form; Pickup shows "There are N locations with your items",
+one shop card with its full address, and "N more locations".
+
+**PS-8.8 — The location picker**
+Tap "N more locations".
+**Expect:** a dialog with a search box, a radio list of every shop (address +
+FREE), and Save. Type a postcode or city — the list narrows. Out-of-stock shops
+are last and disabled.
+
+**PS-8.9 ★ — Pickup is offered to everyone**
+Check out from any address, anywhere.
+**Expect:** the Pickup option is always shown when a shop can hand the basket
+over. Geography is the SHOPPER's business — they know whether they collect near
+home, near work, or on a route; a delivery postcode never decides for them.
+
+**PS-8.10 — The summary drops shipping**
+Choose Pickup.
+**Expect:** the order summary row reads "Pickup in store", not "Shipping".
+
 **PS-8.6 ★ — The confirmation says where to go**
 Check the pickup order's confirmation email and `/orders/[id]`.
 **Expect:** the shop's name and the deadline, not a delivery address they never
 gave. A delivery order's email is unchanged.
-
-**PS-8.7 — Postcode rules** _(needs `locations_07`)_
-Location editor → tick Customer pickup → the box appears. Enter `400*, 411001`.
-**Expect:** "2 rules — everyone else sees delivery only". Enter `oops!!` →
-_"Can't read: oops!!"_.
-
-**PS-8.8 ★ — Empty means everywhere** _(needs `locations_07`)_
-Leave the box empty.
-**Expect:** collection offered to everyone — exactly as before the field
-existed.
-
-**PS-8.9 ★ — Out-of-area hides the toggle, not the shop** _(needs `locations_07`)_
-With Mumbai set to `400*`: check out with a `600001` address, then a `400072`
-one.
-**Expect:** 600001 sees **no pickup option at all**; 400072 sees it. Then, from
-a 400072 address with a second Pune-only shop, choose pickup.
-**Expect:** Pune is behind _"Collecting somewhere else?"_ — disclosed, not
-dropped.
-
-**PS-8.10 ★ — An unknown postcode fails open** _(needs `locations_07`)_
-Check out as a first-time shopper with no saved address.
-**Expect:** pickup is offered. Hiding it from someone who simply hasn't typed an
-address yet is the failure this must not have.
 
 **PS-8.11 — Expiry**
 Let a pickup pass `pickup_expires_at`, then run
