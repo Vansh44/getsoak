@@ -749,12 +749,24 @@ function dbMessage(e: unknown): string {
 }
 
 // Ping IndexNow for a newly-published article (prod only, non-blocking).
+//
+// THREE urls, not one. Publishing an article also changes the two pages that
+// list it — its category page and the help hub — and the category page in
+// particular may be entering the sitemap for the very first time (empty
+// categories are pruned; see app/sitemap.ts). Announcing only the article left
+// crawlers to rediscover its own inbound links on their own schedule, which is
+// the opposite of the "new article indexed fast" goal. IndexNow takes up to
+// 10,000 urls per request, so the extra two are free.
 function pingArticle(categoryId: string | null, slug: string) {
   if (!SEARCH_INDEXABLE || !categoryId) return;
   after(async () => {
     const cats = await getHelpCategories().catch(() => []);
     const catSlug = cats.find((c) => c.id === categoryId)?.slug;
     if (!catSlug) return;
-    await pingIndexNow([`${HELP_URL}/help/${catSlug}/${slug}`]).catch(() => {});
+    await pingIndexNow([
+      `${HELP_URL}/help/${catSlug}/${slug}`,
+      `${HELP_URL}/help/${catSlug}`,
+      `${HELP_URL}/help`,
+    ]).catch(() => {});
   });
 }
