@@ -140,7 +140,7 @@ export function RolesManagementView({ roles, canManage }: Props) {
                 <th>Description</th>
                 <th>Access</th>
                 <th>Admins</th>
-                <th>Actions</th>
+                <th className="dash-col-actions">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -180,7 +180,7 @@ export function RolesManagementView({ roles, canManage }: Props) {
                       )}
                     </td>
                     <td className="dash-cell-sub mono">{role.member_count}</td>
-                    <td>
+                    <td className="dash-col-actions">
                       {canManage ? (
                         <DropdownMenu>
                           <DropdownMenuTrigger className="dash-row-menu">

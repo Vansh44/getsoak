@@ -156,7 +156,7 @@ export function ColorsManagementView({ colors, canManage = true }: Props) {
                 <th>Hex</th>
                 <th>Used by</th>
                 <th>Order</th>
-                {canManage && <th>Actions</th>}
+                {canManage && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -180,7 +180,7 @@ export function ColorsManagementView({ colors, canManage = true }: Props) {
                   </td>
                   <td className="text-dim font-mono-dash">{c.sort_order}</td>
                   {canManage && (
-                    <td>
+                    <td className="dash-col-actions">
                       <DropdownMenu>
                         <DropdownMenuTrigger className="dash-row-menu">
                           <MoreHorizontal className="h-4 w-4" />

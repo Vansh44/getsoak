@@ -347,7 +347,7 @@ export function EnquiriesManagementView({
                   <th>Message</th>
                   <th>Status</th>
                   <th>Received</th>
-                  {canManage && <th />}
+                  {canManage && <th className="dash-col-actions" />}
                 </tr>
               </thead>
               <tbody>
@@ -400,7 +400,10 @@ export function EnquiriesManagementView({
                     </td>
 
                     {canManage && (
-                      <td onClick={(event) => event.stopPropagation()}>
+                      <td
+                        className="dash-col-actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <DropdownMenu>
                           <DropdownMenuTrigger className="enquiries-row-menu">
                             <MoreHorizontal className="h-4 w-4" />

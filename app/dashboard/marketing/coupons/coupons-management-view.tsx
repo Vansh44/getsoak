@@ -226,7 +226,7 @@ export function CouponsManagementView({
                 <th>Validity</th>
                 <th>Status</th>
                 <th>Storefront</th>
-                {canManage && <th>Actions</th>}
+                {canManage && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -300,7 +300,7 @@ export function CouponsManagementView({
                       />
                     </td>
                     {canManage && (
-                      <td>
+                      <td className="dash-col-actions">
                         <DropdownMenu>
                           <DropdownMenuTrigger className="dash-row-menu">
                             <MoreHorizontal className="h-4 w-4" />
