@@ -1,5 +1,12 @@
 import Link from "next/link";
 import { PLATFORM_URL } from "@/lib/site";
+import { LEGAL_DOCS } from "@/lib/legal/documents";
+import {
+  BRAND_SOCIAL_LINKS,
+  SUPPORT_EMAIL,
+  platformOrganizationSchema,
+  platformWebsiteSchema,
+} from "@/lib/seo/brand-identity";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import {
   ArrowRight,
@@ -212,27 +219,11 @@ export default function StoreminkLanding() {
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
-      {
-        "@type": "Organization",
-        "@id": `${PLATFORM_URL}/#organization`,
-        name: "StoreMink",
-        // The one-word spelling people actually type. Declaring it as an
-        // alternate name tells Google "storemink" IS the brand — a direct signal
-        // against the "did you mean storelink?" spell-correction on a new brand.
-        alternateName: ["Storemink", "store mink"],
-        url: PLATFORM_URL,
-        logo: `${PLATFORM_URL}/icon.svg`,
-        description:
-          "India-first no-code store builder — storefront, blogs, reviews, coupons and email campaigns included. D2C + B2B, no transaction fees.",
-      },
-      {
-        "@type": "WebSite",
-        "@id": `${PLATFORM_URL}/#website`,
-        name: "StoreMink",
-        alternateName: ["Storemink", "store mink"],
-        url: PLATFORM_URL,
-        publisher: { "@id": `${PLATFORM_URL}/#organization` },
-      },
+      // Organization + WebSite come from lib/seo/brand-identity.ts because the
+      // help centre emits the SAME nodes under the same @id. Two hand-written
+      // copies would drift, and a contradictory entity is worse than none.
+      platformOrganizationSchema(),
+      platformWebsiteSchema(),
       {
         "@type": "SoftwareApplication",
         "@id": `${PLATFORM_URL}/#software`,
@@ -717,6 +708,33 @@ export default function StoreminkLanding() {
             <nav>
               <a href="https://help.storemink.com">Help Centre</a>
               <a href="#faq">FAQ</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+            </nav>
+          </div>
+          <div>
+            <h4>Follow</h4>
+            {/* The visible half of the `sameAs` claim in the JSON-LD above —
+                same list, one source (lib/seo/brand-identity.ts), so a profile
+                can never be asserted in schema but missing from the page.
+                rel="me" is the standard "this account is us" annotation. */}
+            <nav>
+              {BRAND_SOCIAL_LINKS.map((s) => (
+                <a key={s.href} href={s.href} rel="me noopener" target="_blank">
+                  {s.label}
+                </a>
+              ))}
+            </nav>
+          </div>
+          <div>
+            <h4>Legal</h4>
+            {/* Previously reachable only from inside the signup form, so both
+                the sitemap entry and the crawler had no path to them. */}
+            <nav>
+              {LEGAL_DOCS.map((d) => (
+                <Link key={d.slug} href={`/legal/${d.slug}`}>
+                  {d.title}
+                </Link>
+              ))}
             </nav>
           </div>
         </div>

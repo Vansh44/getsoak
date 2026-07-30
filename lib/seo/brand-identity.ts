@@ -1,0 +1,102 @@
+/**
+ * StoreMink's own brand identity for structured data — the platform entity, not
+ * a merchant's store.
+ *
+ * This lives in one module because the SAME Organization node has to be emitted
+ * from two hosts (the apex and help.storemink.com) under one `@id`. Two
+ * hand-written copies would drift, and a drifted entity is worse than one
+ * absent: search engines would see two different descriptions of the thing at
+ * `https://storemink.com/#organization`.
+ *
+ * Pure — imports only from lib/store/host.ts (dependency-free, edge-safe).
+ */
+import { PLATFORM_URL } from "@/lib/store/host";
+
+/**
+ * Official profiles, for schema.org `sameAs`.
+ *
+ * `sameAs` is an ASSERTION that these accounts are this organisation. It is one
+ * of the strongest corroborating signals for a brand query, and it works both
+ * ways round: each profile should also list storemink.com as its website, so
+ * the claim can be confirmed rather than just made.
+ *
+ * Rules for this list, all of which cost real ranking if broken:
+ *  - PUBLIC profile URLs only. An admin/dashboard URL
+ *    (linkedin.com/company/<id>/admin/...) is behind a login and identifies a
+ *    session, not the brand — it must never appear here.
+ *  - Canonical form only. LinkedIn's own <link rel="canonical"> is
+ *    /company/storemink, so no /home/ suffix and no trailing slash.
+ *  - Only accounts we actually control. A wrong handle claims someone else's
+ *    account is us.
+ *
+ * Verified live 2026-07-29: the YouTube and LinkedIn pages both carry the
+ * StoreMink name and the site's own tagline; the Instagram payload carries the
+ * display name "StoreMink" (a nonexistent handle's does not).
+ */
+export const BRAND_SAME_AS: readonly string[] = [
+  "https://www.linkedin.com/company/storemink",
+  "https://www.youtube.com/@storemink",
+  "https://www.instagram.com/storemink.official",
+];
+
+export const SUPPORT_EMAIL = "support@storemink.com";
+
+const BRAND_DESCRIPTION =
+  "India-first no-code store builder — storefront, blogs, reviews, coupons and email campaigns included. D2C + B2B, no transaction fees.";
+
+/**
+ * "storemink" written the ways people actually type it. Declaring these tells
+ * Google the one-word spelling IS the brand — a direct counter to the
+ * "did you mean…?" spell-correction a new, invented brand name attracts.
+ */
+const ALTERNATE_NAMES = ["Storemink", "store mink"];
+
+/**
+ * The platform Organization node. Emitted on the apex AND the help centre under
+ * one `@id`, so every help article's publisher resolves to this same entity
+ * (see helpArticleSchema in ./schema.ts).
+ */
+export function platformOrganizationSchema(): Record<string, unknown> {
+  return {
+    "@type": "Organization",
+    "@id": `${PLATFORM_URL}/#organization`,
+    name: "StoreMink",
+    alternateName: ALTERNATE_NAMES,
+    url: PLATFORM_URL,
+    logo: `${PLATFORM_URL}/icon.svg`,
+    description: BRAND_DESCRIPTION,
+    sameAs: [...BRAND_SAME_AS],
+    contactPoint: {
+      "@type": "ContactPoint",
+      contactType: "customer support",
+      email: SUPPORT_EMAIL,
+      url: `https://help.${PLATFORM_URL.replace(/^https?:\/\//, "")}`,
+      availableLanguage: ["en"],
+    },
+    address: { "@type": "PostalAddress", addressCountry: "IN" },
+  };
+}
+
+/** The platform WebSite node, publisher-linked to the Organization above. */
+export function platformWebsiteSchema(): Record<string, unknown> {
+  return {
+    "@type": "WebSite",
+    "@id": `${PLATFORM_URL}/#website`,
+    name: "StoreMink",
+    alternateName: ALTERNATE_NAMES,
+    url: PLATFORM_URL,
+    publisher: { "@id": `${PLATFORM_URL}/#organization` },
+  };
+}
+
+/**
+ * Footer link labels for the same profiles. Kept beside BRAND_SAME_AS so a
+ * profile can't be claimed in schema without also being linked in the page —
+ * a `sameAs` with no visible corresponding link is a weaker signal, and an
+ * unreachable brand looks unfinished to a human reader too.
+ */
+export const BRAND_SOCIAL_LINKS: readonly { label: string; href: string }[] = [
+  { label: "LinkedIn", href: "https://www.linkedin.com/company/storemink" },
+  { label: "YouTube", href: "https://www.youtube.com/@storemink" },
+  { label: "Instagram", href: "https://www.instagram.com/storemink.official" },
+];

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Inter } from "next/font/google";
 import { HELP_URL } from "@/lib/site";
+import { platformOrganizationSchema } from "@/lib/seo/brand-identity";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 import "./help.css";
 
@@ -26,6 +27,26 @@ export const metadata: Metadata = {
   ...(SEARCH_INDEXABLE ? {} : { robots: { index: false, follow: false } }),
 };
 
+// The help centre had NO Organization or WebSite node anywhere — only the
+// category and article routes emitted JSON-LD. So every help article declared a
+// publisher that resolved to nothing on this host, and a whole subdomain of
+// first-party content contributed nothing to the StoreMink entity. Same @id as
+// the apex (lib/seo/brand-identity.ts), so the two describe one entity rather
+// than two.
+const HELP_GRAPH = {
+  "@context": "https://schema.org",
+  "@graph": [
+    platformOrganizationSchema(),
+    {
+      "@type": "WebSite",
+      "@id": `${HELP_URL}/#website`,
+      name: "StoreMink Help Centre",
+      url: HELP_URL,
+      publisher: { "@id": platformOrganizationSchema()["@id"] },
+    },
+  ],
+};
+
 export default function HelpLayout({
   children,
 }: {
@@ -33,6 +54,10 @@ export default function HelpLayout({
 }) {
   return (
     <div className={`hc ${helpFont.variable}`}>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(HELP_GRAPH) }}
+      />
       <header className="hc-topbar">
         <div className="hc-wrap hc-topbar-inner">
           <Link href="/help" className="hc-logo">

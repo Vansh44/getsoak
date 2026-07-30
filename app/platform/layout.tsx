@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   title: "StoreMink — Launch your store in a day. Keep 100% of every sale.",
   description: DESCRIPTION,
   applicationName: "StoreMink",
+  // Self-canonical. Without this the apex emitted NO canonical at all, while
+  // `/`, `/signup` and `/login` all served a byte-identical title and the same
+  // og:url — three indexable copies of the one page that has to win the brand
+  // query. Child routes override this with their own canonical.
+  alternates: { canonical: "/" },
   keywords: [
     "storemink",
     "StoreMink",
