@@ -91,9 +91,10 @@ export const SECTIONS: DashboardSection[] = [
     href: "/dashboard/orders",
     icon: "orders",
     group: "Workspace",
+    // No badge. This carried a HARDCODED "12" — not an order count, just the
+    // literal string, shown to every store on every plan forever. A number in
+    // the nav that never moves teaches people to ignore numbers in the nav.
     actions: ["view", "manage"],
-    badge: "12",
-    badgeTone: "accent",
   },
   {
     key: "products",

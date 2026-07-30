@@ -186,9 +186,14 @@ wholesip/
 │   │   │                      # Settings area) must stay a section. foldNestedSections()
 │   │   │                      # does the folding AFTER the permission filter, never
 │   │   │                      # mutates the shared catalog, bubbles a nested badge up
-│   │   │                      # to a parent that has none (or Inventory's low-stock
-│   │   │                      # count would vanish), and leaves an orphan top-level
-│   │   │                      # when its parent was filtered out. Tested),
+│   │   │                      # to a parent that has none (Enquiries' unread count
+│   │   │                      # reaching Customers — otherwise nesting would hide it),
+│   │   │                      # and leaves an orphan top-level when its parent was
+│   │   │                      # filtered out. Tested. ⚠ Sidebar badges are for counts
+│   │   │                      # that DEMAND action and go away once handled. Orders
+│   │   │                      # carried a hardcoded "12" and Inventory a permanent
+│   │   │                      # low-stock total; both are gone — a number that never
+│   │   │                      # moves teaches people to ignore the ones that do),
 │   │   │                      # list-params.ts, use-row-selection.ts. ★ access.ts never
 │   │   │                      # swallows a DB error into an access decision (the
 │   │   │                      # resolve.ts rule): getViewerContext returns

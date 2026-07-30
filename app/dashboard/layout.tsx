@@ -10,7 +10,6 @@ import { MobileNavProvider } from "./dashboard-mobile-nav";
 import { getViewerContext } from "./lib/access";
 import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
-import { getLowStockAlertCount } from "./inventory/data";
 import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
 import { ChatProvider } from "./chat-context";
@@ -141,8 +140,12 @@ export default async function DashboardLayout({
   const canViewEnquiries = can(permissions, "enquiries", "view", isSuperadmin);
   const newEnquiries = canViewEnquiries ? await getNewEnquiriesCount() : 0;
 
-  const canViewInventory = can(permissions, "inventory", "view", isSuperadmin);
-  const lowStockAlerts = canViewInventory ? await getLowStockAlertCount() : 0;
+  // NOTE: no low-stock badge on Inventory. It was removed deliberately, and
+  // with it the getLowStockAlertCount() query — one less DB round trip on every
+  // dashboard page load. Low stock still surfaces where it is actionable: the
+  // Inventory page's own Low Stock filter, and the inventory.low_stock
+  // notification (CODEBASE.md §24), which fires on the CROSSING rather than
+  // sitting there as a permanent number.
 
   // Store identity for the topbar (name + current plan, Shopify-style). Cached
   // host lookup, so this adds no query. effectivePlan folds an expired timed
@@ -183,19 +186,6 @@ export default async function DashboardLayout({
           badge: String(newEnquiries),
           badgeTone: "amber" as const,
         };
-      }
-      if (s.key === "inventory" && lowStockAlerts > 0) {
-        return {
-          ...s,
-          badge: String(lowStockAlerts),
-          badgeTone: "amber" as const,
-        };
-      }
-      if (s.key === "inventory") {
-        const rest = { ...s };
-        delete rest.badge;
-        delete rest.badgeTone;
-        return rest;
       }
       if (s.key === "pos") {
         const rest = { ...s };
