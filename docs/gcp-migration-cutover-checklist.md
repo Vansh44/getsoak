@@ -133,8 +133,14 @@ not separate instances or projects.
 
 - [ ] Deploy Cloud Run: `--add-cloudsql-instances=<prod-instance>`, runtime SA,
       the **decoupled** env (explicit `FIREBASE_*` for the prod Firebase project + `GCP_PROJECT_ID=<infra project>`), `--set-secrets`.
-- [ ] Crons → **Cloud Scheduler** (`send-emails`, `plan-expiry`,
-      `expire-pending-payments`), then delete the `crons` block from `vercel.json`.
+- [x] Crons → **Cloud Scheduler** (`send-emails`, `plan-expiry`,
+      `expire-pending-payments`) — **DONE 2026-07-30**, see `docs/cron-jobs.md`.
+      ⚠ This box sat unticked long after the cutover, and prod ran with **zero**
+      scheduled jobs in every region the whole time. Nothing was lost only
+      because prod had 2 stores and 0 orders. `vercel.json` keeps its `crons`
+      block as the record of intended schedules (annotated inert) rather than
+      being deleted — deleting it would leave no reviewable trace of what the
+      schedules are supposed to be.
 - [ ] Flip DNS `storemink.com` + `*.storemink.com` → the LB IP. **Keep Vercel
       live as rollback.**
 

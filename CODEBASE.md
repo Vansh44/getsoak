@@ -391,12 +391,22 @@ wholesip/
 │   ├── seo/                   # ★ schema.ts — pure JSON-LD builders (productSchema/
 │   │                          # articleSchema/breadcrumbSchema), tested. Rendered via the
 │   │                          # (storefront) <JsonLd> component on product/blog pages.
+│   │                          # Article/help publishers carry @id + url so they
+│   │                          # resolve to the site's own #organization node.
 │   │                          # og-card.ts — brandOgImageUrl() builds the /api/og URL
 │   │                          # (single `d` param) for the branded default share card.
-│   │                          # search-engines.ts — pingIndexNow() (Bing/Yandex) +
-│   │                          # submitSitemapToGoogle() (Search Console); fired via
-│   │                          # after() on store create + publish. Best-effort, dormant
-│   │                          # until env is set. IndexNow key: public/<key>.txt.
+│   │                          # search-engines.ts — pingIndexNow() (Bing/Yandex —
+│   │                          # NOT Google) + submitSitemapToGoogle() (Search
+│   │                          # Console; the ONLY caller is store-signup). Both
+│   │                          # best-effort; the Google path now logs via
+│   │                          # observability instead of returning silently.
+│   │                          # IndexNow key: public/<key>.txt.
+│   │                          # ★ disallow.ts — the ONE list of non-indexable
+│   │                          # storefront/platform paths, read by BOTH app/robots.ts
+│   │                          # and app/sitemap.ts so a URL can never be blocked in
+│   │                          # one and submitted in the other (/track-order was).
+│   │                          # `exact` emits a `$` anchor so `/cart` doesn't also
+│   │                          # block a merchant page slugged `cartography`. Tested.
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
 │   │                          # trigger-worker, blog/enquiry notifications.
 │   │                          # ★ notification-emails.ts (§22: single + digest
@@ -2256,6 +2266,56 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   Search Console \_Domain property* (covers all `*.storemink.com`) and add the
   `storemink-run@…` SA as a property user. Custom-domain stores fall outside the
   property, so their Google submit no-ops (IndexNow + on-page canonicals cover them).
+  **⚠ A STORE'S PUBLIC ORIGIN IS `storeOrigin(store)` (`lib/site.ts`) — NEVER
+  `custom_domain ?? subdomain`.** The custom domain counts only once
+  `settings.custom_domain_verified === true`, which is the same rule
+  `lookupStoreByHost` (`lib/store/resolve.ts`) applies when deciding whether to
+  SERVE on that domain — and the two silently disagreed. `saveCustomDomain`
+  writes `custom_domain` while CLEARING the verified flag, so every merchant
+  passes through a state where the store is served on its subdomain while every
+  canonical, `og:url`, robots `Host:`, sitemap `<loc>` and IndexNow ping pointed
+  at a domain we don't serve. Google follows the canonical, fails to fetch it,
+  and drops the working subdomain URLs as "Alternate page with proper canonical
+  tag" — total silent deindexing of a tenant. `getStoreUrl()` (and therefore the
+  storefront `metadataBase`) routes through it; regression-tested in
+  `lib/site.test.ts`. Related: a store-SHAPED host that resolves to NO store
+  (unclaimed subdomain, suspended store, unseeded demo) now returns
+  `Disallow: /` + an empty sitemap instead of falling through to the platform's,
+  which had every parked subdomain advertising storemink.com's URLs as its own.
+  **`app/sitemap.ts` emits NO fabricated `lastmod`** — a request-time value makes
+  Google discard lastmod site-wide, including the values that are accurate — so
+  each URL derives it from a real content timestamp or omits it, guarded by
+  `app/sitemap.test.ts`. Products use **`products.content_updated_at`**
+  (`supabase/seo_01_product_content_timestamp.sql`), a trigger-maintained column
+  that moves only when a visitor-visible field changes: `updated_at` is bumped by
+  `_recompute_stock_aggregate` on every sale, so it would claim a content change
+  per purchase. Pages use `published_at`, not `updated_at`, which a BEFORE-UPDATE
+  trigger + `savePageDraft`'s autosave advance while an UNPUBLISHED draft is
+  edited.
+- **A NEW STORE IS NOT INDEXABLE UNTIL ITS OWNER PUBLISHES SOMETHING**
+  (`lib/store/launch.ts`). At creation a store is pure theme seed — the same
+  homepage, ~17 content pages and sample catalogue as every other store on that
+  template — and `createStore` used to submit exactly that to Google + IndexNow
+  the moment it existed. Mass-submitting near-duplicate placeholder stores spends
+  the whole `*.storemink.com` domain's reputation, and `robots.txt` cannot undo
+  it (Disallow stops crawling, not indexing). `stores.settings.launched` gates
+  `robots.ts` + `sitemap.ts`; `markStoreLaunched()` fires from `publishPage` and
+  the product publish path, which is now also where the one-time
+  `submitSitemapToGoogle` happens. **Absence of the flag means LAUNCHED** —
+  pre-existing stores have no key and treating them as unlaunched would deindex
+  live shops; `createStore` writes `launched: false` explicitly. Demo stores
+  (`settings.demo`) stay permanently out. Theme SAMPLE products now seed as
+  **drafts** (`applyTheme`'s `publishSampleProducts`, true only for demo stores):
+  published, every store on a theme served the same product pages whose own copy
+  says "replace it with your own".
+  Full audit, fixes and the re-index cadence: `docs/seo-action-plan.md`.
+- **StoreMink's own brand identity for schema lives in
+  `lib/seo/brand-identity.ts`** — one Organization node (`sameAs` for the
+  LinkedIn/YouTube/Instagram profiles, `contactPoint`, `address`) emitted from
+  BOTH the apex and `help.storemink.com` under a single `@id`, plus the matching
+  visible footer links. Two hand-written copies would drift, and a contradictory
+  entity is worse than an absent one. **Only public profile URLs belong in
+  `sameAs`** — never a `/admin/` dashboard URL.
 
 ## 8. Multi-tenant rollout status (as of 2026-07)
 
