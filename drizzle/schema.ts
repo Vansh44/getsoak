@@ -1568,6 +1568,16 @@ export const products = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    // Moves only when a visitor-visible column changes — NOT on a sale. See
+    // supabase/seo_01_product_content_timestamp.sql: updated_at is bumped by
+    // _recompute_stock_aggregate on every inventory movement, so it cannot be
+    // used as the sitemap's lastmod. Trigger-maintained; never written by app code.
+    contentUpdatedAt: timestamp("content_updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
     basePrice: numeric("base_price", {
       precision: 10,
       scale: 2,

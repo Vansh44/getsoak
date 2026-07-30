@@ -1,7 +1,13 @@
 import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
-import { HELP_URL, PLATFORM_URL } from "@/lib/site";
-import { ROOT_DOMAIN, SEARCH_INDEXABLE, isHelpHost } from "@/lib/store/host";
+import {
+  PLATFORM_DISALLOW,
+  STOREFRONT_DISALLOW,
+  disallowPaths,
+} from "@/lib/seo/disallow";
+import { HELP_URL, PLATFORM_URL, storeOrigin } from "@/lib/site";
+import { SEARCH_INDEXABLE, isHelpHost, isPlatformHost } from "@/lib/store/host";
+import { isStoreLaunched } from "@/lib/store/launch";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 
 export default async function robots(): Promise<MetadataRoute.Robots> {
@@ -26,30 +32,38 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
     };
   }
 
-  // Host-aware: a real store host advertises its own canonical origin; the
-  // platform apex (storemink.com) and any unresolved host must advertise the
-  // platform itself — NOT the WholeSip fallback that getStoreUrl() would return
-  // here (that pointed robots/sitemap at wholesip.com on storemink.com).
+  // Host-aware: a real store host advertises its own canonical origin (custom
+  // domain only once VERIFIED — see storeOrigin), and the platform apex
+  // advertises the platform itself.
   const store = await getCurrentStoreOrNull();
-  const siteUrl = store
-    ? `https://${store.custom_domain ?? `${store.slug}.${ROOT_DOMAIN}`}`
-    : PLATFORM_URL;
+
+  // A store-SHAPED host that resolves to no store — an unclaimed subdomain, a
+  // suspended store, a demo that was never seeded. Falling through to the
+  // platform branch made every one of them answer `Allow: /` while advertising
+  // storemink.com's Host + Sitemap, inviting crawlers to a host that serves
+  // nothing of its own. Nothing here is indexable, so say so.
+  if (!store && !isPlatformHost(host)) {
+    return { rules: { userAgent: "*", disallow: "/" } };
+  }
+
+  // A store that has never published anything of its own is still the theme's
+  // seed content — the same pages every other store on that theme has. Keep it
+  // out until the merchant makes it theirs (lib/store/launch.ts). Demo stores
+  // are permanent showcases of exactly that shared content, so they stay out
+  // for good.
+  if (store && (!isStoreLaunched(store) || store.settings?.demo === true)) {
+    return { rules: { userAgent: "*", disallow: "/" } };
+  }
+
+  const siteUrl = store ? storeOrigin(store) : PLATFORM_URL;
   return {
     rules: {
       userAgent: "*",
       allow: "/",
-      // Keep the admin app, auth flows, API, and personal/utility pages out of
-      // the index.
-      disallow: [
-        "/dashboard",
-        "/auth",
-        "/api",
-        "/cart",
-        "/profile",
-        "/track-order",
-        "/blogs/write",
-        "/blogs/my-submissions",
-      ],
+      // Admin app, auth flows, API, and personal/transactional pages. Shared
+      // with app/sitemap.ts via lib/seo/disallow.ts so a URL can never be
+      // blocked here and submitted there — `/track-order` was, for months.
+      disallow: disallowPaths(store ? STOREFRONT_DISALLOW : PLATFORM_DISALLOW),
     },
     sitemap: `${siteUrl}/sitemap.xml`,
     host: siteUrl,
