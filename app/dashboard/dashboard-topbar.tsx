@@ -40,7 +40,8 @@ export function DashboardTopbar({
   const planPill = PLAN_PILL[planId ?? "free"] ?? PLAN_PILL.free;
 
   return (
-    <header className="dash-topbar flex items-center justify-between px-2 sm:px-4 h-14 bg-[#3f3f46] text-white">
+    <header className="dash-topbar relative flex items-center justify-between px-2 sm:px-4 h-14 bg-[#3f3f46] text-white">
+      {/* Left */}
       <div className="flex items-center gap-1 sm:gap-3 shrink-0">
         <button
           type="button"
@@ -69,9 +70,6 @@ export function DashboardTopbar({
           </span>
         </Link>
 
-        {/* Store identity + plan (Shopify-style): which store you're managing
-            and the plan it's on, right next to the product logo. Hidden on the
-            platform console, which has no single store. */}
         {storeName && (
           <div className="hidden items-center gap-2 lg:flex shrink-0">
             <span className="h-5 w-px bg-white/15" aria-hidden />
@@ -81,6 +79,7 @@ export function DashboardTopbar({
             >
               {storeName}
             </span>
+
             {planName && (
               <span
                 className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${planPill}`}
@@ -93,25 +92,29 @@ export function DashboardTopbar({
         )}
       </div>
 
-      <div className="flex items-center gap-2 flex-1 justify-center max-w-xl mx-2">
-        <div className="hidden md:flex flex-1 max-w-md bg-slate-700 hover:bg-slate-600 transition-colors border border-transparent hover:border-slate-500 rounded-lg h-[34px] px-3 items-center gap-2 group cursor-text">
+      {/* Perfectly centered search */}
+      <div className="absolute inset-0 hidden md:flex items-center justify-center pointer-events-none">
+        <div className="pointer-events-auto w-full max-w-md bg-slate-700 hover:bg-slate-600 transition-colors border border-transparent hover:border-slate-500 rounded-lg h-[34px] px-3 flex items-center gap-2 group cursor-text">
           <Search className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white transition-colors" />
+
           <input
             type="search"
             placeholder="Search"
             className="flex-1 bg-transparent border-none outline-none text-white text-[13px] placeholder:text-slate-400"
           />
+
           <kbd className="shrink-0 bg-slate-800 border border-slate-600 text-slate-400 text-[10px] font-medium px-1.5 py-0.5 rounded">
             ⌘ K
           </kbd>
         </div>
       </div>
 
+      {/* Right */}
       <div className="flex items-center gap-0.5 sm:gap-3 shrink-0 justify-end">
-        {/* The role this session is signed in with, next to My Store. */}
         <span className="hidden sm:inline-flex items-center rounded-full bg-white/10 px-2.5 h-[34px] text-[12.5px] font-medium text-white/85 shrink-0">
           {formatRole(role)}
         </span>
+
         <button
           type="button"
           onClick={() => window.open("/", "_blank")}
@@ -120,7 +123,7 @@ export function DashboardTopbar({
           <Store className="h-4 w-4" />
           My Store
         </button>
-        {/* Mobile Search Icon (hidden on md+) */}
+
         <button
           type="button"
           className="md:hidden relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0"
@@ -128,15 +131,20 @@ export function DashboardTopbar({
         >
           <Search className="h-[18px] w-[18px]" />
         </button>
+
         <button
           type="button"
           onClick={toggleChat}
-          className={`relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0 ${isChatOpen ? "bg-slate-700 text-white" : ""}`}
+          className={`relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0 ${
+            isChatOpen ? "bg-slate-700 text-white" : ""
+          }`}
           aria-label="Mink AI"
         >
           <MessageSquare className="h-[18px] w-[18px]" />
         </button>
+
         <NotificationBell />
+
         <div className="shrink-0 ml-1">
           <TopbarProfile
             email={email}

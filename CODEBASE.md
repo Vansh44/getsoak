@@ -150,7 +150,20 @@ wholesip/
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
-│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions),
+│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions;
+│   │   │                      # ★ SECTIONS is grouped by JOB — Workspace / Sell in
+│   │   │                      # person / Storefront / Marketing / Settings — and a
+│   │   │                      # section may set `parent` to render NESTED under
+│   │   │                      # another while keeping its own permission key. That
+│   │   │                      # distinction is load-bearing: `children` are rendered
+│   │   │                      # with NO can() check, so anything separately gated
+│   │   │                      # (Categories, Colours, Inventory, Enquiries, and every
+│   │   │                      # Settings area) must stay a section. foldNestedSections()
+│   │   │                      # does the folding AFTER the permission filter, never
+│   │   │                      # mutates the shared catalog, bubbles a nested badge up
+│   │   │                      # to a parent that has none (or Inventory's low-stock
+│   │   │                      # count would vanish), and leaves an orphan top-level
+│   │   │                      # when its parent was filtered out. Tested),
 │   │   │                      # list-params.ts, use-row-selection.ts. ★ access.ts never
 │   │   │                      # swallows a DB error into an access decision (the
 │   │   │                      # resolve.ts rule): getViewerContext returns

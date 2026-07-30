@@ -7,7 +7,13 @@ import { ArrowLeft } from "lucide-react";
 import { SidebarNavLink, navIcons, type NavIconKey } from "./sidebar-nav-link";
 import { useMobileNav } from "./dashboard-mobile-nav";
 
-type Child = { label: string; href: string; icon?: NavIconKey };
+type Child = {
+  label: string;
+  href: string;
+  icon?: NavIconKey;
+  badge?: string;
+  badgeTone?: "accent" | "amber";
+};
 type Item = {
   href: string;
   label: string;
@@ -152,6 +158,13 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
                               />
                             </span>
                             <span className="truncate">{c.label}</span>
+                            {c.badge ? (
+                              <span
+                                className={`dash-nav-badge ${c.badgeTone ?? "accent"}`}
+                              >
+                                {c.badge}
+                              </span>
+                            ) : null}
                           </Link>
                         );
                       })}
