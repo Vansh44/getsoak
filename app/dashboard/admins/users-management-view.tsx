@@ -168,7 +168,7 @@ export function UsersManagementView({
               <th>Role</th>
               <th>Last Active</th>
               <th>Status</th>
-              <th>Actions</th>
+              <th className="dash-col-actions">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -215,7 +215,7 @@ export function UsersManagementView({
                       {status.label}
                     </span>
                   </td>
-                  <td>
+                  <td className="dash-col-actions">
                     {profile.id === currentUserId || !canManage ? (
                       <span className="text-dim text-[12px]">—</span>
                     ) : (

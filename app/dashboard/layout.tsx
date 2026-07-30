@@ -10,7 +10,6 @@ import { MobileNavProvider } from "./dashboard-mobile-nav";
 import { getViewerContext } from "./lib/access";
 import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
-import { getLowStockAlertCount } from "./inventory/data";
 import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
 import { ChatProvider } from "./chat-context";
@@ -18,6 +17,7 @@ import { DashboardChat } from "./dashboard-chat";
 import {
   SECTIONS,
   SECTION_GROUPS,
+  foldNestedSections,
   can,
   type SectionGroup,
 } from "./lib/permissions";
@@ -140,8 +140,12 @@ export default async function DashboardLayout({
   const canViewEnquiries = can(permissions, "enquiries", "view", isSuperadmin);
   const newEnquiries = canViewEnquiries ? await getNewEnquiriesCount() : 0;
 
-  const canViewInventory = can(permissions, "inventory", "view", isSuperadmin);
-  const lowStockAlerts = canViewInventory ? await getLowStockAlertCount() : 0;
+  // NOTE: no low-stock badge on Inventory. It was removed deliberately, and
+  // with it the getLowStockAlertCount() query — one less DB round trip on every
+  // dashboard page load. Low stock still surfaces where it is actionable: the
+  // Inventory page's own Low Stock filter, and the inventory.low_stock
+  // notification (CODEBASE.md §24), which fires on the CROSSING rather than
+  // sitting there as a permanent number.
 
   // Store identity for the topbar (name + current plan, Shopify-style). Cached
   // host lookup, so this adds no query. effectivePlan folds an expired timed
@@ -183,19 +187,6 @@ export default async function DashboardLayout({
           badgeTone: "amber" as const,
         };
       }
-      if (s.key === "inventory" && lowStockAlerts > 0) {
-        return {
-          ...s,
-          badge: String(lowStockAlerts),
-          badgeTone: "amber" as const,
-        };
-      }
-      if (s.key === "inventory") {
-        const rest = { ...s };
-        delete rest.badge;
-        delete rest.badgeTone;
-        return rest;
-      }
       if (s.key === "pos") {
         const rest = { ...s };
         if (!posState.posAvailable) {
@@ -218,6 +209,11 @@ export default async function DashboardLayout({
     items: typeof SECTIONS;
   }[];
 
+  // Nest the sections that declare a `parent` (Categories/Colours/Inventory
+  // under Products, the settings areas under Settings, …). Runs AFTER the
+  // permission filter above, which is the whole point — see foldNestedSections.
+  const nav = foldNestedSections(navGroups);
+
   return (
     <div
       className={`dashboard-shell ${dashFont.variable} ${dashMono.variable} flex flex-col`}
@@ -234,7 +230,7 @@ export default async function DashboardLayout({
             planName={planName}
           />
           <div className="flex flex-1 overflow-hidden">
-            <DashboardSidebar groups={navGroups} />
+            <DashboardSidebar groups={nav} />
 
             <div className="dash-main rounded-none md:rounded-tl-[16px] shadow-sm border-l-0 md:border-l border-t-0 md:border-t border-[#e5e5e5] overflow-hidden flex-1 relative flex flex-col mt-0 md:mt-2 ml-0 md:ml-2 mb-0 md:mb-2 mr-0 md:mr-2">
               <div className="dash-content flex-1 overflow-y-auto relative z-10">

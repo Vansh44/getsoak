@@ -150,7 +150,50 @@ wholesip/
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
-│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions),
+│   │   │                      # ★ A wide list table (`dash-table-wide`) sets an
+│   │   │                      # 800px floor, but opening the Mink AI panel leaves
+│   │   │                      # the content region ~755px — so every list page
+│   │   │                      # scrolled horizontally and columns were clipped.
+│   │   │                      # FIX (dashboard.css, two layers): (1) a CONTAINER
+│   │   │                      # query on the card — below 880px the floor drops to
+│   │   │                      # 0 and cell padding goes 22px → 10px, which reclaims
+│   │   │                      # ~150-190px (6 cols spend 264px on padding, 8 cols
+│   │   │                      # 352px) and lets everything FIT rather than scroll.
+│   │   │                      # A container query, not a media query: card width
+│   │   │                      # depends on the panel, the resizable sidebar AND the
+│   │   │                      # viewport, so a viewport breakpoint is wrong as soon
+│   │   │                      # as any one of them moves. Enquiries/Customers set
+│   │   │                      # their own wider floors LOWER in the file and must be
+│   │   │                      # named explicitly or they win on source order.
+│   │   │                      # (2) the row-actions column is pinned right
+│   │   │                      # (`dash-col-actions` on the <th> AND its <td>) as a
+│   │   │                      # backstop for widths even (1) can't fit. Opt-in, NOT
+│   │   │                      # `:last-child`: the column is conditional on
+│   │   │                      # canManage/canEdit, so for a view-only role the last
+│   │   │                      # column is real data. No JS either way — sticky is
+│   │   │                      # inert once the table fits.
+│   │   │                      # ⚠ Order matters: the compact block must sit AFTER
+│   │   │                      # the base `.dash-table th/td` padding rules or the
+│   │   │                      # shorthand `padding` beats it at equal specificity.
+│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions;
+│   │   │                      # ★ SECTIONS is grouped by JOB — Workspace / Sell in
+│   │   │                      # person / Storefront / Marketing / Settings — and a
+│   │   │                      # section may set `parent` to render NESTED under
+│   │   │                      # another while keeping its own permission key. That
+│   │   │                      # distinction is load-bearing: `children` are rendered
+│   │   │                      # with NO can() check, so anything separately gated
+│   │   │                      # (Categories, Colours, Inventory, Enquiries, and every
+│   │   │                      # Settings area) must stay a section. foldNestedSections()
+│   │   │                      # does the folding AFTER the permission filter, never
+│   │   │                      # mutates the shared catalog, bubbles a nested badge up
+│   │   │                      # to a parent that has none (Enquiries' unread count
+│   │   │                      # reaching Customers — otherwise nesting would hide it),
+│   │   │                      # and leaves an orphan top-level when its parent was
+│   │   │                      # filtered out. Tested. ⚠ Sidebar badges are for counts
+│   │   │                      # that DEMAND action and go away once handled. Orders
+│   │   │                      # carried a hardcoded "12" and Inventory a permanent
+│   │   │                      # low-stock total; both are gone — a number that never
+│   │   │                      # moves teaches people to ignore the ones that do),
 │   │   │                      # list-params.ts, use-row-selection.ts. ★ access.ts never
 │   │   │                      # swallows a DB error into an access decision (the
 │   │   │                      # resolve.ts rule): getViewerContext returns

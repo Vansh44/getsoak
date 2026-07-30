@@ -321,7 +321,7 @@ export function InventoryManagementView({
                 <th>SKU</th>
                 <th>Status</th>
                 <th>Stock</th>
-                {canEdit && <th>Actions</th>}
+                {canEdit && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -402,7 +402,7 @@ export function InventoryManagementView({
                     </div>
                   </td>
                   {canEdit && (
-                    <td>
+                    <td className="dash-col-actions">
                       <button
                         type="button"
                         className="dash-btn dash-btn-ghost h-8 px-2 text-xs"
