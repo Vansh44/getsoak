@@ -88,6 +88,9 @@ export function DashboardTopbar({
                 {planName}
               </span>
             )}
+            <span className="hidden sm:inline-flex items-center rounded-full bg-white/10 px-2.5 h-[34px] text-[12.5px] font-medium text-white/85 shrink-0">
+              {formatRole(role)}
+            </span>
           </div>
         )}
       </div>
@@ -111,10 +114,6 @@ export function DashboardTopbar({
 
       {/* Right */}
       <div className="flex items-center gap-0.5 sm:gap-3 shrink-0 justify-end">
-        <span className="hidden sm:inline-flex items-center rounded-full bg-white/10 px-2.5 h-[34px] text-[12.5px] font-medium text-white/85 shrink-0">
-          {formatRole(role)}
-        </span>
-
         <button
           type="button"
           onClick={() => window.open("/", "_blank")}
