@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidateTag } from "next/cache";
-import { after } from "next/server";
 import { eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
@@ -14,7 +13,6 @@ import { emitEvent } from "@/lib/notifications/record";
 import { recordSignupConsent } from "@/lib/legal/store";
 import { applyTheme } from "@/lib/themes/apply";
 import { DEFAULT_THEME_ID } from "@/lib/themes/meta";
-import { submitSitemapToGoogle, pingIndexNow } from "@/lib/seo/search-engines";
 
 // Subdomains we can never hand out (platform-reserved or operational).
 const RESERVED = new Set([
@@ -295,6 +293,12 @@ export async function createStore(
           settings: {
             template,
             brand: { name: rawName.trim() },
+            // Not indexable until the merchant publishes something of their
+            // own. Written EXPLICITLY false because absence means "launched" —
+            // stores created before this flag existed are already in Google,
+            // and treating a missing value as unlaunched would deindex live
+            // shops. See lib/store/launch.ts.
+            launched: false,
             ...(Object.keys(business).length ? { business } : {}),
           },
         })
@@ -362,17 +366,22 @@ export async function createStore(
   // New store row is now resolvable — bust the cached store lookups.
   revalidateTag(STORE_TAG, "max");
 
-  // Announce the new store to search engines so it's discovered without waiting
-  // for organic crawl. Runs after the response (never blocks signup) and is
-  // best-effort/dormant until the platform's Search Console + IndexNow env is
-  // configured. Google then finds all future content via the dynamic sitemap.
+  // NOTE: search engines are deliberately NOT notified here any more.
+  //
+  // A store at this instant is pure theme seed — the same homepage, the same
+  // ~17 content pages and the same sample catalogue as every other store on
+  // this template. Submitting that to Google and IndexNow the moment it exists
+  // meant the platform repeatedly showed search engines thin, near-duplicate
+  // content, and the reputational cost lands on the whole *.storemink.com
+  // domain — including the stores that did the work. `robots.txt` cannot undo
+  // it either: Disallow stops future crawling, it does not deindex.
+  //
+  // The store is submitted the first time its owner publishes something of
+  // their own, which is where markStoreLaunched() is called from
+  // (page-actions.publishPage, product-actions). See lib/store/launch.ts.
+  //
+  // Still needed below: the welcome email tells the merchant their address.
   const storeUrl = `https://${store.slug}.${ROOT_DOMAIN}`;
-  after(async () => {
-    await Promise.allSettled([
-      submitSitemapToGoogle(`${storeUrl}/sitemap.xml`),
-      pingIndexNow([`${storeUrl}/`]),
-    ]);
-  });
 
   // Belt and braces: consent is recorded right after the account is created,
   // but a wizard resumed from a refreshed tab or a Google redirect can reach

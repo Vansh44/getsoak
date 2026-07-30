@@ -19,7 +19,8 @@ import {
 import { emitEvent } from "@/lib/notifications/record";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { getStoreUrl } from "@/lib/site";
-import { pingIndexNow } from "@/lib/seo/search-engines";
+import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
+import { markStoreLaunched } from "@/lib/store/launch";
 import { TAGS } from "@/lib/storefront/tags";
 import { callGemini, brandSystemText } from "@/lib/ai/gemini";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
@@ -305,8 +306,25 @@ async function notifyProductPublished(
   published: boolean,
 ) {
   if (!published || !slug) return;
-  const base = await getStoreUrl();
-  after(() => pingIndexNow([`${base}/shop/${slug}`]));
+  // Swallow everything: this runs after the product is already saved, and a
+  // search-engine ping must never turn a successful save into an error the
+  // merchant sees and retries.
+  try {
+    const base = await getStoreUrl();
+    const storeId = await getActingStoreId();
+    after(async () => {
+      // Publishing a real product means the store is no longer just the theme
+      // seed (sample products now seed as drafts — lib/themes/apply.ts), so
+      // this is a genuine signal that the shop is open. See lib/store/launch.ts.
+      await markStoreLaunched(storeId);
+      await Promise.allSettled([
+        pingIndexNow([`${base}/shop/${slug}`, `${base}/shop`]),
+        submitSitemapToGoogle(`${base}/sitemap.xml`),
+      ]);
+    });
+  } catch (err) {
+    console.error("notifyProductPublished failed:", (err as Error).message);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -766,6 +766,10 @@ export async function seedDemoStore(themeId: string): Promise<SeedDemoResult> {
   const result = await applyTheme(storeId, theme.id, {
     publish: true,
     reset: true,
+    // A demo store IS the showcase — its whole job is to look like a finished
+    // shop, so its sample catalogue must be live. Real merchant stores seed
+    // these as drafts (see applyTheme's publishSampleProducts).
+    publishSampleProducts: true,
   });
 
   revalidateTag(STORE_TAG, "max");

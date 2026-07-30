@@ -8,7 +8,8 @@ import { storePages } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { emitEvent } from "@/lib/notifications/record";
 import { getStoreUrl } from "@/lib/site";
-import { pingIndexNow } from "@/lib/seo/search-engines";
+import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
+import { markStoreLaunched } from "@/lib/store/launch";
 import { TAGS } from "@/lib/storefront/tags";
 import { getStoreSetting } from "@/lib/settings/resolve";
 import { sanitizeBlogContent } from "@/lib/sanitize";
@@ -456,7 +457,19 @@ export async function publishPage(
   // rather than inside after().
   const base = await getStoreUrl();
   const pageUrl = page.slug ? `${base}/${page.slug}` : `${base}/`;
-  after(() => pingIndexNow([pageUrl]));
+
+  // The merchant has now published a page THEY edited, so the store is no
+  // longer indistinguishable from the theme seed. Open it to search engines
+  // and announce it — including its sitemap, which nothing else submits (the
+  // one-time registration that used to happen at signup, now deferred to the
+  // moment there is something worth registering). See lib/store/launch.ts.
+  after(async () => {
+    await markStoreLaunched(storeId);
+    await Promise.allSettled([
+      pingIndexNow([pageUrl, `${base}/`]),
+      submitSitemapToGoogle(`${base}/sitemap.xml`),
+    ]);
+  });
 
   emitEvent({
     type: "page.published",

@@ -52,7 +52,27 @@ export async function applyTheme(
     publish,
     actorUserId = null,
     reset = false,
-  }: { publish: boolean; actorUserId?: string | null; reset?: boolean },
+    publishSampleProducts = false,
+  }: {
+    publish: boolean;
+    actorUserId?: string | null;
+    reset?: boolean;
+    /**
+     * Publish the theme's SAMPLE products (default: seed them as drafts).
+     *
+     * Only the demo stores want them live. For a real merchant they are
+     * placeholders that say so in their own copy — "Tomatoes (500 g) (Sample)",
+     * "replace it with your own" — and publishing them means every store on
+     * this theme serves the same handful of identical product pages under a
+     * different subdomain. That is a near-duplicate cluster that competes with
+     * the merchant's own products, and a shop whose live catalogue announces
+     * itself as placeholder is worse for a visitor than one that is empty.
+     *
+     * As drafts they still appear in the dashboard, fully written, one click
+     * from live — which is what makes them useful as a starting point.
+     */
+    publishSampleProducts?: boolean;
+  },
 ): Promise<ApplyThemeResult> {
   const theme = getThemeDefinition(themeId);
   const errors: string[] = [];
@@ -191,11 +211,13 @@ export async function applyTheme(
               sellingPrice: p.selling_price,
               imageUrl: p.image_url,
               images: p.images ?? [],
-              status: "published",
+              status: publishSampleProducts ? "published" : "draft",
               featured: p.featured ?? false,
               sortOrder: p.sort_order ?? 0,
               cardColor: p.card_color ?? null,
-              publishedAt: new Date().toISOString(),
+              publishedAt: publishSampleProducts
+                ? new Date().toISOString()
+                : null,
               createdBy: actorUserId,
               updatedBy: actorUserId,
             } as typeof products.$inferInsert)
