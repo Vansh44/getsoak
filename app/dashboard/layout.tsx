@@ -176,6 +176,8 @@ export default async function DashboardLayout({
     items: SECTIONS.filter(
       (s) =>
         s.group === group &&
+        // Folded into another screen — key kept for roles, entry hidden here.
+        !s.hiddenInNav &&
         (s.key !== "locations" || showLocations) &&
         (s.key === "dashboard" ||
           can(permissions, s.key, "view", isSuperadmin)),

@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useState } from "react";
 import {
   ChevronDown,
@@ -52,6 +51,8 @@ export function OutlinePanel({
   onToggleSection,
   onReorder,
   onAddSection,
+  chromeTarget,
+  onSelectChrome,
 }: {
   pages: PageListItem[];
   selectedPageId: string | null;
@@ -69,6 +70,9 @@ export function OutlinePanel({
   onToggleSection: (id: string) => void;
   onReorder: (activeId: string, overId: string) => void;
   onAddSection: () => void;
+  /** Which global area (header/footer) the inspector is editing, if any. */
+  chromeTarget: "header" | "footer" | null;
+  onSelectChrome: (target: "header" | "footer") => void;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -161,16 +165,25 @@ export function OutlinePanel({
         )}
       </div>
 
-      {/* Header (theme-level, edited in Navigation) */}
+      {/* Header — a global section, edited right here. It used to be a Link
+          out to /dashboard/navigation, which threw the merchant into a
+          different page with a different form and no preview. */}
       <div className="sm-builder-outline">
-        <Link href="/dashboard/navigation" className="sm-builder-themerow">
+        <button
+          type="button"
+          className={`sm-builder-themerow${
+            chromeTarget === "header" ? " is-selected" : ""
+          }`}
+          onClick={() => onSelectChrome("header")}
+        >
           <Layout className="h-4 w-4 opacity-50" />
           <span>
             <span className="sm-builder-themerow-title">Header</span>
-            <span className="sm-builder-themerow-sub">Menus & links</span>
+            <span className="sm-builder-themerow-sub">
+              Menu, search &amp; cart
+            </span>
           </span>
-          <span className="sm-builder-themerow-edit">Edit</span>
-        </Link>
+        </button>
 
         <div className="sm-builder-outline-label">Sections</div>
 
@@ -217,17 +230,22 @@ export function OutlinePanel({
           </button>
         )}
 
-        {/* Footer (theme-level) */}
-        <Link href="/dashboard/navigation" className="sm-builder-themerow">
+        {/* Footer — likewise a global section. */}
+        <button
+          type="button"
+          className={`sm-builder-themerow${
+            chromeTarget === "footer" ? " is-selected" : ""
+          }`}
+          onClick={() => onSelectChrome("footer")}
+        >
           <Layout className="h-4 w-4 rotate-180 opacity-50" />
           <span>
             <span className="sm-builder-themerow-title">Footer</span>
             <span className="sm-builder-themerow-sub">
-              Groups & legal links
+              Columns, newsletter &amp; legal
             </span>
           </span>
-          <span className="sm-builder-themerow-edit">Edit</span>
-        </Link>
+        </button>
       </div>
     </aside>
   );

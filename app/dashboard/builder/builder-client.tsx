@@ -41,6 +41,8 @@ import {
   type PageDraft,
   type PageListItem,
 } from "@/app/actions/page-actions";
+import { saveChromeDraft, publishChrome } from "@/app/actions/chrome-actions";
+import type { StoreChrome } from "@/lib/chrome/types";
 import { useAutosave, type SaveStatus } from "./use-autosave";
 import {
   EMPTY_CONFIG,
@@ -83,12 +85,32 @@ export function BuilderClient({
   categories,
   blogs,
   storeName,
+  initialChrome,
 }: Options & {
   initialPages: PageListItem[];
   storeName: string;
+  initialChrome: StoreChrome;
 }) {
   const [pages, setPages] = useState(initialPages);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The site-wide header + footer. Held beside the page draft rather than
+  // inside it: chrome belongs to the STORE, so it survives page switches and
+  // is saved on its own row (app/actions/chrome-actions.ts).
+  const [chrome, setChrome] = useState<StoreChrome>(initialChrome);
+  // Which global area the inspector is editing, if any. Mutually exclusive
+  // with selectedSectionId — one inspector, one subject.
+  const [chromeTarget, setChromeTarget] = useState<"header" | "footer" | null>(
+    null,
+  );
+  const [chromeDirty, setChromeDirty] = useState(false);
+  // The message handler is registered once; a ref keeps it reading the LATEST
+  // chrome without tearing down and re-adding the listener on every keystroke.
+  // Synced in an effect, not during render — a render-phase ref write is not
+  // safe under concurrent rendering (React may render and discard).
+  const chromeRef = useRef(chrome);
+  useEffect(() => {
+    chromeRef.current = chrome;
+  }, [chrome]);
   const [draft, setDraft] = useState<PageDraft | null>(null);
   const [loadingDraft, setLoadingDraft] = useState(false);
   // Preview iframe lifecycle: the element is REUSED across page switches
@@ -234,6 +256,13 @@ export function BuilderClient({
         ids?: string[];
       };
       switch (data?.type) {
+        // A fresh iframe announces itself. Answer with the current draft
+        // chrome — the merchant's unsaved header edits must survive a page
+        // switch or a preview reload, and without this the iframe would keep
+        // rendering the PUBLISHED chrome while the outline showed the draft.
+        case "sm-chrome-ready":
+          postToPreview({ type: "sm-chrome", chrome: chromeRef.current });
+          break;
         case "sm-select":
           if (typeof data.id === "string") setSelectedSectionId(data.id);
           break;
@@ -262,7 +291,7 @@ export function BuilderClient({
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [clearVeil]);
+  }, [postToPreview, clearVeil]);
 
   const loadDraft = useCallback(
     async (id: string) => {
@@ -445,6 +474,47 @@ export function BuilderClient({
       return arrayMove(s, from, to);
     });
 
+  // Chrome edits: push to the preview instantly, save on a debounce.
+  //
+  // Its own debounce rather than the page autosave chain — chrome lives on a
+  // different row and a different action, and threading it through the page's
+  // single-flight token would let a header edit lose a section edit.
+  const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateChrome = useCallback(
+    (next: StoreChrome) => {
+      setChrome(next);
+      setChromeDirty(true);
+      postToPreview({ type: "sm-chrome", chrome: next });
+      if (chromeTimer.current) clearTimeout(chromeTimer.current);
+      chromeTimer.current = setTimeout(async () => {
+        const res = await saveChromeDraft(next);
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+        setChromeDirty(false);
+      }, 400);
+    },
+    [postToPreview],
+  );
+
+  // Flush a pending chrome save before publishing, or Publish would ship the
+  // last SAVED chrome and silently drop whatever was typed in the last 400ms.
+  const flushChrome = useCallback(async (): Promise<boolean> => {
+    if (chromeTimer.current) {
+      clearTimeout(chromeTimer.current);
+      chromeTimer.current = null;
+    }
+    if (!chromeDirty) return true;
+    const res = await saveChromeDraft(chrome);
+    if (res.error) {
+      toast.error(res.error);
+      return false;
+    }
+    setChromeDirty(false);
+    return true;
+  }, [chrome, chromeDirty]);
+
   const addSection = (type: HomepageSectionType) => {
     const item: PageSectionItem = {
       id: crypto.randomUUID(),
@@ -474,6 +544,15 @@ export function BuilderClient({
       const flushed = await flush();
       if (!flushed) {
         toast.error("Couldn't save your latest changes — publish aborted.");
+        return;
+      }
+      // One Publish means one website: the page AND the site-wide chrome go
+      // live together. Publishing a page that references a nav link the
+      // visitor cannot see yet is the split this redesign exists to remove.
+      if (!(await flushChrome())) return;
+      const chromeRes = await publishChrome();
+      if (chromeRes.error) {
+        toast.error(chromeRes.error);
         return;
       }
       const result = await publishPage(draft.id, tokenRef.current);
@@ -778,7 +857,15 @@ export function BuilderClient({
             selectedSectionId={selectedSectionId}
             canvasHoverId={canvasHoverId}
             hiddenSectionIds={hiddenSectionIds}
+            chromeTarget={chromeTarget}
+            onSelectChrome={(t) => {
+              // One inspector, one subject: selecting the header clears any
+              // selected section, and vice versa.
+              setChromeTarget(t);
+              setSelectedSectionId(null);
+            }}
             onSelectSection={(id) => {
+              setChromeTarget(null);
               setSelectedSectionId(id);
               postToPreview({ type: "sm-scroll-to", id });
             }}
@@ -835,6 +922,10 @@ export function BuilderClient({
           onClearSelection={() => setSelectedSectionId(null)}
           onOpenCodeEditor={() => setCodeEditorOpen(true)}
           onOpenPageSettings={() => setPageSettingsOpen(true)}
+          chromeTarget={chromeTarget}
+          chrome={chrome}
+          onChromeChange={updateChrome}
+          onClearChrome={() => setChromeTarget(null)}
         />
       </div>
 

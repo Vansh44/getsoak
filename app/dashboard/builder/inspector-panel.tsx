@@ -21,6 +21,8 @@ import {
 } from "@/lib/homepage/section-types";
 import type { PageSectionItem } from "@/lib/sections/registry";
 import type { PageDraft } from "@/app/actions/page-actions";
+import type { StoreChrome } from "@/lib/chrome/types";
+import { HeaderForm, FooterForm } from "./chrome-form";
 import {
   SectionForm,
   fieldClass,
@@ -53,6 +55,10 @@ export function InspectorPanel({
   onClearSelection,
   onOpenCodeEditor,
   onOpenPageSettings,
+  chromeTarget,
+  chrome,
+  onChromeChange,
+  onClearChrome,
 }: {
   draft: PageDraft | null;
   section: PageSectionItem | null;
@@ -64,6 +70,11 @@ export function InspectorPanel({
   onClearSelection: () => void;
   onOpenCodeEditor: () => void;
   onOpenPageSettings: () => void;
+  /** Editing the site-wide header/footer instead of a page section. */
+  chromeTarget: "header" | "footer" | null;
+  chrome: StoreChrome;
+  onChromeChange: (next: StoreChrome) => void;
+  onClearChrome: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("content");
 
@@ -73,6 +84,36 @@ export function InspectorPanel({
   if (sectionId !== prevSectionId) {
     setPrevSectionId(sectionId);
     setTab("content");
+  }
+
+  // Chrome is store-wide, so it is editable even before a page is chosen —
+  // this branch deliberately sits ABOVE the "select a page" guard.
+  if (chromeTarget) {
+    return (
+      <aside className="sm-builder-inspector has-selection">
+        <div className="sm-builder-inspector-head">
+          <button
+            type="button"
+            className="sm-builder-inspector-back"
+            onClick={onClearChrome}
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <span className="sm-builder-inspector-title">
+            {chromeTarget === "header" ? "Header" : "Footer"}
+          </span>
+        </div>
+        <div className="sm-builder-inspector-body">
+          <p className="sm-b-scope">Appears on every page of your store.</p>
+          {chromeTarget === "header" ? (
+            <HeaderForm chrome={chrome} onChange={onChromeChange} />
+          ) : (
+            <FooterForm chrome={chrome} onChange={onChromeChange} />
+          )}
+        </div>
+      </aside>
+    );
   }
 
   if (!draft) {
