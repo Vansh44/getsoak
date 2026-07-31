@@ -326,6 +326,35 @@ Throttle the network to slow-3G and search the catalogue.
 **Expect:** search still instant — it's served from the local IndexedDB cache.
 Completing a sale still needs the server.
 
+**PS-7.19 ★ — Tapping a product must not open the keyboard (iPad)**
+On a tablet, tap several products into the cart.
+**Expect:** the software keyboard NEVER appears — not on load, not on any tap.
+Sticky focus on the search box is switched off wherever `hover: none` and
+`pointer: coarse`, because iPadOS answers a programmatic focus by opening the
+keyboard over half the till. A laptop with a touchscreen keeps sticky focus.
+
+**PS-7.20 ★ — A tablet still scans, with nothing focused**
+On that same tablet, with a paired hardware scanner and no field focused
+(e.g. straight after tapping a product tile), scan a barcode.
+**Expect:** the line is added. Turning sticky focus off must not cost a tablet
+its scanner — a document-level wedge reads the burst instead.
+
+**PS-7.21 ★ — A scan does not re-ring the tapped product**
+Tap a product tile (it now holds focus), then scan a DIFFERENT product.
+**Expect:** the scanned product is added, once. The wedge swallows the burst —
+Space and Enter both activate a focused button, so an unhandled scan would add
+the tapped item again.
+
+**PS-7.22 — Typing a search is never intercepted**
+Tap the search box and type a product name.
+**Expect:** the characters go to the box and the grid filters. The wedge stays
+out of the way whenever an editable element has focus.
+
+**PS-7.23 — Overlays keep their own focus**
+Open "Add customer" (or the tender panel) and type.
+**Expect:** the field keeps focus. The register never pulls focus back to the
+scan box while an overlay owns the screen.
+
 ---
 
 ## 8. Pickup — click & collect

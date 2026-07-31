@@ -1507,12 +1507,44 @@ group, span}` (span = columns of the 4-wide desktop grid),
         the order snapshot) + `components/pos/thermal-receipt.tsx` + its CSS —
         a 80mm roll format, deliberately NOT the A4 invoice of §17.
       - **Barcode scanning, three engines behind one seam**
-        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so a
-        focused hidden input + its trailing Enter is the default and needs no
+        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so the
+        search input + its trailing Enter is the default and needs no
         permission; on mobile the camera uses the native `BarcodeDetector`, and
         `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
         SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
         entered in the product editor. StoreMink never prints its own.
+      - **★ STICKY FOCUS IS FOR KEYBOARD DEVICES ONLY** — on a tablet it was
+        the register's most-complained-about behaviour. Keeping the search box
+        focused is what makes a scan land with zero clicks, so the register
+        re-focused it on mount, on every cart change, and 80 ms after any blur.
+        On an iPad that means **tap a product, get the software keyboard**: the
+        tap blurs the box, focus is taken straight back, and iPadOS answers a
+        programmatic focus by opening the keyboard over half the till — every
+        single time. `isTouchPrimary()` (`lib/pos/keyboard-wedge.ts`,
+        `(hover: none) and (pointer: coarse)`) switches it off there;
+        `autoFocus` is gone for the same reason. The query pairs `hover: none`
+        WITH coarse so a touchscreen laptop — which has a real keyboard — keeps
+        the fast path. It reaches BEHAVIOUR only, never rendered markup: the
+        SSR snapshot is `false`, so a placeholder or class keyed off it would
+        be a hydration mismatch on the exact devices it targets.
+      - **★ SO A SCAN MUST WORK WITH NOTHING FOCUSED.** Turning sticky focus
+        off would otherwise cost an iPad + Bluetooth-scanner shop — a very
+        ordinary setup — its scanner, silently. `createKeyboardWedge()` (pure,
+        tested) is a document-level listener that reads a fast burst of
+        characters ending in Enter, and it is enabled on ALL devices: on a
+        desktop the box holds focus, so `isEditableTarget` hands every key to
+        it and behaviour is byte-for-byte what it was. It **swallows the burst**
+        (`preventDefault`) — after a tap the product tile is the focused
+        element and both Space and Enter activate a focused button, so an
+        unhandled scan would re-ring the TAPPED product instead of adding the
+        scanned one. It is not a scanner-vs-human heuristic (a human can't type
+        into an unfocused screen); the gap rule only stops stray keypresses
+        minutes apart from joining into one nonsense code.
+      - **Refocus is suppressed while ANY overlay is open** — tender, choices,
+        camera, layout, **customer search and the receipt**. The last two were
+        missing, and the customer panel `autoFocus`es its own search box: the
+        register grabbed focus back 80 ms later, so attaching a customer was
+        unusable on desktop too.
       - **★ Local catalog cache — the "<50 ms, zero network" promise
         (docs/pos-plan.md §10).** `lib/pos/catalog-index.ts` is the PURE
         matching core (`buildIndex`/`scanLocal`/`searchLocal`/
