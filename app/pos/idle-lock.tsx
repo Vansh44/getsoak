@@ -14,7 +14,26 @@ import { posLock } from "@/app/actions/pos-auth-actions";
 // re-validation in resolvePosOperator; when Phase 2's sale actions land they can
 // enforce idle server-side too, since they already touch the DB on every action.
 
-const WARN_SECONDS = 20;
+// How much notice a cashier gets before the lock. Two minutes, not the 20
+// seconds this started as: 20s reads as "this thing locks in 20 seconds" — the
+// banner is the only part of the timer anybody actually sees, so it's taken for
+// the whole of it — and it isn't long enough to finish serving the customer in
+// front of you and then decide to keep the session.
+const WARN_SECONDS = 300;
+
+/** The warning can never outrun the idle window itself — `pos.idleLockMinutes`
+ *  goes as low as 1, and a 2-minute warning on a 1-minute timer would put the
+ *  banner on screen permanently. Half the window keeps a short setting usable
+ *  and still gives the full 2 minutes at anything from 4 minutes up. */
+const warnMsFor = (idleMs: number) =>
+  Math.min(WARN_SECONDS * 1000, Math.floor(idleMs / 2));
+
+/** "1:58" over a minute, "45s" under it — "Locking in 118s" is arithmetic. */
+function formatRemaining(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  return `${m}:${String(seconds % 60).padStart(2, "0")}`;
+}
 const ACTIVITY = [
   "pointerdown",
   "keydown",
@@ -33,6 +52,7 @@ export function IdleLock({ minutes }: { minutes: number }) {
 
   useEffect(() => {
     const idleMs = Math.max(1, minutes) * 60_000;
+    const warnMs = warnMsFor(idleMs);
     lastActive.current = Date.now();
 
     const bump = () => {
@@ -56,9 +76,7 @@ export function IdleLock({ minutes }: { minutes: number }) {
         });
         return;
       }
-      setRemaining(
-        msLeft <= WARN_SECONDS * 1000 ? Math.ceil(msLeft / 1000) : null,
-      );
+      setRemaining(msLeft <= warnMs ? Math.ceil(msLeft / 1000) : null);
     }, 1000);
 
     return () => {
@@ -74,7 +92,8 @@ export function IdleLock({ minutes }: { minutes: number }) {
       role="status"
       className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center gap-3 bg-amber-500 px-4 py-3 text-sm font-semibold text-[#0b0f14]"
     >
-      Locking in {remaining}s — touch the screen to stay signed in
+      Locking in {formatRemaining(remaining)} — touch the screen to stay signed
+      in
       <button
         type="button"
         onClick={() => {

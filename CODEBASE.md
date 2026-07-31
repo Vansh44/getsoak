@@ -1429,8 +1429,13 @@ group, span}` (span = columns of the 4-wide desktop grid),
            `createPairingCode` so an admin isn't handed an unusable code.
         5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): a PIN operator's
            register locks after `pos.idleLockMinutes` of inactivity (registry
-           setting, default 10, edited at `/dashboard/pos/settings`) with a 20s
-           countdown. Owners are exempt — this targets the
+           setting, default 10, edited at `/dashboard/pos/settings`) with a
+           **2-minute** countdown, capped at half the idle window so a
+           1-minute setting doesn't show the banner permanently. It was 20s,
+           which is too little notice to finish serving the customer in front
+           of you first — and because the banner is the only part of the timer
+           anyone ever sees, 20s also got read as the whole lock time.
+           Owners are exempt — this targets the
            walked-away-from-a-shared-till risk. It is a physical-presence
            measure, NOT an authorization boundary (a client bypass keeps the
            cookie until it expires); the server boundary remains the device gate

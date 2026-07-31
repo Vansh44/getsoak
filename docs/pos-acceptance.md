@@ -233,7 +233,14 @@ inbox differs. The link is single-use, 1 hour.
 
 **PS-6.11 — Idle auto-lock**
 Sign in with a PIN, leave the till for `pos.idleLockMinutes` (default 10).
-**Expect:** a 20-second countdown, then locked. Owners are exempt.
+**Expect:** a **5-minute** countdown ("Locking in 1:58"), then locked. Owners
+are exempt. Touching the screen or "Stay" dismisses it.
+
+**PS-6.12 ★ — The warning never outruns the idle window**
+Set `pos.idleLockMinutes` to 1 (its minimum) and leave the till.
+**Expect:** the banner appears with 30s left, not immediately — the warning is
+capped at half the window, so a short setting doesn't put it on screen
+permanently.
 
 ---
 
