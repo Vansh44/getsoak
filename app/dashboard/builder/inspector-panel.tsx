@@ -22,7 +22,12 @@ import {
 import type { PageSectionItem } from "@/lib/sections/registry";
 import type { PageDraft } from "@/app/actions/page-actions";
 import type { StoreChrome } from "@/lib/chrome/types";
-import { HeaderForm, FooterForm } from "./chrome-form";
+import {
+  HeaderForm,
+  FooterForm,
+  BrandForm,
+  type BrandAppearance,
+} from "./chrome-form";
 import {
   SectionForm,
   fieldClass,
@@ -59,6 +64,9 @@ export function InspectorPanel({
   chrome,
   onChromeChange,
   onClearChrome,
+  brand,
+  onBrandChange,
+  loading,
 }: {
   draft: PageDraft | null;
   section: PageSectionItem | null;
@@ -71,10 +79,14 @@ export function InspectorPanel({
   onOpenCodeEditor: () => void;
   onOpenPageSettings: () => void;
   /** Editing the site-wide header/footer instead of a page section. */
-  chromeTarget: "header" | "footer" | null;
+  chromeTarget: "header" | "footer" | "brand" | null;
   chrome: StoreChrome;
   onChromeChange: (next: StoreChrome) => void;
   onClearChrome: () => void;
+  brand: BrandAppearance;
+  onBrandChange: (next: BrandAppearance) => void;
+  /** A page is being opened — do not tell the merchant to pick one. */
+  loading: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("content");
 
@@ -101,13 +113,19 @@ export function InspectorPanel({
             <ArrowLeft className="h-4 w-4" />
           </button>
           <span className="sm-builder-inspector-title">
-            {chromeTarget === "header" ? "Header" : "Footer"}
+            {chromeTarget === "header"
+              ? "Header"
+              : chromeTarget === "brand"
+                ? "Brand"
+                : "Footer"}
           </span>
         </div>
         <div className="sm-builder-inspector-body">
           <p className="sm-b-scope">Appears on every page of your store.</p>
           {chromeTarget === "header" ? (
             <HeaderForm chrome={chrome} onChange={onChromeChange} />
+          ) : chromeTarget === "brand" ? (
+            <BrandForm brand={brand} onChange={onBrandChange} />
           ) : (
             <FooterForm chrome={chrome} onChange={onChromeChange} />
           )}
@@ -119,7 +137,12 @@ export function InspectorPanel({
   if (!draft) {
     return (
       <aside className="sm-builder-inspector">
-        <p className="sm-builder-empty">Select a page to start editing.</p>
+        {/* "Select a page" while a page is ALREADY opening tells the merchant
+            to do something that is underway — the builder auto-opens Home, and
+            on a slow connection that took long enough to read as broken. */}
+        <p className="sm-builder-empty">
+          {loading ? "Opening…" : "Select a page to start editing."}
+        </p>
       </aside>
     );
   }

@@ -79,6 +79,11 @@ export default async function BuilderPage() {
       blogs={blogOptions}
       storeName={brand.name}
       initialChrome={chrome}
+      initialBrand={{
+        name: brand.name,
+        primaryColor: brand.primaryColor,
+        logoUrl: brand.logoUrl,
+      }}
     />
   );
 }

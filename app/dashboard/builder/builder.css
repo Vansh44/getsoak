@@ -1093,3 +1093,58 @@
   color: var(--b-accent);
   background: var(--b-accent-tint);
 }
+
+/* ---------- Pages rail ----------
+   Replaces the switcher dropdown, which overlaid the section outline: choosing
+   a page covered the very thing you were about to edit. */
+.sm-builder-pagesrail {
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--b-border);
+}
+.sm-builder-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--b-text-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.sm-builder-rail-count {
+  padding: 1px 6px;
+  border-radius: 20px;
+  background: var(--b-surface-2);
+  color: var(--b-text-2);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+/* Capped and scrollable: a store with thirty pages must not push the section
+   outline — the thing being edited — off the bottom of the panel. */
+.sm-builder-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 208px;
+  overflow-y: auto;
+}
+
+.sm-b-colorrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sm-b-color {
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--b-border);
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+}

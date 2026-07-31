@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { revalidateTag } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { stores } from "@/drizzle/schema";
-import { getActingStoreId } from "@/app/dashboard/lib/access";
+import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { ROOT_DOMAIN } from "@/lib/store/host";
 import { brandFromSettings, type StoreBrand } from "@/lib/store/brand";
@@ -117,6 +117,67 @@ export async function saveStoreBranding(
       err instanceof Error ? err.message : err,
     );
     return { error: "Could not save branding. Please try again." };
+  }
+
+  revalidateTag(STORE_TAG, "max");
+  return { success: true };
+}
+
+/**
+ * Patch ONLY the appearance fields, for the website builder's Brand panel.
+ *
+ * saveStoreBranding rebuilds the whole brand object from a FormData carrying
+ * every field, so calling it from a panel that edits two of them would blank
+ * the merchant's email, social links and legal name. This merges instead, and
+ * touches nothing it wasn't given.
+ */
+export async function saveBrandAppearance(input: {
+  primaryColor?: string;
+  logoUrl?: string | null;
+}): Promise<ActionResult> {
+  const userId = await getManagerUserId("builder");
+  if (!userId) return { error: "Not authenticated" };
+  const storeId = await getActingStoreId();
+
+  let settings: Record<string, unknown>;
+  try {
+    const [store] = await withService((db) =>
+      db
+        .select({ settings: stores.settings })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1),
+    );
+    settings = ((store?.settings as Record<string, unknown>) ?? {}) as Record<
+      string,
+      unknown
+    >;
+  } catch (err) {
+    console.error("saveBrandAppearance read:", err);
+    return { error: "Could not save. Please try again." };
+  }
+
+  const existingBrand = (settings.brand as Record<string, unknown>) ?? {};
+  const brand: Record<string, unknown> = { ...existingBrand };
+  // A colour renders into an inline style attribute, so validate rather than
+  // trust: anything that isn't a hex is dropped, not written through.
+  if (input.primaryColor && /^#[0-9a-fA-F]{6}$/.test(input.primaryColor)) {
+    brand.primaryColor = input.primaryColor;
+  }
+  if (input.logoUrl !== undefined) {
+    brand.logoUrl = input.logoUrl || null;
+  }
+
+  try {
+    await withService((db) =>
+      db
+        .update(stores)
+        .set({ settings: { ...settings, brand } })
+        .where(eq(stores.id, storeId)),
+    );
+  } catch (err) {
+    console.error("saveBrandAppearance write:", err);
+    return { error: "Could not save. Please try again." };
   }
 
   revalidateTag(STORE_TAG, "max");

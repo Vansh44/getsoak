@@ -43,6 +43,8 @@ import {
 } from "@/app/actions/page-actions";
 import { saveChromeDraft, publishChrome } from "@/app/actions/chrome-actions";
 import type { StoreChrome } from "@/lib/chrome/types";
+import { saveBrandAppearance } from "@/app/actions/store-branding";
+import type { BrandAppearance } from "./chrome-form";
 import { useAutosave, type SaveStatus } from "./use-autosave";
 import {
   EMPTY_CONFIG,
@@ -86,10 +88,12 @@ export function BuilderClient({
   blogs,
   storeName,
   initialChrome,
+  initialBrand,
 }: Options & {
   initialPages: PageListItem[];
   storeName: string;
   initialChrome: StoreChrome;
+  initialBrand: BrandAppearance;
 }) {
   const [pages, setPages] = useState(initialPages);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -99,10 +103,13 @@ export function BuilderClient({
   const [chrome, setChrome] = useState<StoreChrome>(initialChrome);
   // Which global area the inspector is editing, if any. Mutually exclusive
   // with selectedSectionId — one inspector, one subject.
-  const [chromeTarget, setChromeTarget] = useState<"header" | "footer" | null>(
-    null,
-  );
+  const [chromeTarget, setChromeTarget] = useState<
+    "header" | "footer" | "brand" | null
+  >(null);
   const [chromeDirty, setChromeDirty] = useState(false);
+  // Brand appearance (colour + logo). Lives beside chrome for the same reason:
+  // it belongs to the STORE, not to whichever page happens to be open.
+  const [brand, setBrand] = useState<BrandAppearance>(initialBrand);
   // The message handler is registered once; a ref keeps it reading the LATEST
   // chrome without tearing down and re-adding the listener on every keystroke.
   // Synced in an effect, not during render — a render-phase ref write is not
@@ -112,7 +119,13 @@ export function BuilderClient({
     chromeRef.current = chrome;
   }, [chrome]);
   const [draft, setDraft] = useState<PageDraft | null>(null);
-  const [loadingDraft, setLoadingDraft] = useState(false);
+  // Starts TRUE whenever there is a page to auto-open, so the very first
+  // (server-rendered, pre-hydration) paint says "Opening…" rather than
+  // "Select a page" — which told the merchant to do something the builder was
+  // already doing, and on a slow connection read as broken. React state cannot
+  // fix that frame; only the initial value can. loadDraft clears it on both
+  // the success and failure paths, so it can never stick.
+  const [loadingDraft, setLoadingDraft] = useState(initialPages.length > 0);
   // Preview iframe lifecycle: the element is REUSED across page switches
   // (navigation via contentWindow.location.replace) so the outgoing page
   // stays visible under a loading veil — no blank flash, no scroll jank, and
@@ -498,6 +511,26 @@ export function BuilderClient({
     [postToPreview],
   );
 
+  // Brand: same instant-preview + debounce shape as chrome. The colour is
+  // pushed as a CSS variable rather than a re-render, so it repaints the whole
+  // storefront skin without a round trip.
+  const brandTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateBrand = useCallback(
+    (next: BrandAppearance) => {
+      setBrand(next);
+      postToPreview({ type: "sm-brand", brand: next });
+      if (brandTimer.current) clearTimeout(brandTimer.current);
+      brandTimer.current = setTimeout(async () => {
+        const res = await saveBrandAppearance({
+          primaryColor: next.primaryColor,
+          logoUrl: next.logoUrl,
+        });
+        if (res.error) toast.error(res.error);
+      }, 500);
+    },
+    [postToPreview],
+  );
+
   // Flush a pending chrome save before publishing, or Publish would ship the
   // last SAVED chrome and silently drop whatever was typed in the last 400ms.
   const flushChrome = useCallback(async (): Promise<boolean> => {
@@ -872,6 +905,7 @@ export function BuilderClient({
             onHoverSection={(id) => postToPreview({ type: "sm-highlight", id })}
             onToggleSection={toggleSection}
             onReorder={reorderSections}
+            loading={loadingDraft}
             onAddSection={() => {
               insertAfterRef.current = undefined;
               setLibraryOpen(true);
@@ -925,7 +959,10 @@ export function BuilderClient({
           chromeTarget={chromeTarget}
           chrome={chrome}
           onChromeChange={updateChrome}
+          brand={brand}
+          onBrandChange={updateBrand}
           onClearChrome={() => setChromeTarget(null)}
+          loading={loadingDraft}
         />
       </div>
 

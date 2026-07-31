@@ -845,7 +845,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     hat. Edits reach the preview by `sm-chrome` postMessage (`ChromeProvider`),
     and a fresh iframe announces `sm-chrome-ready` so the builder re-pushes the
     draft; without that a page switch shows published chrome under a draft
-    outline. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
+    outline.
+    The builder also shows a **Brand** row (colour + logo) saved through
+    `saveBrandAppearance` — a PATCH, deliberately: `saveStoreBranding` rebuilds
+    the whole brand object from a FormData carrying every field, so calling it
+    from a two-field panel would blank the merchant's email, social links and
+    legal name. Contact/social/legal stay in `/dashboard/branding` because they
+    are store IDENTITY (they print on invoices and go out in email), not a
+    website decision. Pages list in an always-visible **rail** rather than a
+    dropdown that overlaid the section outline you were about to edit, and
+    `loadingDraft` starts TRUE when there is a page to auto-open so the first,
+    pre-hydration paint says "Opening…" instead of "Select a page" — React
+    state cannot fix that frame, only the initial value can. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
     `meta.ts` (client-safe catalog for the signup picker: id/name/category/
     previewImage/demoSlug; the picker must NEVER import definitions),
     `definitions/basket.ts` (brand accents, **`design` skin**, pages incl. the

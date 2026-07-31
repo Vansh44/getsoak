@@ -31,9 +31,17 @@ export function ChromeProvider({
 }) {
   const [value, setValue] = useState<StoreChrome>(chrome);
 
-  // Server-rendered chrome changes on navigation (and on router.refresh after
-  // publish); adopt it, or the preview would keep showing a stale draft.
-  useEffect(() => setValue(chrome), [chrome]);
+  // Adopt server-rendered chrome when it changes (navigation, or a
+  // router.refresh after publish) — otherwise the preview keeps rendering a
+  // stale copy. Adjusted DURING RENDER rather than in an effect: React handles
+  // this case specially (it re-renders immediately without committing the
+  // discarded output), whereas a setState in an effect paints the stale value
+  // first. Same pattern as inspector-panel's tab reset.
+  const [prevChrome, setPrevChrome] = useState(chrome);
+  if (chrome !== prevChrome) {
+    setPrevChrome(chrome);
+    setValue(chrome);
+  }
 
   useEffect(() => {
     if (!live) return;
@@ -41,8 +49,19 @@ export function ChromeProvider({
       // Same-origin only. The preview iframe is served from the store's own
       // host, so anything from elsewhere is not the builder.
       if (e.origin !== window.location.origin) return;
-      const data = e.data as { type?: string; chrome?: StoreChrome } | null;
+      const data = e.data as {
+        type?: string;
+        chrome?: StoreChrome;
+        brand?: { primaryColor?: string; logoUrl?: string | null };
+      } | null;
       if (data?.type === "sm-chrome" && data.chrome) setValue(data.chrome);
+      // Brand colour is a CSS variable written inline on .storefront-root by
+      // the layout, so a live change is one setProperty — no re-render, and
+      // the whole theme skin (buttons, links, accents) repaints with it.
+      if (data?.type === "sm-brand" && data.brand?.primaryColor) {
+        const root = document.querySelector<HTMLElement>(".storefront-root");
+        root?.style.setProperty("--brand-primary", data.brand.primaryColor);
+      }
     };
     window.addEventListener("message", onMessage);
     // Tell the builder we're ready for draft pushes — it may have mounted

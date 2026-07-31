@@ -10,6 +10,7 @@ import {
   Home,
   Layout,
   Plus,
+  Palette,
 } from "lucide-react";
 import {
   DndContext,
@@ -53,6 +54,7 @@ export function OutlinePanel({
   onAddSection,
   chromeTarget,
   onSelectChrome,
+  loading,
 }: {
   pages: PageListItem[];
   selectedPageId: string | null;
@@ -71,8 +73,10 @@ export function OutlinePanel({
   onReorder: (activeId: string, overId: string) => void;
   onAddSection: () => void;
   /** Which global area (header/footer) the inspector is editing, if any. */
-  chromeTarget: "header" | "footer" | null;
-  onSelectChrome: (target: "header" | "footer") => void;
+  chromeTarget: "header" | "footer" | "brand" | null;
+  onSelectChrome: (target: "header" | "footer" | "brand") => void;
+  /** A page is being opened. Distinct from "no page chosen". */
+  loading: boolean;
 }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
@@ -86,12 +90,6 @@ export function OutlinePanel({
   const sorted = [...pages].sort((a, b) =>
     a.slug === "" ? -1 : b.slug === "" ? 1 : 0,
   );
-  const current = pages.find((p) => p.id === selectedPageId) ?? null;
-  const currentLabel = current
-    ? current.slug === ""
-      ? "Home"
-      : current.title || current.slug
-    : "Select a page";
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -102,34 +100,34 @@ export function OutlinePanel({
 
   return (
     <aside className="sm-builder-pages">
-      {/* Page switcher */}
-      <div className="sm-builder-switcher">
+      {/* Pages — an always-visible rail, not a dropdown.
+          It used to be a menu that OVERLAID the section outline, so choosing a
+          page meant covering the thing you were about to edit and losing your
+          place in it. A list that pushes content down costs a little height
+          and takes nothing away. */}
+      <div className="sm-builder-pagesrail">
         <button
-          className="sm-builder-switcher-btn"
+          className="sm-builder-rail-head"
           onClick={() => setSwitcherOpen((o) => !o)}
+          aria-expanded={switcherOpen}
         >
-          {current?.slug === "" ? (
-            <Home className="h-4 w-4 opacity-60" />
-          ) : (
-            <FileText className="h-4 w-4 opacity-60" />
-          )}
-          <span className="truncate">{currentLabel}</span>
+          <span>Pages</span>
+          <span className="sm-builder-rail-count">{sorted.length}</span>
           <ChevronDown
-            className={`ml-auto h-4 w-4 opacity-50 transition-transform ${switcherOpen ? "rotate-180" : ""}`}
+            className={`ml-auto h-3.5 w-3.5 opacity-50 transition-transform ${
+              switcherOpen ? "" : "-rotate-90"
+            }`}
           />
         </button>
         {switcherOpen && (
-          <div className="sm-builder-switcher-menu">
+          <div className="sm-builder-rail-list">
             {sorted.map((p) => {
               const isHome = p.slug === "";
               return (
                 <button
                   key={p.id}
                   className={`sm-builder-pageitem ${selectedPageId === p.id ? "active" : ""}`}
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    onSelectPage(p.id);
-                  }}
+                  onClick={() => onSelectPage(p.id)}
                 >
                   {isHome ? (
                     <Home className="h-4 w-4 shrink-0 opacity-60" />
@@ -153,13 +151,12 @@ export function OutlinePanel({
             })}
             <button
               className="sm-builder-pageitem sm-builder-newpage"
-              onClick={() => {
-                setSwitcherOpen(false);
-                onNewPage();
-              }}
+              onClick={onNewPage}
             >
               <Plus className="h-4 w-4 shrink-0" />
-              <span className="sm-builder-pageitem-title">New page…</span>
+              <span className="sm-builder-pageitem-main">
+                <span className="sm-builder-pageitem-title">New page</span>
+              </span>
             </button>
           </div>
         )}
@@ -188,7 +185,9 @@ export function OutlinePanel({
         <div className="sm-builder-outline-label">Sections</div>
 
         {sections === null && (
-          <p className="sm-builder-empty">Select a page to see its sections.</p>
+          <p className="sm-builder-empty">
+            {loading ? "Opening…" : "Select a page to see its sections."}
+          </p>
         )}
         {sections?.length === 0 && (
           <p className="sm-builder-empty">
@@ -229,6 +228,21 @@ export function OutlinePanel({
             <Plus className="h-4 w-4" /> Add Section
           </button>
         )}
+
+        {/* Brand — the third global section: how the whole site looks. */}
+        <button
+          type="button"
+          className={`sm-builder-themerow${
+            chromeTarget === "brand" ? " is-selected" : ""
+          }`}
+          onClick={() => onSelectChrome("brand")}
+        >
+          <Palette className="h-4 w-4 opacity-50" />
+          <span>
+            <span className="sm-builder-themerow-title">Brand</span>
+            <span className="sm-builder-themerow-sub">Colour &amp; logo</span>
+          </span>
+        </button>
 
         {/* Footer — likewise a global section. */}
         <button

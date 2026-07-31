@@ -376,3 +376,85 @@ export function FooterForm({
     </>
   );
 }
+
+export interface BrandAppearance {
+  name: string;
+  primaryColor: string;
+  logoUrl: string | null;
+}
+
+/**
+ * Brand — the third global "section".
+ *
+ * Deliberately narrow: the colour and logo that decide how the WEBSITE looks.
+ * Contact details, social profiles and the legal name stay in
+ * /dashboard/branding because they are store identity — they print on invoices
+ * and go out in email, so they are not a website decision and should not be
+ * edited from a screen whose Publish button is about the website.
+ */
+export function BrandForm({
+  brand,
+  onChange,
+}: {
+  brand: BrandAppearance;
+  onChange: (next: BrandAppearance) => void;
+}) {
+  return (
+    <>
+      <Group title="Colour" hint="Used for buttons, links and accents.">
+        <div className="sm-b-colorrow">
+          <input
+            type="color"
+            className="sm-b-color"
+            value={brand.primaryColor}
+            onChange={(e) =>
+              onChange({ ...brand, primaryColor: e.target.value })
+            }
+            aria-label="Primary colour"
+          />
+          <input
+            className="sm-b-input sm-b-input-mono"
+            value={brand.primaryColor}
+            onChange={(e) =>
+              onChange({ ...brand, primaryColor: e.target.value })
+            }
+            aria-label="Primary colour hex"
+          />
+        </div>
+      </Group>
+
+      <Group title="Logo" defaultOpen={false}>
+        <label className="sm-b-field">
+          <span>Image URL</span>
+          <input
+            className="sm-b-input sm-b-input-mono"
+            value={brand.logoUrl ?? ""}
+            placeholder="https://…"
+            onChange={(e) =>
+              onChange({ ...brand, logoUrl: e.target.value || null })
+            }
+          />
+        </label>
+        <p className="sm-b-hint">
+          Leave empty to show your store name as text. Upload images in the{" "}
+          <a href="/dashboard/media" target="_blank" rel="noopener">
+            media library
+          </a>
+          .
+        </p>
+      </Group>
+
+      <Group title="Everything else" defaultOpen={false}>
+        <p className="sm-b-hint">
+          Your store name, contact details, social profiles and legal name are
+          store identity — they also appear on invoices and in email, so they
+          live in{" "}
+          <a href="/dashboard/branding" target="_blank" rel="noopener">
+            branding
+          </a>
+          .
+        </p>
+      </Group>
+    </>
+  );
+}
