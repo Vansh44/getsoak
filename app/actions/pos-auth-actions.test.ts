@@ -37,6 +37,8 @@ vi.mock("next/cache", () => ({
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(async () => ({ uid: "u1", email: "a@b.c" })),
   getActingStoreId: vi.fn(async () => "store-1"),
+  // Granting device trust is superadmin-only; the happy paths below run as one.
+  isStoreSuperadmin: vi.fn(async () => true),
 }));
 vi.mock("@/lib/store/resolve", () => ({
   getCurrentStoreId: vi.fn(async () => "store-1"),
@@ -80,7 +82,10 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { rateLimit } from "@/lib/rate-limit";
-import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import {
+  getManagerIdentity,
+  isStoreSuperadmin,
+} from "@/app/dashboard/lib/access";
 import { getAuthorizedDevice, rotateDeviceNonce } from "@/lib/pos/devices";
 import { hashPin } from "@/lib/pos/pin";
 import {
@@ -94,6 +99,7 @@ import { updateAuthUser } from "@/lib/auth/firebase-users";
 import {
   authorizeThisDevice,
   createPairingCode,
+  revokeDevice,
   pairDevice,
   posLoginWithPin,
   posLock,
@@ -117,6 +123,7 @@ beforeEach(() => {
     uid: "u1",
     email: "a@b.c",
   } as any);
+  vi.mocked(isStoreSuperadmin).mockResolvedValue(true);
   vi.mocked(getAuthorizedDevice).mockResolvedValue(null);
   dbHolder.current = makeDbMock();
 });
@@ -126,6 +133,18 @@ describe("authorizeThisDevice", () => {
     vi.mocked(getManagerIdentity).mockResolvedValue(null);
     const r = await authorizeThisDevice("loc-1");
     expect(r.error).toMatch(/owner/i);
+    expect(H.jar.set).not.toHaveBeenCalled();
+  });
+
+  // ★ Narrower than "a store admin": authorizing a device hands a browser the
+  // lasting ability to take money, so it answers to the owner — not to anyone
+  // who was given a dashboard login with POS access.
+  it("refuses a DELEGATED dashboard admin", async () => {
+    vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
+    dbHolder.current = makeDbMock({ selectQueue: capSelects() });
+    const r = await authorizeThisDevice("loc-1");
+    expect(r.error).toMatch(/only the store owner/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
     expect(H.jar.set).not.toHaveBeenCalled();
   });
 
@@ -175,7 +194,17 @@ describe("authorizeThisDevice", () => {
 describe("createPairingCode", () => {
   it("rejects unauthorized callers", async () => {
     vi.mocked(getManagerIdentity).mockResolvedValue(null);
-    expect((await createPairingCode("loc-1")).error).toMatch(/permission/i);
+    expect((await createPairingCode("loc-1")).error).toMatch(/owner/i);
+  });
+
+  // A pairing code IS a device authorization, posted to someone else to redeem.
+  it("refuses a DELEGATED dashboard admin", async () => {
+    vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
+    dbHolder.current = makeDbMock({ selectQueue: capSelects() });
+    const r = await createPairingCode("loc-1");
+    expect(r.error).toMatch(/only the store owner/i);
+    expect(r.code).toBeUndefined();
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("issues an 8-char code for a valid location", async () => {
@@ -191,6 +220,25 @@ describe("createPairingCode", () => {
     const r = await createPairingCode("loc-1");
     expect(r.error).toMatch(/already has 5 authorized devices/i);
     expect(r.code).toBeUndefined();
+  });
+});
+
+// ★ The deliberate ASYMMETRY: granting device trust is superadmin-only, taking
+// it away is not. Revocation can only ever reduce what a browser may do, and
+// making the owner the only person who can kill a stolen or cloned till would
+// buy nothing while leaving it live for hours. Pinned so it isn't "tidied up"
+// into matching the grant path.
+describe("revokeDevice", () => {
+  it("lets a DELEGATED dashboard admin revoke", async () => {
+    vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
+    const r = await revokeDevice("d1");
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.update).toHaveLength(1);
+  });
+
+  it("still refuses someone with no POS access at all", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue(null);
+    expect((await revokeDevice("d1")).error).toMatch(/permission/i);
   });
 });
 

@@ -35,7 +35,7 @@ import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { summariseItems } from "@/lib/notifications/format";
-import { posCan } from "@/lib/pos/permissions";
+import { posCan, type PosActorRole } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import {
@@ -133,7 +133,7 @@ export interface RegisterConfig {
   locationId: string;
   locationName: string;
   operatorName: string;
-  role: string;
+  role: PosActorRole;
   taxEnabled: boolean;
   gstEnabled: boolean;
   pricesIncludeTax: boolean;
@@ -145,9 +145,18 @@ export interface RegisterConfig {
   /** Applied to products with no tax class of their own. */
   defaultTaxClassId: string | null;
   currency: string;
-  allowPriceOverride: boolean;
-  requireManagerForDiscount: boolean;
-  maxDiscountPercent: number;
+  /** Whether to render the discount fields at all. The SERVER still refuses a
+   *  discount from anyone else — this only keeps a control off the screen that
+   *  the cashier would be told off for using. It replaces the cap/approval
+   *  numbers that used to ride here unread: the client must not hold the
+   *  discount policy, only the answer. */
+  canDiscount: boolean;
+  /** Same, for a line's price. Replaces the raw `allowPriceOverride` setting:
+   *  the merchant's on/off switch is only half the answer, and shipping half an
+   *  answer to the client is how a UI ends up offering what the server refuses.
+   *  (No override control exists on the register yet — this is what one would
+   *  ask.) */
+  canOverridePrice: boolean;
 }
 
 export async function getRegisterConfig(): Promise<
@@ -202,10 +211,13 @@ export async function getRegisterConfig(): Promise<
     taxRates,
     defaultTaxClassId: billingRows[0]?.default_tax_class_id ?? null,
     currency: "INR",
-    allowPriceOverride: settings["pos.allowPriceOverride"] !== false,
-    requireManagerForDiscount:
-      settings["pos.requireManagerForDiscount"] === true,
-    maxDiscountPercent: Number(settings["pos.maxDiscountPercent"]) || 10,
+    canDiscount:
+      settings["pos.ownerOnlyDiscounts"] === false ||
+      posCan(op.role, "discount"),
+    canOverridePrice:
+      settings["pos.allowPriceOverride"] !== false &&
+      (settings["pos.ownerOnlyDiscounts"] === false ||
+        posCan(op.role, "price_override")),
   };
 }
 
@@ -699,6 +711,10 @@ export async function placePosSale(
   const allowOverride = settings["pos.allowPriceOverride"] !== false;
   const requireApproval = settings["pos.requireManagerForDiscount"] === true;
   const maxDiscountPct = Number(settings["pos.maxDiscountPercent"]) || 10;
+  // Default TRUE: discounting belongs to the owner unless a merchant hands it
+  // out deliberately.
+  const ownerOnlyDiscounts = settings["pos.ownerOnlyDiscounts"] !== false;
+  const mayDiscount = posCan(op.role, "discount");
 
   // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
   // reconciliation never has to infer it from a timestamp. A store may require
@@ -832,7 +848,7 @@ export async function placePosSale(
     const listed = v ? v.selling_price : p.selling_price;
     let unit = special && special > 0 ? special : listed;
 
-    // A price override is a manager-authorised deviation, never a client claim.
+    // A price override is an authorised deviation, never a client claim.
     if (
       l.priceOverride !== undefined &&
       l.priceOverride !== null &&
@@ -840,7 +856,22 @@ export async function placePosSale(
     ) {
       if (!allowOverride) return { error: "Price overrides are turned off." };
       if (l.priceOverride < 0) return { error: "Invalid price." };
-      if (!opts.managerApproved && op.role === "cashier") needsApproval = true;
+      // ★ Repricing a line to ₹1 IS a discount, so it answers to the same rule
+      // (`pos.ownerOnlyDiscounts`) and the same capability table. Without this,
+      // the discount gate below would be decorative — a manager would simply
+      // mark the price down instead.
+      if (ownerOnlyDiscounts && !posCan(op.role, "price_override")) {
+        return {
+          error:
+            "Only the owner can change a price on a sale. Ask them to ring it, or turn off owner-only discounts in POS settings.",
+        };
+      }
+      // Legacy path (owner-only discounts switched off): a cashier needs a
+      // manager's PIN, a manager and above don't. `discount_over_cap` is that
+      // set, named — it used to be an inline `role === "cashier"`.
+      if (!opts.managerApproved && !posCan(op.role, "discount_over_cap")) {
+        needsApproval = true;
+      }
       unit = l.priceOverride;
     }
 
@@ -889,8 +920,31 @@ export async function placePosSale(
   });
   const { subtotal, discount } = totals;
 
-  // Discount cap — enforced SERVER-side; a cashier needs a manager PIN above it.
-  if (requireApproval && subtotal > 0 && op.role === "cashier") {
+  // ★ WHO MAY DISCOUNT AT ALL. Under `pos.ownerOnlyDiscounts` (the default) a
+  // discount from staff is REFUSED, not queued for approval — a manager's PIN
+  // must not open this door, because the manager is one of the people being
+  // kept out of it. Returning `needsApproval` here would hand them the key.
+  //
+  // Both kinds count: an order discount and a per-line markdown are the same
+  // act with different arithmetic, and allowing "Less ₹50" per line while
+  // blocking "Discount ₹50" would be a rule in name only.
+  if (discount > 0 && ownerOnlyDiscounts && !mayDiscount) {
+    return {
+      error:
+        "Only the owner can apply a discount. Ask them to ring this sale, or turn off owner-only discounts in POS settings.",
+    };
+  }
+
+  // The cap, for a merchant who has handed discounting to their staff. A
+  // cashier needs a manager's PIN above it; `discount_over_cap` is what exempts
+  // a manager, rather than an inline role check that could disagree with the
+  // capability table.
+  if (
+    requireApproval &&
+    subtotal > 0 &&
+    discount > 0 &&
+    !posCan(op.role, "discount_over_cap")
+  ) {
     const pct = (discount / subtotal) * 100;
     if (pct > maxDiscountPct && !opts.managerApproved) needsApproval = true;
   }

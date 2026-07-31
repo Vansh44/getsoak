@@ -15,7 +15,10 @@ import { cookies } from "next/headers";
 import { withService } from "@/lib/db/client";
 import { admins, posStaff, posStaffLocations } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
-import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import {
+  getManagerIdentity,
+  isStoreSuperadmin,
+} from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getDefaultLocationId } from "@/lib/pos/locations";
 import { getAuthorizedDevice } from "@/lib/pos/devices";
@@ -43,13 +46,18 @@ export async function resolvePosOperator(): Promise<PosOperator | null> {
   const device = await getAuthorizedDevice(storeId);
 
   // 1. Owner — a dashboard admin with POS access. NOT device-restricted.
+  //
+  // Resolved as "superadmin" when they actually are one, because the two differ
+  // for the money-losing capabilities (permissions.ts SUPERADMIN_ONLY): a
+  // delegated admin may run the till but not discount or reprice. Everything
+  // else treats them alike via `isPosOwnerRole`.
   const ownerIdentity = await getManagerIdentity("pos");
   if (ownerIdentity) {
     const locationId =
       device?.locationId ?? (await getDefaultLocationId(storeId));
     if (locationId) {
       return {
-        role: "owner",
+        role: (await isStoreSuperadmin()) ? "superadmin" : "owner",
         storeId,
         locationId,
         staffId: null,

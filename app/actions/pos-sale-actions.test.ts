@@ -56,10 +56,32 @@ const CASHIER = {
   deviceAuthorized: true,
 };
 
+/** The store's superadmin ringing the till — the ONLY actor who may discount. */
+const OWNER = {
+  ...CASHIER,
+  role: "superadmin" as const,
+  staffId: null,
+  name: "Vansh",
+  source: "owner" as const,
+};
+
+/** A dashboard admin the owner delegated POS access to. Runs the till, but may
+ *  not give money away — that is the point of the owner/superadmin split. */
+const DELEGATED_ADMIN = { ...OWNER, role: "owner" as const, name: "Asha" };
+
 const SETTINGS = {
   "pos.allowPriceOverride": true,
+  // The default, stated explicitly: discounts are the owner's to give.
+  "pos.ownerOnlyDiscounts": true,
   "pos.requireManagerForDiscount": true,
   "pos.maxDiscountPercent": 10,
+} as any;
+
+/** A merchant who has deliberately handed discounting to their staff, which is
+ *  what re-arms the cap + manager-PIN machinery. */
+const STAFF_MAY_DISCOUNT = {
+  ...SETTINGS,
+  "pos.ownerOnlyDiscounts": false,
 } as any;
 
 // A ₹100 product, 18% GST, exclusive pricing, supplier in state 07.
@@ -226,13 +248,193 @@ describe("placePosSale — pricing is server-authoritative", () => {
   });
 });
 
-describe("placePosSale — discount cap needs a manager", () => {
+// ★ The default: giving money away belongs to the owner.
+describe("placePosSale — only the owner may discount", () => {
+  it("refuses a cashier's order discount OUTRIGHT, not for approval", async () => {
+    const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
+      orderDiscount: 50,
+    });
+    expect(r.error).toMatch(/only the owner/i);
+    // Not `needsApproval` — that would put a PIN prompt on screen and let a
+    // manager wave it through.
+    expect(r.needsApproval).toBeUndefined();
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("refuses a MANAGER's discount too", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue({
+      ...CASHIER,
+      role: "manager",
+    } as any);
+    const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
+      orderDiscount: 50,
+    });
+    expect(r.error).toMatch(/only the owner/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ cannot be unlocked with a manager's PIN", async () => {
+    // The manager is one of the people being kept out, so their own PIN must
+    // not be the key. This is the whole point of refusing rather than queuing.
+    const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
+      orderDiscount: 50,
+      managerApproved: true,
+    });
+    expect(r.error).toMatch(/only the owner/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ blocks a per-line markdown as well", async () => {
+    // Otherwise "Less ₹50" on the line does exactly what "Discount ₹50" is
+    // forbidden from doing, and the rule is a rule in name only.
+    const r = await placePosSale(
+      [{ ...line, quantity: 2, lineDiscount: 50 }],
+      [{ method: "cash", amount: 1 }],
+    );
+    expect(r.error).toMatch(/only the owner/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ refuses a DELEGATED dashboard admin too", async () => {
+    // POS access is delegable; discounting is not. Otherwise "owner only" would
+    // quietly mean "anyone the owner ever gave a dashboard login with POS on".
+    vi.mocked(resolvePosOperator).mockResolvedValue(DELEGATED_ADMIN as any);
+    const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
+      orderDiscount: 50,
+    });
+    expect(r.error).toMatch(/only the owner/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("lets the owner discount", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      { orderDiscount: 50 },
+    );
+    expect(r.success).toBe(true);
+    const order = dbHolder.current.calls.values[0];
+    expect(order.discount).toBe(50);
+    // ₹100 − ₹50 discount = ₹50 taxable, +18% = ₹59.
+    expect(order.total).toBe(59);
+  });
+
+  it("a sale with no discount is unaffected", async () => {
+    expect((await placePosSale([line], cash)).success).toBe(true);
+  });
+});
+
+// ★ A price override is a discount by another name, so it answers to the same
+// rule. Leaving it open would have made the block above decorative — a manager
+// would just reprice the line instead.
+describe("placePosSale — only the owner may override a price", () => {
+  const cheap = { ...line, priceOverride: 50 };
+
+  it("refuses a cashier", async () => {
+    const r = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(r.error).toMatch(/only the owner can change a price/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("refuses a manager, and a manager's PIN doesn't help", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue({
+      ...CASHIER,
+      role: "manager",
+    } as any);
+    const r = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      { managerApproved: true },
+    );
+    expect(r.error).toMatch(/only the owner can change a price/i);
+    expect(r.needsApproval).toBeUndefined();
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("refuses a delegated dashboard admin", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(DELEGATED_ADMIN as any);
+    const r = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(r.error).toMatch(/only the owner can change a price/i);
+  });
+
+  it("lets the owner reprice a line", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    const r = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].subtotal).toBe(50);
+    expect(dbHolder.current.calls.values[1][0].price).toBe(50);
+  });
+
+  // The merchant's own on/off switch still comes first — it is a store policy,
+  // not a permission, so it stops the owner too.
+  it("respects pos.allowPriceOverride being off, even for the owner", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...SETTINGS,
+      "pos.allowPriceOverride": false,
+    } as any);
+    const r = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(r.error).toMatch(/turned off/i);
+  });
+
+  it("falls back to the manager-PIN flow when staff may discount", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue(STAFF_MAY_DISCOUNT);
+    const asCashier = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(asCashier.needsApproval).toBe(true);
+
+    vi.mocked(resolvePosOperator).mockResolvedValue({
+      ...CASHIER,
+      role: "manager",
+    } as any);
+    seedHappyPath();
+    const asManager = await placePosSale(
+      [cheap],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+    );
+    expect(asManager.success).toBe(true);
+  });
+});
+
+// The pre-existing cap machinery, which now applies only to a merchant who has
+// deliberately handed discounting to their staff.
+describe("placePosSale — the cap, when staff may discount", () => {
+  beforeEach(() => {
+    vi.mocked(getStoreSettings).mockResolvedValue(STAFF_MAY_DISCOUNT);
+  });
+
   it("blocks a cashier discounting past the cap", async () => {
     const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
       orderDiscount: 50, // 50% of a ₹100 sale, cap is 10%
     });
     expect(r.needsApproval).toBe(true);
     expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("allows a cashier under the cap with no approval", async () => {
+    // ₹100 − ₹10 = ₹90 taxable, +18% = ₹106.20. Tender ₹110.
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 110, tendered: 110 }],
+      { orderDiscount: 10 }, // exactly the 10% cap
+    );
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].discount).toBe(10);
   });
 
   it("allows it once a manager PIN has approved", async () => {
@@ -244,7 +446,6 @@ describe("placePosSale — discount cap needs a manager", () => {
     expect(r.error).toBeUndefined();
     const order = dbHolder.current.calls.values[0];
     expect(order.discount).toBe(50);
-    // ₹100 − ₹50 discount = ₹50 taxable, +18% = ₹59.
     expect(order.total).toBe(59);
   });
 
@@ -510,12 +711,18 @@ describe("placePosSale — GSTIN", () => {
 describe("placePosSale — line discounts", () => {
   const twoOf = { productId: "p1", variantId: null, quantity: 2 };
 
+  // The arithmetic is what's under test here, so these run as the owner — the
+  // only actor allowed to mark a line down by default. Who MAY is covered in
+  // "only the owner may discount" above.
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+  });
+
   it("reduces the line amount and the order total", async () => {
     // 2 x ₹100 = ₹200, less ₹30 = ₹170, +18% = ₹200.60 -> 201
     const r = await placePosSale(
       [{ ...twoOf, lineDiscount: 30 }],
       [{ method: "cash", amount: 201, tendered: 201 }],
-      { managerApproved: true }, // 15% is over the 10% cap
     );
     expect(r.success).toBe(true);
     const order = dbHolder.current.calls.values[0];
@@ -532,7 +739,6 @@ describe("placePosSale — line discounts", () => {
     const r = await placePosSale(
       [{ ...twoOf, lineDiscount: 9999 }],
       [{ method: "cash", amount: 1, tendered: 1 }],
-      { managerApproved: true },
     );
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].discount).toBe(200);
@@ -540,8 +746,11 @@ describe("placePosSale — line discounts", () => {
   });
 
   // The cap is on TOTAL generosity — line and order discounts together — so a
-  // cashier can't stay under it by splitting the giveaway across both.
+  // cashier can't stay under it by splitting the giveaway across both. Only
+  // reachable once a merchant has let staff discount at all.
   it("counts line discounts toward the manager-approval cap", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+    vi.mocked(getStoreSettings).mockResolvedValue(STAFF_MAY_DISCOUNT);
     const r = await placePosSale(
       [{ ...twoOf, lineDiscount: 50 }], // 25% of ₹200; cap is 10%
       [{ method: "cash", amount: 1 }],
@@ -550,7 +759,10 @@ describe("placePosSale — line discounts", () => {
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
+  // Rejected before it becomes a discount at all — so it must not trip the
+  // owner-only gate either. Run as a CASHIER precisely to prove that.
   it("ignores a negative or non-numeric line discount", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     const r = await placePosSale(
       [{ ...twoOf, lineDiscount: -50 }],
       [{ method: "cash", amount: 236, tendered: 236 }],

@@ -37,6 +37,7 @@ export const SETTING_KEYS = [
   "pos.enabled",
   "pos.idleLockMinutes",
   "pos.allowPriceOverride",
+  "pos.ownerOnlyDiscounts",
   "pos.requireManagerForDiscount",
   "pos.maxDiscountPercent",
   "pos.requireOpenShift",
@@ -168,7 +169,18 @@ export const SETTINGS: readonly SettingDef[] = [
     key: "pos.allowPriceOverride",
     label: "Allow price overrides at the register",
     description:
-      "Let staff change an item's price during a sale. Turn off to make listed prices final.",
+      "Let the till change an item's price during a sale. Turn off to make listed prices final. Who may do it is governed by the setting below.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.ownerOnlyDiscounts",
+    label: "Only the owner can give discounts",
+    description:
+      "Cashiers and managers cannot discount a sale, mark a line down, or override a price — not even with a manager's PIN. A price override is a discount by another name, so it is covered here too. Turn this off to let cashiers discount up to the limit below, with a manager approving anything larger.",
     group: "Point of Sale",
     section: "pos",
     type: "boolean",
@@ -179,7 +191,7 @@ export const SETTINGS: readonly SettingDef[] = [
     key: "pos.requireManagerForDiscount",
     label: "Require a manager's PIN for large discounts",
     description:
-      "Cashiers must get a manager's PIN to discount beyond the limit below (managers and owners are never prompted).",
+      "Only applies when 'Only the owner can give discounts' is off. Cashiers must then get a manager's PIN to discount beyond the limit below (managers and owners are never prompted).",
     group: "Point of Sale",
     section: "pos",
     type: "boolean",
@@ -190,7 +202,7 @@ export const SETTINGS: readonly SettingDef[] = [
     key: "pos.maxDiscountPercent",
     label: "Discount a cashier can give without approval",
     description:
-      "Percent of the sale a cashier may discount before a manager's PIN is required.",
+      "Percent of the sale a cashier may discount before a manager's PIN is required. Only applies when 'Only the owner can give discounts' is off.",
     group: "Point of Sale",
     section: "pos",
     type: "number",

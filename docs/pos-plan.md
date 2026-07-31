@@ -180,18 +180,28 @@ available" screen.
 
 POS roles live in `pos_staff.role` (`'cashier' | 'manager'`), **separate** from
 dashboard `roles` slugs. Owners/admins operating `/pos` are implicitly `manager`+
-(all capabilities, all locations).
+(all locations) — and all capabilities EXCEPT the money-losing pair, which the
+store's superadmin keeps.
 
-| Capability                                            | Cashier                                      | Manager        | Owner/Admin    |
-| ----------------------------------------------------- | -------------------------------------------- | -------------- | -------------- |
-| Ring sale, take tender, print receipt                 | ✅                                           | ✅             | ✅             |
-| Read-only cross-location stock lookup                 | ✅                                           | ✅             | ✅             |
-| Discount above `pos.maxDiscountPercentWithoutManager` | manager PIN                                  | ✅             | ✅             |
-| Price override                                        | per `pos.allowPriceOverride` (+ manager PIN) | ✅             | ✅             |
-| Refund / return                                       | manager PIN                                  | ✅             | ✅             |
-| Open/close shift, cash drop                           | ❌                                           | ✅             | ✅             |
-| Adjust inventory (assigned location only)             | ❌                                           | ✅ (their loc) | ✅ (all)       |
-| Manage staff / authorize devices                      | ❌                                           | ❌             | ✅ (dashboard) |
+**As built there are FOUR actors**, because giving money away is not delegable:
+`owner` is a dashboard admin granted the POS section, `superadmin` is the store's
+superadmin (or a platform operator). They differ for discounts and price
+overrides ONLY.
+
+| Capability                                                    | Cashier     | Manager        | Owner (delegated admin) | Superadmin     |
+| ------------------------------------------------------------- | ----------- | -------------- | ----------------------- | -------------- |
+| Ring sale, take tender, print receipt                         | ✅          | ✅             | ✅                      | ✅             |
+| Read-only cross-location stock lookup                         | ✅          | ✅             | ✅                      | ✅             |
+| **Give ANY discount** (order or per-line)                     | ❌          | ❌             | ❌                      | ✅             |
+| **Price override** (subject to `pos.allowPriceOverride`)      | ❌          | ❌             | ❌                      | ✅             |
+| Either of the two above, when `pos.ownerOnlyDiscounts` is OFF | manager PIN | ✅             | ✅                      | ✅             |
+| Refund / return                                               | manager PIN | ✅             | ✅                      | ✅             |
+| Open/close shift, cash drop                                   | ❌          | ✅             | ✅                      | ✅             |
+| Adjust inventory (assigned location only)                     | ❌          | ✅ (their loc) | ✅ (all)                | ✅ (all)       |
+| Manage staff                                                  | ❌          | ❌             | ✅ (dashboard)          | ✅ (dashboard) |
+| **Authorize** a device / issue a pairing code                 | ❌          | ❌             | ❌                      | ✅             |
+| **Revoke** a device (only ever reduces trust)                 | ❌          | ❌             | ✅ (dashboard)          | ✅ (dashboard) |
+| Left unattended without the idle lock                         | ❌          | ❌             | ❌                      | ✅             |
 
 Every capability is enforced **server-side** in the POS action from the resolved
 operator, never from a client flag. Manager location-scoping is enforced against
@@ -348,9 +358,13 @@ exactly:
    POS not enabled / not pro / operator lacks `sell`.
 2. Rate-limit per operator. Validate cart shape (bounds like `placeOrder`).
 3. **Re-price from DB, store-scoped** (never trust client prices).
-4. Apply **line + order discounts** with reason codes; enforce
-   `pos.maxDiscountPercentWithoutManager` — above cap requires a **manager
-   approval token** (from a manager PIN verify).
+4. Apply **line + order discounts** with reason codes. **As built, any discount
+   OR price override requires a `SUPERADMIN_ONLY` capability — the store's
+   superadmin, not a delegated admin** (`pos.ownerOnlyDiscounts`, default on),
+   refused outright rather than sent for approval so a manager cannot approve
+   their own. Only with that setting OFF does the original design apply: enforce
+   `pos.maxDiscountPercent`, above which a cashier needs a **manager approval
+   token** (from a manager PIN verify).
 5. **GST place-of-supply** split (§6) per line.
 6. **Reserve stock at the register's location** via `reserve_stock_at`.
 7. Insert `orders` (`sales_channel:'pos'`, location/register/shift/cashier,
@@ -400,7 +414,8 @@ per-location sequence, alongside the global `order_ref`.
 
 `pos.enabled` (bool, `minPlan: 'pro'`), `pos.allowStorePickup`,
 `pos.allowReturnsInStore`, `pos.allowShipFromStore`, `pos.allowPriceOverride`,
-`pos.requireManagerForDiscount`, `pos.maxDiscountPercentWithoutManager` (number),
+`pos.ownerOnlyDiscounts` (bool, default true — shipped),
+`pos.requireManagerForDiscount`, `pos.maxDiscountPercent` (number),
 `pos.requireCustomerForSale`, `pos.receiptChannel` (print|whatsapp|sms|email —
 needs a small `type: "enum"` addition to `SettingDef`), `pos.receiptWidth`
 (80|58), `pos.cashDrawerMaxBeforeDrop`, `pos.trackSerialNumbers`,

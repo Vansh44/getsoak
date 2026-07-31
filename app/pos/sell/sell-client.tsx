@@ -48,6 +48,7 @@ import {
   isTouchPrimary,
   subscribeTouchPrimary,
 } from "@/lib/pos/keyboard-wedge";
+import { isIdleLockExempt } from "@/lib/pos/permissions";
 import { useCatalog } from "@/lib/pos/use-catalog";
 import {
   applyLayout,
@@ -451,7 +452,13 @@ export function SellClient({
           walked-away-from-a-shared-till risk, and since posLock now ends the
           Firebase session it would otherwise sign an owner out of the
           dashboard for standing still. */}
-      {config.role !== "owner" && <IdleLock minutes={idleLockMinutes} />}
+      {/* Only the SUPERADMIN is exempt now. A delegated admin at a shared
+          counter is the same walked-away-from-an-open-till risk as any
+          operator — more so, since their session reaches further than a
+          cashier's. Note the cost that buys: posLock clears sm_session, so an
+          idle till signs them out of the dashboard too. That is the intended
+          trade for everyone except the person whose shop it is. */}
+      {!isIdleLockExempt(config.role) && <IdleLock minutes={idleLockMinutes} />}
 
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-2 font-semibold">
@@ -752,33 +759,38 @@ export function SellClient({
                     </span>
                   </div>
                   {/* Per-line markdown — for the one damaged or expiring unit,
-                      as opposed to a discount across the whole sale. */}
-                  <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                    <label className="flex items-center gap-1.5 text-white/50">
-                      Less ₹
-                      <input
-                        value={l.lineDiscount || ""}
-                        inputMode="numeric"
-                        onChange={(e) =>
-                          setLineDiscount(
-                            l.key,
-                            Number(e.target.value.replace(/\D/g, "")) || 0,
-                          )
-                        }
-                        placeholder="0"
-                        className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
-                      />
-                    </label>
-                    {l.lineDiscount > 0 && (
-                      <span className="font-semibold text-white">
-                        ₹
-                        {(
-                          l.unitPrice * l.quantity -
-                          l.lineDiscount
-                        ).toLocaleString("en-IN")}
-                      </span>
-                    )}
-                  </div>
+                      as opposed to a discount across the whole sale. Hidden
+                      unless this operator may discount: a field that always
+                      fails at the till, in front of a customer, is worse than
+                      no field. The server is the actual boundary. */}
+                  {config.canDiscount && (
+                    <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                      <label className="flex items-center gap-1.5 text-white/50">
+                        Less ₹
+                        <input
+                          value={l.lineDiscount || ""}
+                          inputMode="numeric"
+                          onChange={(e) =>
+                            setLineDiscount(
+                              l.key,
+                              Number(e.target.value.replace(/\D/g, "")) || 0,
+                            )
+                          }
+                          placeholder="0"
+                          className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
+                        />
+                      </label>
+                      {l.lineDiscount > 0 && (
+                        <span className="font-semibold text-white">
+                          ₹
+                          {(
+                            l.unitPrice * l.quantity -
+                            l.lineDiscount
+                          ).toLocaleString("en-IN")}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -821,18 +833,20 @@ export function SellClient({
                 <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
               </div>
             )}
-            <label className="mb-2 flex items-center justify-between gap-2 text-sm">
-              <span className="text-white/60">Discount ₹</span>
-              <input
-                value={discount || ""}
-                inputMode="numeric"
-                onChange={(e) =>
-                  setDiscount(Number(e.target.value.replace(/\D/g, "")) || 0)
-                }
-                placeholder="0"
-                className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
-              />
-            </label>
+            {config.canDiscount && (
+              <label className="mb-2 flex items-center justify-between gap-2 text-sm">
+                <span className="text-white/60">Discount ₹</span>
+                <input
+                  value={discount || ""}
+                  inputMode="numeric"
+                  onChange={(e) =>
+                    setDiscount(Number(e.target.value.replace(/\D/g, "")) || 0)
+                  }
+                  placeholder="0"
+                  className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
+                />
+              </label>
+            )}
             {tax > 0 && (
               <div className="mb-2 flex items-center justify-between text-sm">
                 <span className="text-white/60">

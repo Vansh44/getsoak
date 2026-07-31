@@ -29,7 +29,9 @@ import {
 import {
   getActingStoreId,
   getManagerIdentity,
+  isStoreSuperadmin,
 } from "@/app/dashboard/lib/access";
+import type { UserIdentity } from "@/lib/db/client";
 import { getCurrentStoreId } from "@/lib/store/resolve";
 import { getStoreLocations } from "@/lib/pos/locations";
 import {
@@ -194,12 +196,33 @@ async function registerDevice(
 
 // ---- Owner: authorize this device -----------------------------------------
 
+const NOT_OWNER_ERROR = "Only the store owner can authorize a device.";
+
+/**
+ * The gate for GRANTING device trust — narrower than `getManagerIdentity("pos")`,
+ * which a delegated admin also passes. Authorizing a device hands a browser the
+ * permanent (until revoked) ability to take money on this store's behalf, so it
+ * answers to the same person as a discount: `authorize_device` is
+ * SUPERADMIN_ONLY in lib/pos/permissions.ts, and this is its server side.
+ *
+ * Both failures return the SAME message on purpose — a delegated admin doesn't
+ * need to be told they'd have passed the weaker gate.
+ *
+ * REVOKING is deliberately NOT narrowed (see `revokeDevice`): it can only take
+ * trust away, and locking a store's admin out of killing a compromised till
+ * would trade a real safety valve for nothing.
+ */
+async function superadminIdentity(): Promise<UserIdentity | null> {
+  const admin = await getManagerIdentity("pos");
+  if (!admin) return null;
+  return (await isStoreSuperadmin()) ? admin : null;
+}
+
 export async function authorizeThisDevice(
   locationId: string,
 ): Promise<ActionResult> {
-  // Only an owner/admin (dashboard POS access) may authorize a device.
-  const admin = await getManagerIdentity("pos");
-  if (!admin) return { error: "Only a store owner can authorize a device." };
+  const admin = await superadminIdentity();
+  if (!admin) return { error: NOT_OWNER_ERROR };
   const storeId = await getCurrentStoreId();
 
   const locations = await getStoreLocations(storeId);
@@ -214,8 +237,10 @@ export async function authorizeThisDevice(
 export async function createPairingCode(
   locationId: string,
 ): Promise<{ code?: string; expiresAt?: string; error?: string }> {
-  const admin = await getManagerIdentity("pos");
-  if (!admin) return { error: "You don't have permission to do this." };
+  // A pairing code IS a device authorization, posted to someone else to redeem
+  // — so it takes the same gate as authorizing the device in your hands.
+  const admin = await superadminIdentity();
+  if (!admin) return { error: NOT_OWNER_ERROR };
   const storeId = await getActingStoreId();
 
   const locations = await getStoreLocations(storeId);
@@ -367,6 +392,10 @@ export async function listPosActivity(
 }
 
 export async function revokeDevice(id: string): Promise<ActionResult> {
+  // Deliberately the WIDER gate: granting device trust is superadmin-only
+  // (`superadminIdentity`), but taking it away can only ever reduce what a
+  // browser may do. Requiring the owner to kill a stolen or cloned till would
+  // buy nothing and could leave one live for hours.
   const admin = await getManagerIdentity("pos");
   if (!admin) return { error: "You don't have permission to do this." };
   const storeId = await getActingStoreId();

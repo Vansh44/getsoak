@@ -26,6 +26,10 @@ vi.mock("@/lib/store/resolve", () => ({
 }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(async () => null),
+  // Defaults to a DELEGATED admin ("owner"), so the tests below that assert the
+  // owner path keep asserting the weaker actor. The superadmin case is asserted
+  // explicitly.
+  isStoreSuperadmin: vi.fn(async () => false),
 }));
 vi.mock("@/lib/auth/server-user", () => ({
   getServerUser: vi.fn(async () => null),
@@ -45,7 +49,10 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { withService } from "@/lib/db/client";
-import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import {
+  getManagerIdentity,
+  isStoreSuperadmin,
+} from "@/app/dashboard/lib/access";
 import { getAuthorizedDevice } from "@/lib/pos/devices";
 import { POS_OPERATOR_COOKIE, signOperatorToken } from "./session";
 import { resolvePosOperator } from "./operator";
@@ -71,6 +78,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   H.store.clear();
   vi.mocked(getManagerIdentity).mockResolvedValue(null);
+  vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
   vi.mocked(getAuthorizedDevice).mockResolvedValue(AUTHORIZED);
   dbHolder.current = makeDbMock();
 });
@@ -134,6 +142,19 @@ describe("resolvePosOperator", () => {
       source: "owner",
       deviceAuthorized: false,
     });
+  });
+
+  // ★ The owner/superadmin split. Both run the till; only the superadmin may
+  // discount or reprice (permissions.ts SUPERADMIN_ONLY), so the distinction has
+  // to survive into the resolved operator — a single "owner" role would hand a
+  // delegated admin the money-losing capabilities.
+  it("resolves the store's superadmin as `superadmin`, not `owner`", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "u1",
+      email: "owner@x.com",
+    } as any);
+    vi.mocked(isStoreSuperadmin).mockResolvedValue(true);
+    expect((await resolvePosOperator())?.role).toBe("superadmin");
   });
 });
 

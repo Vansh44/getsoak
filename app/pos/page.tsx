@@ -3,6 +3,7 @@ import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreLocations } from "@/lib/pos/locations";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { getPickupQueue } from "@/app/actions/pos-pickup-actions";
+import { posCan } from "@/lib/pos/permissions";
 import { RegisterHome } from "./register-home";
 
 export default async function PosPage() {
@@ -26,7 +27,7 @@ export default async function PosPage() {
       source={operator.source}
       locationName={locationName}
       deviceAuthorized={operator.deviceAuthorized}
-      canAuthorizeDevice={operator.role === "owner"}
+      canAuthorizeDevice={posCan(operator.role, "authorize_device")}
       locations={locations.map((l) => ({ id: l.id, name: l.name }))}
       idleLockMinutes={Number(settings["pos.idleLockMinutes"]) || 10}
       pickupWaiting={pickups.orders.length}

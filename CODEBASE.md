@@ -1427,7 +1427,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
            per location — enforced in `registerDevice` (the choke point both
            authorization paths funnel through) and pre-checked in
            `createPairingCode` so an admin isn't handed an unusable code.
-        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): a PIN operator's
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): every operator's
            register locks after `pos.idleLockMinutes` of inactivity (registry
            setting, default 10, edited at `/dashboard/pos/settings`) with a
            **2-minute** countdown, capped at half the idle window so a
@@ -1435,8 +1435,13 @@ group, span}` (span = columns of the 4-wide desktop grid),
            which is too little notice to finish serving the customer in front
            of you first — and because the banner is the only part of the timer
            anyone ever sees, 20s also got read as the whole lock time.
-           Owners are exempt — this targets the
-           walked-away-from-a-shared-till risk. It is a physical-presence
+           **Only the SUPERADMIN is exempt** (`isIdleLockExempt` — a delegated
+           dashboard admin locks like anyone else; see the discount rule in
+           Phase 2 for why the two are told apart). It targets the
+           walked-away-from-a-shared-till risk, and locking clears BOTH the
+           operator token and `sm_session` — so it ends a dashboard session as
+           well, which is exactly why the exemption exists rather than the lock
+           applying to everyone. It is a physical-presence
            measure, NOT an authorization boundary (a client bypass keeps the
            cookie until it expires); the server boundary remains the device gate
            - per-request `pos_staff` re-validation.
@@ -1480,11 +1485,71 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Phase 2 (v1, done) = the register.** `app/actions/pos-sale-actions.ts`
       is the sell path's trust boundary and mirrors `placeOrder` (§12) step for
       step: operator resolved server-side, prices RE-READ from the DB, discount
-      re-derived and capped (manager PIN above the cap via `verifyManagerPin`),
-      tax recomputed, stock reserved atomically **at the register's location**
+      re-derived and authorised (see the owner-only rule below), tax
+      recomputed, stock reserved atomically **at the register's location**
       (`reserve_stock_at`), service-role writes last, and a reverse rollback
       chain on any failure. `getRegisterConfig` opens the register;
       `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **★ ONLY THE SUPERADMIN MAY GIVE MONEY AWAY** (`pos.ownerOnlyDiscounts`,
+        default **on**). A discount is the till's one irreversible act that
+        leaves NOTHING missing from the shelf to count afterwards — no physical
+        trace — so it sits with the person whose money it is. Three parts:
+        - **The grant is `SUPERADMIN_ONLY` in `lib/pos/permissions.ts`** —
+          `discount`, `price_override` **and `authorize_device`**, held by
+          neither staff role (by OMISSION, so a role added later can't inherit
+          them by resembling a manager) and **not by a delegated dashboard admin
+          either**. Hence **FOUR actor roles**: `PosActorRole` gained
+          `superadmin` alongside `owner`, and `resolvePosOperator` distinguishes
+          them with `isStoreSuperadmin()` (access.ts — request-cached, and the
+          one gate here that FAILS CLOSED, since the cost of a DB blip is a
+          refused discount, not a locked-out admin). POS access is delegable;
+          giving money away — and handing out the ability to take it — is not.
+          Otherwise "owner only" quietly means "anyone ever given a dashboard
+          login with POS on".
+        - **GRANTING device trust is narrowed; REVOKING is deliberately not.**
+          `authorizeThisDevice` and `createPairingCode` (a pairing code IS an
+          authorization, posted to someone else to redeem) go through
+          `superadminIdentity()` in pos-auth-actions.ts; both failure modes
+          return the same message, so a delegated admin isn't told they'd have
+          passed the weaker gate. `revokeDevice` keeps `getManagerIdentity("pos")`
+          — revocation can only ever REDUCE what a browser may do, and making the
+          owner the only person who can kill a stolen or cloned till would buy
+          nothing while leaving it live for hours. Pinned by a test so it isn't
+          "tidied up" into symmetry. `pairDevice` is unchanged: the code is the
+          authorization, redeemed on the device by whoever holds it.
+        - **The idle lock now exempts ONLY the superadmin**
+          (`isIdleLockExempt`, used by `/pos` and `/pos/sell`). Not a
+          capability — it isn't something you may DO, it's whose screen may be
+          left unattended — and a delegated admin at a shared counter is the
+          same walked-away-from-an-open-till risk as any operator, with a
+          session that reaches further than a cashier's. ⚠ **Know what that
+          costs:** `posLock` clears `sm_session` as well as the operator token,
+          so an idle till now signs a delegated admin out of `/dashboard` too.
+          That is the intended trade for everyone except the person whose shop
+          it is — and it is why the exemption exists at all rather than the lock
+          simply applying to everybody. `IdleLock` also calls `endSession()`, so
+          the Firebase SDK left running in the page can't re-mint a session for
+          someone who has walked away; the manual "Lock" button has always done
+          both, and an unattended till has more need of it, not less.
+        - **Refused, NOT queued for approval.** Returning `needsApproval` would
+          put a PIN prompt on screen and let a **manager** wave through the very
+          thing they are being kept out of; their own PIN must not be the key.
+        - **All three mechanisms, or none.** An order discount, a per-line
+          markdown ("Less ₹50"), and repricing a ₹200 tin to ₹1 are the same act
+          with different arithmetic. Blocking one and leaving another open makes
+          the rule decorative — which is exactly what an open
+          `pos.allowPriceOverride` did for the first version of this. That
+          setting is now WHETHER the till may reprice at all (a store policy, so
+          it stops the superadmin too); WHO may is this rule.
+          The register hides both fields via `RegisterConfig.canDiscount` /
+          `canOverridePrice` — a field that always fails at the till, in front of
+          a customer, is worse than no field — but the server is the boundary, and
+          the config carries the ANSWER, never the policy.
+          Switching the setting OFF re-arms the pre-existing cap machinery
+          (`pos.requireManagerForDiscount` + `pos.maxDiscountPercent`: a cashier
+          needs a manager's PIN above the cap, and for an override), which now asks
+          `posCan(role, "discount_over_cap")` rather than an inline
+          `role === "cashier"` that could drift from the capability table.
       - **★ ONE total, shared by the screen and the sale** (`lib/pos/totals.ts`,
         pure + tested). `posTotals` owns subtotal → line markdowns → capped
         order discount → tax → total, and BOTH `placePosSale` and the sell
@@ -1585,10 +1650,12 @@ group, span}` (span = columns of the 4-wide desktop grid),
         upper-case) since it prints on the invoice. The GSTIN is independent
         of the attach — a business buyer needs no account to get it on the
         bill. **Per-line discounts** mark down ONE line (a damaged tin) as
-        opposed to the whole sale: capped server-side at the line's own gross,
-        counted toward the manager-approval cap together with the order-level
-        discount (so a cashier can't stay under it by splitting the giveaway),
-        and persisted in `order_items.line_discount`
+        opposed to the whole sale: **owner-only like any other discount** (the
+        rule above), capped server-side at the line's own gross, and — when a
+        merchant has handed discounting to staff — counted toward the
+        manager-approval cap together with the order-level discount (so a
+        cashier can't stay under it by splitting the giveaway).
+        Persisted in `order_items.line_discount`
         (`supabase/pos_07_line_discount.sql`) — `total` stays net of it, so
         existing readers are unaffected, and the thermal receipt prints
         "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that

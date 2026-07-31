@@ -210,6 +210,20 @@ As owner on the till: "Authorize this device". Or dashboard → Devices →
 generate a code → enter it at `/pos`.
 **Expect:** authorized; the code is single-use and expires in 10 minutes.
 
+**PS-6.6a ★★ — Only the owner may GRANT device trust**
+Sign in as a delegated dashboard admin (a non-superadmin role with the POS
+section) and try "Authorize this device", then try generating a pairing code.
+**Expect:** both refused — _"Only the store owner can authorize a device."_ No
+`pos_devices` row is written and no cookie is set. A device grant hands a
+browser the lasting ability to take money, so it is not delegable. Redeeming a
+code (`pairDevice`) is unchanged: the code itself is the authorization.
+
+**PS-6.6b ★★ — But that same admin CAN revoke**
+As the delegated admin, revoke a device from dashboard → POS → Devices.
+**Expect:** it works. Revocation only ever takes trust away, and making the
+owner the only person who can kill a stolen or cloned till would leave it live
+for hours. The asymmetry is intentional and test-pinned.
+
 **PS-6.7 ★ — A copied cookie is detected**
 Copy the `pos_device` cookie to another browser and use it after the original
 signs in again.
@@ -233,8 +247,20 @@ inbox differs. The link is single-use, 1 hour.
 
 **PS-6.11 — Idle auto-lock**
 Sign in with a PIN, leave the till for `pos.idleLockMinutes` (default 10).
-**Expect:** a **5-minute** countdown ("Locking in 1:58"), then locked. Owners
-are exempt. Touching the screen or "Stay" dismisses it.
+**Expect:** a **5-minute** countdown ("Locking in 1:58"), then locked. Touching
+the screen or "Stay" dismisses it. **Only the superadmin is exempt** — a
+delegated dashboard admin locks like any operator.
+
+**PS-6.11a ★★ — The lock actually locks a session-cookie actor**
+Sign in with email + PASSWORD (staff), or as a delegated admin, and let the
+timer run out.
+**Expect:** you land on `/pos/login` and **STAY** there. Clearing the
+`pos_operator` cookie alone would not do it — `resolvePosOperator` re-resolves a
+session cookie and `/pos/login` sends a resolvable operator straight back to
+`/pos`, so the lock would be a flash for exactly these people. `posLock` clears
+`sm_session` too, which means **it also signs them out of `/dashboard`** — that
+is the intended trade (the walked-away session is the risk) and the reason the
+superadmin is exempt.
 
 **PS-6.12 ★ — The warning never outruns the idle window**
 Set `pos.idleLockMinutes` to 1 (its minimum) and leave the till.
@@ -263,18 +289,59 @@ Tender the exact total on a cart whose total has a fractional component.
 exactly-covering payment.
 
 **PS-7.4 — Line discount**
-Mark one line down (a damaged tin).
+As the owner, mark one line down (a damaged tin).
 **Expect:** the receipt prints `2 × ₹100 … ₹200 / Less −₹30 = ₹170`, and the
 line total is net of it.
 
+**PS-7.4a ★ — Only the owner can discount (default)**
+Sign in as a **cashier**, then as a **manager**. Look at the cart.
+**Expect:** no "Discount ₹" field and no per-line "Less ₹" field for either.
+Sign in as the owner (the store's superadmin): both are there.
+
+**PS-7.4b ★ — And the server says no, not just the screen**
+As a cashier or manager, call `placePosSale` directly with `orderDiscount: 50`
+(or a `lineDiscount`).
+**Expect:** refused — _"Only the owner can apply a discount."_ Both kinds are
+blocked: "Less ₹50" per line is the same act as "Discount ₹50" on the sale.
+
+**PS-7.4c ★★ — A manager's PIN cannot unlock it**
+Repeat PS-7.4b with `managerApproved: true`.
+**Expect:** STILL refused, and NO PIN prompt appears on screen
+(`needsApproval` is never returned). The manager is one of the people being
+kept out, so their own PIN must not be the key.
+
+**PS-7.4d ★★ — A price override is a discount, and is blocked too**
+As a manager, call `placePosSale` with a line `priceOverride` well under the
+listed price.
+**Expect:** refused — _"Only the owner can change a price on a sale."_ Marking a
+₹200 tin down to ₹1 is discounting it by ₹199; leaving this open would make
+PS-7.4b decorative. `pos.allowPriceOverride` is a different question (may the
+till reprice AT ALL — it stops the owner too); this is who.
+
+**PS-7.4e ★★ — POS access is delegable; discounting is not**
+Give a second dashboard admin a non-superadmin role that grants the POS section.
+Sign in as them at `/pos` and try to discount or reprice.
+**Expect:** refused. They resolve as `owner` (not `superadmin`) and run the till
+normally otherwise — they can still sell, adjust stock, and authorize this
+device. Without this split, "owner only" means "anyone ever given a dashboard
+login with POS on".
+
 **PS-7.5 ★ — Splitting a giveaway doesn't dodge the cap**
-With `pos.maxDiscountPercent` set, split the same total discount across several
-line discounts instead of one order discount.
+Turn `pos.ownerOnlyDiscounts` OFF (this is what re-arms the cap at all), set
+`pos.maxDiscountPercent`, then split the same total discount across several line
+discounts instead of one order discount.
 **Expect:** still counted together, still needs a manager PIN above the cap.
 
 **PS-7.6 — Manager override**
-Exceed the cap.
-**Expect:** a manager PIN is required and recorded.
+With `pos.ownerOnlyDiscounts` off, exceed the cap as a cashier (and separately,
+send a `priceOverride`).
+**Expect:** a manager PIN is required and recorded for both. A manager is exempt
+from the cap (`discount_over_cap`).
+
+**PS-7.6a — Repricing can be switched off outright**
+Turn `pos.allowPriceOverride` off and send a `priceOverride` **as the owner**.
+**Expect:** refused — _"Price overrides are turned off."_ It is a store policy,
+not a permission, so it stops the owner too.
 
 **PS-7.7 ★ — Prices are re-read server-side**
 Tamper with a price in the client before completing.

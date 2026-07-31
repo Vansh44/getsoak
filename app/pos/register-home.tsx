@@ -19,9 +19,14 @@ import { endSession } from "@/lib/auth/firebase-client";
 import { authorizeThisDevice } from "@/app/actions/pos-auth-actions";
 import { toast } from "sonner";
 import { IdleLock } from "./idle-lock";
+import { isIdleLockExempt, type PosActorRole } from "@/lib/pos/permissions";
 
 const ROLE_LABEL: Record<string, string> = {
-  owner: "Owner",
+  // "superadmin" is the person whose shop it is; "owner" is the pseudo-role for
+  // a dashboard admin they delegated POS access to, so calling THAT one "Owner"
+  // on a receipt-facing screen would be wrong.
+  superadmin: "Owner",
+  owner: "Admin",
   manager: "Manager",
   cashier: "Cashier",
 };
@@ -38,7 +43,7 @@ export function RegisterHome({
   pickupWaiting,
 }: {
   name: string;
-  role: string;
+  role: PosActorRole;
   source: "owner" | "operator";
   locationName: string;
   deviceAuthorized: boolean;
@@ -76,9 +81,11 @@ export function RegisterHome({
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Only PIN operators auto-lock: an owner on their own machine isn't the
-          walked-away-from-a-shared-till risk this guards against. */}
-      {source === "operator" && <IdleLock minutes={idleLockMinutes} />}
+      {/* Everyone but the superadmin auto-locks. This used to key off `source`,
+          which exempted a delegated dashboard admin as well — but they may be
+          standing at exactly the shared counter this guards, and their session
+          reaches further than a cashier's. */}
+      {!isIdleLockExempt(role) && <IdleLock minutes={idleLockMinutes} />}
       <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <div className="flex items-center gap-2 font-semibold">
           <ShoppingBag className="h-5 w-5" strokeWidth={2} />
