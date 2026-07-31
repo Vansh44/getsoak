@@ -1051,10 +1051,30 @@ a.dash-status-pill:hover {
    which depends on the AI panel, the resizable sidebar and the viewport all at
    once. A viewport breakpoint would be wrong the moment any of those changed
    independently — the table would compact on a wide screen with the panel
-   closed, or stay wide on a narrow one with it open. */
-.dashboard-shell .dash-card:has(.dash-table-wide) {
-  container-type: inline-size;
-  container-name: dash-table-card;
+   closed, or stay wide on a narrow one with it open.
+
+   ── Browser support ────────────────────────────────────────────────────────
+   This needs `:has()` (Chrome 105+, Safari 15.4+, Firefox 121+) AND container
+   queries (Chrome 105+, Safari 16+, Firefox 110+). Both sit BELOW the floor
+   the app already has: Tailwind v4 depends on `@property` and `color-mix()`,
+   so it requires Chrome 111 / Safari 16.4 / Firefox 128 (see `browserslist` in
+   package.json). Any browser old enough to lack `:has()` cannot render this
+   dashboard at all.
+
+   The @supports guard is therefore belt-and-braces, not load-bearing — it
+   states the dependency in the file that depends on it, and keeps the failure
+   graceful if the floor is ever lowered: without the container, the 800px
+   floor stands and the table scrolls, which is what it did before this block
+   existed. The pinned actions column below is plain `position: sticky` and
+   keeps working either way, so edit/delete never goes missing.
+
+   `selector(:has(+ *))`, not `selector(:has(*))`: the latter reports true in
+   browsers that merely parse `:has()` forgivingly without implementing it. */
+@supports selector(:has(+ *)) and (container-type: inline-size) {
+  .dashboard-shell .dash-card:has(.dash-table-wide) {
+    container-type: inline-size;
+    container-name: dash-table-card;
+  }
 }
 
 @container dash-table-card (max-width: 880px) {
