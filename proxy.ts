@@ -66,6 +66,21 @@ export async function proxy(request: NextRequest) {
     !pathname.startsWith("/auth") &&
     !pathname.startsWith("/pos")
   ) {
+    // Surface the builder's ?preview=1 to the storefront LAYOUT as a header.
+    // The layout renders the header and footer, and needs to know whether to
+    // show the merchant their unpublished chrome — but a layout cannot read
+    // searchParams at all (Next 16: "Layouts do not rerender on navigation, so
+    // they cannot access search params"), and only pages get the prop. A
+    // request header is the one channel that reaches both.
+    //
+    // This is a HINT, not authorisation: getDraftChromeForPreview still runs
+    // the same getManagerUserId("builder") gate as the page-draft loader, so
+    // anyone can set this header and still see only published content.
+    if (request.nextUrl.searchParams.get("preview") === "1") {
+      const headers = new Headers(request.headers);
+      headers.set("x-sm-preview", "1");
+      return NextResponse.next({ request: { headers } });
+    }
     return NextResponse.next();
   }
 

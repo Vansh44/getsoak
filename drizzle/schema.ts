@@ -2564,6 +2564,37 @@ export const storeCounters = pgTable(
   ],
 );
 
+// The site-wide header + footer, with the same draft/published contract as
+// store_pages (supabase/builder_01_store_chrome.sql). Supersedes store_menus,
+// which is left in place unread until the builder has shipped a release.
+// `draft` is REVOKED from anon at the DB layer — storefront reads must select
+// named columns and never `*`.
+export const storeChrome = pgTable(
+  "store_chrome",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    draft: jsonb().default({}).notNull(),
+    published: jsonb(),
+    publishedAt: timestamp("published_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_chrome_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 export const storeMenus = pgTable(
   "store_menus",
   {
