@@ -7,10 +7,11 @@ import CartProvider from "@/app/(storefront)/components/cart/CartProvider";
 import CartDrawer from "@/app/(storefront)/components/cart/CartDrawer";
 import AuthModal from "@/app/(storefront)/components/auth/AuthModal";
 import { BrandProvider } from "@/app/(storefront)/components/brand-provider";
-import { MenuProvider } from "@/app/(storefront)/components/menu-provider";
+import { ChromeProvider } from "@/app/(storefront)/components/chrome-provider";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import { getStoreBrand } from "@/lib/store/brand";
-import { getStoreMenus } from "@/lib/storefront/queries";
+import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
@@ -57,10 +58,21 @@ export default async function StorefrontLayout({
   const store = await getCurrentStoreOrNull();
   if (!store) notFound();
 
-  const [brand, menus] = await Promise.all([
+  // Chrome: the PUBLISHED header/footer, except inside the builder's preview
+  // iframe where the admin is shown their unsaved draft.
+  //
+  // The ?preview=1 flag arrives as a header because a LAYOUT cannot read
+  // searchParams (Next 16) and this layout is what renders Header/Footer — see
+  // the note in proxy.ts. The header is only a hint: getDraftChromeForPreview
+  // runs the same getManagerUserId("builder") gate as the page-draft loader and
+  // returns null for everyone else, so forging it leaks nothing.
+  const previewing = (await headers()).get("x-sm-preview") === "1";
+  const [brand, publishedChrome, draftChrome] = await Promise.all([
     getStoreBrand(),
-    getStoreMenus(store.id),
+    getStoreChrome(store.id),
+    previewing ? getDraftChromeForPreview(store.id) : Promise.resolve(null),
   ]);
+  const chrome = draftChrome ?? publishedChrome;
 
   // The visual skin: resolve the store's theme (settings.template) and flatten
   // its palette/fonts/shape into CSS custom properties written inline on
@@ -92,13 +104,13 @@ export default async function StorefrontLayout({
     <AuthProvider>
       <CartProvider>
         <BrandProvider brand={brand}>
-          <MenuProvider menus={menus}>
+          <ChromeProvider chrome={chrome} live={previewing}>
             <div className={rootClass} style={themeVars as CSSProperties}>
               <Header />
               {children}
               <Footer />
             </div>
-          </MenuProvider>
+          </ChromeProvider>
         </BrandProvider>
         <AuthModal />
         <CartDrawer />

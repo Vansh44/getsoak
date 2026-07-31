@@ -49,6 +49,12 @@ export interface DashboardSection {
   /** Open the link in a new tab (e.g. the full-screen Website Builder). */
   openInNewTab?: boolean;
   /**
+   * Keep this section OUT of the sidebar while leaving its permission key
+   * intact. For an area that has been folded into another screen: removing the
+   * section outright would strip the key from every saved role.
+   */
+  hiddenInNav?: boolean;
+  /**
    * Display this section NESTED under another section's key, instead of at the
    * top level of its group.
    *
@@ -225,10 +231,17 @@ export const SECTIONS: DashboardSection[] = [
     openInNewTab: true,
   },
   {
+    // Retired as a destination — /dashboard/navigation redirects into the
+    // builder, where the header and footer now live. The SECTION stays so
+    // existing roles keep a meaningful permission key and the role editor
+    // doesn't silently drop a grant; `hiddenInNav` keeps it out of the
+    // sidebar, where a second entry pointing at the builder would just be a
+    // duplicate of the one above it.
     key: "navigation",
     label: "Navigation",
-    href: "/dashboard/navigation",
+    href: "/dashboard/builder",
     icon: "globe",
+    hiddenInNav: true,
     group: "Storefront",
     actions: ["view", "manage"],
   },

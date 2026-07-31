@@ -885,3 +885,266 @@
     display: flex;
   }
 }
+
+/* ---------- Global sections (header / footer) ----------
+   These rows used to be links out to /dashboard/navigation; they are now
+   selection buttons that drive the inspector, so they need the selected state
+   every other outline row has. */
+.sm-builder-themerow {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.sm-builder-themerow.is-selected {
+  border-style: solid;
+  border-color: var(--b-accent);
+  background: var(--b-accent-tint);
+}
+
+/* Reminds the merchant that this edit is not page-local — the single most
+   likely misunderstanding when header/footer sit in a page-shaped outline. */
+.sm-b-scope {
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: var(--b-accent-tint);
+  color: var(--b-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sm-b-group {
+  border-top: 1px solid var(--b-border);
+}
+.sm-b-group:first-of-type {
+  border-top: none;
+}
+.sm-b-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--b-text);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.sm-b-group-body {
+  padding-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.sm-b-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--b-text-3);
+}
+.sm-b-hint a {
+  color: var(--b-accent);
+  text-decoration: underline;
+}
+
+.sm-b-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--b-text-2);
+}
+.sm-b-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--b-border);
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--b-text);
+  background: #fff;
+}
+.sm-b-input:focus {
+  outline: none;
+  border-color: var(--b-accent);
+}
+.sm-b-input-mono {
+  font-family: var(--font-dash-mono), monospace;
+  font-size: 11.5px;
+}
+.sm-b-input-strong {
+  font-weight: 600;
+}
+
+.sm-b-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.sm-b-toggle input {
+  margin-top: 2px;
+}
+.sm-b-toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sm-b-toggle-label {
+  font-size: 12.5px;
+  color: var(--b-text);
+}
+.sm-b-toggle-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--b-text-3);
+}
+
+.sm-b-linklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sm-b-linkrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.sm-b-linkgrip {
+  color: var(--b-text-3);
+  flex-shrink: 0;
+}
+.sm-b-linkfields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.sm-b-linkactions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.sm-b-linkactions button {
+  padding: 1px 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--b-text-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sm-b-linkactions button:hover:not(:disabled) {
+  background: var(--b-surface-2);
+  color: var(--b-text);
+}
+.sm-b-linkactions button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.sm-b-column {
+  padding: 9px;
+  border: 1px solid var(--b-border);
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sm-b-column-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.sm-b-column-head button {
+  padding: 3px;
+  color: var(--b-text-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.sm-b-column-head button:hover {
+  background: var(--b-surface-2);
+  color: var(--b-danger, #b42318);
+}
+
+.sm-b-addbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  padding: 7px;
+  border: 1px dashed var(--b-border-strong, rgba(17, 24, 39, 0.18));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--b-text-2);
+  background: none;
+  cursor: pointer;
+}
+.sm-b-addbtn:hover {
+  border-color: var(--b-accent);
+  color: var(--b-accent);
+  background: var(--b-accent-tint);
+}
+
+/* ---------- Pages rail ----------
+   Replaces the switcher dropdown, which overlaid the section outline: choosing
+   a page covered the very thing you were about to edit. */
+.sm-builder-pagesrail {
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--b-border);
+}
+.sm-builder-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--b-text-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.sm-builder-rail-count {
+  padding: 1px 6px;
+  border-radius: 20px;
+  background: var(--b-surface-2);
+  color: var(--b-text-2);
+  font-size: 10.5px;
+  letter-spacing: 0;
+}
+/* Capped and scrollable: a store with thirty pages must not push the section
+   outline — the thing being edited — off the bottom of the panel. */
+.sm-builder-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 208px;
+  overflow-y: auto;
+}
+
+.sm-b-colorrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sm-b-color {
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--b-border);
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+}

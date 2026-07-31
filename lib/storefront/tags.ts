@@ -8,6 +8,9 @@ export const TAGS = {
   blogs: "storefront:blogs",
   blogTaxonomy: "storefront:blog-taxonomy",
   pages: "storefront:pages",
+  /** Header + footer (store_chrome). Busted by publishChrome. */
+  chrome: "storefront:chrome",
+  /** @deprecated superseded by `chrome` — store_menus is no longer read. */
   menus: "storefront:menus",
   coupons: "storefront:coupons",
   billing: "storefront:billing",

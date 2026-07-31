@@ -4,6 +4,8 @@ import { blogs, categories, products } from "@/drizzle/schema";
 import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import { listPages, ensureHomepage } from "@/app/actions/page-actions";
 import { getStoreBrand } from "@/lib/store/brand";
+import { getDraftChromeForEditor } from "@/lib/chrome/queries";
+import { DEFAULT_CHROME } from "@/lib/chrome/types";
 import { BuilderClient } from "./builder-client";
 import type { BlogOption, CategoryOption, ProductOption } from "./section-form";
 import "./builder.css";
@@ -54,6 +56,11 @@ export default async function BuilderPage() {
     getStoreBrand(),
   ]);
 
+  // The header + footer the merchant edits. Loaded here rather than fetched by
+  // the client so the builder opens with its chrome already in hand — the
+  // outline shows Header and Footer rows immediately, with no second spinner.
+  const chrome = (await getDraftChromeForEditor(storeId)) ?? DEFAULT_CHROME;
+
   const blogOptions: BlogOption[] = storeData.blogRows.map((b) => ({
     id: b.id,
     name: b.title,
@@ -71,6 +78,12 @@ export default async function BuilderPage() {
       categories={storeData.categoryRows as CategoryOption[]}
       blogs={blogOptions}
       storeName={brand.name}
+      initialChrome={chrome}
+      initialBrand={{
+        name: brand.name,
+        primaryColor: brand.primaryColor,
+        logoUrl: brand.logoUrl,
+      }}
     />
   );
 }

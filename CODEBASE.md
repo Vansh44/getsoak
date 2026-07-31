@@ -811,12 +811,52 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `wholesip_static_pages_seed.sql`) and their route dirs deleted, so
     `[pageSlug]` serves them; `RESERVED_PAGE_SLUGS` now reserves only
     the INTERACTIVE routes that stay in code (blogs, cart, enquiries, profile,
-    shop) + system routes. - **Menu builder (Phase 4c, done)**: header + footer nav is per-store in
-    `store_menus` (jsonb: `header`, `footer_groups`, `footer_legal`; RLS public
-    read / admin write). Read cached via `getStoreMenus` (tag `TAGS.menus`) →
-    `MenuProvider` → `Header`/`Footer`. Edited at `/dashboard/navigation`
-    (permission section `navigation`) via `menu-actions.ts`; shape + defaults in
-    `lib/menus.ts` (`DEFAULT_MENUS` fallback). - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
+    shop) + system routes. - **★ Header & footer are BUILDER content (`store_chrome`)**: the site-wide
+    chrome is edited INSIDE `/dashboard/builder`, as two pinned rows in the
+    outline that open the normal inspector — not a link out.
+    `/dashboard/navigation` now REDIRECTS there; its permission key survives via
+    `hiddenInNav` so saved roles keep their grant.
+    **Why:** one footer drew from FOUR places — link columns in `store_menus` (a
+    separate dashboard page), logo/social/legal name in `stores.settings.brand`
+    (another), the builder, and hardcoded JSX for the newsletter and contact
+    blocks. The two halves also had different safety models: a page edit sat in
+    draft until Publish, while `saveStoreMenus` wrote straight to LIVE — on the
+    chrome that appears on every page of the store.
+    `supabase/builder_01_store_chrome.sql` gives chrome the exact `store_pages`
+    contract: one row per store, `draft` + `published` jsonb, anon SELECT
+    revoked and re-granted WITHOUT `draft`. `lib/chrome/types.ts` is the pure
+    schema — `normalizeChrome` (reads) fills defaults so a storefront is never
+    unnavigable, `sanitizeChromeForSave` (writes) preserves an explicit empty so
+    deleting your last footer column is an edit that actually sticks.
+    `app/actions/chrome-actions.ts` = saveChromeDraft / publishChrome /
+    revertChromeDraft, and **Publish publishes BOTH** page and chrome.
+    ⚠ Three load-bearing details:
+    (1) **A LAYOUT cannot read `searchParams`** (Next 16) and the storefront
+    layout is what renders Header/Footer — so `?preview=1` arrives as an
+    `x-sm-preview` header set in `proxy.ts`. It is a HINT, not authorisation:
+    `getDraftChromeForPreview` runs the same `getManagerUserId("builder")` gate
+    as the page-draft loader.
+    (2) `getStoreChrome` falls back to `store_menus` when no chrome row exists,
+    so THE DEPLOY IS ORDER-INDEPENDENT — without it, shipping before the
+    migration ran would silently replace every merchant's navigation with the
+    platform's stock links. Delete it when `store_menus` is dropped.
+    (3) Every toggle DEFAULTS ON, matching what Header/Footer rendered before —
+    a default that changes a live storefront is a migration bug wearing a config
+    hat. Edits reach the preview by `sm-chrome` postMessage (`ChromeProvider`),
+    and a fresh iframe announces `sm-chrome-ready` so the builder re-pushes the
+    draft; without that a page switch shows published chrome under a draft
+    outline.
+    The builder also shows a **Brand** row (colour + logo) saved through
+    `saveBrandAppearance` — a PATCH, deliberately: `saveStoreBranding` rebuilds
+    the whole brand object from a FormData carrying every field, so calling it
+    from a two-field panel would blank the merchant's email, social links and
+    legal name. Contact/social/legal stay in `/dashboard/branding` because they
+    are store IDENTITY (they print on invoices and go out in email), not a
+    website decision. Pages list in an always-visible **rail** rather than a
+    dropdown that overlaid the section outline you were about to edit, and
+    `loadingDraft` starts TRUE when there is a page to auto-open so the first,
+    pre-hydration paint says "Opening…" instead of "Select a page" — React
+    state cannot fix that frame, only the initial value can. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
     `meta.ts` (client-safe catalog for the signup picker: id/name/category/
     previewImage/demoSlug; the picker must NEVER import definitions),
     `definitions/basket.ts` (brand accents, **`design` skin**, pages incl. the

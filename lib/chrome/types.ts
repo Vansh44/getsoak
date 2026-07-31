@@ -1,0 +1,260 @@
+// ---------------------------------------------------------------------------
+// Site chrome — the header and footer, as builder-editable content.
+//
+// One typed schema, normalised on read and sanitised on write, in the shape
+// lib/homepage/section-types.ts already uses for page sections. Pure: no DB, no
+// React, so the builder inspector, the storefront renderer and the server
+// action all agree on what a header IS by importing the same file.
+//
+// Replaces lib/menus.ts, which only ever covered the LINKS. The rest of the
+// chrome — newsletter, contact block, social row, badges — was hardcoded in
+// Footer.jsx with no way for a merchant to touch it, and the logo/social URLs
+// lived in stores.settings.brand behind a different dashboard page.
+// ---------------------------------------------------------------------------
+
+export interface ChromeLink {
+  label: string;
+  href: string;
+}
+
+export interface FooterGroup {
+  title: string;
+  links: ChromeLink[];
+}
+
+export interface HeaderConfig {
+  links: ChromeLink[];
+  /** Search box in the header. Off for stores that sell a handful of SKUs. */
+  showSearch: boolean;
+  /** Account / sign-in affordance. */
+  showAccount: boolean;
+  /** Cart icon. A catalogue-only store (enquiry-led B2B) turns this off. */
+  showCart: boolean;
+  /** Keep the bar pinned when the visitor scrolls. */
+  sticky: boolean;
+}
+
+export interface FooterBlockToggle {
+  enabled: boolean;
+}
+
+export interface NewsletterConfig extends FooterBlockToggle {
+  heading: string;
+  subtext: string;
+  buttonLabel: string;
+}
+
+export interface FooterConfig {
+  groups: FooterGroup[];
+  /** The legal row along the bottom (Privacy, Terms, …). */
+  legal: ChromeLink[];
+  newsletter: NewsletterConfig;
+  /** Email/phone/hours strip. The VALUES come from brand (settings.brand). */
+  contact: FooterBlockToggle;
+  /** Social icon row. The URLs come from brand. */
+  social: FooterBlockToggle;
+  /** Trust badges. The badge list comes from brand. */
+  badges: FooterBlockToggle;
+  /** "Powered by StoreMink" — plan-gated elsewhere, see PLAN_LIMITS.removeBadge. */
+  showCredit: boolean;
+}
+
+export interface StoreChrome {
+  header: HeaderConfig;
+  footer: FooterConfig;
+}
+
+// Caps: keep the payload small and the rendered chrome sane. A footer with 40
+// columns is not a footer.
+const MAX_LINKS = 12;
+const MAX_GROUPS = 6;
+const MAX_LABEL = 60;
+const MAX_HREF = 512;
+const MAX_TEXT = 160;
+
+/**
+ * The out-of-the-box chrome.
+ *
+ * Every toggle defaults to what Footer.jsx / Header.jsx render TODAY, so a
+ * store that has never opened the builder looks exactly as it did. A default
+ * that changes a live storefront is a migration bug wearing a config hat.
+ */
+export const DEFAULT_CHROME: StoreChrome = {
+  header: {
+    links: [
+      { label: "Shop", href: "/shop" },
+      { label: "Blogs", href: "/blogs" },
+      { label: "Enquiries", href: "/enquiries" },
+    ],
+    showSearch: true,
+    showAccount: true,
+    showCart: true,
+    sticky: true,
+  },
+  footer: {
+    groups: [
+      {
+        title: "Shop",
+        links: [{ label: "All Products", href: "/shop" }],
+      },
+      {
+        title: "Company",
+        links: [
+          { label: "Our Story", href: "/our-story" },
+          { label: "Blog", href: "/blogs" },
+        ],
+      },
+      {
+        title: "Support",
+        links: [
+          { label: "FAQs", href: "/faqs" },
+          { label: "Track My Order", href: "/track-order" },
+        ],
+      },
+    ],
+    legal: [
+      { label: "Privacy Policy", href: "/privacy-policy" },
+      { label: "Terms of Use", href: "/terms" },
+      { label: "Refund Policy", href: "/refund-policy" },
+    ],
+    newsletter: {
+      enabled: true,
+      heading: "Stay in the loop",
+      subtext: "New arrivals, offers and stories — no spam.",
+      buttonLabel: "Subscribe",
+    },
+    contact: { enabled: true },
+    social: { enabled: true },
+    badges: { enabled: true },
+    showCredit: true,
+  },
+};
+
+// ── coercion helpers ────────────────────────────────────────────────────────
+
+const str = (v: unknown, max: number): string =>
+  typeof v === "string" ? v.trim().slice(0, max) : "";
+
+/** Missing means "use the default", not "off" — see DEFAULT_CHROME. */
+const bool = (v: unknown, fallback: boolean): boolean =>
+  typeof v === "boolean" ? v : fallback;
+
+function cleanLink(raw: unknown): ChromeLink | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const label = str(r.label, MAX_LABEL);
+  const href = str(r.href, MAX_HREF);
+  if (!label || !href) return null;
+  return { label, href };
+}
+
+function cleanLinks(raw: unknown): ChromeLink[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(cleanLink)
+    .filter((l): l is ChromeLink => l !== null)
+    .slice(0, MAX_LINKS);
+}
+
+function cleanGroups(raw: unknown): FooterGroup[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((g): FooterGroup | null => {
+      if (!g || typeof g !== "object") return null;
+      const gr = g as Record<string, unknown>;
+      const title = str(gr.title, MAX_LABEL);
+      const links = cleanLinks(gr.links);
+      // A group with neither a title nor links renders as a blank column.
+      if (!title && links.length === 0) return null;
+      return { title, links };
+    })
+    .filter((g): g is FooterGroup => g !== null)
+    .slice(0, MAX_GROUPS);
+}
+
+function cleanHeader(raw: unknown, d: HeaderConfig): HeaderConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const links = cleanLinks(r.links);
+  return {
+    links,
+    showSearch: bool(r.showSearch, d.showSearch),
+    showAccount: bool(r.showAccount, d.showAccount),
+    showCart: bool(r.showCart, d.showCart),
+    sticky: bool(r.sticky, d.sticky),
+  };
+}
+
+function cleanFooter(raw: unknown, d: FooterConfig): FooterConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const n = (r.newsletter ?? {}) as Record<string, unknown>;
+  return {
+    groups: cleanGroups(r.groups),
+    legal: cleanLinks(r.legal),
+    newsletter: {
+      enabled: bool(n.enabled, d.newsletter.enabled),
+      heading: str(n.heading, MAX_TEXT) || d.newsletter.heading,
+      subtext: str(n.subtext, MAX_TEXT) || d.newsletter.subtext,
+      buttonLabel: str(n.buttonLabel, MAX_LABEL) || d.newsletter.buttonLabel,
+    },
+    contact: {
+      enabled: bool(
+        (r.contact as Record<string, unknown>)?.enabled,
+        d.contact.enabled,
+      ),
+    },
+    social: {
+      enabled: bool(
+        (r.social as Record<string, unknown>)?.enabled,
+        d.social.enabled,
+      ),
+    },
+    badges: {
+      enabled: bool(
+        (r.badges as Record<string, unknown>)?.enabled,
+        d.badges.enabled,
+      ),
+    },
+    showCredit: bool(r.showCredit, d.showCredit),
+  };
+}
+
+/**
+ * Coerce arbitrary jsonb (a store_chrome row, or a draft mid-edit) into usable
+ * chrome, falling back to DEFAULT_CHROME per field.
+ *
+ * Empty link lists fall back to the defaults here because this feeds the
+ * STOREFRONT: a store with no header links should show something navigable
+ * rather than a bare logo. sanitizeChromeForSave is the counterpart that
+ * preserves an explicit empty.
+ */
+export function normalizeChrome(raw: unknown): StoreChrome {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const header = cleanHeader(r.header, DEFAULT_CHROME.header);
+  const footer = cleanFooter(r.footer, DEFAULT_CHROME.footer);
+  return {
+    header: {
+      ...header,
+      links: header.links.length ? header.links : DEFAULT_CHROME.header.links,
+    },
+    footer: {
+      ...footer,
+      groups: footer.groups.length
+        ? footer.groups
+        : DEFAULT_CHROME.footer.groups,
+      legal: footer.legal.length ? footer.legal : DEFAULT_CHROME.footer.legal,
+    },
+  };
+}
+
+/**
+ * Sanitise for saving. Same cleaning, but an empty list STAYS empty — deleting
+ * every footer column is a decision, and normalizeChrome silently restoring the
+ * defaults would make that edit impossible to perform.
+ */
+export function sanitizeChromeForSave(raw: unknown): StoreChrome {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    header: cleanHeader(r.header, DEFAULT_CHROME.header),
+    footer: cleanFooter(r.footer, DEFAULT_CHROME.footer),
+  };
+}
