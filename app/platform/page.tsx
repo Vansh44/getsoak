@@ -10,17 +10,24 @@ import {
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import {
   ArrowRight,
+  Banknote,
   Building2,
   Check,
   CircleCheck,
+  FileText,
   Globe,
   IndianRupee,
   LayoutTemplate,
   Mail,
+  MapPin,
   Megaphone,
   PenLine,
+  Percent,
+  Receipt,
   Rocket,
+  ScanLine,
   Star,
+  Store,
   Users,
   X,
 } from "lucide-react";
@@ -109,6 +116,17 @@ const COMPARE: {
     label: "B2B / wholesale selling",
     mink: { ok: true, text: "Enquiry-based selling built in" },
     other: { ok: false, text: "Enterprise plans, lakhs per month" },
+  },
+  {
+    label: "Point of Sale (in-store till)",
+    // Pro includes PLAN_LIMITS.pro.posLocationsIncluded locations.
+    mink: { ok: true, text: "Included on Pro — 2 locations" },
+    other: { ok: false, text: "Paid add-on, charged per location" },
+  },
+  {
+    label: "GST invoicing",
+    mink: { ok: true, text: "Included on every plan, free included" },
+    other: { ok: false, text: "Paid app" },
   },
 ];
 
@@ -282,7 +300,7 @@ export default function StoreminkLanding() {
             </span>
             <h1 className="stq-rise stq-rise-1">
               Launch your store in a day.{" "}
-              <span className="stq-grad">Keep 100% of every sales.</span>
+              <span className="stq-grad">Keep 100% of every sale.</span>
             </h1>
             <p className="stq-sub stq-rise stq-rise-2">
               StoreMink is the India-first store builder with everything
@@ -521,6 +539,155 @@ export default function StoreminkLanding() {
               <span>You keep</span>
               <b>₹10,000</b>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------- POS -------------------------------- */}
+      {/* Everything claimed here is shipped (CODEBASE §22/§23) — the register,
+          PIN sign-in, device authorization, shifts, transfers and pickup. Note
+          what is deliberately NOT claimed: selling while OFFLINE. The catalogue
+          cache makes search and scan instant with no round trip, but a sale
+          still needs the server, and the offline outbox is unbuilt. */}
+      <section className="stq-section-lg" style={{ paddingTop: 0 }} id="pos">
+        <div className="stq-split">
+          <div>
+            <span className="stq-kicker">
+              <Store size={13} style={{ verticalAlign: "-2px" }} /> Also sells
+              in person
+            </span>
+            <h2>Your counter and your website, one system.</h2>
+            <p>
+              Turn any tablet or laptop into a till. Same products, same stock,
+              same customers as online — so a sale at the counter and a sale on
+              the website are the same business, not two spreadsheets you
+              reconcile on Sunday night.
+            </p>
+            <ul className="stq-checklist">
+              <li>
+                <ScanLine size={19} />
+                <span>
+                  <b>Scan and sell</b> — a barcode scanner or just your phone
+                  camera. Search resolves instantly from a catalogue held on the
+                  device.
+                </span>
+              </li>
+              <li>
+                <Users size={19} />
+                <span>
+                  <b>Staff sign in with a PIN,</b> on registers you have
+                  authorised — not from a cashier&apos;s own phone.
+                </span>
+              </li>
+              <li>
+                <Banknote size={19} />
+                <span>
+                  <b>Shifts and cash-up</b> — open with a float, count at close,
+                  see the variance rather than guess at it.
+                </span>
+              </li>
+              <li>
+                <MapPin size={19} />
+                <span>
+                  <b>More than one shop?</b> Stock is tracked per location, and
+                  you can move it between them. Two locations included on Pro.
+                </span>
+              </li>
+              <li>
+                <Store size={19} />
+                <span>
+                  <b>Buy online, collect in store</b> — held on the shelf for
+                  the customer, handed over at the counter.
+                </span>
+              </li>
+            </ul>
+          </div>
+          <div className="stq-money" aria-hidden="true">
+            <div className="stq-money-row">
+              <span>Amul Taaza Toned Milk (1 L) × 2</span>
+              <b>₹128</b>
+            </div>
+            <div className="stq-money-row">
+              <span>Tata Salt (1 kg)</span>
+              <b>₹28</b>
+            </div>
+            <div className="stq-money-row">
+              <span>CGST 2.5% + SGST 2.5%</span>
+              <b>₹7.80</b>
+            </div>
+            <div className="stq-money-row stq-money-total">
+              <span>Total</span>
+              <b>₹163.80</b>
+            </div>
+            <div className="stq-money-row">
+              <span>Cash tendered</span>
+              <b>₹200</b>
+            </div>
+            <div className="stq-money-row">
+              <span>Change</span>
+              <b>₹36.20</b>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------- GST -------------------------------- */}
+      <section className="stq-section-lg" style={{ paddingTop: 0 }} id="gst">
+        <div className="stq-sec-head">
+          <span className="stq-kicker">
+            <Percent size={13} style={{ verticalAlign: "-2px" }} /> Built for
+            Indian tax
+          </span>
+          <h2>GST that works itself out.</h2>
+          <p>
+            Set a tax rate against a product once. Every order, invoice and
+            receipt after that gets it right on its own — online and at the
+            counter, on every plan including Free.
+          </p>
+        </div>
+        <div className="stq-grid">
+          <div className="stq-feature">
+            <div className="stq-feature-icon">
+              <Percent size={20} />
+            </div>
+            <h3>Rates you set once</h3>
+            <p>
+              Group products into 5%, 12%, 18% — whatever your catalogue needs —
+              and show prices inclusive or exclusive of tax. Your choice, store
+              wide.
+            </p>
+          </div>
+          <div className="stq-feature">
+            <div className="stq-feature-icon">
+              <MapPin size={20} />
+            </div>
+            <h3>CGST, SGST and IGST, decided for you</h3>
+            <p>
+              Split within your state, IGST across it — worked out from the
+              place of supply on every order, so you are not doing it by hand at
+              filing time.
+            </p>
+          </div>
+          <div className="stq-feature">
+            <div className="stq-feature-icon">
+              <Receipt size={20} />
+            </div>
+            <h3>Selling to a business</h3>
+            <p>
+              Take a buyer&apos;s GSTIN at checkout or at the till and it prints
+              on the invoice, with HSN codes against each line.
+            </p>
+          </div>
+          <div className="stq-feature">
+            <div className="stq-feature-icon">
+              <FileText size={20} />
+            </div>
+            <h3>Invoices that stay put</h3>
+            <p>
+              Printable invoices carrying your business identity, and customers
+              can download their own. Change your tax settings tomorrow and last
+              month&apos;s invoices are untouched.
+            </p>
           </div>
         </div>
       </section>
