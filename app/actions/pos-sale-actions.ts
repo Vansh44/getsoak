@@ -43,6 +43,7 @@ import {
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { likePattern } from "@/lib/pos/search";
+import { personLabel } from "@/lib/pos/person";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
@@ -1513,7 +1514,7 @@ export async function listPosSales(
           orderRef: r.order_ref ?? "",
           total: Number(r.total) || 0,
           createdAt: r.created_at,
-          cashierName: r.cashier_name,
+          cashierName: personLabel(r.cashier_name),
           customerName: name,
           itemCount: counts.get(r.id) ?? 0,
           paymentMethod: r.payment_method ?? "",

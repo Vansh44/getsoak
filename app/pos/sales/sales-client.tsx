@@ -132,7 +132,7 @@ export function SalesClient({
                     {when(s.createdAt)} · {s.itemCount} item
                     {s.itemCount === 1 ? "" : "s"}
                     {s.customerName ? ` · ${s.customerName}` : ""}
-                    {s.cashierName ? ` · ${s.cashierName}` : ""}
+                    {s.cashierName ? ` · by ${s.cashierName}` : ""}
                   </span>
                 </span>
                 <span className="shrink-0 text-base font-semibold">
