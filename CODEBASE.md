@@ -1550,6 +1550,31 @@ group, span}` (span = columns of the 4-wide desktop grid),
           needs a manager's PIN above the cap, and for an override), which now asks
           `posCan(role, "discount_over_cap")` rather than an inline
           `role === "cashier"` that could drift from the capability table.
+      - **★ A MANAGER'S APPROVAL IS A SIGNED GRANT, NOT A CLIENT FLAG**
+        (`lib/pos/approval.ts`). `verifyManagerPin` returned `{approved: true}`
+        and `placePosSale` trusted an `opts.managerApproved` boolean that came
+        from the browser — but both are server ACTIONS, so the register's own
+        JavaScript is not the only caller. A cashier with devtools could invoke
+        `placePosSale({managerApproved: true})` and take any over-cap discount
+        with nobody at the keypad: the PIN pad was a UI step, not a gate, and
+        the rate limit on `verifyManagerPin` guarded a door you could walk
+        around. The PIN check now MINTS a short HMAC token (over
+        `POS_SESSION_SECRET`, reusing `session.ts`'s `signToken`/`verifyToken`
+        so there is one signing implementation) and the sale VERIFIES it.
+        Bound to four things, each of them a bypass the boolean allowed:
+        store + location, the operator, a **fingerprint of the exact cart and
+        discount** (so "₹50 off" can't be replayed as "₹5,000 off", or against
+        another basket), and a 3-minute expiry — approval means "I am standing
+        here looking at this sale", not "this cashier may discount all shift".
+        The fingerprint hashes the CLIENT'S INPUTS, not the priced total: those
+        are what both calls carry, and the charge derives from them plus DB
+        prices the client can't touch. Lines are sorted, so a re-ordered cart
+        doesn't void an approval that was really given. ⚠ Residual: inside
+        those 3 minutes an identical cart could be rung twice on one approval —
+        strict single-use needs a used-nonce table, and the manager is standing
+        at the counter. This changes nothing under the default
+        `pos.ownerOnlyDiscounts`, where staff discounts are refused outright
+        before approval is ever consulted.
       - **★ ONE total, shared by the screen and the sale** (`lib/pos/totals.ts`,
         pure + tested). `posTotals` owns subtotal → line markdowns → capped
         order discount → tax → total, and BOTH `placePosSale` and the sell

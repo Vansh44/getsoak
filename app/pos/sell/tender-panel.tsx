@@ -41,11 +41,14 @@ export function TenderPanel({
   onCancel: () => void;
   onComplete: (
     tenders: PosTender[],
-    managerApproved?: boolean,
+    /** The manager's signed approval, passed straight through. The panel never
+     *  decides that a sale is approved — it only carries what the server
+     *  minted. */
+    approvalToken?: string,
   ) => Promise<{ error?: string; needsApproval?: boolean }>;
   onVerifyManager: (
     pin: string,
-  ) => Promise<{ approved?: boolean; error?: string }>;
+  ) => Promise<{ approved?: boolean; token?: string; error?: string }>;
 }) {
   const [method, setMethod] = useState<PosTenderMethod>("cash");
   const [amount, setAmount] = useState<string>("");
@@ -77,10 +80,10 @@ export function TenderPanel({
     setReference("");
   };
 
-  const finish = async (approved?: boolean) => {
+  const finish = async (approvalToken?: string) => {
     setBusy(true);
     setError(null);
-    const res = await onComplete(taken, approved);
+    const res = await onComplete(taken, approvalToken);
     setBusy(false);
     if (res.needsApproval) {
       setManagerPin("");
@@ -94,7 +97,7 @@ export function TenderPanel({
     setBusy(true);
     setError(null);
     const v = await onVerifyManager(pin);
-    if (!v.approved) {
+    if (!v.approved || !v.token) {
       setBusy(false);
       setError(v.error ?? "Incorrect manager PIN.");
       return;
@@ -102,7 +105,7 @@ export function TenderPanel({
     setManagerPin(null);
     setPin("");
     setBusy(false);
-    await finish(true);
+    await finish(v.token);
   };
 
   // Compared in PAISE via the same helper placePosSale uses. A float compare

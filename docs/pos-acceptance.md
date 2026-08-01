@@ -305,10 +305,22 @@ As a cashier or manager, call `placePosSale` directly with `orderDiscount: 50`
 blocked: "Less ₹50" per line is the same act as "Discount ₹50" on the sale.
 
 **PS-7.4c ★★ — A manager's PIN cannot unlock it**
-Repeat PS-7.4b with `managerApproved: true`.
+Repeat PS-7.4b with a genuine `approvalToken` (mint one by entering a real
+manager PIN on the same cart).
 **Expect:** STILL refused, and NO PIN prompt appears on screen
 (`needsApproval` is never returned). The manager is one of the people being
 kept out, so their own PIN must not be the key.
+
+**PS-7.4f ★★ — Approval is a signed grant, not a claim**
+Turn `pos.ownerOnlyDiscounts` OFF (so the cap machinery is live) and, as a
+cashier, call `placePosSale` with `orderDiscount` over `pos.maxDiscountPercent`
+and: (a) no `approvalToken`; (b) `approvalToken: "true"`; (c) a token minted for
+a SMALLER discount; (d) a token minted for a different cart; (e) a token minted
+at another location.
+**Expect:** all five come back `needsApproval` and write nothing. Only a token
+minted by `verifyManagerPin` for THIS cart, till and operator, inside 3 minutes,
+completes the sale. Before this, `managerApproved: true` from the browser was
+enough — the PIN pad was a UI step, not a gate.
 
 **PS-7.4d ★★ — A price override is a discount, and is blocked too**
 As a manager, call `placePosSale` with a line `priceOverride` well under the

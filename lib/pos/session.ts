@@ -56,7 +56,7 @@ function requireSecret(): string {
   return s;
 }
 
-interface BaseClaims {
+export interface BaseClaims {
   iat: number;
   exp: number;
 }
@@ -91,12 +91,18 @@ function mac(payload: string, key: string): string {
   return createHmac("sha256", key).update(payload).digest("base64url");
 }
 
-function sign(payloadObj: Record<string, unknown>): string {
+/**
+ * Sign an arbitrary claim set. Exported so short-lived, single-purpose tokens
+ * (see lib/pos/approval.ts) share ONE signing implementation with the two
+ * cookies — a second hand-rolled HMAC is a second place to get it wrong.
+ */
+export function signToken(payloadObj: Record<string, unknown>): string {
   const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64url");
   return `${payload}.${mac(payload, requireSecret())}`;
 }
 
-function verify<T extends BaseClaims>(
+/** Counterpart to signToken. Null on a bad signature, wrong type, or expiry. */
+export function verifyToken<T extends BaseClaims>(
   token: string | undefined | null,
   expectedType: string,
 ): T | null {
@@ -132,7 +138,7 @@ export function signDeviceToken(
   >,
 ): string {
   const now = Math.floor(Date.now() / 1000);
-  return sign({
+  return signToken({
     t: "device",
     ...claims,
     iat: now,
@@ -143,7 +149,7 @@ export function signDeviceToken(
 export function verifyDeviceToken(
   token: string | undefined | null,
 ): PosDeviceClaims | null {
-  return verify<PosDeviceClaims>(token, "device");
+  return verifyToken<PosDeviceClaims>(token, "device");
 }
 
 export function signOperatorToken(
@@ -153,7 +159,7 @@ export function signOperatorToken(
   >,
 ): string {
   const now = Math.floor(Date.now() / 1000);
-  return sign({
+  return signToken({
     t: "operator",
     ...claims,
     iat: now,
@@ -164,5 +170,5 @@ export function signOperatorToken(
 export function verifyOperatorToken(
   token: string | undefined | null,
 ): PosOperatorClaims | null {
-  return verify<PosOperatorClaims>(token, "operator");
+  return verifyToken<PosOperatorClaims>(token, "operator");
 }
