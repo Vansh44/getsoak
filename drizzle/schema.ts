@@ -3833,3 +3833,61 @@ export const planPrices = pgTable("plan_prices", {
     .notNull(),
   updatedBy: text("updated_by"),
 });
+
+// ---- Returns & refunds (supabase/pos_12_returns.sql) ----------------------
+// Two tables because they are two facts: a return can be refunded across
+// several tenders, and a refund can happen with no return (a cancellation).
+
+export const orderReturns = pgTable("order_returns", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+  /** Where the goods came back TO — not necessarily where they were sold. */
+  locationId: uuid("location_id"),
+  shiftId: uuid("shift_id"),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  reason: text(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+});
+
+export const orderReturnItems = pgTable("order_return_items", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  returnId: uuid("return_id").notNull(),
+  orderItemId: uuid("order_item_id").notNull(),
+  quantity: integer().notNull(),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** 'sellable' goes back on the shelf, 'damaged' does not. */
+  condition: text().notNull(),
+  restocked: boolean().notNull(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+});
+
+export const orderRefunds = pgTable("order_refunds", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+  returnId: uuid("return_id"),
+  locationId: uuid("location_id"),
+  shiftId: uuid("shift_id"),
+  method: text().notNull(),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** Razorpay refund id — UNIQUE, so a replay can't record it twice. */
+  gatewayRefundId: text("gateway_refund_id"),
+  status: text().notNull(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+});

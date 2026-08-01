@@ -17,6 +17,7 @@ import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
+  orderRefunds,
   orderPayments,
   orders,
   posCashMovements,
@@ -60,6 +61,8 @@ export interface ShiftReport {
   /** Net cash the drawer should hold (open) or should have held (closed). */
   expectedCash: number;
   cashSales: number;
+  /** Cash handed back on returns — out of this drawer (pos_12). */
+  cashRefunds: number;
   paidIn: number;
   payouts: number;
   drops: number;
@@ -124,7 +127,7 @@ async function loadReport(
       .limit(1);
     if (shiftRows.length === 0) return null;
 
-    const [payments, movements, saleAgg] = await Promise.all([
+    const [payments, movements, saleAgg, refundAgg] = await Promise.all([
       db
         .select({
           order_id: orderPayments.orderId,
@@ -154,12 +157,27 @@ async function loadReport(
         })
         .from(orders)
         .where(eq(orders.shiftId, shiftId)),
+      // Cash handed back on returns is money OUT of this drawer (pos_12).
+      // Stamped with the shift at refund time, so it lands in the drawer it
+      // was actually paid from rather than whichever is open when you look.
+      db
+        .select({
+          cash: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .where(
+          and(
+            eq(orderRefunds.shiftId, shiftId),
+            eq(orderRefunds.method, "cash"),
+            eq(orderRefunds.status, "completed"),
+          ),
+        ),
     ]);
-    return { shift: shiftRows[0], payments, movements, saleAgg };
+    return { shift: shiftRows[0], payments, movements, saleAgg, refundAgg };
   });
   if (!rows) return null;
 
-  const { shift, payments, movements, saleAgg } = rows;
+  const { shift, payments, movements, saleAgg, refundAgg } = rows;
   const closed = shift.status === "closed";
 
   const totals = shiftTotals({
@@ -171,6 +189,7 @@ async function loadReport(
         amount: Number(p.amount) || 0,
         changeDue: p.change_due === null ? null : Number(p.change_due),
       })),
+    cashRefunds: Number(refundAgg[0]?.cash) || 0,
     movements: movements.map((m) => ({
       type: m.type as CashMovementType,
       amount: Number(m.amount) || 0,
@@ -196,6 +215,7 @@ async function loadReport(
     closedByName: shift.closed_by_name,
     expectedCash: expected,
     cashSales: totals.cashSales,
+    cashRefunds: totals.cashRefunds,
     paidIn: totals.paidIn,
     payouts: totals.payouts,
     drops: totals.drops,

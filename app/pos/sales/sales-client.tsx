@@ -8,7 +8,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowLeft, Receipt, Search } from "lucide-react";
+import { ArrowLeft, Receipt, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { listPosSales, type PosSaleRow } from "@/app/actions/pos-sale-actions";
 import { ReceiptOverlay } from "../sell/receipt-overlay";
@@ -43,9 +43,12 @@ function when(iso: string): string {
 export function SalesClient({
   initial,
   error,
+  canRefund,
 }: {
   initial: PosSaleRow[];
   error: string | null;
+  /** Returns are a manager capability — a cashier can reprint but not refund. */
+  canRefund: boolean;
 }) {
   const [sales, setSales] = useState(initial);
   const [query, setQuery] = useState("");
@@ -139,6 +142,15 @@ export function SalesClient({
                   {money(s.total)}
                 </span>
               </button>
+              {canRefund && !s.refunded && (
+                <Link
+                  href={`/pos/returns/${s.id}`}
+                  className="mt-1 ml-11 inline-flex items-center gap-1.5 text-xs font-medium text-white/50 transition-colors hover:text-white"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Return items
+                </Link>
+              )}
             </li>
           ))}
         </ul>
