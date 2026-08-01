@@ -4,7 +4,8 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { SidebarNavLink, navIcons, type NavIconKey } from "./sidebar-nav-link";
+import { SidebarNavLink } from "./sidebar-nav-link";
+import { navIcons, type NavIconKey } from "./nav-icons";
 import { useMobileNav } from "./dashboard-mobile-nav";
 
 type Child = {

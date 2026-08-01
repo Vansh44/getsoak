@@ -5,7 +5,7 @@
 // server components, server actions, and client editors alike.
 // ---------------------------------------------------------------------------
 
-import type { NavIconKey } from "../sidebar-nav-link";
+import type { NavIconKey } from "../nav-icons";
 
 export type PermissionAction = "view" | "manage";
 

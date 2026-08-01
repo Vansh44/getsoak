@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getViewerAccess } from "@/app/dashboard/lib/access";
 import { SECTIONS } from "@/app/dashboard/lib/permissions";
-import { navIcons } from "@/app/dashboard/sidebar-nav-link";
+import { navIcons } from "@/app/dashboard/nav-icons";
 
 export const metadata = { title: "Settings" };
 
