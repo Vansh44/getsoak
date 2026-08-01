@@ -1958,3 +1958,882 @@
     padding: 64px 20px 68px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Brand lockup — the mark beside the wordmark.
+   --------------------------------------------------------------------------- */
+.stq-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+.stq-logo em {
+  font-style: normal;
+}
+.stq-logo img {
+  flex: none;
+}
+/* On the dark band and the dark CTA the wordmark has to invert. */
+.stq-footer .stq-logo,
+.stq-showcase .stq-logo {
+  color: #fff;
+}
+
+/* The sticky bar sits over a DARK section now. At 0.82 alpha the heading
+   underneath showed through as a muddy smear (visible the moment the showcase
+   scrolled past). Near-opaque keeps the bar clean without losing the frosted
+   feel on the white sections. */
+.stq-navbar {
+  background: rgba(255, 255, 255, 0.94);
+}
+
+/* ---------------------------------------------------------------------------
+   The storefront mock, drawn rather than photographed.
+
+   It used the Basket theme's own photographs, which put a demo store's imagery
+   on the platform's own front page — the wrong thing to be selling. Everything
+   here is CSS: a lit hero band and three product blocks with enough shape to
+   read as merchandise instead of grey rectangles.
+   --------------------------------------------------------------------------- */
+.stq-mock-hero {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(118deg, #eef2ff 0%, #f5f3ff 45%, #ecfdf5 100%);
+}
+/* two soft blooms, so the band has depth instead of being a flat wash */
+.stq-mock-hero::before,
+.stq-mock-hero::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(18px);
+  pointer-events: none;
+}
+.stq-mock-hero::before {
+  width: 120px;
+  height: 120px;
+  right: -28px;
+  top: -44px;
+  background: radial-gradient(circle, rgba(79, 57, 246, 0.3), transparent 70%);
+}
+.stq-mock-hero::after {
+  width: 96px;
+  height: 96px;
+  right: 54px;
+  bottom: -46px;
+  background: radial-gradient(circle, rgba(12, 138, 81, 0.28), transparent 70%);
+}
+.stq-mock-hero b,
+.stq-mock-hero span,
+.stq-mock-pill {
+  position: relative;
+  z-index: 1;
+}
+/* Product blocks: a soft ground, a rounded "item" on it, and a shadow — enough
+   to read as a photographed product without pretending to be one. */
+.stq-mock-card .img {
+  position: relative;
+  overflow: hidden;
+}
+.stq-mock-card .img::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 9px;
+  width: 44%;
+  height: 60%;
+  transform: translateX(-50%);
+  border-radius: 7px 7px 4px 4px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.94),
+    rgba(255, 255, 255, 0.62)
+  );
+  box-shadow: 0 4px 8px -3px rgba(13, 17, 23, 0.28);
+}
+.stq-mock-card .img::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 54%;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: rgba(13, 17, 23, 0.14);
+  filter: blur(2.5px);
+}
+
+/* ---------------------------------------------------------------------------
+   Showcase cards: fuller. They were a picture, a heading and a paragraph, with
+   a lot of dark space doing nothing — the section read as empty despite being
+   the densest thing we ship. Each card now states what it actually includes.
+   --------------------------------------------------------------------------- */
+.stq-show-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+.stq-show-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.78);
+}
+.stq-show-list svg {
+  flex: none;
+  margin-top: 2px;
+  color: #6ee7b7;
+}
+.stq-viz {
+  height: 210px;
+}
+/* A closing line under the three cards, so the band ends on a statement rather
+   than trailing off into background. */
+.stq-showcase-foot {
+  margin-top: 44px;
+  padding-top: 26px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 34px;
+  align-items: center;
+  justify-content: space-between;
+}
+.stq-showcase-foot p {
+  margin: 0;
+  font-size: 15.5px;
+  color: rgba(255, 255, 255, 0.72);
+  max-width: 620px;
+}
+.stq-showcase-foot .stq-btn-light {
+  flex: none;
+}
+.stq-show-more {
+  margin: 14px 0 0;
+}
+.stq-show-more a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #c7c0ff;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(199, 192, 255, 0.4);
+  padding-bottom: 2px;
+}
+.stq-show-more a:hover {
+  color: #fff;
+  border-bottom-color: #fff;
+}
+
+/* ---------------------------------------------------------------------------
+   /pos — the Point of Sale product page. Reuses the landing page's system;
+   only what is genuinely new lives here.
+   --------------------------------------------------------------------------- */
+/* The register drawn large in the hero, rather than card-sized. */
+.stq-viz-hero {
+  height: 320px;
+  background: linear-gradient(160deg, #f4f5fb, #eef1f9);
+  border-color: var(--stq-line);
+  box-shadow:
+    0 2px 4px rgba(13, 17, 23, 0.05),
+    0 18px 36px -12px rgba(13, 17, 23, 0.16),
+    0 48px 80px -28px rgba(13, 17, 23, 0.24);
+}
+@media (max-width: 920px) {
+  .stq-viz-hero {
+    height: 260px;
+  }
+}
+/* Four steps rather than three cards. */
+.stq-flow-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 980px) {
+  .stq-flow-grid {
+    grid-template-columns: 1fr 1fr;
+    max-width: none;
+  }
+}
+@media (max-width: 620px) {
+  .stq-flow-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.stq-flow-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  font-weight: 800;
+  font-size: 15px;
+  color: #fff;
+  background: linear-gradient(135deg, #6d5cf7, #4f39f6);
+  box-shadow: 0 6px 16px -6px rgba(79, 57, 246, 0.8);
+}
+.stq-flow-grid .stq-show-card h3 {
+  margin-top: 16px;
+}
+
+/* A lighter footer for the sub-pages — the landing page's four-column one is
+   more than a product page needs. */
+.stq-footer-simple {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+.stq-footer-simple p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 14.5px;
+}
+.stq-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 4px !important;
+}
+.stq-footer-links a {
+  color: rgba(255, 255, 255, 0.78);
+  text-decoration: none;
+  font-size: 14.5px;
+}
+.stq-footer-links a:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
+/* ===========================================================================
+   Product artwork (app/platform/product-art.tsx).
+
+   The earlier version was grey bars, and it read as a wireframe. Real strings
+   at small sizes are what makes UI art look like software — Shopify's cards
+   carry product names, prices and a Checkout button, and that is the whole
+   difference. Type here goes down to 8px on purpose: it is decorative, sits
+   behind aria-hidden, and no one is asked to read it.
+   =========================================================================== */
+.sm-art {
+  position: relative;
+  width: 100%;
+  font-size: 10px;
+  line-height: 1.25;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- the register ------------------------------------------------------- */
+.sm-art-register {
+  /* Right padding reserves the phone's own column. It must EXCEED the phone's
+     width minus the intended overlap, or the phone sits on top of the order
+     panel and hides the totals and the Charge button — which are the whole
+     point of showing a till mid-sale. Overlap is ~16px: enough to read as
+     layered, not enough to obscure anything. */
+  padding: 0 96px 22px 0;
+}
+.art-tablet {
+  background: #12151c;
+  border: 1px solid #232838;
+  border-radius: 14px;
+  padding: 9px;
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.3),
+    0 24px 52px -18px rgba(0, 0, 0, 0.65);
+}
+.art-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #8d95ab;
+  font-size: 8.5px;
+  font-weight: 600;
+  padding: 0 2px 7px;
+}
+.art-status-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #4ade80;
+}
+.art-status-live i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4ade80;
+}
+.art-body {
+  display: flex;
+  gap: 8px;
+}
+.art-left {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.art-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #1a1f2b;
+  border: 1px solid #262c3c;
+  border-radius: 7px;
+  padding: 6px 8px;
+  color: #7c8398;
+  font-size: 9px;
+  margin-bottom: 7px;
+}
+.art-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.art-tile {
+  /* Grid items default to min-width:auto, so a long product name refuses to
+     shrink and the whole tile grid overflows its column — on top of the order
+     panel, clipping the line items. The ellipsis on `b` only works once the
+     track is actually allowed to be narrower than its content. */
+  min-width: 0;
+  position: relative;
+  background: #1a1f2b;
+  border: 1px solid #262c3c;
+  border-radius: 8px;
+  padding: 22px 7px 7px;
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.art-tile b {
+  color: #e8ebf2;
+  font-size: 8.5px;
+  font-weight: 600;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.art-tile-price {
+  color: #9aa2b8;
+  font-size: 8.5px;
+  margin-top: 2px;
+}
+.art-tile-badge {
+  position: absolute;
+  top: 6px;
+  left: 7px;
+  font-size: 7.5px;
+  font-weight: 700;
+  color: #a5b4fc;
+  background: rgba(79, 57, 246, 0.22);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+.art-tile.is-out {
+  opacity: 0.5;
+}
+.art-tile.is-out .art-tile-badge {
+  color: #fca5a5;
+  background: rgba(211, 58, 69, 0.22);
+}
+/* the order panel */
+.art-order {
+  width: 40%;
+  flex: none;
+  background: #171b25;
+  border: 1px solid #262c3c;
+  border-radius: 9px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.art-order-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #262c3c;
+}
+.art-order-head b {
+  color: #fff;
+  font-size: 10px;
+}
+.art-order-head span {
+  color: #7c8398;
+  font-size: 8.5px;
+}
+.art-lines {
+  list-style: none;
+  margin: 7px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.art-lines li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8.5px;
+}
+.art-lines .q {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: #262c3c;
+  color: #c3cadd;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 8px;
+}
+.art-lines .n {
+  flex: 1;
+  color: #d6dbe8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.art-lines .p {
+  color: #fff;
+  font-weight: 600;
+}
+.art-totals {
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px dashed #2b3244;
+  display: grid;
+  gap: 4px;
+}
+.art-totals div {
+  display: flex;
+  justify-content: space-between;
+  color: #8d95ab;
+  font-size: 8.5px;
+}
+.art-total-row {
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 10px !important;
+  padding-top: 3px;
+}
+.art-charge {
+  margin-top: 8px;
+  background: linear-gradient(135deg, #0c8a51, #10b981);
+  color: #fff;
+  font-weight: 700;
+  font-size: 9.5px;
+  text-align: center;
+  border-radius: 7px;
+  padding: 8px;
+}
+/* the phone taking the tender */
+.art-phone {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 112px;
+  z-index: 2;
+  background: #12151c;
+  border: 3px solid #05070b;
+  border-radius: 16px;
+  padding: 10px 9px;
+  box-shadow: 0 18px 38px -12px rgba(0, 0, 0, 0.7);
+}
+.art-phone-top {
+  color: #7c8398;
+  font-size: 8.5px;
+  font-weight: 600;
+}
+.art-phone-amt {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 2px 0 8px;
+}
+.art-phone-rows {
+  display: grid;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px dashed #2b3244;
+}
+.art-phone-rows div {
+  display: flex;
+  justify-content: space-between;
+  color: #8d95ab;
+  font-size: 8.5px;
+}
+.art-change {
+  color: #4ade80 !important;
+  font-weight: 700;
+}
+.art-phone-btn {
+  margin-top: 9px;
+  background: #fff;
+  color: #0d1117;
+  font-weight: 700;
+  font-size: 9px;
+  text-align: center;
+  border-radius: 7px;
+  padding: 7px;
+}
+
+/* ---- the storefront ----------------------------------------------------- */
+.art-browser {
+  background: #fff;
+  border: 1px solid var(--stq-line);
+  border-radius: 13px;
+  overflow: hidden;
+  box-shadow:
+    0 2px 5px rgba(13, 17, 23, 0.06),
+    0 22px 46px -16px rgba(13, 17, 23, 0.24);
+}
+.art-chrome {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #f7f8fb;
+  border-bottom: 1px solid #eef0f4;
+  padding: 8px 10px;
+}
+.art-chrome i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #dde0e8;
+}
+.art-chrome i:nth-child(1) {
+  background: #ff5f57;
+}
+.art-chrome i:nth-child(2) {
+  background: #febc2e;
+}
+.art-chrome i:nth-child(3) {
+  background: #28c840;
+}
+.art-url {
+  margin-left: 8px;
+  background: #fff;
+  border: 1px solid #eaecf1;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 9px;
+  color: var(--stq-muted);
+}
+.art-url b {
+  color: var(--stq-ink);
+}
+.art-site {
+  padding: 10px;
+}
+.art-nav {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 9px;
+}
+.art-brandmark {
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #7c3aed, #5b21b6);
+}
+.art-nav b {
+  font-size: 11px;
+  letter-spacing: -0.01em;
+}
+.art-navlinks {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  font-size: 9px;
+  color: var(--stq-muted);
+}
+.art-banner {
+  position: relative;
+  border-radius: 10px;
+  padding: 16px 14px;
+  background: linear-gradient(118deg, #eef2ff, #f5f3ff 45%, #ecfdf5);
+  overflow: hidden;
+}
+.art-banner b {
+  display: block;
+  font-size: 12.5px;
+  letter-spacing: -0.015em;
+}
+.art-banner > span {
+  display: block;
+  font-size: 9.5px;
+  color: var(--stq-muted);
+  margin-top: 3px;
+}
+.art-cta {
+  display: inline-block !important;
+  margin-top: 9px !important;
+  background: var(--stq-ink);
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 9px;
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+.art-products {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.art-product {
+  border: 1px solid #eef0f4;
+  border-radius: 8px;
+  padding: 7px;
+}
+.art-thumb {
+  display: block;
+  height: 44px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.art-thumb::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 46%;
+  height: 58%;
+  transform: translateX(-50%);
+  border-radius: 6px 6px 3px 3px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(255, 255, 255, 0.68)
+  );
+  box-shadow: 0 3px 7px -2px rgba(13, 17, 23, 0.3);
+}
+.art-thumb-a {
+  background: linear-gradient(135deg, #fde68a, #fca5a5);
+}
+.art-thumb-b {
+  background: linear-gradient(135deg, #bfdbfe, #c4b5fd);
+}
+.art-thumb-c {
+  background: linear-gradient(135deg, #bbf7d0, #99f6e4);
+}
+.art-product b {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.art-price {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--stq-ink);
+}
+
+/* ---- the builder -------------------------------------------------------- */
+.art-app {
+  background: #fff;
+  border: 1px solid var(--stq-line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 2px 5px rgba(13, 17, 23, 0.06),
+    0 20px 42px -16px rgba(13, 17, 23, 0.22);
+}
+.art-app-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f7f8fb;
+  border-bottom: 1px solid #eef0f4;
+  padding: 7px 9px;
+}
+.art-app-title {
+  font-size: 9.5px;
+  font-weight: 600;
+}
+.art-publish {
+  background: var(--stq-brand);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 3px 9px;
+}
+.art-app-body {
+  display: flex;
+  min-height: 132px;
+}
+.art-outline {
+  width: 38%;
+  border-right: 1px solid #f0f2f6;
+  padding: 8px 7px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+.art-sec {
+  font-size: 8.5px;
+  color: var(--stq-muted);
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: #f6f7fa;
+}
+.art-sec.is-on {
+  background: rgba(79, 57, 246, 0.1);
+  color: var(--stq-brand);
+  font-weight: 700;
+  box-shadow: inset 2px 0 0 var(--stq-brand);
+}
+.art-canvas {
+  flex: 1;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.art-canvas-hero {
+  height: 46px;
+  border-radius: 6px;
+  background: linear-gradient(120deg, #eef2ff, #ecfdf5);
+  border: 1px dashed #c9cffb;
+  display: grid;
+  place-items: center;
+  font-size: 8.5px;
+  color: #6b6fd1;
+  font-weight: 600;
+}
+.art-canvas-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+.art-canvas-row span {
+  height: 32px;
+  border-radius: 5px;
+  background: #f4f5f9;
+  border: 1px solid #edeff4;
+}
+.art-canvas-bar {
+  height: 12px;
+  border-radius: 4px;
+  background: #f4f5f9;
+}
+
+/* ---- the invoice -------------------------------------------------------- */
+.sm-art-invoice {
+  padding: 8px 0 0 10px;
+}
+.art-sheet {
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px 13px;
+  box-shadow:
+    0 2px 5px rgba(13, 17, 23, 0.08),
+    0 20px 42px -16px rgba(13, 17, 23, 0.3);
+}
+.art-sheet-back {
+  position: absolute;
+  inset: 0 12px 12px 0;
+  transform: rotate(-5deg);
+  opacity: 0.5;
+}
+.art-sheet:not(.art-sheet-back) {
+  position: relative;
+}
+.art-inv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #eef0f4;
+}
+.art-inv-logo {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #7c3aed, #5b21b6);
+}
+.art-inv-title {
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  font-weight: 800;
+  color: #8b93a4;
+}
+.art-inv-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--stq-muted);
+  margin: 7px 0;
+}
+.art-inv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5px;
+}
+.art-inv-table td {
+  padding: 3px 0;
+  color: #4b5565;
+  border-bottom: 1px solid #f4f5f8;
+}
+.art-inv-table td:nth-child(2) {
+  color: #99a1b0;
+  text-align: center;
+}
+.art-inv-table td:last-child {
+  text-align: right;
+  color: var(--stq-ink);
+  font-weight: 600;
+}
+.art-inv-gst {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0;
+}
+.art-inv-gst div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--stq-muted);
+}
+.art-inv-total {
+  display: flex;
+  justify-content: space-between;
+  background: var(--stq-ink);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+/* Compact register — the showcase card, ~430px. No phone, four tiles in two
+   columns, and a wider order panel so the totals stop wrapping. */
+.sm-art-register.is-compact {
+  padding: 0;
+}
+.sm-art-register.is-compact .art-tiles {
+  grid-template-columns: repeat(2, 1fr);
+}
+.sm-art-register.is-compact .art-order {
+  width: 46%;
+}
+.sm-art-register.is-compact .art-totals div {
+  gap: 8px;
+}

@@ -8,6 +8,13 @@ import {
   platformWebsiteSchema,
 } from "@/lib/seo/brand-identity";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
+import { BrandMark } from "./brand-mark";
+import {
+  BuilderArt,
+  InvoiceArt,
+  RegisterArt,
+  StorefrontArt,
+} from "./product-art";
 import {
   ArrowRight,
   Building2,
@@ -32,50 +39,41 @@ import {
 // gateway), B2B + D2C together, live in a day, dogfooded on WholeSip.
 // ---------------------------------------------------------------------------
 
+// Short on purpose. Six cards each carrying a three-line paragraph is a wall of
+// text pretending to be a grid — the heading is the point, the line under it is
+// a caption, not an essay.
 const FEATURES = [
   {
     icon: LayoutTemplate,
-    title: "A storefront that feels yours",
-    body: "Your brand, logo and colours at your-name.storemink.com — or your own domain. A homepage you compose section by section, no code.",
+    title: "Your own storefront",
+    body: "Your brand, your colours, your domain.",
   },
   {
     icon: PenLine,
-    title: "Blogs your customers write too",
-    body: "A full blog engine with community submissions and an approval queue you control — or let posts go live instantly. Your store, your rules.",
+    title: "Blogs and community posts",
+    body: "Customers can write them. You approve them.",
   },
   {
     icon: Megaphone,
-    title: "Marketing built in, not bolted on",
-    body: "Coupons, customer groups, targeted offers and email campaigns — the tools other platforms sell as paid apps are simply here.",
+    title: "Marketing built in",
+    body: "Coupons, segments and email campaigns.",
   },
   {
     icon: Star,
-    title: "Reviews & social proof",
-    body: "Product reviews, ratings and rich product pages that build trust and rank on Google — structured data included.",
+    title: "Reviews and ratings",
+    body: "Social proof, with Google-ready markup.",
   },
   {
     icon: Users,
-    title: "A real team dashboard",
-    body: "Invite staff with roles and granular permissions. Enquiries, media library, analytics — one operations centre for the whole business.",
+    title: "A team, with permissions",
+    body: "Staff roles down to the individual action.",
   },
   {
     icon: Building2,
-    title: "D2C and B2B, one store",
-    body: "Sell to shoppers and to businesses from the same place — enquiry-based selling, customer groups and wholesale workflows.",
+    title: "D2C and B2B together",
+    body: "Retail and wholesale from one store.",
   },
 ];
-
-// Photography for the hero mock and the category strip. These are the BASKET
-// THEME's own bundled assets (public/themes/basket) — the same images a
-// merchant gets when they pick that template at signup. Deliberately not stock
-// photos of some other product: everything shown here is something the visitor
-// can go and see running at the demo store below.
-const MOCK_PRODUCTS = [
-  { img: "/themes/basket/p-milk.webp", price: "₹249" },
-  { img: "/themes/basket/p-cookies.webp", price: "₹329" },
-  { img: "/themes/basket/p-juice.webp", price: "₹199" },
-];
-
 const COMPARE: {
   label: string;
   mink: { ok: boolean; text: string };
@@ -142,8 +140,12 @@ const PLANS = [
     meta: PLAN_META.free,
     who: "Try everything. Launch your first store.",
     features: [
-      "Storefront at you.storemink.com",
+      "Storefront on your own subdomain",
+      "Website builder — every section type",
       `Up to ${PLAN_LIMITS.free.maxProducts} products`,
+      "Blogs, reviews and enquiries",
+      "GST invoicing and tax classes",
+      "Cash on delivery checkout",
       "Full admin dashboard",
       `${PLAN_LIMITS.free.aiGenerationsPerMonth} AI generations a month`,
     ],
@@ -154,10 +156,13 @@ const PLANS = [
     meta: PLAN_META.basic,
     who: "For new brands getting their first orders.",
     features: [
-      "Everything in Free",
+      "Everything in Free, plus:",
       "Your own custom domain",
-      "Online payments — your own gateway",
-      `${PLAN_LIMITS.basic.maxProducts} products & ${PLAN_LIMITS.basic.maxStaff} staff accounts`,
+      "Online payments — your own gateway, 0% to us",
+      `${PLAN_LIMITS.basic.maxProducts} products`,
+      `${PLAN_LIMITS.basic.maxStaff} staff accounts with roles`,
+      "Coupons and customer groups",
+      "Media library",
       `${PLAN_LIMITS.basic.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.basic.name}`,
@@ -165,18 +170,21 @@ const PLANS = [
   },
   {
     meta: PLAN_META.pro,
-    who: "For growing brands ready to scale with a team.",
+    who: "For growing brands, a team, and a counter.",
     features: [
-      `Everything in ${PLAN_META.basic.name}`,
-      "Unlimited products & staff",
+      `Everything in ${PLAN_META.basic.name}, plus:`,
+      "Point of Sale — till, staff PINs, shifts",
+      `${PLAN_LIMITS.pro.posLocationsIncluded} shop locations, ${PLAN_LIMITS.pro.posDevicesPerLocation} tills each`,
+      "Stock per location, and transfers",
+      "Buy online, collect in store",
       "Email campaigns",
+      "Unlimited products and staff",
       `${PLAN_LIMITS.pro.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.pro.name}`,
     popular: false,
   },
 ];
-
 const priceInr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
 const FAQS = [
@@ -275,10 +283,14 @@ export default function StoreminkLanding() {
       <div className="stq-navbar">
         <nav className="stq-nav">
           <Link href="/" className="stq-logo">
-            Store<span>Mink</span>
+            <BrandMark size={26} priority />
+            <em>
+              Store<span>Mink</span>
+            </em>
           </Link>
           <div className="stq-nav-links">
             <a href="#features">Features</a>
+            <Link href="/pos">Point of Sale</Link>
             <a href="#compare">Compare</a>
             <a href="#pricing">Pricing</a>
             <a href="#faq">FAQ</a>
@@ -335,53 +347,7 @@ export default function StoreminkLanding() {
           </div>
 
           <div className="stq-mock-wrap stq-rise stq-rise-2">
-            <div className="stq-mock" aria-hidden="true">
-              <div className="stq-mock-bar">
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-url">
-                  🔒 <strong>yourbrand</strong>.storemink.com
-                </span>
-              </div>
-              <div className="stq-mock-body">
-                <div className="stq-mock-store-head">
-                  <span className="stq-mock-logo">
-                    <i /> yourbrand
-                  </span>
-                  <span className="stq-mock-navlinks">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                </div>
-                <div
-                  className="stq-mock-hero stq-mock-shot"
-                  style={
-                    {
-                      "--stq-shot": "url(/themes/basket/hero.webp)",
-                    } as React.CSSProperties
-                  }
-                >
-                  <b>Made with care. Delivered with pride.</b>
-                  <span>Fresh from our kitchen to your doorstep.</span>
-                  <br />
-                  <span className="stq-mock-pill">SHOP NOW</span>
-                </div>
-                <div className="stq-mock-grid">
-                  {MOCK_PRODUCTS.map((p) => (
-                    <div className="stq-mock-card" key={p.img}>
-                      <div
-                        className="img stq-shot"
-                        style={{ backgroundImage: `url(${p.img})` }}
-                      />
-                      <div className="t" />
-                      <div className="p">{p.price}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            <StorefrontArt />
             <div className="stq-float stq-float-1" aria-hidden="true">
               <CircleCheck size={17} /> Order received — ₹648
             </div>
@@ -560,130 +526,88 @@ export default function StoreminkLanding() {
           <div className="stq-sec-head">
             <span className="stq-kicker">Not a roadmap</span>
             <h2>The parts other people charge extra for.</h2>
-            <p>
-              A till for your counter, a builder for your website and Indian tax
-              done properly — all in the same plan, all working today.
-            </p>
+            <p>All in the same plan. All working today.</p>
           </div>
 
           <div className="stq-show-grid">
             {/* --- register --- */}
             <article className="stq-show-card">
-              <div className="stq-viz stq-viz-pos" aria-hidden="true">
-                <div className="pane till">
-                  <div className="grid">
-                    {Array.from({ length: 9 }).map((_, i) => (
-                      <span className="tile" key={i} />
-                    ))}
-                  </div>
-                  <div className="cart">
-                    <span className="bar" />
-                    <span className="bar" />
-                    <span className="bar" />
-                    <span className="bar" />
-                    <span className="total" />
-                  </div>
-                </div>
-                <div className="pane phone">
-                  <span className="amt" />
-                  <span className="row">
-                    <span className="bar" />
-                    <span className="bar" />
-                  </span>
-                  <span className="row">
-                    <span className="bar" />
-                    <span className="bar" />
-                  </span>
-                  <span className="pay" />
-                </div>
-              </div>
+              <RegisterArt compact />
               <h3>Sell at the counter</h3>
-              <p>
-                Turn a tablet into a till. Scan a barcode, take cash or card,
-                and the sale lands in the same orders list as your website.
-                Staff sign in with a PIN, shifts cash up at the end of the day,
-                and stock is tracked shop by shop.
-              </p>
+              <p>Your counter, sharing one catalogue with your website.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Barcode scanner, or your phone&apos;s
+                  camera
+                </li>
+                <li>
+                  <Check size={15} /> Shifts, cash drops and an end-of-day count
+                </li>
+                <li>
+                  <Check size={15} /> Stock per shop, and transfers between them
+                </li>
+                <li>
+                  <Check size={15} /> Buy online, collect in store
+                </li>
+              </ul>
               <span className="stq-show-tag">Pro · 2 locations included</span>
+              <p className="stq-show-more">
+                <Link href="/pos">
+                  Everything in Point of Sale <ArrowRight size={15} />
+                </Link>
+              </p>
             </article>
 
             {/* --- builder --- */}
             <article className="stq-show-card">
-              <div className="stq-viz stq-viz-builder" aria-hidden="true">
-                <div className="pane app">
-                  <div className="chrome">
-                    <i />
-                    <i />
-                    <i />
-                  </div>
-                  <div className="body">
-                    <div className="rail">
-                      <span className="bar" />
-                      <span className="bar on" />
-                      <span className="bar" />
-                      <span className="bar" />
-                      <span className="bar" />
-                    </div>
-                    <div className="canvas">
-                      <div className="hero" />
-                      <div className="cards">
-                        <span />
-                        <span />
-                        <span />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <BuilderArt />
               <h3>Build the site yourself</h3>
-              <p>
-                Compose every page from ready-made sections — hero, product
-                grids, offers, FAQs — and watch it change as you type. Header
-                and footer too. Save a draft, publish when it&apos;s right, and
-                never open a code editor unless you want to.
-              </p>
+              <p>Every page, section by section. No code, ever.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Twelve section types, drag to reorder
+                </li>
+                <li>
+                  <Check size={15} /> Live preview as you type
+                </li>
+                <li>
+                  <Check size={15} /> Draft and publish, with undo
+                </li>
+                <li>
+                  <Check size={15} /> Your own domain from Basic up
+                </li>
+              </ul>
               <span className="stq-show-tag">Every plan</span>
             </article>
 
             {/* --- GST --- */}
             <article className="stq-show-card">
-              <div className="stq-viz stq-viz-invoice" aria-hidden="true">
-                <div className="pane sheet back" />
-                <div className="pane sheet">
-                  <div className="head">
-                    <i />
-                    <b>TAX INVOICE</b>
-                  </div>
-                  <div className="line">
-                    <span className="bar" />
-                    <span className="bar" />
-                  </div>
-                  <div className="line">
-                    <span className="bar" />
-                    <span className="bar" />
-                  </div>
-                  <div className="line">
-                    <span className="bar" />
-                    <span className="bar" />
-                  </div>
-                  <div className="gst">
-                    <div className="split">
-                      <span />
-                      <span />
-                    </div>
-                    <div className="total" />
-                  </div>
-                </div>
-              </div>
+              <InvoiceArt />
               <h3>GST that works itself out</h3>
-              <p>
-                Set a rate against a product once. CGST and SGST inside your
-                state, IGST outside it, HSN codes on the line, and your
-                buyer&apos;s GSTIN on the bill. Change your settings tomorrow —
-                last month&apos;s invoices stay exactly as they were issued.
-              </p>
+              <p>Set a rate once. Every invoice after that is correct.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Tax classes per product, 5% / 12% / 18%
+                </li>
+                <li>
+                  <Check size={15} /> Prices inclusive or exclusive — your call
+                </li>
+                <li>
+                  <Check size={15} /> Printable invoices customers can download
+                </li>
+                <li>
+                  <Check size={15} /> Place of supply decides the split
+                </li>
+              </ul>
               <span className="stq-show-tag">Every plan, Free included</span>
             </article>
+          </div>
+
+          <div className="stq-showcase-foot">
+            <p>No add-ons. No upgrade tier. No app store.</p>
+            <Link href="/signup" className="stq-btn stq-btn-light">
+              Create your store free <ArrowRight size={17} />
+            </Link>
           </div>
         </div>
       </section>
@@ -844,7 +768,10 @@ export default function StoreminkLanding() {
         <div className="stq-footer2-inner">
           <div className="stq-footer2-brand">
             <Link href="/" className="stq-logo">
-              Store<span>Mink</span>
+              <BrandMark size={26} />
+              <em>
+                Store<span>Mink</span>
+              </em>
             </Link>
             <p>
               The India-first store builder with everything included. Launch
