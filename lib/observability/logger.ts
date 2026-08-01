@@ -73,8 +73,21 @@ export function logError(
   const fullMessage =
     isProd && err?.stack ? `${message}\n${err.stack}` : message;
 
+  // `cause` matters more than it looks. A Drizzle failure's own message is
+  // just "Failed query: insert into …" — the REASON (`column "x" does not
+  // exist`, a constraint name, a type mismatch) lives on the cause, and
+  // without it a schema drift in production reads as an unexplained failure
+  // and has to be chased through the database's own logs instead.
+  const cause =
+    err?.cause instanceof Error
+      ? err.cause.message
+      : err?.cause != null
+        ? String(err.cause)
+        : undefined;
+
   emit("ERROR", fullMessage, {
     ...context,
     ...(err ? { error: err.message } : {}),
+    ...(cause ? { cause } : {}),
   });
 }
