@@ -1033,7 +1033,11 @@ describe("listPosSales", () => {
     expect(where).toMatch(/is not null/);
   });
 
-  it("builds a customer name and reports a cancelled sale", async () => {
+  // ★ The count is a separate grouped query, not a correlated subquery in the
+  // select: interpolating columns into sql`` drops their table qualification,
+  // so `where "order_id" = "id"` resolved both names inside order_items and
+  // silently returned 0 for every sale.
+  it("counts the items on each sale", async () => {
     dbHolder.current = makeDbMock({
       selectQueue: [
         [
@@ -1047,9 +1051,10 @@ describe("listPosSales", () => {
             shipping_address: { firstName: "Ravi", lastName: "Kumar" },
             payment_method: "cash",
             status: "cancelled",
-            items: 3,
           },
         ],
+        // Second query: the grouped item counts.
+        [{ order_id: "o1", n: 3 }],
       ],
     });
     const { sales } = await listPosSales();
@@ -1076,9 +1081,9 @@ describe("listPosSales", () => {
             shipping_address: null,
             payment_method: "cash",
             status: "completed",
-            items: 1,
           },
         ],
+        [{ order_id: "o2", n: 1 }],
       ],
     });
     const { sales } = await listPosSales();

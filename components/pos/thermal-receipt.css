@@ -111,6 +111,16 @@
   .tr-sheet * {
     visibility: visible !important;
   }
+  /* ★ The sheet is parked off-screen on-screen (see .tr-print-host) so the
+     cashier never sees it. `position: absolute` resolves against the nearest
+     POSITIONED ancestor — which is that off-screen host — so `left: 0` put the
+     receipt 9999px to the left of the page and printed a blank sheet. Neutralise
+     the host first, then position the sheet. */
+  .tr-print-host {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+  }
   .tr-sheet {
     position: absolute;
     left: 0;

@@ -129,7 +129,7 @@ export function ReceiptOverlay({
 
       {/* Off-screen until printed. */}
       {receipt && (
-        <div className="pointer-events-none fixed left-[-9999px] top-0">
+        <div className="tr-print-host pointer-events-none fixed top-0 left-[-9999px]">
           <ThermalReceipt receipt={receipt} />
         </div>
       )}

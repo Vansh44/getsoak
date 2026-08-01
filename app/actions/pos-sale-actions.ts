@@ -16,6 +16,7 @@
 
 import {
   and,
+  count,
   desc,
   eq,
   gt,
@@ -1455,7 +1456,6 @@ export async function listPosSales(
           shipping_address: orders.shippingAddress,
           payment_method: orders.paymentMethod,
           status: orders.status,
-          items: sql<number>`(select count(*) from ${orderItems} where ${orderItems.orderId} = ${orders.id})`,
         })
         .from(orders)
         .where(
@@ -1476,6 +1476,31 @@ export async function listPosSales(
         .limit(60),
     );
 
+    // Item counts as their own grouped query, NOT a correlated subquery in the
+    // select. Interpolating columns into sql`` renders them UNQUALIFIED —
+    // `where "order_id" = "id"` — and inside the subquery both names resolve to
+    // order_items, so it silently counts zero for every row. Two plain queries
+    // can't be wrong that way.
+    const counts = new Map<string, number>();
+    if (rows.length > 0) {
+      const countRows = await withService((db) =>
+        db
+          .select({
+            order_id: orderItems.orderId,
+            n: count(),
+          })
+          .from(orderItems)
+          .where(
+            inArray(
+              orderItems.orderId,
+              rows.map((r) => r.id),
+            ),
+          )
+          .groupBy(orderItems.orderId),
+      );
+      for (const c of countRows) counts.set(c.order_id, Number(c.n) || 0);
+    }
+
     return {
       sales: rows.map((r) => {
         const addr = (r.shipping_address ?? {}) as Record<string, unknown>;
@@ -1490,7 +1515,7 @@ export async function listPosSales(
           createdAt: r.created_at,
           cashierName: r.cashier_name,
           customerName: name,
-          itemCount: Number(r.items) || 0,
+          itemCount: counts.get(r.id) ?? 0,
           paymentMethod: r.payment_method ?? "",
           refunded: r.status === "cancelled" || r.status === "refunded",
         };
