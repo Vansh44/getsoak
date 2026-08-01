@@ -47,6 +47,7 @@ import {
   getCatalogSnapshot,
   placePosSale,
   searchPosCustomers,
+  listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
 
@@ -165,6 +166,18 @@ describe("placePosSale — gates", () => {
   it("rejects an empty cart and a cart with no payment", async () => {
     expect((await placePosSale([], cash)).error).toMatch(/empty/i);
     expect((await placePosSale([line], [])).error).toMatch(/take a payment/i);
+  });
+
+  it("★ refuses a tender the system cannot settle — gift card and store credit are declared but unbuilt", async () => {
+    // The register only offers cash/card/upi, but this is a server action and
+    // the register's JS is not its only caller. Accepting either would mark a
+    // sale paid in full against a balance that does not exist.
+    for (const method of ["gift_card", "store_credit"] as const) {
+      const res = await placePosSale([line], [
+        { method, amount: 100 },
+      ] as never);
+      expect(res.error).toMatch(/invalid payment method/i);
+    }
   });
 
   it("rejects invalid quantities and unknown tender methods", async () => {
@@ -994,5 +1007,82 @@ describe("placePosSale — shift attribution", () => {
       "pos.requireOpenShift": true,
     } as any);
     expect((await placePosSale([line], cash)).success).toBe(true);
+  });
+});
+
+describe("listPosSales", () => {
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    expect((await listPosSales()).error).toMatch(/signed in/i);
+  });
+
+  // The commonest reason to look a sale up is a customer at the counter asking
+  // for their bill again. Making that a manager's job stops the queue.
+  it("a cashier may look up sales", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    expect((await listPosSales()).error).toBeUndefined();
+  });
+
+  // sqlText renders operators without column names, so this asserts the SHAPE:
+  // store =, location =, and `is not null` (the receipt-no filter) AND-ed.
+  it("★ scopes to the operator's own shop and to TILL sales only", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    await listPosSales();
+    const where = sqlText(dbHolder.current.calls.where[0]);
+    expect(where).toMatch(/=/);
+    expect(where).toMatch(/is not null/);
+  });
+
+  it("builds a customer name and reports a cancelled sale", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o1",
+            receipt_no: "POS-000007",
+            order_ref: "ORD10011027",
+            total: "240.50",
+            created_at: "2026-07-30T10:00:00Z",
+            cashier_name: "Priya",
+            shipping_address: { firstName: "Ravi", lastName: "Kumar" },
+            payment_method: "cash",
+            status: "cancelled",
+            items: 3,
+          },
+        ],
+      ],
+    });
+    const { sales } = await listPosSales();
+    expect(sales[0]).toMatchObject({
+      receiptNo: "POS-000007",
+      total: 240.5,
+      customerName: "Ravi Kumar",
+      itemCount: 3,
+      refunded: true,
+    });
+  });
+
+  it("leaves a walk-in's name null rather than inventing one", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o2",
+            receipt_no: "POS-000008",
+            order_ref: "ORD10011028",
+            total: "99",
+            created_at: "2026-07-30T10:00:00Z",
+            cashier_name: null,
+            shipping_address: null,
+            payment_method: "cash",
+            status: "completed",
+            items: 1,
+          },
+        ],
+      ],
+    });
+    const { sales } = await listPosSales();
+    expect(sales[0].customerName).toBeNull();
+    expect(sales[0].refunded).toBe(false);
   });
 });

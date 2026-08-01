@@ -14,7 +14,17 @@
 // There is no cross-statement transaction over the pool, hence the manual
 // rollback chain — the same discipline placeOrder uses.
 
-import { and, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  ilike,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -31,6 +41,7 @@ import {
   users,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
+import { likePattern } from "@/lib/pos/search";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
@@ -102,14 +113,23 @@ export interface PosSaleResult {
   changeDue?: number;
 }
 
-const TENDER_METHODS: PosTenderMethod[] = [
-  "cash",
-  "card",
-  "upi",
-  "gift_card",
-  "store_credit",
-  "razorpay",
-];
+/**
+ * What the till may actually be paid with TODAY.
+ *
+ * ★ `gift_card` and `store_credit` are deliberately absent even though
+ * PosTenderMethod declares them: neither feature is built, so there is no
+ * balance to check a tender against. Accepting one would mark a sale paid in
+ * full, and let the goods leave the shelf, against money that never existed.
+ *
+ * The register only offers cash/card/upi — but `placePosSale` is a server
+ * action, so the register's own JavaScript is not its only caller. That is
+ * exactly how the `managerApproved` boolean was bypassable (§22); the lesson
+ * is that a list the SERVER accepts must never be wider than what the system
+ * can actually settle.
+ *
+ * Add them back in the same commit that builds the ledger behind them.
+ */
+const TENDER_METHODS: PosTenderMethod[] = ["cash", "card", "upi", "razorpay"];
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -1384,3 +1404,99 @@ export async function getPosReceipt(
 // export becomes a server-action entry, so `export type { … }` fails the
 // production build ("Export X doesn't exist in target module") even though dev
 // and unit tests pass. Import PosOperator from @/lib/pos/operator instead.
+
+// ---- Sale lookup (reprint / "what did I just ring?") ----------------------
+
+export interface PosSaleRow {
+  id: string;
+  receiptNo: string;
+  orderRef: string;
+  total: number;
+  createdAt: string;
+  cashierName: string | null;
+  customerName: string | null;
+  itemCount: number;
+  paymentMethod: string;
+  refunded: boolean;
+}
+
+/**
+ * Recent till sales at THIS shop, newest first.
+ *
+ * Why a cashier and not just a manager: the commonest reason to look a sale up
+ * is a customer standing at the counter asking for their bill again. Making
+ * that a manager's job stops the queue.
+ *
+ * Scoped to the operator's own location, never a location from the client —
+ * and to sales with a `receipt_no`, which is what distinguishes a till sale
+ * from an online order that merely routed to this shop. Someone else's online
+ * order is not a receipt this till ever printed.
+ */
+export async function listPosSales(
+  query?: string,
+): Promise<{ sales: PosSaleRow[]; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { sales: [], error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { sales: [], error: "Not allowed." };
+
+  const q = (query ?? "").trim().slice(0, 60);
+  const like = likePattern(q);
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: orders.id,
+          receipt_no: orders.receiptNo,
+          order_ref: orders.orderRef,
+          total: orders.total,
+          created_at: orders.createdAt,
+          cashier_name: orders.cashierName,
+          shipping_address: orders.shippingAddress,
+          payment_method: orders.paymentMethod,
+          status: orders.status,
+          items: sql<number>`(select count(*) from ${orderItems} where ${orderItems.orderId} = ${orders.id})`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, op.storeId),
+            eq(orders.locationId, op.locationId),
+            isNotNull(orders.receiptNo),
+            q
+              ? or(
+                  ilike(orders.receiptNo, like),
+                  ilike(orders.orderRef, like),
+                  sql`${orders.shippingAddress}::text ilike ${like}`,
+                )
+              : undefined,
+          ),
+        )
+        .orderBy(desc(orders.createdAt))
+        .limit(60),
+    );
+
+    return {
+      sales: rows.map((r) => {
+        const addr = (r.shipping_address ?? {}) as Record<string, unknown>;
+        const name =
+          [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() ||
+          null;
+        return {
+          id: r.id,
+          receiptNo: r.receipt_no ?? "",
+          orderRef: r.order_ref ?? "",
+          total: Number(r.total) || 0,
+          createdAt: r.created_at,
+          cashierName: r.cashier_name,
+          customerName: name,
+          itemCount: Number(r.items) || 0,
+          paymentMethod: r.payment_method ?? "",
+          refunded: r.status === "cancelled" || r.status === "refunded",
+        };
+      }),
+    };
+  } catch (err) {
+    return { sales: [], error: dbErrorMessage(err, "Couldn't load sales.") };
+  }
+}

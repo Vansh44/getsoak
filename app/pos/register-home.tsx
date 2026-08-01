@@ -13,6 +13,7 @@ import {
   Banknote,
   Boxes,
   PackageCheck,
+  Receipt,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
@@ -207,6 +208,14 @@ export function RegisterHome({
               </span>
             </Link>
           )}
+
+          <Link
+            href="/pos/sales"
+            className="mt-3 ml-2 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+          >
+            <Receipt className="h-4 w-4" strokeWidth={2} />
+            Sales
+          </Link>
 
           <Link
             href="/pos/shift"
