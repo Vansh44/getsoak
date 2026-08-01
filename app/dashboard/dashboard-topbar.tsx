@@ -58,7 +58,7 @@ export function DashboardTopbar({
         >
           <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md bg-white/10">
             <Image
-              src="/icon.svg"
+              src="/brand/storemink-mark.png"
               alt="StoreMink logo"
               width={20}
               height={20}

@@ -33,7 +33,7 @@ export async function generateMetadata(): Promise<Metadata> {
   if (!store) {
     return {
       title: "Store not found",
-      icons: { icon: "/icon.svg" },
+      icons: { icon: "/brand/storemink-mark.png" },
       robots: { index: false, follow: false },
     };
   }
@@ -43,7 +43,9 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
     description: brand.tagline ?? undefined,
-    icons: brand.logoUrl ? { icon: brand.logoUrl } : { icon: "/icon.svg" },
+    icons: brand.logoUrl
+      ? { icon: brand.logoUrl }
+      : { icon: "/brand/storemink-mark.png" },
   };
 }
 
