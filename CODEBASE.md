@@ -1918,9 +1918,12 @@ group, span}` (span = columns of the 4-wide desktop grid),
         BELOW the address step. Rules are KEPT when pickup is switched off
         (inert, and retyping a hundred postcodes is a real cost).
       - **★ THE NUDGE IS A CLAIM, NOT A SCHEDULE.** `sweepPickupReminders`
-        warns 24 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ the cron
-        interval or an order slips the whole window between two runs and
-        expires unwarned) and claims `orders.pickup_warned_at` NULL → now() in
+        warns 48 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ TWICE the
+        cron interval: window and schedule are not in phase, so the notice an
+        order gets is (W − I, W] — at W = I nothing slips through unwarned, but
+        an order expiring just after a run is warned just before it lapses, and
+        it spends the one email the claim allows) and claims
+        `orders.pickup_warned_at` NULL → now() in
         the same conditional UPDATE it selects with
         (`locations_06_pickup_reminder.sql`). The cron is a HEARTBEAT — it
         re-reads the same rows every run — and `notifications`' UNIQUE on
@@ -2379,7 +2382,13 @@ npm run format      # prettier --write
   webhooks post to `/api/webhooks/resend` and need **`RESEND_WEBHOOK_SECRET`**
   (Svix signing secret) plus the endpoint registered in the Resend dashboard,
   subscribed to `email.bounced` + `email.complained` — without it bounces are
-  never learned and dead addresses are mailed forever (§22).
+  never learned and dead addresses are mailed forever (§22). It is **per
+  ENDPOINT, therefore per env** (`_RESEND_WEBHOOK_SECRET_SECRET` in
+  `cloudbuild.yaml` → `RESEND_WEBHOOK_SECRET_{STAGING,PROD}`), unlike
+  `RESEND_API_KEY`, which is one account-wide key. It went unwired on Cloud Run
+  until 2026-08-01, so the whole suppression half of §24 was inert — the route
+  degrades by logging and dropping the event, which is the failure you don't
+  notice. Registration + secret creation runbook: `docs/gcp-ci-cd.md`.
 - **Google Cloud Storage** (media, GCP migration Phase 3 — `lib/storage/gcs.ts`):
   when **`GCS_BUCKET`** is set, new image/video uploads go to that GCS bucket
   (public, uniform bucket-level access) and public URLs are

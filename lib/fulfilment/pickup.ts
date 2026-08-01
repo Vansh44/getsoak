@@ -306,12 +306,25 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
 /**
  * How far ahead the nudge goes out.
  *
- * MUST be at least the cron's own interval, or an order can slip through the
- * whole window between two runs and expire with no warning at all. The reaper
- * runs daily (Vercel Hobby caps crons at once/day), so 24 hours is the floor,
- * not a preference.
+ * MUST be at least TWICE the cron's own interval. The window and the schedule
+ * are not in phase, so with a window of W and an interval of I the notice an
+ * order actually gets is anywhere in (W − I, W]. At 24 hours against a daily
+ * reaper that is (0, 24] — nothing slipped through unwarned, which is what the
+ * old floor of "≥ the interval" guaranteed, but an order expiring ten minutes
+ * after a run was warned ten minutes before it lapsed. A reminder nobody has
+ * time to act on is the same as no reminder, and it still spends the one email
+ * the claim on `pickup_warned_at` allows.
+ *
+ * At 48 hours against the same daily run, every order gets between 24 and 48
+ * hours — a full day of notice in the worst case rather than the best.
+ *
+ * ⚠ Raise this if `expire-pending-payments` ever moves to a longer interval;
+ * halve-and-check if it moves to a shorter one. A merchant on a very short
+ * `fulfilment.pickupHoldDays` (the minimum is 1) will see the nudge land close
+ * to order time, because with a one-day window and a daily run there is no
+ * later moment to send it — early is the only alternative to silent.
  */
-export const PICKUP_WARN_HOURS = 24;
+export const PICKUP_WARN_HOURS = 48;
 
 /** Hours left, rounded the way a person would say it. */
 export function hoursUntil(expiresAt: string | Date, now = new Date()): number {
