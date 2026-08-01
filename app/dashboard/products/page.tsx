@@ -46,6 +46,8 @@ export interface ProductVariant {
   special_price: number | null;
   stock: number;
   sku: string | null;
+  /** Merchant-entered supplier barcode (pos_06) — what the register scans. */
+  barcode: string | null;
   image_url: string | null;
   images: string[] | null;
   sort_order: number;
@@ -80,6 +82,7 @@ export interface Product {
   low_stock_threshold: number | null;
   allow_backorder: boolean;
   sku: string | null;
+  barcode: string | null;
   tax_class_id: string | null;
   created_at: string;
   updated_at: string;

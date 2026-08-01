@@ -6,16 +6,21 @@ import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
   categories,
+  inventoryLevels,
   productVariants,
   products,
   stockMovements,
+  storeLocations,
   stores,
 } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { DASHBOARD_PAGE_SIZE } from "@/app/dashboard/lib/list-params";
 import { TAGS } from "@/lib/storefront/tags";
+import { emitEvent } from "@/lib/notifications/record";
+import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 import { inventoryStatus } from "@/lib/inventory/status";
+import { getViewerLocations } from "@/lib/locations/scope";
 
 export interface SkuRow {
   id: string; // "p-uuid" or "v-uuid"
@@ -46,22 +51,72 @@ export interface StockMovementRow {
   order_id: string | null;
 }
 
+/**
+ * Validate a requested location for the desk view.
+ *
+ * Returns null for "all locations" — the aggregate, read-only. Anything else
+ * must belong to THIS store and be inside the viewer's own scope (Phase B2), so
+ * a location-bound admin cannot read or edit another shop's shelves by editing
+ * the URL. Invariant 7: a filter the client can set is not a boundary.
+ */
+async function resolveInventoryLocation(
+  storeId: string,
+  requested: string | null | undefined,
+): Promise<{ locationId: string | null; error?: string }> {
+  if (!requested || requested === "all") return { locationId: null };
+
+  const scope = await getViewerLocations();
+  if (scope !== null && !scope.includes(requested)) {
+    return {
+      locationId: null,
+      error: "You don't have access to that location.",
+    };
+  }
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ id: storeLocations.id })
+        .from(storeLocations)
+        .where(
+          and(
+            eq(storeLocations.id, requested),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
+        .limit(1),
+    );
+    if (rows.length === 0)
+      return { locationId: null, error: "Unknown location." };
+    return { locationId: requested };
+  } catch {
+    // A lookup failure falls back to the aggregate rather than editing the
+    // wrong shelf.
+    return { locationId: null };
+  }
+}
+
 export async function getInventory({
   page = 1,
   pageSize = DASHBOARD_PAGE_SIZE,
   filter = "all",
   q = "",
   categoryId,
+  locationId,
 }: {
   page?: number;
   pageSize?: number;
   filter?: InventoryFilter;
   q?: string;
   categoryId?: string;
+  /** A specific shop, or null/"all" for the cross-location total. */
+  locationId?: string | null;
 }): Promise<{
   rows: SkuRow[];
   total: number;
   lowStockThreshold: number;
+  /** Echoed back so the UI knows which shelf it is actually showing. */
+  locationId: string | null;
   error?: string;
 }> {
   const userId = await getManagerUserId("inventory");
@@ -70,6 +125,7 @@ export async function getInventory({
       rows: [],
       total: 0,
       lowStockThreshold: 5,
+      locationId: null,
       error: "Not authenticated",
     };
 
@@ -101,6 +157,11 @@ export async function getInventory({
   // large stores this might need a custom RPC or materialized view, but this
   // matches the Phase 1 scope. Aliased snake_case selects keep the rows in the
   // shape lib/inventory/status.ts expects.
+  // A specific shop shows ITS shelf; "all locations" keeps products.stock,
+  // which the sync trigger maintains as the sum across every location.
+  const resolved = await resolveInventoryLocation(storeId, locationId);
+  const atLocation = resolved.locationId;
+
   const prodConds = [eq(products.storeId, storeId)];
   const varConds = [eq(productVariants.storeId, storeId)];
   if (categoryId && categoryId !== "all") {
@@ -142,7 +203,11 @@ export async function getInventory({
           id: products.id,
           name: products.name,
           sku: products.sku,
-          stock: products.stock,
+          // coalesce: a location that has never carried this SKU has no level
+          // row, which means zero here — not "unknown".
+          stock: atLocation
+            ? sql<number>`coalesce(${inventoryLevels.onHand}, 0)`
+            : products.stock,
           track_inventory: products.trackInventory,
           low_stock_threshold: products.lowStockThreshold,
           allow_backorder: products.allowBackorder,
@@ -152,6 +217,16 @@ export async function getInventory({
         })
         .from(products)
         .leftJoin(categories, eq(products.categoryId, categories.id))
+        .leftJoin(
+          inventoryLevels,
+          atLocation
+            ? and(
+                eq(inventoryLevels.productId, products.id),
+                eq(inventoryLevels.locationId, atLocation),
+                isNull(inventoryLevels.variantId),
+              )
+            : sql`false`,
+        )
         .where(and(...prodConds));
       const variantRows = await db
         .select({
@@ -159,7 +234,9 @@ export async function getInventory({
           product_id: productVariants.productId,
           name: productVariants.name,
           sku: productVariants.sku,
-          stock: productVariants.stock,
+          stock: atLocation
+            ? sql<number>`coalesce(${inventoryLevels.onHand}, 0)`
+            : productVariants.stock,
           track_inventory: productVariants.trackInventory,
           low_stock_threshold: productVariants.lowStockThreshold,
           allow_backorder: productVariants.allowBackorder,
@@ -172,6 +249,15 @@ export async function getInventory({
         .from(productVariants)
         .innerJoin(products, eq(productVariants.productId, products.id))
         .leftJoin(categories, eq(products.categoryId, categories.id))
+        .leftJoin(
+          inventoryLevels,
+          atLocation
+            ? and(
+                eq(inventoryLevels.variantId, productVariants.id),
+                eq(inventoryLevels.locationId, atLocation),
+              )
+            : sql`false`,
+        )
         .where(and(...varConds));
       return [productRows, variantRows] as const;
     });
@@ -181,6 +267,7 @@ export async function getInventory({
       rows: [],
       total: 0,
       lowStockThreshold: defaultLowThreshold,
+      locationId: null,
       error: dbErrorMessage(err, "Failed to load inventory."),
     };
   }
@@ -261,7 +348,13 @@ export async function getInventory({
   const start = (p - 1) * pageSize;
   const rows = allRows.slice(start, start + pageSize);
 
-  return { rows, total, lowStockThreshold: defaultLowThreshold };
+  return {
+    rows,
+    total,
+    lowStockThreshold: defaultLowThreshold,
+    locationId: atLocation,
+    error: resolved.error,
+  };
 }
 
 export async function adjustStock(
@@ -270,22 +363,47 @@ export async function adjustStock(
   delta: number,
   reason: string = "adjustment",
   note?: string,
+  /** Which shelf. Omitted = the store's default location, via the
+   *  compatibility wrapper — exactly what a single-location store has always
+   *  done, so nothing changes for them. */
+  locationId?: string | null,
 ): Promise<{ success?: boolean; newStock?: number; error?: string }> {
   const userId = await getManagerUserId("inventory");
   if (!userId) return { error: "Not authenticated" };
 
   const storeId = await getActingStoreId();
 
+  const resolved = await resolveInventoryLocation(storeId, locationId);
+  if (resolved.error) return { error: resolved.error };
+  const at = resolved.locationId;
+
   try {
     // The unchanged Postgres function does the atomic, row-locked adjustment
     // and writes the ledger row.
     const res = await withService((db) =>
       db.execute(
-        sql`select adjust_stock(p_store => ${storeId}, p_product => ${productId}, p_variant => ${variantId || null}, p_delta => ${delta}, p_reason => ${reason}, p_note => ${note || null}, p_actor => ${userId}) as new_stock`,
+        at
+          ? sql`select adjust_stock_at(p_store => ${storeId}, p_location => ${at}, p_product => ${productId}, p_variant => ${variantId || null}, p_delta => ${delta}, p_reason => ${reason}, p_note => ${note || null}, p_actor => ${userId}) as new_stock`
+          : sql`select adjust_stock(p_store => ${storeId}, p_product => ${productId}, p_variant => ${variantId || null}, p_delta => ${delta}, p_reason => ${reason}, p_note => ${note || null}, p_actor => ${userId}) as new_stock`,
       ),
     );
     revalidateTag(TAGS.products, "max");
     const row = res.rows[0] as { new_stock: number | string } | undefined;
+
+    emitEvent({
+      type: "inventory.adjusted",
+      storeId,
+      actor: { type: "admin", id: userId },
+      subject: { type: "product", id: variantId || productId },
+      payload: {
+        delta,
+        stock: Number(row?.new_stock),
+        reason,
+        ...(note ? { note } : {}),
+      },
+    });
+    reportStockChanges(storeId, [{ productId, variantId, delta }]);
+
     return { success: true, newStock: Number(row?.new_stock) };
   } catch (err) {
     return { error: dbErrorMessage(err, "Failed to adjust stock.") };
@@ -297,17 +415,41 @@ export async function setStock(
   variantId: string | null | undefined,
   quantity: number,
   note?: string,
+  locationId?: string | null,
 ): Promise<{ success?: boolean; newStock?: number; error?: string }> {
   const userId = await getManagerUserId("inventory");
   if (!userId) return { error: "Not authenticated" };
 
   const storeId = await getActingStoreId();
 
-  // First fetch current stock to compute delta
+  const resolved = await resolveInventoryLocation(storeId, locationId);
+  if (resolved.error) return { error: resolved.error };
+  const at = resolved.locationId;
+
+  // Current stock, to compute the delta. When a shop is selected this MUST be
+  // that shelf's on_hand, not the cross-location aggregate — otherwise
+  // "set Delhi to 9" would compute its delta against the company-wide total
+  // and write a wildly wrong correction.
   let row: { stock: number } | undefined;
   try {
-    const rows = await withService((db) =>
-      variantId
+    const rows = await withService((db) => {
+      if (at) {
+        return db
+          .select({ stock: inventoryLevels.onHand })
+          .from(inventoryLevels)
+          .where(
+            and(
+              eq(inventoryLevels.storeId, storeId),
+              eq(inventoryLevels.locationId, at),
+              eq(inventoryLevels.productId, productId),
+              variantId
+                ? eq(inventoryLevels.variantId, variantId)
+                : isNull(inventoryLevels.variantId),
+            ),
+          )
+          .limit(1);
+      }
+      return variantId
         ? db
             .select({ stock: productVariants.stock })
             .from(productVariants)
@@ -324,9 +466,11 @@ export async function setStock(
             .where(
               and(eq(products.id, productId), eq(products.storeId, storeId)),
             )
-            .limit(1),
-    );
-    row = rows[0];
+            .limit(1);
+    });
+    // A shop that has never carried this SKU has no level row: that is zero,
+    // not "not found".
+    row = rows[0] ?? (at ? { stock: 0 } : undefined);
   } catch (err) {
     return { error: dbErrorMessage(err, "Failed to read current stock.") };
   }
@@ -337,7 +481,7 @@ export async function setStock(
 
   if (delta === 0) return { success: true, newStock: currentStock };
 
-  return adjustStock(productId, variantId, delta, "correction", note);
+  return adjustStock(productId, variantId, delta, "correction", note, at);
 }
 
 // Guard against an unbounded fan-out of concurrent RPCs (the UI only ever sends
@@ -351,6 +495,7 @@ export async function bulkAdjust(
     delta?: number;
     set?: number;
   }[],
+  locationId?: string | null,
 ): Promise<{ success?: boolean; error?: string }> {
   const userId = await getManagerUserId("inventory");
   if (!userId) return { error: "Not authenticated" };
@@ -358,6 +503,10 @@ export async function bulkAdjust(
   if (items.length > MAX_BULK_ITEMS) return { error: "Too many items." };
 
   const storeId = await getActingStoreId();
+
+  const resolvedBulk = await resolveInventoryLocation(storeId, locationId);
+  if (resolvedBulk.error) return { error: resolvedBulk.error };
+  const at = resolvedBulk.locationId;
 
   // "Set" items need each SKU's current balance to compute a delta. Batch-read
   // them in ONE query per table instead of a round-trip per item.
@@ -372,6 +521,25 @@ export async function bulkAdjust(
       .map((i) => i.variantId!);
     try {
       const [prodRows, varRows] = await withService(async (db) => {
+        // When a shop is selected the baseline MUST be that shelf's on_hand.
+        // Reading products.stock here would compute "set Delhi to 9" against
+        // the cross-location total and write a wildly wrong correction.
+        if (at) {
+          const levelRows = await db
+            .select({
+              product_id: inventoryLevels.productId,
+              variant_id: inventoryLevels.variantId,
+              stock: inventoryLevels.onHand,
+            })
+            .from(inventoryLevels)
+            .where(
+              and(
+                eq(inventoryLevels.storeId, storeId),
+                eq(inventoryLevels.locationId, at),
+              ),
+            );
+          return [levelRows, [] as typeof levelRows] as const;
+        }
         const prodRows = await (productIds.length
           ? db
               .select({ id: products.id, stock: products.stock })
@@ -399,8 +567,23 @@ export async function bulkAdjust(
           : Promise.resolve([]));
         return [prodRows, varRows] as const;
       });
-      for (const r of prodRows) currentStock.set(r.id, r.stock);
-      for (const r of varRows) currentStock.set(r.id, r.stock);
+      if (at) {
+        // Keyed the same way the caller looks them up: variantId || productId.
+        for (const r of prodRows as unknown as Array<{
+          product_id: string;
+          variant_id: string | null;
+          stock: number;
+        }>) {
+          currentStock.set(r.variant_id ?? r.product_id, r.stock);
+        }
+        // A shop that has never carried a SKU has no level row; the delta
+        // computation below treats a missing key as zero when `at` is set.
+      } else {
+        for (const r of prodRows as Array<{ id: string; stock: number }>)
+          currentStock.set(r.id, r.stock);
+        for (const r of varRows as Array<{ id: string; stock: number }>)
+          currentStock.set(r.id, r.stock);
+      }
     } catch (err) {
       return { error: dbErrorMessage(err, "Failed to read current stock.") };
     }
@@ -411,7 +594,12 @@ export async function bulkAdjust(
     [];
   for (const item of items) {
     if (item.set !== undefined) {
-      const current = currentStock.get(item.variantId || item.productId);
+      const known = currentStock.get(item.variantId || item.productId);
+      // At a specific shop, "no level row" means the shelf holds zero — not
+      // "unknown". Skipping it would make "set to 5" silently do nothing for a
+      // SKU that location has never carried, which is the common case when
+      // stocking a new shop.
+      const current = known ?? (at ? 0 : undefined);
       if (current === undefined) continue; // not found / not this store
       const delta = item.set - current;
       if (delta !== 0) ops.push({ item, delta, reason: "correction" });
@@ -428,7 +616,9 @@ export async function bulkAdjust(
     ops.map((op) =>
       withService((db) =>
         db.execute(
-          sql`select adjust_stock(p_store => ${storeId}, p_product => ${op.item.productId}, p_variant => ${op.item.variantId || null}, p_delta => ${op.delta}, p_reason => ${op.reason}, p_note => ${"Bulk update"}, p_actor => ${userId})`,
+          at
+            ? sql`select adjust_stock_at(p_store => ${storeId}, p_location => ${at}, p_product => ${op.item.productId}, p_variant => ${op.item.variantId || null}, p_delta => ${op.delta}, p_reason => ${op.reason}, p_note => ${"Bulk update"}, p_actor => ${userId})`
+            : sql`select adjust_stock(p_store => ${storeId}, p_product => ${op.item.productId}, p_variant => ${op.item.variantId || null}, p_delta => ${op.delta}, p_reason => ${op.reason}, p_note => ${"Bulk update"}, p_actor => ${userId})`,
         ),
       ).then(
         () => null,
@@ -440,6 +630,17 @@ export async function bulkAdjust(
   // Bust the shared product cache ONCE for the whole batch, not per item. Some
   // ops may have succeeded even if one failed, so revalidate regardless.
   revalidateTag(TAGS.products, "max");
+
+  reportStockChanges(
+    storeId,
+    ops
+      .filter((_, i) => results[i] === null)
+      .map((op) => ({
+        productId: op.item.productId,
+        variantId: op.item.variantId || null,
+        delta: op.delta,
+      })),
+  );
 
   const failed = results.find((r) => r !== null);
   if (failed) return { error: dbErrorMessage(failed, "Some updates failed.") };

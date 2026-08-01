@@ -10,6 +10,7 @@ import {
 } from "next/font/google";
 import NextTopLoader from "nextjs-toploader";
 import { PLATFORM_URL } from "@/lib/site";
+import { SEARCH_INDEXABLE } from "@/lib/store/host";
 
 // Default WholeSip / platform fonts.
 const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
@@ -72,6 +73,11 @@ export const metadata = {
   applicationName: "StoreMink",
   title: { default: "StoreMink", template: "%s" },
   description: "Launch, grow, and scale your D2C brand online.",
+  // Belt-and-braces with the X-Robots-Tag header in next.config.ts: on any
+  // non-production build EVERY page inherits noindex, including store
+  // subdomains on staging. Production evaluates this to nothing, so nothing is
+  // added there. (app/help/layout.tsx already did this for the help host only.)
+  ...(SEARCH_INDEXABLE ? {} : { robots: { index: false, follow: false } }),
 };
 
 export default function RootLayout({

@@ -50,6 +50,9 @@ import PhoneInput, { isValidPhoneNumber } from "react-phone-number-input";
 import "react-phone-number-input/style.css";
 import { customPhoneLabels } from "@/lib/phone-labels";
 import { CountrySelect } from "@/components/ui/phone-country-select";
+import { LocationPicker, type PickedLocation } from "./location-picker";
+import { acceptPlatformPolicies } from "@/app/actions/legal-actions";
+import { signupRequiredDocs } from "@/lib/legal/documents";
 
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -63,12 +66,21 @@ type Step =
   | "phone"
   | "name"
   | "store"
+  | "location"
   | "theme"
   | "plan"
   | "creating";
 
 // Progress stages shown in the stepper (Account folds email+password).
-const STAGES = ["Account", "Phone", "You", "Store", "Theme", "Plan"] as const;
+const STAGES = [
+  "Account",
+  "Phone",
+  "You",
+  "Store",
+  "Location",
+  "Theme",
+  "Plan",
+] as const;
 function stageOf(step: Step): number {
   switch (step) {
     case "email":
@@ -80,10 +92,12 @@ function stageOf(step: Step): number {
       return 2;
     case "store":
       return 3;
-    case "theme":
+    case "location":
       return 4;
+    case "theme":
+      return 5;
     default:
-      return 5; // plan / creating
+      return 6; // plan / creating
   }
 }
 
@@ -105,6 +119,18 @@ function dashboardUrl(slug: string): string {
     ? `${protocol}//${slug}.localhost${port ? ":" + port : ""}/dashboard`
     : `https://${slug}.${ROOT_DOMAIN}/dashboard`;
 }
+
+// The documents the consent box covers, straight from the registry — the same
+// list the server writes acceptance rows for. Adding one to lib/legal/documents
+// changes the sentence, the acceptance write and the re-acceptance gate
+// together, which is the only way they can't drift apart.
+const CONSENT_DOCS = signupRequiredDocs();
+/** "the Terms of Service, Privacy Policy and Acceptable Use Policy" */
+const CONSENT_DOC_NAMES = CONSENT_DOCS.map((d, i) =>
+  i === 0
+    ? `the ${d.title}`
+    : `${i === CONSENT_DOCS.length - 1 ? " and " : ", "}${d.title}`,
+).join("");
 
 // Short marketing bullets per plan (derived from the plan catalog; kept concise
 // for the signup card, not the full feature matrix).
@@ -170,6 +196,20 @@ export default function SignupPage() {
   const [name, setName] = useState("");
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
   const [city, setCity] = useState("");
+  // Consent. `agreed` gates BOTH signup paths (email and Google) because both
+  // start from the same screen; `marketing` is the optional box beneath it and
+  // gates nothing.
+  const [agreed, setAgreed] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+  // The map pin, when the merchant captured one. Optional by design: geolocation
+  // can be declined and the map can fail to load, and neither may block signup.
+  const [place, setPlace] = useState<PickedLocation>({
+    lat: null,
+    lng: null,
+    address: "",
+    city: "",
+    countryCode: "",
+  });
   const [check, setCheck] = useState<CheckState>({ status: "idle" });
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const seq = useRef(0);
@@ -253,6 +293,13 @@ export default function SignupPage() {
       setError("Enter a valid email address.");
       return;
     }
+    // Checked here as well as via the disabled button: `disabled` is a UI
+    // affordance, and this is the only client-side gate before an account is
+    // created. (The real guarantee is the server-side acceptance write.)
+    if (!agreed) {
+      setError(`Please accept ${CONSENT_DOC_NAMES} to continue.`);
+      return;
+    }
     setError("");
     setStep("password");
   }
@@ -270,6 +317,10 @@ export default function SignupPage() {
         setError(sessErr);
         return;
       }
+      // The account now exists and a session cookie is set, so the server can
+      // observe who is consenting. Before this point there is no identity to
+      // attach it to.
+      await acceptPlatformPolicies({ marketingOptIn: marketing });
       await resumeWizard();
       setGoogleLoading(false);
     } catch (err) {
@@ -309,11 +360,15 @@ export default function SignupPage() {
     }
     // Exchange the fresh ID token for the session cookie the server reads.
     const sessErr = await establishSession();
-    setBusy(false);
     if (sessErr) {
+      setBusy(false);
       setError(sessErr);
       return;
     }
+    // Same as the Google path: consent is recorded server-side the moment
+    // there is an identity to attach it to.
+    await acceptPlatformPolicies({ marketingOptIn: marketing });
+    setBusy(false);
     setStep("phone");
   }
 
@@ -379,6 +434,9 @@ export default function SignupPage() {
       lastName,
       country,
       city,
+      address: place.address,
+      lat: place.lat ?? undefined,
+      lng: place.lng ?? undefined,
     });
     if (res.error || !res.storeId || !res.slug) {
       setError(res.error ?? "Could not create your store.");
@@ -464,7 +522,8 @@ export default function SignupPage() {
   const BACK: Partial<Record<Step, Step>> = {
     password: "email",
     store: "name",
-    theme: "store",
+    location: "store",
+    theme: "location",
     plan: "theme",
   };
 
@@ -530,7 +589,7 @@ export default function SignupPage() {
               <button
                 type="button"
                 onClick={handleGoogle}
-                disabled={googleLoading}
+                disabled={googleLoading || !agreed}
                 className="w-full h-12 flex items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60"
               >
                 {googleLoading ? (
@@ -569,16 +628,67 @@ export default function SignupPage() {
                 </div>
                 <button
                   type="submit"
-                  className="stq-btn stq-btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2"
+                  disabled={!agreed}
+                  className="stq-btn stq-btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2 disabled:opacity-60"
                 >
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>
               </form>
 
-              <p className="mt-6 text-center text-xs text-gray-400 leading-relaxed">
-                By continuing you agree to StoreMink&apos;s Terms and
-                acknowledge our Privacy Policy.
-              </p>
+              {/* Consent. Replaces a passive "by continuing you agree…" line that
+                  named no documents, linked to nothing, and left no record —
+                  which is not consent, it's a notice. Both buttons above are
+                  disabled until this is ticked, so there is no path into an
+                  account that skips it. */}
+              <div className="mt-7 flex flex-col gap-3 rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={agreed}
+                    onChange={(e) => setAgreed(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-indigo-600"
+                  />
+                  {/* Driven by the REGISTRY, not hardcoded: the same list
+                      (signupRequiredDocs) decides what this sentence names,
+                      what recordSignupConsent writes a row for, and what the
+                      re-acceptance gate checks. Hardcoding it here is how a
+                      merchant ends up ticking a box for two documents while
+                      the server records three. */}
+                  <span className="text-[13px] leading-relaxed text-gray-700">
+                    I agree to StoreMink&apos;s{" "}
+                    {CONSENT_DOCS.map((doc, i) => (
+                      <span key={doc.kind}>
+                        {i > 0 &&
+                          (i === CONSENT_DOCS.length - 1 ? " and " : ", ")}
+                        <a
+                          href={`/legal/${doc.slug}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-semibold text-indigo-600 underline"
+                        >
+                          {doc.title}
+                        </a>
+                      </span>
+                    ))}
+                    .
+                  </span>
+                </label>
+
+                {/* Optional, and visibly so: unticked by default, gating
+                    nothing. A pre-ticked marketing box is not consent either. */}
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={marketing}
+                    onChange={(e) => setMarketing(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-indigo-600"
+                  />
+                  <span className="text-[13px] leading-relaxed text-gray-500">
+                    Send me product updates and selling tips.{" "}
+                    <span className="text-gray-400">(Optional)</span>
+                  </span>
+                </label>
+              </div>
             </div>
           )}
 
@@ -808,7 +918,7 @@ export default function SignupPage() {
                   e.preventDefault();
                   if (!isNameAvailable) return;
                   setError("");
-                  setStep("theme");
+                  setStep("location");
                 }}
                 className="flex flex-col gap-5"
               >
@@ -833,41 +943,6 @@ export default function SignupPage() {
                   https://{currentSlug}.{ROOT_DOMAIN}
                 </div>
 
-                {/* Location — where the merchant sells from */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
-                      Where do you sell from?
-                    </label>
-                    <select
-                      className="stq-input h-12 bg-white"
-                      value={country}
-                      onChange={(e) => setCountry(e.target.value)}
-                    >
-                      {COUNTRIES.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
-                      City{" "}
-                      <span className="font-normal text-gray-400">
-                        (optional)
-                      </span>
-                    </label>
-                    <input
-                      className="stq-input h-12"
-                      placeholder="E.g., Mumbai"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      maxLength={80}
-                    />
-                  </div>
-                </div>
-
                 <div className="mt-2 flex items-center gap-3 rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 shadow-sm">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-100 bg-white text-xl shadow-sm">
                     🎉
@@ -886,6 +961,96 @@ export default function SignupPage() {
                   type="submit"
                   disabled={!isNameAvailable}
                   className="stq-btn stq-btn-primary w-full h-12 flex items-center justify-center gap-2"
+                >
+                  Continue <ChevronRight className="w-5 h-5" />
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* ── Location ──────────────────────────────────────────────
+              Its own step, and REQUIRED: this address prints on every invoice
+              the store issues, and it decides tax treatment. Bolted onto the
+              "name your store" screen with an optional city, it was the field
+              everyone skipped. */}
+          {step === "location" && (
+            <div className="animate-in fade-in slide-in-from-right-2 duration-300">
+              <h1 className="text-2xl font-bold text-gray-900 mb-1">
+                Where do you sell from?
+              </h1>
+              <p className="text-gray-500 mb-8">
+                Your business address appears on invoices. You can change it
+                later in Settings.
+              </p>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!country) {
+                    setError("Please choose the country you sell from.");
+                    return;
+                  }
+                  if (!city.trim()) {
+                    setError("Please enter the city you sell from.");
+                    return;
+                  }
+                  setError("");
+                  setStep("theme");
+                }}
+                className="flex flex-col gap-5"
+              >
+                <LocationPicker
+                  value={place}
+                  onChange={(next) => {
+                    setPlace(next);
+                    // The pin fills the fields, it doesn't lock them — a
+                    // reverse-geocode is often a suburb off and the merchant
+                    // gets the final word.
+                    if (next.city) setCity(next.city);
+                    if (
+                      next.countryCode &&
+                      COUNTRIES.some((c) => c.code === next.countryCode)
+                    ) {
+                      setCountry(next.countryCode);
+                    }
+                  }}
+                />
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-semibold text-gray-700">
+                      Country
+                    </label>
+                    <select
+                      className="stq-input h-12 bg-white"
+                      value={country}
+                      onChange={(e) => setCountry(e.target.value)}
+                    >
+                      {COUNTRIES.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-semibold text-gray-700">
+                      City
+                    </label>
+                    <input
+                      className="stq-input h-12"
+                      placeholder="E.g., Mumbai"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      maxLength={80}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="stq-btn stq-btn-primary flex h-12 w-full items-center justify-center gap-2"
                 >
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>

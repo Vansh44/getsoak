@@ -1,11 +1,12 @@
 "use server";
 
-import { and, desc, eq, inArray, like, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
 import { getStoreUrl } from "@/lib/site";
 import { pingIndexNow } from "@/lib/seo/search-engines";
 import { TAGS } from "@/lib/storefront/tags";
+import { emitEvent } from "@/lib/notifications/record";
 import { sanitizeBlogContent } from "@/lib/sanitize";
 import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import { isUniqueViolation, dbErrorMessage } from "@/lib/db/errors";
@@ -21,11 +22,6 @@ import {
   extractMediaUrlsFromHtml,
 } from "@/lib/storage/cleanup";
 import { gcsPathFromUrl } from "@/lib/storage/gcs";
-import {
-  sendBlogApprovedEmail,
-  sendBlogRejectedEmail,
-} from "@/lib/email/blog-notifications";
-import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { fetchBlogTaxonomy } from "@/lib/blog-taxonomy";
 
@@ -138,29 +134,6 @@ export async function getBlogForEditor(
   }
 }
 
-// Looks up a customer's email + first name by id, bypassing RLS via the
-// service scope. The customers table only lets a customer read their own
-// row, so an admin session can't read a submitter — this is used purely to
-// address review-notification emails after an admin action.
-async function getCustomerContact(
-  submittedBy: string | null,
-): Promise<{ email: string | null; firstName: string | null } | null> {
-  if (!submittedBy) return null;
-  try {
-    const rows = await withService((db) =>
-      db
-        .select({ email: users.email, firstName: users.firstName })
-        .from(users)
-        .where(eq(users.id, submittedBy))
-        .limit(1),
-    );
-    return rows[0] ?? null;
-  } catch (e) {
-    console.error("getCustomerContact error:", e);
-    return null;
-  }
-}
-
 /**
  * Validate a customer submission's categories/tags against the STORE'S OWN
  * taxonomy (blog_categories / blog_tags — managed in /dashboard/blogs/settings).
@@ -245,6 +218,39 @@ function revalidateBlogs() {
   revalidateTag(TAGS.blogs, "max");
 }
 
+/**
+ * Nudge search engines to (re)crawl newly published post(s).
+ *
+ * Mirrors notifyProductPublished in product-actions.ts. It exists because only
+ * ONE of the many paths that can publish a blog — the list-row toggle
+ * (publishBlog) — ever pinged. Writing a post in the editor, approving a
+ * customer submission, or bulk-publishing all went out silently, so the most
+ * common way to publish was also the one search engines were never told about.
+ *
+ * Best-effort and off the response path. getStoreUrl() reads the request host,
+ * so it must be resolved BEFORE after() — inside the callback there is no
+ * request to read.
+ */
+async function notifyBlogPublished(
+  slugs: (string | null | undefined)[],
+  published: boolean,
+) {
+  if (!published) return;
+  const live = slugs.filter((s): s is string => !!s);
+  if (!live.length) return;
+  // Swallow everything. This runs AFTER the post is already published and
+  // committed, so anything thrown here — a store lookup that fails, a missing
+  // request scope — would turn a successful publish into an error the merchant
+  // sees, and they would (reasonably) try again. Telling a search engine is
+  // strictly less important than the write that already succeeded.
+  try {
+    const base = await getStoreUrl();
+    after(() => pingIndexNow(live.map((s) => `${base}/blogs/${s}`)));
+  } catch (err) {
+    console.error("notifyBlogPublished failed:", (err as Error).message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Create Blog
 // ---------------------------------------------------------------------------
@@ -297,6 +303,7 @@ export async function createBlog(
         db.insert(blogs).values(row(slug)).returning(),
       );
       revalidateBlogs();
+      await notifyBlogPublished([slug], formData.status === "published");
       return { success: true, data: inserted as Record<string, unknown> };
     } catch (err) {
       if (!isUniqueViolation(err)) {
@@ -395,23 +402,22 @@ export async function updateBlog(
     }
 
     // Approving a customer submission by publishing it from the editor:
-    // notify the author (best-effort), mirroring approveCustomerBlog.
+    // tell the author, mirroring approveCustomerBlog. The notification system
+    // owns the mail now (merchant-editable copy, one global design), so this
+    // is an emit rather than a bespoke send.
     const isApproval =
       currentBlog?.status === "pending_review" &&
       formData.status === "published" &&
       currentBlog?.submitted_by;
     if (isApproval) {
-      const contact = await getCustomerContact(currentBlog!.submitted_by);
-      if (contact?.email) {
-        const brand = await getStoreBrand();
-        await sendBlogApprovedEmail({
-          to: contact.email,
-          firstName: contact.firstName,
-          title: formData.title,
-          slug,
-          brand,
-        });
-      }
+      emitEvent({
+        type: "blog.approved",
+        storeId,
+        actor: { type: "admin", id: userId },
+        subject: { type: "blog", id, label: formData.title },
+        customerId: currentBlog!.submitted_by,
+        payload: { title: formData.title, url: `/blogs/${slug}` },
+      });
     }
 
     // Purge images no longer referenced (old cover + old body images that
@@ -428,6 +434,9 @@ export async function updateBlog(
 
     revalidateBlogs();
     revalidatePath(`/blogs/${slug}`);
+    // Also covers the rename case: the slug here is the CURRENT one, so a post
+    // republished under a new slug gets the new URL announced.
+    await notifyBlogPublished([slug], formData.status === "published");
     return { success: true };
   }
 
@@ -524,13 +533,7 @@ export async function publishBlog(id: string): Promise<ActionResult> {
   if (!published) return { error: "Blog not found." };
 
   revalidateBlogs();
-
-  // Nudge search engines to crawl the newly published post (best-effort).
-  if (published.slug) {
-    const base = await getStoreUrl();
-    const publishedSlug = published.slug;
-    after(() => pingIndexNow([`${base}/blogs/${publishedSlug}`]));
-  }
+  await notifyBlogPublished([published.slug], true);
   return { success: true };
 }
 
@@ -580,16 +583,26 @@ export async function bulkSetBlogStatus(
   const userId = admin.uid;
   if (ids.length === 0) return { error: "Nothing selected." };
 
+  let touched: { slug: string | null }[] = [];
   try {
-    await withUser(admin, (db) =>
+    touched = await withUser(admin, (db) =>
       db
         .update(blogs)
         .set({
           status,
-          publishedAt: status === "published" ? new Date().toISOString() : null,
+          // COALESCE, not a fresh timestamp: re-running a bulk publish over
+          // already-published posts used to stamp them all with "now", which
+          // rewrites their sitemap lastmod (and their displayed date) even
+          // though nothing about the content changed. A post keeps the date it
+          // first went live; only a genuinely new publish gets today's.
+          publishedAt:
+            status === "published"
+              ? sql`COALESCE(${blogs.publishedAt}, now())`
+              : null,
           updatedBy: userId,
         })
-        .where(inArray(blogs.id, ids)),
+        .where(inArray(blogs.id, ids))
+        .returning({ slug: blogs.slug }),
     );
   } catch (err) {
     console.error("bulkSetBlogStatus error:", err);
@@ -597,6 +610,10 @@ export async function bulkSetBlogStatus(
   }
 
   revalidateBlogs();
+  await notifyBlogPublished(
+    touched.map((t) => t.slug),
+    status === "published",
+  );
   return { success: true };
 }
 
@@ -848,10 +865,27 @@ export async function submitCustomerBlog(
         );
         revalidatePath("/blogs");
         revalidateTag(TAGS.blogs, "max");
+        // It is live to the public now, exactly like an admin publish.
+        await notifyBlogPublished([slug], true);
       } catch (promoteError) {
         console.error("submitCustomerBlog promote error:", promoteError);
       }
     }
+
+    // Notify the store: a submission that needs approval is work waiting in a
+    // queue; a direct publish is just news. Either way the shopper's post is
+    // now the store's responsibility.
+    emitEvent({
+      type: requireApproval ? "blog.submitted" : "blog.published",
+      storeId,
+      actor: { type: "customer", id: user.id, label: authorName || null },
+      subject: {
+        type: "blog",
+        id: (inserted?.id as string) ?? null,
+        label: formData.title,
+      },
+      payload: { slug },
+    });
 
     revalidatePath("/dashboard/blogs");
     return { success: true, data: inserted };
@@ -1285,23 +1319,21 @@ export async function approveCustomerBlog(id: string): Promise<ActionResult> {
     return { error: "This blog is no longer pending review." };
   }
 
-  // Notify the author that their blog is live (best-effort — a mail failure
-  // must not undo the approval).
+  // Tell the author their blog is live. Deferred and swallowed by emitEvent,
+  // so a mail failure can never undo the approval.
   if (approved.submitted_by) {
-    const contact = await getCustomerContact(approved.submitted_by);
-    if (contact?.email) {
-      const brand = await getStoreBrand();
-      await sendBlogApprovedEmail({
-        to: contact.email,
-        firstName: contact.firstName,
-        title: approved.title,
-        slug: approved.slug,
-        brand,
-      });
-    }
+    emitEvent({
+      type: "blog.approved",
+      storeId: await getActingStoreId(),
+      actor: { type: "admin", id: userId },
+      subject: { type: "blog", id, label: approved.title },
+      customerId: approved.submitted_by,
+      payload: { title: approved.title, url: `/blogs/${approved.slug}` },
+    });
   }
 
   revalidateBlogs();
+  await notifyBlogPublished([approved.slug], true);
   return { success: true };
 }
 
@@ -1337,18 +1369,16 @@ export async function rejectCustomerBlog(id: string): Promise<ActionResult> {
     return { error: dbErrorMessage(err, "Failed to reject blog.") };
   }
 
-  // Notify the author that their submission wasn't approved (best-effort).
+  // Tell the author their submission wasn't approved.
   if (target?.submitted_by) {
-    const contact = await getCustomerContact(target.submitted_by);
-    if (contact?.email) {
-      const brand = await getStoreBrand();
-      await sendBlogRejectedEmail({
-        to: contact.email,
-        firstName: contact.firstName,
-        title: target.title,
-        brand,
-      });
-    }
+    emitEvent({
+      type: "blog.rejected",
+      storeId: await getActingStoreId(),
+      actor: { type: "admin", id: admin.uid },
+      subject: { type: "blog", id, label: target.title },
+      customerId: target.submitted_by,
+      payload: { title: target.title },
+    });
   }
 
   revalidatePath("/dashboard/blogs");

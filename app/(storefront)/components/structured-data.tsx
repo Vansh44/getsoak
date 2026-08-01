@@ -13,7 +13,13 @@ export default async function StructuredData() {
         "@id": `${siteUrl}/#organization`,
         name: brand.name,
         url: siteUrl,
-        logo: brand.logoUrl ?? `${siteUrl}/icon.svg`,
+        // Only claim a logo the merchant actually supplied. The old
+        // `?? ${siteUrl}/icon.svg` fallback resolved to StoreMink's own icon —
+        // and brand.logoUrl is null for EVERY new store (no theme seeds one), so
+        // the default was to publish the platform's mark as the merchant's
+        // official logo. Omitting the property is what lib/seo/schema.ts already
+        // does; an absent logo is honest, a wrong one is a false entity claim.
+        ...(brand.logoUrl ? { logo: brand.logoUrl } : {}),
         ...(brand.tagline ? { description: brand.tagline } : {}),
       },
       {

@@ -44,6 +44,34 @@ const nextConfig: NextConfig = {
       "@tiptap/starter-kit",
     ],
   },
+  // Non-production environments serve `X-Robots-Tag: noindex` on EVERY response.
+  //
+  // robots.txt was doing this job alone, and it cannot finish it: `Disallow: /`
+  // stops Google FETCHING a URL, but a URL that is linked from anywhere can
+  // still be indexed without being fetched — it appears in results with no
+  // snippet. Worse, the Disallow guarantees Google never sees a `noindex` in the
+  // HTML, because it never loads the HTML. An HTTP header is the one signal that
+  // survives that, and it covers non-HTML responses (JSON, XML, images) too.
+  //
+  // Gated on the same SEARCH_INDEXABLE rule as robots.ts / sitemap.ts, derived
+  // from the baked NEXT_PUBLIC_ROOT_DOMAIN — so staging, `*.staging`, Cloud Run
+  // preview URLs and localhost all get it, production never does, and there is
+  // no per-deploy flag anyone can forget. Duplicated here rather than imported
+  // because next.config.ts is evaluated outside the app's module graph.
+  async headers() {
+    const indexable =
+      (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "storemink.com").toLowerCase() ===
+        "storemink.com" && process.env.NEXT_PUBLIC_NOINDEX !== "1";
+    if (indexable) return [];
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

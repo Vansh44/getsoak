@@ -7,10 +7,19 @@
 // empty (blank description, zero-count rating, non-absolute images) are omitted
 // rather than emitted null.
 
+// PLATFORM_URL comes from lib/store/host.ts, which is pure and dependency-free
+// (no DB, edge-safe) — importing it here keeps this module pure too. Do NOT
+// import lib/site.ts: that pulls in the DB-backed store resolver.
+import { PLATFORM_URL } from "@/lib/store/host";
+
 type Json = Record<string, unknown>;
 
 // The storefront prices everything in INR (₹) — see lib/pricing.formatPrice.
 const CURRENCY = "INR";
+
+// The platform's own Organization node id. Help articles and the platform pages
+// must all point at this ONE id so they describe a single entity.
+const PLATFORM_ORIGIN = PLATFORM_URL;
 
 const IN_STOCK = "https://schema.org/InStock";
 const OUT_OF_STOCK = "https://schema.org/OutOfStock";
@@ -132,9 +141,16 @@ export function articleSchema(i: ArticleSchemaInput): Json {
     headline: i.title,
     url,
     mainEntityOfPage: url,
+    // `@id` + `url` so this resolves to the SAME Organization node the
+    // storefront homepage declares (structured-data.tsx). Without them every
+    // article minted an anonymous, orphaned publisher that no consumer could
+    // connect to the store's own entity — the schema was present but earned
+    // nothing.
     publisher: {
       "@type": "Organization",
+      "@id": `${i.siteUrl}/#organization`,
       name: i.brandName,
+      url: i.siteUrl,
       ...(logo ? { logo: { "@type": "ImageObject", url: logo } } : {}),
     },
   };
@@ -175,9 +191,14 @@ export function helpArticleSchema(i: HelpArticleSchemaInput): Json {
     url,
     mainEntityOfPage: url,
     inLanguage: "en",
+    // Same @id as the platform Organization node (see platformOrganizationSchema),
+    // so every help article reinforces the StoreMink entity instead of minting an
+    // orphan. The help centre's publisher is the PLATFORM, not a store.
     publisher: {
       "@type": "Organization",
+      "@id": `${PLATFORM_ORIGIN}/#organization`,
       name: i.publisherName,
+      url: PLATFORM_ORIGIN,
       ...(logo ? { logo: { "@type": "ImageObject", url: logo } } : {}),
     },
   };

@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import styles from "./Header.module.css";
 import Image from "next/image";
 import { useBrand } from "@/app/(storefront)/components/brand-provider";
-import { useMenus } from "@/app/(storefront)/components/menu-provider";
+import { useChrome } from "@/app/(storefront)/components/chrome-provider";
 import { useAuth } from "@/app/(storefront)/components/auth/AuthProvider";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import {
@@ -16,13 +16,16 @@ import {
   FileText,
   MessageSquare,
   LogOut,
+  Bell,
   ChevronRight,
 } from "lucide-react";
+import { getMyCustomerUnreadCount } from "@/app/actions/customer-notification-actions";
 
 export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [customerUnread, setCustomerUnread] = useState(0);
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const profileRef = useRef(null);
@@ -30,9 +33,40 @@ export default function Header() {
   const { user, customer, loading, openAuthModal, signOut } = useAuth();
   const { totalItems, hydrated: cartHydrated, openCart } = useCart();
   const brand = useBrand();
-  const { header: navLinks } = useMenus();
+  // The header config the merchant edits in the website builder: which links
+  // appear, and whether the search box, account and cart show at all. A
+  // catalogue-only (enquiry-led B2B) store turns the cart off entirely.
+  const { header: headerCfg } = useChrome();
+  const navLinks = headerCfg.links;
 
   const isLoggedIn = !!user && !!customer;
+
+  // Unread badge for the shopper's notification centre. Polls only while
+  // signed in AND the tab is visible — the same shape as the dashboard bell
+  // (Supabase Realtime went with the Cloud SQL migration, so there is no push).
+  useEffect(() => {
+    // Signed out: nothing to poll. The badge is derived from isLoggedIn at
+    // render time rather than being zeroed here, so the effect never sets
+    // state synchronously.
+    if (!isLoggedIn) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const n = await getMyCustomerUnreadCount();
+        if (!cancelled) setCustomerUnread(n);
+      } catch {
+        // A failed poll isn't worth surfacing to a shopper.
+      }
+    };
+    void check();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void check();
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isLoggedIn]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
@@ -133,39 +167,41 @@ export default function Header() {
 
       <div className={styles.headerRight}>
         {/* Search Bar - Now exclusively in the main header */}
-        <form
-          className={styles.searchBar}
-          onSubmit={submitSearch}
-          role="search"
-        >
-          <input
-            type="text"
-            placeholder="Search products..."
-            className={styles.searchInput}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label="Search products"
-          />
-          <button
-            type="submit"
-            className={styles.searchIcon}
-            aria-label="Search"
+        {headerCfg.showSearch && (
+          <form
+            className={styles.searchBar}
+            onSubmit={submitSearch}
+            role="search"
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <input
+              type="text"
+              placeholder="Search products..."
+              className={styles.searchInput}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search products"
+            />
+            <button
+              type="submit"
+              className={styles.searchIcon}
+              aria-label="Search"
             >
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-          </button>
-        </form>
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+              </svg>
+            </button>
+          </form>
+        )}
 
         <div className={styles.iconGroup}>
           {/* Profile Button with Dropdown */}
@@ -254,6 +290,41 @@ export default function Header() {
                   My Profile
                   <ChevronRight size={16} className={styles.profileItemArrow} />
                 </Link>
+                {isLoggedIn && (
+                  <>
+                    <Link
+                      href="/orders"
+                      className={styles.profileDropdownItem}
+                      role="menuitem"
+                      onClick={() => setIsProfileOpen(false)}
+                    >
+                      <Package size={18} strokeWidth={1.75} />
+                      My Orders
+                      <ChevronRight
+                        size={16}
+                        className={styles.profileItemArrow}
+                      />
+                    </Link>
+                    <Link
+                      href="/notifications"
+                      className={styles.profileDropdownItem}
+                      role="menuitem"
+                      onClick={() => setIsProfileOpen(false)}
+                    >
+                      <Bell size={18} strokeWidth={1.75} />
+                      Notifications
+                      {isLoggedIn && customerUnread > 0 && (
+                        <span className={styles.profileItemBadge}>
+                          {customerUnread > 9 ? "9+" : customerUnread}
+                        </span>
+                      )}
+                      <ChevronRight
+                        size={16}
+                        className={styles.profileItemArrow}
+                      />
+                    </Link>
+                  </>
+                )}
                 <Link
                   href="/track-order"
                   className={styles.profileDropdownItem}
@@ -301,30 +372,32 @@ export default function Header() {
           </div>
 
           {/* Cart Button */}
-          <button
-            type="button"
-            onClick={openCart}
-            className={styles.cartBtn}
-            aria-label="Open cart"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {headerCfg.showCart && (
+            <button
+              type="button"
+              onClick={openCart}
+              className={styles.cartBtn}
+              aria-label="Open cart"
             >
-              <circle cx="9" cy="21" r="1"></circle>
-              <circle cx="20" cy="21" r="1"></circle>
-              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
-            </svg>
-            {cartHydrated && totalItems > 0 && (
-              <span className={styles.cartBadge}>{totalItems}</span>
-            )}
-          </button>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="9" cy="21" r="1"></circle>
+                <circle cx="20" cy="21" r="1"></circle>
+                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"></path>
+              </svg>
+              {cartHydrated && totalItems > 0 && (
+                <span className={styles.cartBadge}>{totalItems}</span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Mobile Hamburger Button */}

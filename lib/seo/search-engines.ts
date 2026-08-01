@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 
 // Search-engine notification: tell crawlers about new/changed URLs so a store
@@ -181,22 +182,44 @@ async function googleAccessToken(
 export async function submitSitemapToGoogle(sitemapUrl: string): Promise<void> {
   if (!SEARCH_INDEXABLE) return;
   const property = process.env.GOOGLE_SEARCH_CONSOLE_PROPERTY;
-  if (!property) return;
+  // This is the ONLY Google-facing notification in the codebase, and it used to
+  // `return` here in silence. A prod deploy that lost the substitution, or a
+  // service account never granted access to the property, therefore looked
+  // exactly like a healthy one — nothing was ever submitted and nothing said so.
+  // Both failure modes now leave a line in Cloud Logging.
+  if (!property) {
+    logWarn("submitSitemapToGoogle skipped: no property configured", {
+      sitemapUrl,
+      hint: "set GOOGLE_SEARCH_CONSOLE_PROPERTY (e.g. sc-domain:storemink.com)",
+    });
+    return;
+  }
   try {
     const token = await googleAccessToken(loadGoogleCreds());
-    if (!token) return;
+    if (!token) {
+      logWarn("submitSitemapToGoogle skipped: no access token", {
+        sitemapUrl,
+        property,
+      });
+      return;
+    }
     const res = await fetchWithTimeout(
       googleSitemapEndpoint(property, sitemapUrl),
       { method: "PUT", headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
-      console.error(
-        "submitSitemapToGoogle:",
-        res.status,
-        await res.text().catch(() => ""),
-      );
+      // 403 here almost always means the runtime service account was never
+      // added as a user on the Search Console property.
+      logError("submitSitemapToGoogle rejected", undefined, {
+        sitemapUrl,
+        property,
+        status: res.status,
+        body: await res.text().catch(() => ""),
+      });
+      return;
     }
+    logInfo("submitSitemapToGoogle ok", { sitemapUrl, property });
   } catch (err) {
-    console.error("submitSitemapToGoogle failed:", (err as Error).message);
+    logError("submitSitemapToGoogle failed", err, { sitemapUrl, property });
   }
 }

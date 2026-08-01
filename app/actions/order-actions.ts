@@ -1,6 +1,17 @@
 "use server";
 
-import { and, count, desc, eq, gte, ilike, or, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -9,16 +20,20 @@ import {
   orders,
   products,
   productVariants,
+  stockReservations,
 } from "@/drizzle/schema";
+import { releaseHold } from "@/lib/inventory/reservations";
 import {
   getActingStoreId,
   getManagerIdentity,
   getManagerUserId,
 } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import {
   DASHBOARD_PAGE_SIZE,
   sanitizeSearch,
 } from "@/app/dashboard/lib/list-params";
+import { emitEvent } from "@/lib/notifications/record";
 
 // Allowlists — order/payment state is a closed set, so never trust an arbitrary
 // string from the client into the DB (keeps the status column clean + prevents
@@ -28,10 +43,21 @@ const ORDER_STATUSES = [
   "processing",
   "shipped",
   "delivered",
+  // In-person POS sales are fulfilled the moment they're rung (CODEBASE §22).
+  "completed",
   "cancelled",
 ] as const;
 const PAYMENT_STATUSES = ["pending", "paid", "failed"] as const;
-const PAYMENT_METHODS = ["cash_on_delivery", "razorpay"] as const;
+// "split" = a POS sale settled across several tenders; the itemised breakdown
+// lives in order_payments.
+const PAYMENT_METHODS = [
+  "cash_on_delivery",
+  "razorpay",
+  "cash",
+  "card",
+  "upi",
+  "split",
+] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
@@ -45,6 +71,7 @@ export interface OrderStatusCounts {
   processing: number;
   shipped: number;
   delivered: number;
+  completed: number;
   cancelled: number;
 }
 
@@ -54,6 +81,7 @@ const ZERO_COUNTS: OrderStatusCounts = {
   processing: 0,
   shipped: 0,
   delivered: 0,
+  completed: 0,
   cancelled: 0,
 };
 
@@ -167,6 +195,28 @@ export async function getOrders(
   const dateFrom = dateFloor(params.dateRange ?? "");
   const baseConds = [eq(orders.storeId, storeId)];
   if (dateFrom) baseConds.push(gte(orders.createdAt, dateFrom));
+
+  // Location scope — the second tenancy dimension (roadmap Phase B2). Derived
+  // from the VIEWER, never from a parameter: a filter the client can set is
+  // not a permission boundary. null = unrestricted (owner, superadmin, or an
+  // admin nobody has assigned), which is every store's behaviour until
+  // someone is deliberately bound to a shop.
+  //
+  // Orders with no location (every online order until fulfilment routing lands
+  // in Phase D) stay visible to everyone — they belong to no shop, and hiding
+  // them would take the entire online order book away from location-bound
+  // staff.
+  const locationScope = await getViewerLocations();
+  if (locationScope !== null) {
+    baseConds.push(
+      or(
+        isNull(orders.locationId),
+        locationScope.length > 0
+          ? inArray(orders.locationId, locationScope)
+          : sql`false`,
+      )!,
+    );
+  }
 
   const conds = [...baseConds];
   if (status) conds.push(eq(orders.status, status));
@@ -288,13 +338,19 @@ export async function updateOrderStatus(
             eq(orders.stockStatus, "reserved"),
           ),
         )
-        .returning({ id: orders.id }),
+        // location_id comes back with the claim: a POS sale reserved stock at
+        // the register's own location (reserve_stock_at), so the units must go
+        // BACK there. The plain release_stock wrapper delegates to the store's
+        // DEFAULT location, which would silently move stock between shops —
+        // the selling location never gets its unit back and the default gains
+        // one it never had.
+        .returning({ id: orders.id, location_id: orders.locationId }),
     ).catch((err) => {
       console.error(
         "stock release claim:",
         err instanceof Error ? err.message : err,
       );
-      return [] as { id: string }[];
+      return [] as { id: string; location_id: string | null }[];
     });
 
     if (claimed.length > 0) {
@@ -311,11 +367,18 @@ export async function updateOrderStatus(
           .where(eq(orderItems.orderId, orderId)),
       ).catch(() => []);
 
+      // Where the stock came from. Online orders have no location and reserved
+      // against the default, so the wrapper is right for them; a POS sale must
+      // be released at the location it was rung up on.
+      const locationId = claimed[0]?.location_id ?? null;
+
       for (const item of items) {
-        // The unchanged Postgres function does the atomic restock + ledger row.
+        // The Postgres function does the atomic restock + ledger row.
         await withService((db) =>
           db.execute(
-            sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
+            locationId
+              ? sql`select release_stock_at(p_store => ${storeId}, p_location => ${locationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`
+              : sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
           ),
         ).catch((err) =>
           console.error(
@@ -327,21 +390,70 @@ export async function updateOrderStatus(
     }
   }
 
+  // A PICKUP order's units were never taken off the shelf — they are held
+  // (locations_04). Cancelling it therefore releases the holds instead of
+  // restocking, which is why such orders carry stock_status 'none' and the
+  // claim above matches nothing. Releasing is idempotent, so a second cancel
+  // is a no-op rather than a double-free.
+  if (status === "cancelled") {
+    try {
+      const holds = await withService((db) =>
+        db
+          .select({ id: stockReservations.id })
+          .from(stockReservations)
+          .where(
+            and(
+              eq(stockReservations.storeId, storeId),
+              eq(stockReservations.ownerType, "pickup"),
+              eq(stockReservations.ownerId, orderId),
+              eq(stockReservations.status, "held"),
+            ),
+          ),
+      );
+      for (const h of holds) await releaseHold(h.id);
+    } catch (err) {
+      // Never block the cancellation over a hold. The TTL sweep is the backstop.
+      console.error("release pickup holds:", err);
+    }
+  }
+
   const updateData: { status: string; paymentStatus?: string } = { status };
   if (paymentStatus) {
     updateData.paymentStatus = paymentStatus;
   }
 
+  // customer_id is NULLABLE — an order can have no account behind it (a POS
+  // walk-in). emitEvent takes that as "no customer audience", which is right:
+  // there is nobody to tell.
+  let updated: { order_ref: string; customer_id: string | null }[];
   try {
-    await withUser(admin, (db) =>
+    updated = await withUser(admin, (db) =>
       db
         .update(orders)
         .set(updateData)
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId))),
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        // Returned so the event below can name the order and reach its owner
+        // — the shopper is told about their own order, not just the staff.
+        .returning({
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+        }),
     );
   } catch (err) {
     console.error("Error updating order status:", err);
     return { error: dbErrorMessage(err, "Failed to update order status.") };
+  }
+
+  const row = updated[0];
+  if (row) {
+    emitEvent({
+      type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "order", id: orderId, label: row.order_ref },
+      customerId: row.customer_id,
+      payload: { status, ...(paymentStatus ? { paymentStatus } : {}) },
+    });
   }
 
   revalidatePath("/dashboard/orders");

@@ -102,6 +102,24 @@ export function firebaseAuthErrorMessage(err: unknown): string {
       return "Please choose a stronger password.";
     case "auth/invalid-verification-code":
       return "That code isn't right. Please check and try again.";
+    // ── Phone auth ────────────────────────────────────────────────────────
+    // Every one of these used to fall through to the generic message, so a
+    // shopper who typed a number one digit short and a project that had run
+    // out of SMS quota saw exactly the same "Something went wrong" — and no
+    // way to tell which problem they had.
+    case "auth/invalid-phone-number":
+    case "auth/missing-phone-number":
+      return "Please enter a valid mobile number, including the country code.";
+    case "auth/quota-exceeded":
+      return "We can't send codes right now. Please try again later or use email.";
+    case "auth/captcha-check-failed":
+    case "auth/missing-app-credential":
+    case "auth/invalid-app-credential":
+      return "The security check didn't complete. Please close this and try again.";
+    case "auth/operation-not-allowed":
+      return "Mobile sign-in isn't enabled for this store.";
+    case "auth/session-expired":
+      return "That code has expired. Please request a new one.";
     case "auth/code-expired":
       return "That code has expired. Please request a new one.";
     case "auth/account-exists-with-different-credential":

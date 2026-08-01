@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
+import { recordEvent } from "@/lib/notifications/record";
 import { orderItems, orders } from "@/drizzle/schema";
 import { getStoreGateway } from "@/lib/payments/provider";
+import { sweepExpiredHolds } from "@/lib/inventory/reservations";
+import {
+  sweepExpiredPickups,
+  sweepPickupReminders,
+} from "@/lib/fulfilment/pickup";
 import {
   capturedPayment,
   rzpFetchOrderPayments,
@@ -23,6 +29,13 @@ import {
 //      release the reserved stock (the existing reserved → released
 //      conditional claim, exactly-once), release the coupon use, and cancel
 //      the order.
+//
+// It ALSO cancels pickups nobody collected (Phase F) and sweeps expired stock
+// holds (roadmap Phase E). Same job because it is
+// the same shape of problem — units set aside for something that never
+// completed — and a hold nobody ends would make stock unsellable forever.
+// Independent of the payment work below: the sweep runs even when there are no
+// pending orders, and a failure in one must not skip the other.
 //
 // Auth: `Authorization: Bearer <CRON_SECRET>` (Vercel Cron sends it).
 
@@ -52,6 +65,9 @@ interface PendingOrder {
   store_id: string;
   razorpay_order_id: string | null;
   applied_coupon_code: string | null;
+  order_ref: string | null;
+  customer_id: string | null;
+  total: number | null;
 }
 
 async function handle(request: Request) {
@@ -70,6 +86,9 @@ async function handle(request: Request) {
           store_id: orders.storeId,
           razorpay_order_id: orders.razorpayOrderId,
           applied_coupon_code: orders.appliedCouponCode,
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+          total: orders.total,
         })
         .from(orders)
         .where(
@@ -90,7 +109,12 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "read failed" }, { status: 500 });
   }
   if (!pending.length) {
-    return NextResponse.json({ ok: true, paid: 0, expired: 0 });
+    return NextResponse.json({
+      ok: true,
+      paid: 0,
+      expired: 0,
+      holdsFreed: await sweepExpiredHolds(),
+    });
   }
 
   // One gateway lookup (and decrypt) per store, not per order.
@@ -181,6 +205,23 @@ async function handle(request: Request) {
     if (!claimed.length) continue;
     expired++;
 
+    // The merchant needs to know an order died unpaid — it looked like a sale
+    // in the dashboard until this ran. recordEvent (not emitEvent): a cron
+    // response ends the moment we return, so after() has nothing to run on.
+    await recordEvent({
+      type: "order.payment_failed",
+      storeId: order.store_id,
+      actor: { type: "system" },
+      subject: { type: "order", id: order.id, label: order.order_ref },
+      customerId: order.customer_id,
+      payload: {
+        orderRef: order.order_ref ?? "",
+        total: Number(order.total ?? 0),
+        currency: "INR",
+        reason: "Payment not completed",
+      },
+    });
+
     // 3. Restock exactly once (the order-actions cancellation pattern).
     const stockClaim = await withService((db) =>
       db
@@ -229,7 +270,23 @@ async function handle(request: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, paid, expired });
+  // Pickups first: cancelling an uncollected order releases its own holds, so
+  // running the generic sweep afterwards finds a tidier table (and anything the
+  // pickup pass failed to release still lapses here on TTL).
+  const pickupsExpired = await sweepExpiredPickups();
+  // Reminders AFTER the expiry sweep, never before: an order that just lapsed
+  // is no longer awaiting collection, and telling someone to hurry and collect
+  // something we have already cancelled is worse than saying nothing.
+  const pickupsWarned = await sweepPickupReminders();
+
+  return NextResponse.json({
+    ok: true,
+    paid,
+    expired,
+    pickupsExpired,
+    pickupsWarned,
+    holdsFreed: await sweepExpiredHolds(),
+  });
 }
 
 export const GET = handle;

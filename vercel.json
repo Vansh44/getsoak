@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "_comment": "INERT. Production runs on Cloud Run, where Vercel's cron block does nothing. The real driver is Cloud Scheduler in storemink-prod/asia-south1 — see docs/cron-jobs.md. This file is kept as the record of intended schedules; if you change one here, change the Cloud Scheduler job too, or they silently disagree.",
   "crons": [
     {
       "path": "/api/cron/send-emails",

@@ -8,26 +8,71 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
+import { useMinkAi, type MinkMessage } from "./mink-ai";
 
 interface ChatContextType {
   isChatOpen: boolean;
+  // Full-view "takeover" mode (Shopify Sidekick style) vs the narrow side panel.
+  isExpanded: boolean;
   toggleChat: () => void;
   closeChat: () => void;
+  toggleExpand: () => void;
+  // Home "Ask anything…" box → open the chat in full view AND send the message.
+  startExpandedChat: (message: string) => void;
+  // The shared Mink AI conversation (one thread across the Home box + panel).
+  messages: MinkMessage[];
+  input: string;
+  setInput: (value: string) => void;
+  isReplying: boolean;
+  send: (raw?: string) => void;
+  reset: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  // Conversation state lives here (not in each surface) so a message typed in
+  // the Home box carries over into the panel/full view that opens.
+  const mink = useMinkAi();
+  const { send } = mink;
 
-  // Stable identities + memoized value: this provider wraps the whole dashboard,
-  // so an unstable value object would re-render every consumer on any re-render
-  // (a real cost once chat state grows beyond a single boolean).
   const toggleChat = useCallback(() => setIsChatOpen((prev) => !prev), []);
-  const closeChat = useCallback(() => setIsChatOpen(false), []);
+  const closeChat = useCallback(() => {
+    setIsChatOpen(false);
+    setIsExpanded(false);
+  }, []);
+  const toggleExpand = useCallback(() => setIsExpanded((prev) => !prev), []);
+
+  const startExpandedChat = useCallback(
+    (message: string) => {
+      setIsChatOpen(true);
+      setIsExpanded(true);
+      send(message);
+    },
+    [send],
+  );
+
   const value = useMemo(
-    () => ({ isChatOpen, toggleChat, closeChat }),
-    [isChatOpen, toggleChat, closeChat],
+    () => ({
+      isChatOpen,
+      isExpanded,
+      toggleChat,
+      closeChat,
+      toggleExpand,
+      startExpandedChat,
+      ...mink,
+    }),
+    [
+      isChatOpen,
+      isExpanded,
+      toggleChat,
+      closeChat,
+      toggleExpand,
+      startExpandedChat,
+      mink,
+    ],
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
@@ -42,9 +87,18 @@ export function useChat() {
     // feature). Mirrors useMobileNav's non-throwing fallback.
     return {
       isChatOpen: false,
+      isExpanded: false,
       toggleChat: () => {},
       closeChat: () => {},
-    };
+      toggleExpand: () => {},
+      startExpandedChat: () => {},
+      messages: [],
+      input: "",
+      setInput: () => {},
+      isReplying: false,
+      send: () => {},
+      reset: () => {},
+    } satisfies ChatContextType;
   }
   return context;
 }

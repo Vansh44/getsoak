@@ -116,6 +116,8 @@ export const RESERVED_PAGE_SLUGS: ReadonlySet<string> = new Set([
   "cart",
   "checkout",
   "enquiries",
+  "notifications",
+  "orders",
   "profile",
   "shop",
   // top-level app routes (never storefront pages, but never claimable either)

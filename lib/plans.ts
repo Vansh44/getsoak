@@ -136,6 +136,15 @@ export interface PlanLimits {
   emailCampaigns: boolean;
   /** "Powered by StoreMink" badge is removed from the storefront footer. */
   removeBadge: boolean;
+  /** May use the Point of Sale (in-store register at /pos). Pro only. */
+  posEnabled: boolean;
+  /** POS locations included at no extra cost. Additional locations are billed
+   *  per month (see docs/pos-plan.md §9.2 / Phase 7). 0 = POS not available. */
+  posLocationsIncluded: number;
+  /** Max simultaneously-authorized POS devices per location. Bounds the blast
+   *  radius of a leaked pairing code and keeps the device list reviewable —
+   *  a real shop runs a handful of registers, not dozens. */
+  posDevicesPerLocation: number;
 }
 
 export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
@@ -148,6 +157,9 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: false,
     emailCampaigns: false,
     removeBadge: false,
+    posEnabled: false,
+    posLocationsIncluded: 0,
+    posDevicesPerLocation: 0,
   },
   basic: {
     maxProducts: 500,
@@ -158,6 +170,9 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: true,
     emailCampaigns: false,
     removeBadge: true,
+    posEnabled: false,
+    posLocationsIncluded: 0,
+    posDevicesPerLocation: 0,
   },
   pro: {
     maxProducts: null,
@@ -168,10 +183,45 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     onlinePayments: true,
     emailCampaigns: true,
     removeBadge: true,
+    posEnabled: true,
+    posLocationsIncluded: 2,
+    posDevicesPerLocation: 5,
   },
 };
 
 /** The resolved limits for a raw stores.plan value (unknown plans → free). */
 export function limitsFor(plan: unknown): PlanLimits {
   return PLAN_LIMITS[normalizePlan(plan)];
+}
+
+// ---------------------------------------------------------------------------
+// Expiry warnings (notifications §22 — "fire on the crossing, not the state")
+// ---------------------------------------------------------------------------
+
+/** How many days ahead a merchant is told their timed plan is about to lapse. */
+export const EXPIRY_WARN_DAYS = [7, 1] as const;
+
+/**
+ * The half-open window `(from, to]` of expiry timestamps that the `days`-ahead
+ * warning covers on a run at `now`. PURE, so the once-only property is testable.
+ *
+ * Each horizon is a 24-HOUR BAND, not "≤ N days away". The cron runs daily, so
+ * a band matches each store exactly once per horizon and needs no "already
+ * warned" column to stay idempotent — whereas "≤ 7 days" would re-warn every
+ * single day for a week, which is how a warning becomes noise.
+ *
+ * The trade-off is that a skipped cron day skips that horizon's warning. That's
+ * acceptable: the backstop (the downgrade email when the plan actually lapses)
+ * is unconditional, and the two horizons mean one missed run rarely silences
+ * both.
+ */
+export function expiryWarnWindow(
+  now: Date,
+  days: number,
+): { from: string; to: string } {
+  const DAY_MS = 86_400_000;
+  return {
+    from: new Date(now.getTime() + (days - 1) * DAY_MS).toISOString(),
+    to: new Date(now.getTime() + days * DAY_MS).toISOString(),
+  };
 }

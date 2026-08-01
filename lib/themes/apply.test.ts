@@ -172,7 +172,6 @@ describe("applyTheme", () => {
     const productUpserts = dbHolder.current.calls.insert.products;
     expect(productUpserts.length).toBe(13); // basket sample products
     expect(productUpserts[0].storeId).toBe("store-1");
-    expect(productUpserts[0].status).toBe("published");
 
     const variantInserts = dbHolder.current.calls.insert.product_variants;
     expect(variantInserts.length).toBeGreaterThan(0);
@@ -182,6 +181,35 @@ describe("applyTheme", () => {
       storeId: "store-1",
       productId: "prod-1",
     });
+  });
+
+  // The sample catalogue names itself in its own copy ("Tomatoes (500 g)
+  // (Sample)", "replace it with your own"). Published, every store on this
+  // theme would serve the same handful of identical product pages under a
+  // different subdomain — a near-duplicate cluster competing with the
+  // merchant's real products. Drafts still show up in the dashboard, fully
+  // written, one click from live.
+  it("seeds SAMPLE products as drafts by default", async () => {
+    await applyTheme("store-1", "basket", { publish: true });
+    const productUpserts = dbHolder.current.calls.insert.products;
+    expect(productUpserts.length).toBeGreaterThan(0);
+    for (const p of productUpserts) {
+      expect(p.status).toBe("draft");
+      expect(p.publishedAt).toBeNull();
+    }
+  });
+
+  // A demo store IS the showcase — its whole job is to look like a finished
+  // shop, so there the samples must be live.
+  it("publishes sample products when publishSampleProducts is set", async () => {
+    await applyTheme("store-1", "basket", {
+      publish: true,
+      publishSampleProducts: true,
+    });
+    const productUpserts = dbHolder.current.calls.insert.products;
+    expect(productUpserts.length).toBeGreaterThan(0);
+    for (const p of productUpserts) expect(p.status).toBe("published");
+    expect(productUpserts[0].publishedAt).toBeTruthy();
   });
 
   it("refuses reset on a non-demo store", async () => {

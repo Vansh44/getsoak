@@ -43,6 +43,10 @@ type Props = {
   filter: InventoryFilter;
   categoryFilter: string;
   storeLowStockThreshold: number;
+  /** Shops this viewer may pick from; empty for a single-location store. */
+  locations: { id: string; name: string }[];
+  /** The shop being shown, or null for the cross-location total. */
+  locationId: string | null;
 };
 
 export function InventoryManagementView({
@@ -56,9 +60,18 @@ export function InventoryManagementView({
   filter,
   categoryFilter,
   storeLowStockThreshold,
+  locations,
+  locationId,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
+
+  // A cross-location view shows the SUM across shops. There is no such shelf to
+  // adjust, so editing is off until a specific location is chosen. Single-
+  // location stores are unaffected: they have nothing to choose and locationId
+  // stays null, which the compatibility wrapper resolves to their one shelf.
+  const isAggregate = locations.length > 1 && locationId === null;
+  const canEdit = canManage && !isAggregate;
   const [isPending, startTransition] = useTransition();
   const [navigating, startNavigation] = useTransition();
   const [search, setSearch] = useState(query);
@@ -77,21 +90,25 @@ export function InventoryManagementView({
     q?: string;
     filter?: InventoryFilter;
     category?: string;
+    location?: string;
     page?: number;
   }): string => {
     const q = (next.q ?? query).trim();
     const f = next.filter ?? filter;
     const cat = next.category ?? categoryFilter;
+    const loc = next.location ?? locationId ?? "all";
     const changedFacet =
       next.q !== undefined ||
       next.filter !== undefined ||
-      next.category !== undefined;
+      next.category !== undefined ||
+      next.location !== undefined;
     const p = next.page ?? (changedFacet ? 1 : page);
 
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (f !== "all") params.set("filter", f);
     if (cat !== "all") params.set("category", cat);
+    if (loc !== "all") params.set("location", loc);
     if (p > 1) params.set("page", String(p));
     const qs = params.toString();
     return qs ? `${pathname}?${qs}` : pathname;
@@ -149,6 +166,7 @@ export function InventoryManagementView({
         target.variantId,
         newStock,
         reason,
+        locationId,
       );
 
       if (res.error) {
@@ -188,7 +206,7 @@ export function InventoryManagementView({
       setBulkModalOpen(false);
       selection.clear();
 
-      const res = await bulkAdjust(items);
+      const res = await bulkAdjust(items, locationId);
       if (res.error) {
         toast.error(res.error);
         setRows(initialRows);
@@ -245,6 +263,22 @@ export function InventoryManagementView({
                   </option>
                 ))}
               </select>
+
+              {/* Only worth showing once there is a choice to make. */}
+              {locations.length > 1 && (
+                <select
+                  value={locationId ?? "all"}
+                  onChange={(e) => go({ location: e.target.value })}
+                  className="rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-[7px] text-[13px] text-[var(--dash-text)] outline-none"
+                >
+                  <option value="all">All locations</option>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <label className="dash-search-bar">
@@ -273,7 +307,7 @@ export function InventoryManagementView({
           <table className="dash-table dash-table-wide">
             <thead>
               <tr>
-                {canManage && (
+                {canEdit && (
                   <th className="dash-checkbox-cell">
                     <SelectAllCheckbox
                       checked={selection.allSelected}
@@ -287,7 +321,7 @@ export function InventoryManagementView({
                 <th>SKU</th>
                 <th>Status</th>
                 <th>Stock</th>
-                {canManage && <th>Actions</th>}
+                {canEdit && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -297,7 +331,7 @@ export function InventoryManagementView({
                   onClick={() => setEditSku(r)}
                   className={`cursor-pointer ${selection.isSelected(r.id) ? " is-selected" : ""} ${r.status === "low" ? "bg-amber-50/50 dark:bg-amber-900/10" : ""}`}
                 >
-                  {canManage && (
+                  {canEdit && (
                     <td
                       className="dash-checkbox-cell"
                       onClick={(e) => e.stopPropagation()}
@@ -367,8 +401,8 @@ export function InventoryManagementView({
                       )}
                     </div>
                   </td>
-                  {canManage && (
-                    <td>
+                  {canEdit && (
+                    <td className="dash-col-actions">
                       <button
                         type="button"
                         className="dash-btn dash-btn-ghost h-8 px-2 text-xs"
@@ -397,7 +431,7 @@ export function InventoryManagementView({
         />
       </div>
 
-      {canManage && (
+      {canEdit && (
         <BulkActionBar
           count={selection.count}
           onClear={selection.clear}

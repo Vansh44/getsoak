@@ -21,6 +21,13 @@ import {
 } from "@/lib/homepage/section-types";
 import type { PageSectionItem } from "@/lib/sections/registry";
 import type { PageDraft } from "@/app/actions/page-actions";
+import type { StoreChrome } from "@/lib/chrome/types";
+import {
+  HeaderForm,
+  FooterForm,
+  BrandForm,
+  type BrandAppearance,
+} from "./chrome-form";
 import {
   SectionForm,
   fieldClass,
@@ -53,6 +60,13 @@ export function InspectorPanel({
   onClearSelection,
   onOpenCodeEditor,
   onOpenPageSettings,
+  chromeTarget,
+  chrome,
+  onChromeChange,
+  onClearChrome,
+  brand,
+  onBrandChange,
+  loading,
 }: {
   draft: PageDraft | null;
   section: PageSectionItem | null;
@@ -64,6 +78,15 @@ export function InspectorPanel({
   onClearSelection: () => void;
   onOpenCodeEditor: () => void;
   onOpenPageSettings: () => void;
+  /** Editing the site-wide header/footer instead of a page section. */
+  chromeTarget: "header" | "footer" | "brand" | null;
+  chrome: StoreChrome;
+  onChromeChange: (next: StoreChrome) => void;
+  onClearChrome: () => void;
+  brand: BrandAppearance;
+  onBrandChange: (next: BrandAppearance) => void;
+  /** A page is being opened — do not tell the merchant to pick one. */
+  loading: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("content");
 
@@ -75,10 +98,51 @@ export function InspectorPanel({
     setTab("content");
   }
 
+  // Chrome is store-wide, so it is editable even before a page is chosen —
+  // this branch deliberately sits ABOVE the "select a page" guard.
+  if (chromeTarget) {
+    return (
+      <aside className="sm-builder-inspector has-selection">
+        <div className="sm-builder-inspector-head">
+          <button
+            type="button"
+            className="sm-builder-inspector-back"
+            onClick={onClearChrome}
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <span className="sm-builder-inspector-title">
+            {chromeTarget === "header"
+              ? "Header"
+              : chromeTarget === "brand"
+                ? "Brand"
+                : "Footer"}
+          </span>
+        </div>
+        <div className="sm-builder-inspector-body">
+          <p className="sm-b-scope">Appears on every page of your store.</p>
+          {chromeTarget === "header" ? (
+            <HeaderForm chrome={chrome} onChange={onChromeChange} />
+          ) : chromeTarget === "brand" ? (
+            <BrandForm brand={brand} onChange={onBrandChange} />
+          ) : (
+            <FooterForm chrome={chrome} onChange={onChromeChange} />
+          )}
+        </div>
+      </aside>
+    );
+  }
+
   if (!draft) {
     return (
       <aside className="sm-builder-inspector">
-        <p className="sm-builder-empty">Select a page to start editing.</p>
+        {/* "Select a page" while a page is ALREADY opening tells the merchant
+            to do something that is underway — the builder auto-opens Home, and
+            on a slow connection that took long enough to read as broken. */}
+        <p className="sm-builder-empty">
+          {loading ? "Opening…" : "Select a page to start editing."}
+        </p>
       </aside>
     );
   }

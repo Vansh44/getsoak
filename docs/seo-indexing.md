@@ -24,14 +24,32 @@ Google (everything else is automatic and already in code).
 | Page metadata     | each route's `generateMetadata`     | Title/description/OpenGraph + `alternates.canonical` on the store's own origin.                                                                            |
 | Structured data   | `lib/seo/schema.ts` + `<JsonLd>`    | Product / Article / Breadcrumb / Organization / WebSite JSON-LD.                                                                                           |
 | OG share cards    | `app/api/og` + `lib/seo/og-card.ts` | Branded default share image.                                                                                                                               |
-| **IndexNow**      | `lib/seo/search-engines.ts`         | Pings Bing/Yandex/Naver/Seznam on store create + product/blog/page publish. **Live in prod, zero setup.**                                                  |
-| **Google submit** | `lib/seo/search-engines.ts`         | Submits the sitemap to Search Console on the same events. **Dormant until the setup below.**                                                               |
+| **IndexNow**      | `lib/seo/search-engines.ts`         | Pings Bing/Yandex/Naver/Seznam on store create + product/blog/page/help-article publish. **Live in prod, zero setup. Does NOT reach Google.**              |
+| **Google submit** | `lib/seo/search-engines.ts`         | `sitemaps.submit` to Search Console — **only from `store-signup.ts`**, i.e. once per new store. See the correction below.                                  |
 
-Both notify channels fire via `after()` from the mutation actions
-(`store-signup`, `product-actions`, `blog-actions`, `page-actions`), so a slow or
-failed ping never blocks or breaks the user's request. Both are gated on
+IndexNow fires via `after()` from the mutation actions (`store-signup`,
+`product-actions`, `blog-actions`, `page-actions`, `help-actions`), so a slow or
+failed ping never blocks or breaks the user's request. It is gated on
 `SEARCH_INDEXABLE`, so staging never pings with non-production URLs (important:
 staging runs as `NODE_ENV=production` on Cloud Run).
+
+> **⚠ The two channels are NOT symmetric — an earlier version of this document
+> said they were.** `submitSitemapToGoogle` has exactly one non-test call site
+> (`app/actions/store-signup.ts`). Publishing a product, blog, page or help
+> article notifies IndexNow only. **Google is never actively told anything after
+> a store is created**, and neither `storemink.com/sitemap.xml` nor
+> `help.storemink.com/sitemap.xml` has ever been submitted — they are discovered
+> only through the `Sitemap:` line in each host's `robots.txt`.
+>
+> That is less bad than it sounds, and mostly by design: `sitemaps.submit` is a
+> one-time **registration** call, not a nudge. Repeat submissions of the same
+> sitemap are rate-limited and ignored, so wiring it into per-publish paths would
+> buy nothing. There is also **no Google equivalent of IndexNow** — the Indexing
+> API is restricted to `JobPosting` and `BroadcastEvent`. For Google, the sitemap
+> (with an honest `lastmod`) plus internal linking IS the mechanism.
+>
+> What this means in practice: submit each sitemap **once** by hand (step 4
+> below), and keep `lastmod` truthful. See `docs/seo-action-plan.md` §4.
 
 ## Indexability is derived, not flagged
 
@@ -72,10 +90,13 @@ Goal: verify the domain and let the prod Cloud Run service submit sitemaps —
    (`docs/gcp-ci-cd.md`), which becomes `GOOGLE_SEARCH_CONSOLE_PROPERTY` on the
    service. Nothing to paste. Redeploy prod (or wait for the next `main` push) so
    the env is present.
-4. **Submit the root sitemap once (optional).** In Search Console → **Sitemaps**,
-   add `https://storemink.com/sitemap.xml`. After that, store creates/publishes
-   keep it fresh automatically. (Per-store subdomain sitemaps are also submitted
-   automatically by the app on publish.)
+4. **Submit both root sitemaps once — NOT optional.** In Search Console →
+   **Sitemaps**, add `https://storemink.com/sitemap.xml` **and**
+   `https://help.storemink.com/sitemap.xml`. Nothing in the code submits either
+   (see the correction above), so this is the only time they get registered.
+   Google re-reads a registered sitemap on its own schedule afterwards, which is
+   why once is enough. Per-store subdomain sitemaps ARE submitted automatically,
+   but only at store creation (`store-signup.ts`).
 
 That's it — no key file, no Secret Manager entry, nothing to rotate.
 

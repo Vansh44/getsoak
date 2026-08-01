@@ -71,7 +71,10 @@ steps:
       - --max-instances=4
       - --add-cloudsql-instances=${_DB_CONN}
       - --set-env-vars=GCP_PROJECT_ID=${_GCP_PROJECT_ID},GCP_LOCATION=global,GCS_BUCKET=${_GCS_BUCKET},DB_HOST=/cloudsql/${_DB_CONN},DB_USER=app,DB_NAME=${_DB_NAME},FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID},FIREBASE_SERVICE_ACCOUNT_ID=${_FIREBASE_SA_ID},FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY},GOOGLE_SEARCH_CONSOLE_PROPERTY=${_GOOGLE_SEARCH_CONSOLE_PROPERTY},NEXT_PUBLIC_ROOT_DOMAIN=${_NEXT_PUBLIC_ROOT_DOMAIN},NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}
-      - --set-secrets=DB_PASSWORD=${_DB_PASSWORD_SECRET}:latest,CRON_SECRET=CRON_SECRET:latest,RESEND_API_KEY=RESEND_API_KEY:latest,PAYMENT_CRED_KEY=${_PAYMENT_CRED_KEY_SECRET}:latest,RAZORPAY_KEY_ID=${_RAZORPAY_KEY_ID_SECRET}:latest,RAZORPAY_KEY_SECRET=${_RAZORPAY_KEY_SECRET_SECRET}:latest,RAZORPAY_WEBHOOK_SECRET=${_RAZORPAY_WEBHOOK_SECRET_SECRET}:latest
+      # ⚠ EVERY secret named here must EXIST in Secret Manager before the next
+      # deploy — Cloud Run fails the revision outright on a missing one, so
+      # adding a line here without creating the secret takes the service down.
+      - --set-secrets=DB_PASSWORD=${_DB_PASSWORD_SECRET}:latest,CRON_SECRET=CRON_SECRET:latest,RESEND_API_KEY=RESEND_API_KEY:latest,RESEND_WEBHOOK_SECRET=${_RESEND_WEBHOOK_SECRET_SECRET}:latest,PAYMENT_CRED_KEY=${_PAYMENT_CRED_KEY_SECRET}:latest,RAZORPAY_KEY_ID=${_RAZORPAY_KEY_ID_SECRET}:latest,RAZORPAY_KEY_SECRET=${_RAZORPAY_KEY_SECRET_SECRET}:latest,RAZORPAY_WEBHOOK_SECRET=${_RAZORPAY_WEBHOOK_SECRET_SECRET}:latest,POS_SESSION_SECRET=${_POS_SESSION_SECRET_SECRET}:latest
 
 # buildx --push uploads the image directly, so no `images:` block (it would make
 # Cloud Build try to re-push a non-existent local image).
@@ -126,6 +129,22 @@ substitutions:
   _RAZORPAY_KEY_ID_SECRET: RAZORPAY_KEY_ID_STAGING
   _RAZORPAY_KEY_SECRET_SECRET: RAZORPAY_KEY_SECRET_STAGING
   _RAZORPAY_WEBHOOK_SECRET_SECRET: RAZORPAY_WEBHOOK_SECRET_STAGING
+  # Resend's Svix signing secret for /api/webhooks/resend — how the app learns
+  # about hard bounces and complaints (CODEBASE §24). Per-env because it is per
+  # ENDPOINT: staging and prod register different URLs in the Resend dashboard
+  # and each gets its own `whsec_…`. RESEND_API_KEY above is NOT per-env (one
+  # account, one key), which is why only this half is substituted.
+  # Without it the route logs a warning and drops every delivery event, so
+  # `email_suppressions` stays empty and dead addresses are mailed forever on a
+  # sending domain whose reputation is shared by every store — the failure is
+  # silent, which is what kept it unnoticed until 2026-08-01.
+  _RESEND_WEBHOOK_SECRET_SECRET: RESEND_WEBHOOK_SECRET_STAGING
+  # POS device/operator cookie signing key (lib/pos/session.ts). Per-env for the
+  # same reason as PAYMENT_CRED_KEY: this key MINTS register credentials, so a
+  # leaked staging value must not forge a pos_device cookie against prod.
+  # Without it every POS credential mint fails — "Authorize this device" and
+  # cashier PIN login both 500 (staging ran this way until 2026-07-27).
+  _POS_SESSION_SECRET_SECRET: POS_SESSION_SECRET_STAGING
   _GCS_BUCKET: storemink-media
   _FIREBASE_PROJECT_ID: storemink-staging
   # The Firebase project's own firebase-adminsdk SA — the SIGNER for custom

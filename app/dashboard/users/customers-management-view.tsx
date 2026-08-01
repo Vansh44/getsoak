@@ -350,7 +350,7 @@ export function CustomersManagementView({
                   <th>Phone</th>
                   <th>Activity</th>
                   <th>Joined</th>
-                  {canManage && <th />}
+                  {canManage && <th className="dash-col-actions" />}
                 </tr>
               </thead>
               <tbody>
@@ -405,7 +405,10 @@ export function CustomersManagementView({
                     </td>
 
                     {canManage && (
-                      <td onClick={(event) => event.stopPropagation()}>
+                      <td
+                        className="dash-col-actions"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <DropdownMenu>
                           <DropdownMenuTrigger className="customers-row-menu">
                             <MoreHorizontal className="h-4 w-4" />

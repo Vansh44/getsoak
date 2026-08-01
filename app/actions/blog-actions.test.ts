@@ -32,9 +32,9 @@ vi.mock("@/lib/storage/gcs", () => ({
     return m ? m[1] : null;
   },
 }));
-vi.mock("@/lib/email/blog-notifications", () => ({
-  sendBlogApprovedEmail: vi.fn().mockResolvedValue(undefined),
-  sendBlogRejectedEmail: vi.fn().mockResolvedValue(undefined),
+vi.mock("@/lib/notifications/record", () => ({
+  emitEvent: vi.fn(),
+  recordEvent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@/lib/settings/resolve", () => ({
   getStoreSettings: vi.fn(async () => ({
@@ -75,10 +75,15 @@ import { getServerUser } from "@/lib/auth/server-user";
 import { fetchBlogTaxonomy } from "@/lib/blog-taxonomy";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
-import {
-  sendBlogApprovedEmail,
-  sendBlogRejectedEmail,
-} from "@/lib/email/blog-notifications";
+import { emitEvent } from "@/lib/notifications/record";
+
+/** True when an emitEvent call for `type` was made. Approval/rejection mail is
+ *  delivered by the notification system now, not a bespoke sender. */
+function emitted(type: string): boolean {
+  return vi
+    .mocked(emitEvent)
+    .mock.calls.some(([input]) => input?.type === type);
+}
 
 const blogForm = {
   title: "Hello",
@@ -278,7 +283,7 @@ describe("blog-actions", () => {
         ],
       });
       await updateBlog("b1", { ...blogForm, status: "published" });
-      expect(sendBlogApprovedEmail).toHaveBeenCalled();
+      expect(emitted("blog.approved")).toBe(true);
     });
 
     // Updating a regular published post should NOT trigger the customer email.
@@ -299,7 +304,7 @@ describe("blog-actions", () => {
         ],
       });
       await updateBlog("b1", { ...blogForm, status: "published" });
-      expect(sendBlogApprovedEmail).not.toHaveBeenCalled();
+      expect(emitted("blog.approved")).toBe(false);
     });
   });
 
@@ -469,6 +474,17 @@ describe("blog-actions", () => {
         "marketing.showAllCoupons": false,
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
+        "pos.enabled": false,
+        "pos.idleLockMinutes": 10,
+        "pos.allowPriceOverride": true,
+        "pos.ownerOnlyDiscounts": true,
+        "pos.requireManagerForDiscount": true,
+        "pos.maxDiscountPercent": 10,
+        "pos.requireOpenShift": false,
+        "pos.cashVarianceTolerance": 0,
+        "fulfilment.offerPickup": false,
+        "fulfilment.pickupReadyDays": 0,
+        "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.error).toMatch(/disabled/i);
@@ -486,6 +502,17 @@ describe("blog-actions", () => {
         "marketing.showAllCoupons": false,
         "inventory.simpleTrackDefault": false,
         "inventory.lowStockThreshold": 5,
+        "pos.enabled": false,
+        "pos.idleLockMinutes": 10,
+        "pos.allowPriceOverride": true,
+        "pos.ownerOnlyDiscounts": true,
+        "pos.requireManagerForDiscount": true,
+        "pos.maxDiscountPercent": 10,
+        "pos.requireOpenShift": false,
+        "pos.cashVarianceTolerance": 0,
+        "fulfilment.offerPickup": false,
+        "fulfilment.pickupReadyDays": 0,
+        "fulfilment.pickupHoldDays": 5,
       });
       const result = await submitCustomerBlog(customerForm);
       expect(result.success).toBe(true);
@@ -510,20 +537,19 @@ describe("blog-actions", () => {
       expect(result.error).toMatch(/not authenticated/i);
     });
 
-    // Email is best-effort — verify it's attempted on success.
-    it("emails the author after approval", async () => {
+    // The author is told via the notification system, which needs the
+    // customerId to know who to reach — without it the event has no audience.
+    it("notifies the author after approval", async () => {
       dbHolder.current = makeDbMock({
         returning: [{ title: "T", slug: "t", submitted_by: "cust-1" }],
-        selectQueue: [[{ email: "ada@example.com", firstName: "Ada" }]],
       });
       await approveCustomerBlog("b1");
-      expect(sendBlogApprovedEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "ada@example.com",
-          title: "T",
-          slug: "t",
-        }),
-      );
+      expect(emitted("blog.approved")).toBe(true);
+      expect(vi.mocked(emitEvent).mock.calls.at(-1)?.[0]).toMatchObject({
+        type: "blog.approved",
+        customerId: "cust-1",
+        payload: { title: "T", url: "/blogs/t" },
+      });
     });
 
     // No matching pending row → a friendly error, no email.
@@ -531,7 +557,7 @@ describe("blog-actions", () => {
       dbHolder.current = makeDbMock({ returning: [] });
       const result = await approveCustomerBlog("b1");
       expect(result.error).toMatch(/no longer pending/i);
-      expect(sendBlogApprovedEmail).not.toHaveBeenCalled();
+      expect(emitted("blog.approved")).toBe(false);
     });
   });
 
@@ -555,7 +581,7 @@ describe("blog-actions", () => {
         ],
       });
       await rejectCustomerBlog("b1");
-      expect(sendBlogRejectedEmail).toHaveBeenCalled();
+      expect(emitted("blog.rejected")).toBe(true);
     });
   });
 

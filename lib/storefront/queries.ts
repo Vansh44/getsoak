@@ -66,6 +66,11 @@ export interface ProductCardRow {
   stock: number;
   low_stock_threshold: number | null;
   allow_backorder: boolean;
+  /**
+   * Last change to something a VISITOR sees — not stock. The sitemap's lastmod
+   * source; see supabase/seo_01_product_content_timestamp.sql.
+   */
+  content_updated_at: string;
   /** Resolved category name (flattened from the joined categories row). */
   category: string | null;
   variants: {
@@ -125,9 +130,12 @@ export const getPublishedProducts = unstable_cache(
             sort_order: products.sortOrder,
             card_color: products.cardColor,
             track_inventory: products.trackInventory,
-            stock: products.stock,
+            stock: products.onlineStock,
             low_stock_threshold: products.lowStockThreshold,
             allow_backorder: products.allowBackorder,
+            // Sitemap lastmod. Selected here rather than in a separate query so
+            // it rides the existing unstable_cache read and costs nothing.
+            content_updated_at: products.contentUpdatedAt,
             category: categories.name,
           })
           .from(products)
@@ -152,7 +160,7 @@ export const getPublishedProducts = unstable_cache(
             special_price: productVariants.specialPrice,
             sort_order: productVariants.sortOrder,
             track_inventory: productVariants.trackInventory,
-            stock: productVariants.stock,
+            stock: productVariants.onlineStock,
             low_stock_threshold: productVariants.lowStockThreshold,
             allow_backorder: productVariants.allowBackorder,
           })
@@ -434,13 +442,24 @@ export const getStoreBillingSettings = unstable_cache(
 
 // Published page slugs for the current store — used by the sitemap.
 export const getPublishedPageSlugs = unstable_cache(
-  async (storeId: string): Promise<{ slug: string; updated_at: string }[]> => {
+  async (
+    storeId: string,
+  ): Promise<
+    { slug: string; updated_at: string; published_at: string | null }[]
+  > => {
     try {
       const rows = await withAnon((db) =>
         db
           .select({
             slug: storePages.slug,
             updated_at: storePages.updatedAt,
+            // The sitemap's lastmod source. `updated_at` is NOT usable for it:
+            // a BEFORE-UPDATE trigger bumps it and savePageDraft writes
+            // `sections` on every autosave debounce, so editing an UNPUBLISHED
+            // draft advances it dozens of times while the public HTML is
+            // unchanged. published_at moves only when the page actually goes
+            // live. Already anon-granted (supabase/store_pages.sql).
+            published_at: storePages.publishedAt,
             seo_noindex: storePages.seoNoindex,
           })
           .from(storePages)

@@ -21,15 +21,16 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
 ## 2. Tech stack
 
-| Layer     | Tech                                                                                                                                                                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                          |
-| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)            |
-| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                |
-| Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                              |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                   |
-| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                            |
-| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → prettier → build) |
+| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
+| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → prettier → build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -104,7 +105,15 @@ wholesip/
 │   │   │   ├── blogs/         #   blog listing, [slug] detail (comments/reactions),
 │   │   │   │                  #   write/ (TipTap customer blog editor), my-submissions/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
-│   │   │   ├── profile/       #   customer profile (personal info + address-book card)
+│   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
+│   │   │   │                  #   [id] detail (status timeline, items, totals,
+│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   customer_id = auth.uid()) AND host store id
+│   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
+│   │   │   │                  #   the customer rows the fan-out has always
+│   │   │   │                  #   written, finally rendered
+│   │   │   ├── profile/       #   customer profile (personal info + address-book
+│   │   │   │                  #   card + quick links to orders/notifications)
 │   │   │   └── [pageSlug]/    #   ★ ALL content pages from store_pages (see §11): merchant
 │   │   │                      #   custom pages AND the former hardcoded static pages
 │   │   │                      #   (our-story, faqs, …) — retired in Phase 4b, now editable
@@ -142,7 +151,50 @@ wholesip/
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
-│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions),
+│   │   │                      # ★ A wide list table (`dash-table-wide`) sets an
+│   │   │                      # 800px floor, but opening the Mink AI panel leaves
+│   │   │                      # the content region ~755px — so every list page
+│   │   │                      # scrolled horizontally and columns were clipped.
+│   │   │                      # FIX (dashboard.css, two layers): (1) a CONTAINER
+│   │   │                      # query on the card — below 880px the floor drops to
+│   │   │                      # 0 and cell padding goes 22px → 10px, which reclaims
+│   │   │                      # ~150-190px (6 cols spend 264px on padding, 8 cols
+│   │   │                      # 352px) and lets everything FIT rather than scroll.
+│   │   │                      # A container query, not a media query: card width
+│   │   │                      # depends on the panel, the resizable sidebar AND the
+│   │   │                      # viewport, so a viewport breakpoint is wrong as soon
+│   │   │                      # as any one of them moves. Enquiries/Customers set
+│   │   │                      # their own wider floors LOWER in the file and must be
+│   │   │                      # named explicitly or they win on source order.
+│   │   │                      # (2) the row-actions column is pinned right
+│   │   │                      # (`dash-col-actions` on the <th> AND its <td>) as a
+│   │   │                      # backstop for widths even (1) can't fit. Opt-in, NOT
+│   │   │                      # `:last-child`: the column is conditional on
+│   │   │                      # canManage/canEdit, so for a view-only role the last
+│   │   │                      # column is real data. No JS either way — sticky is
+│   │   │                      # inert once the table fits.
+│   │   │                      # ⚠ Order matters: the compact block must sit AFTER
+│   │   │                      # the base `.dash-table th/td` padding rules or the
+│   │   │                      # shorthand `padding` beats it at equal specificity.
+│   │   ├── lib/               # access.ts, permissions.ts (role → allowed nav/actions;
+│   │   │                      # ★ SECTIONS is grouped by JOB — Workspace / Sell in
+│   │   │                      # person / Storefront / Marketing / Settings — and a
+│   │   │                      # section may set `parent` to render NESTED under
+│   │   │                      # another while keeping its own permission key. That
+│   │   │                      # distinction is load-bearing: `children` are rendered
+│   │   │                      # with NO can() check, so anything separately gated
+│   │   │                      # (Categories, Colours, Inventory, Enquiries, and every
+│   │   │                      # Settings area) must stay a section. foldNestedSections()
+│   │   │                      # does the folding AFTER the permission filter, never
+│   │   │                      # mutates the shared catalog, bubbles a nested badge up
+│   │   │                      # to a parent that has none (Enquiries' unread count
+│   │   │                      # reaching Customers — otherwise nesting would hide it),
+│   │   │                      # and leaves an orphan top-level when its parent was
+│   │   │                      # filtered out. Tested. ⚠ Sidebar badges are for counts
+│   │   │                      # that DEMAND action and go away once handled. Orders
+│   │   │                      # carried a hardcoded "12" and Inventory a permanent
+│   │   │                      # low-stock total; both are gone — a number that never
+│   │   │                      # moves teaches people to ignore the ones that do),
 │   │   │                      # list-params.ts, use-row-selection.ts. ★ access.ts never
 │   │   │                      # swallows a DB error into an access decision (the
 │   │   │                      # resolve.ts rule): getViewerContext returns
@@ -181,7 +233,12 @@ wholesip/
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
-│   │   └── settings/          # account/ + domain/ (custom-domain connect + verify);
+│   │   ├── activity/          # ★ Activity & audit trail (§22): the store's
+│   │   │                      # activity_events feed — filters by category/date,
+│   │   │                      # day-grouped. Fills the long-dead `activity` nav link
+│   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
+│   │                          # list → [key] detail with General + per-channel
+│   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
 │   │                          # (e.g. blogs → blogs/settings — see convention #9)
 │   │
@@ -237,6 +294,19 @@ wholesip/
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
+│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # RLS alone would show an order placed on a
+│   │   │                      # DIFFERENT store while browsing this one.
+│   │   ├── customer-notification-actions.ts # ★ The shopper's notification
+│   │   │                      # centre (§22): list/unread/mark-read over the
+│   │   │                      # same notifications table the staff bell uses,
+│   │   │                      # scoped to recipient_type 'customer' + host store
+│   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
+│   │   │                      # (the bell polls it), mark read/all-read/archive,
+│   │   │                      # activity feed, preference get/save, pruneNotifications.
+│   │   │                      # Scope = HOST-derived (store, or platform when
+│   │   │                      # storemink.com) — never getCurrentStoreId()'s fallback.
 │   │   ├── address-actions.ts # ★ Customer saved-address book (own-row RLS, tested):
 │   │   │                      # getMyAddresses, saveAddress (checkout dedup+default),
 │   │   │                      # upsertAddress (profile add/edit), setDefaultAddress,
@@ -245,7 +315,9 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
-│       ├── cron/send-emails/  # Daily email campaign worker (Vercel cron)
+│       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
+│       │                      # cron): coupon campaigns + notification emails
+│       │                      # (§22). Self-chains while either has work left
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
@@ -261,6 +333,28 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
+│   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
+│   │                          # every event, its audiences + default channels),
+│   │                          # render.ts (audience-aware copy, pure), record.ts
+│   │                          # (emitEvent/recordEvent — the ONE write path, service
+│   │                          # scope, deferred with after(), never throws),
+│   │                          # recipients.ts (permission-derived routing),
+│   │                          # digest.ts (clock-aligned send windows),
+│   │                          # routing.ts (per-event recipient rules; NARROWS
+│   │                          # the permission set, never widens),
+│   │                          # channels.ts (email/web live; sms/push/whatsapp
+│   │                          # declared but LOCKED — no provider), config.ts
+│   │                          # (registry ← platform definition ← store
+│   │                          # settings), variables.ts + template.ts (merchant
+│   │                          # {{token}} copy, validated at save). Tested,
+│   │                          # incl. coverage.test.ts — the CI guard that FAILS
+│   │                          # if a registry event has no emitter anywhere.
+│   ├── inventory/             # status.ts (the display-status source of truth, §13)
+│   │                          # + ★ alerts.ts (§22: stockAlertFor — the pure
+│   │                          # crossing rule behind inventory.low_stock/
+│   │                          # out_of_stock — and reportStockChanges, the
+│   │                          # deferred reader called from checkout + inventory
+│   │                          # actions). Tested.
 │   ├── settings/              # ★ Feature-settings framework (see convention #9):
 │   │   ├── registry.ts        #   catalog: every per-store toggle (key, default, plan gate)
 │   │   └── resolve.ts         #   getStoreSettings()/getStoreSetting() for the host store
@@ -341,14 +435,39 @@ wholesip/
 │   ├── seo/                   # ★ schema.ts — pure JSON-LD builders (productSchema/
 │   │                          # articleSchema/breadcrumbSchema), tested. Rendered via the
 │   │                          # (storefront) <JsonLd> component on product/blog pages.
+│   │                          # Article/help publishers carry @id + url so they
+│   │                          # resolve to the site's own #organization node.
 │   │                          # og-card.ts — brandOgImageUrl() builds the /api/og URL
 │   │                          # (single `d` param) for the branded default share card.
-│   │                          # search-engines.ts — pingIndexNow() (Bing/Yandex) +
-│   │                          # submitSitemapToGoogle() (Search Console); fired via
-│   │                          # after() on store create + publish. Best-effort, dormant
-│   │                          # until env is set. IndexNow key: public/<key>.txt.
+│   │                          # search-engines.ts — pingIndexNow() (Bing/Yandex —
+│   │                          # NOT Google) + submitSitemapToGoogle() (Search
+│   │                          # Console; the ONLY caller is store-signup). Both
+│   │                          # best-effort; the Google path now logs via
+│   │                          # observability instead of returning silently.
+│   │                          # IndexNow key: public/<key>.txt.
+│   │                          # ★ disallow.ts — the ONE list of non-indexable
+│   │                          # storefront/platform paths, read by BOTH app/robots.ts
+│   │                          # and app/sitemap.ts so a URL can never be blocked in
+│   │                          # one and submitted in the other (/track-order was).
+│   │                          # `exact` emits a `$` anchor so `/cart` doesn't also
+│   │                          # block a merchant page slugged `cartography`. Tested.
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
-│   │                          # trigger-worker, blog/enquiry notifications
+│   │                          # trigger-worker, blog/enquiry notifications.
+│   │                          # ★ notification-emails.ts (§22: single + digest
+│   │                          # templates, pure/escaped) + notification-worker.ts
+│   │                          # (claims notification_email_queue, GROUPS by
+│   │                          # recipient into one digest, retries with backoff).
+│   │                          # ★ send-batch.ts (per-message outcomes so one bad
+│   │                          # address can't sink a batch), suppression.ts
+│   │                          # (the global bounce/complaint list),
+│   │                          # webhook-signature.ts (Svix verify, pure+tested),
+│   │                          # trigger-worker.ts (the kick that makes "instant"
+│   │                          # instant — PLATFORM_URL, not one env var).
+│   │                          # ★ send.ts — THE choke point: every email leaves
+│   │                          # through sendEmail() and lands in email_logs
+│   │                          # (CI-guarded by send-coverage.test.ts);
+│   │                          # mailers.ts — the mail-type catalog + which types
+│   │                          # are redacted because they carry a credential
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
 │   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
 │   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
@@ -394,12 +513,52 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
+│   │                          # RPCs; available = on_hand - reserved
+│   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
+│   │                          # (sellable-online total, trigger-maintained)
+│   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
+│   │                          # dashboard admins (NO ROWS = unrestricted)
+│   ├── locations_01_capabilities.sql  # ★ store_locations.capabilities (jsonb) —
+│   │                          # what a location may DO; registry in lib/locations/
+│   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
+│   │                          # a store's locations, atomically (one plpgsql txn)
+│   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
+│   │                          # (one open shift per LOCATION, partial unique index)
+│   ├── pos_09_register_layout.sql  # ★ pos_layouts: manager-arranged till grid
+│   │                          # per location (no row = show the whole catalogue)
+│   ├── pos_08_customer_order_store_scope.sql  # ★ store-scopes the CUSTOMER order
+│   │                          # SELECT policies (were uid-only) + auth_customer_store_id()
 │   ├── coupons_storefront_visibility.sql  # coupons.show_on_storefront flag (§storefront coupons)
 │   ├── customer_addresses.sql # ★ saved shipping addresses (own-row RLS) — checkout book
 │   ├── coupon_usage_rpc.sql   # ★ increment_/decrement_coupon_usage: atomic used_count
 │   │                          # reserve/release (enforces max_uses under concurrency)
 │   ├── blog_taxonomy.sql      # per-store blog_categories + blog_tags (+ RLS + seed)
 │   ├── store_menus.sql        # ★ per-store header/footer nav (+ RLS + WholeSip seed) — §11
+│   ├── notifications_01_schema.sql  # ★ the event spine (§22): activity_events
+│   │                          # (append-only audit) + notifications (per-recipient
+│   │                          # inbox, UNIQUE on event+recipient) + notification_
+│   │                          # preferences (store defaults ← user overrides). READ-
+│   │                          # ONLY RLS by design — every write is service-role
+│   │                          # (no client can forge an audit row or push a bell)
+│   ├── notifications_03_console.sql  # ★ §22 console: notification_definitions
+│   │                          # (platform-global, operator-managed) +
+│   │                          # notification_settings (per store: channels,
+│   │                          # recipients, templates, digest, on/off)
+│   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
+│   │                          # (platform rows = store_id NULL). Service-role
+│   │                          # only; bodies redacted for credential mailers
+│   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
+│   │                          # — 'store' (default) | 'event_location'
+│   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
+│   │                          # (GLOBAL — no store_id, by design: a hard bounce
+│   │                          # bounces for everyone and the shared sending
+│   │                          # domain's reputation is the platform's) + the
+│   │                          # failed-row index behind the delivery panel
+│   ├── notifications_02_email_queue.sql  # ★ §22 email channel:
+│   │                          # notification_email_queue + claim/requeue RPCs
+│   │                          # (FOR UPDATE SKIP LOCKED, the email_campaigns
+│   │                          # pattern). Worker-only: RLS on, NO policies
 │   ├── media_assets.sql       # ★ per-store Media Library table (RLS is_store_admin; NOT
 │   │                          # public — object URLs are public, the listing is admin-only)
 │   ├── invoicing.sql          # ★ tax_classes + products.tax_class_id + order_items tax
@@ -653,12 +812,52 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `wholesip_static_pages_seed.sql`) and their route dirs deleted, so
     `[pageSlug]` serves them; `RESERVED_PAGE_SLUGS` now reserves only
     the INTERACTIVE routes that stay in code (blogs, cart, enquiries, profile,
-    shop) + system routes. - **Menu builder (Phase 4c, done)**: header + footer nav is per-store in
-    `store_menus` (jsonb: `header`, `footer_groups`, `footer_legal`; RLS public
-    read / admin write). Read cached via `getStoreMenus` (tag `TAGS.menus`) →
-    `MenuProvider` → `Header`/`Footer`. Edited at `/dashboard/navigation`
-    (permission section `navigation`) via `menu-actions.ts`; shape + defaults in
-    `lib/menus.ts` (`DEFAULT_MENUS` fallback). - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
+    shop) + system routes. - **★ Header & footer are BUILDER content (`store_chrome`)**: the site-wide
+    chrome is edited INSIDE `/dashboard/builder`, as two pinned rows in the
+    outline that open the normal inspector — not a link out.
+    `/dashboard/navigation` now REDIRECTS there; its permission key survives via
+    `hiddenInNav` so saved roles keep their grant.
+    **Why:** one footer drew from FOUR places — link columns in `store_menus` (a
+    separate dashboard page), logo/social/legal name in `stores.settings.brand`
+    (another), the builder, and hardcoded JSX for the newsletter and contact
+    blocks. The two halves also had different safety models: a page edit sat in
+    draft until Publish, while `saveStoreMenus` wrote straight to LIVE — on the
+    chrome that appears on every page of the store.
+    `supabase/builder_01_store_chrome.sql` gives chrome the exact `store_pages`
+    contract: one row per store, `draft` + `published` jsonb, anon SELECT
+    revoked and re-granted WITHOUT `draft`. `lib/chrome/types.ts` is the pure
+    schema — `normalizeChrome` (reads) fills defaults so a storefront is never
+    unnavigable, `sanitizeChromeForSave` (writes) preserves an explicit empty so
+    deleting your last footer column is an edit that actually sticks.
+    `app/actions/chrome-actions.ts` = saveChromeDraft / publishChrome /
+    revertChromeDraft, and **Publish publishes BOTH** page and chrome.
+    ⚠ Three load-bearing details:
+    (1) **A LAYOUT cannot read `searchParams`** (Next 16) and the storefront
+    layout is what renders Header/Footer — so `?preview=1` arrives as an
+    `x-sm-preview` header set in `proxy.ts`. It is a HINT, not authorisation:
+    `getDraftChromeForPreview` runs the same `getManagerUserId("builder")` gate
+    as the page-draft loader.
+    (2) `getStoreChrome` falls back to `store_menus` when no chrome row exists,
+    so THE DEPLOY IS ORDER-INDEPENDENT — without it, shipping before the
+    migration ran would silently replace every merchant's navigation with the
+    platform's stock links. Delete it when `store_menus` is dropped.
+    (3) Every toggle DEFAULTS ON, matching what Header/Footer rendered before —
+    a default that changes a live storefront is a migration bug wearing a config
+    hat. Edits reach the preview by `sm-chrome` postMessage (`ChromeProvider`),
+    and a fresh iframe announces `sm-chrome-ready` so the builder re-pushes the
+    draft; without that a page switch shows published chrome under a draft
+    outline.
+    The builder also shows a **Brand** row (colour + logo) saved through
+    `saveBrandAppearance` — a PATCH, deliberately: `saveStoreBranding` rebuilds
+    the whole brand object from a FormData carrying every field, so calling it
+    from a two-field panel would blank the merchant's email, social links and
+    legal name. Contact/social/legal stay in `/dashboard/branding` because they
+    are store IDENTITY (they print on invoices and go out in email), not a
+    website decision. Pages list in an always-visible **rail** rather than a
+    dropdown that overlaid the section outline you were about to edit, and
+    `loadingDraft` starts TRUE when there is a page to auto-open so the first,
+    pre-hydration paint says "Opening…" instead of "Select a page" — React
+    state cannot fix that frame, only the initial value can. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
     `meta.ts` (client-safe catalog for the signup picker: id/name/category/
     previewImage/demoSlug; the picker must NEVER import definitions),
     `definitions/basket.ts` (brand accents, **`design` skin**, pages incl. the
@@ -763,6 +962,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       order row is deleted (best-effort rollback — no cross-statement txn over
       PostgREST). **If you ever move checkout off the service-role client, add a
       customer INSERT policy first** (see the note in `orders_table.sql`).
+    - **Customer order reads are store-scoped in the DB**
+      (`supabase/pos_08_customer_order_store_scope.sql`). The customer SELECT
+      policies on `orders`/`order_items` were `customer_id = auth.uid()` with
+      NO store predicate — and a Firebase uid is global, so any order anywhere
+      carrying that uid was readable. They now also require
+      `store_id = auth_customer_store_id()` (a SECURITY DEFINER helper; a uid
+      maps to exactly one store because `users.id` is the PK, so no request
+      context is needed). This is defence in depth for the rule above — **an
+      unvalidated `customer_id` write is what makes it exploitable**, which is
+      exactly the bug `placePosSale` had (§22). The migration ends with a guard
+      that FAILS if any policy on those tables keys off `customer_id` without
+      the store scope.
     - **Dashboard reads/writes**: `order-actions.ts` gates on
       `getManagerIdentity("orders")`, scopes every query by `store_id`, paginates
       `getOrders`, and allowlists `status`/`payment_status` in `updateOrderStatus`.
@@ -1082,9 +1293,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Management console** at **`/dashboard/help`** (platform host; nav entry
       in `app/platform/dashboard/(console)/layout.tsx`, `faq` icon), gated by
       `getPlatformViewer()`. `app/actions/help-actions.ts` holds public actions
-      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle`) and
+      (`suggestHelpArticles`, `recordHelpArticleView`, `voteHelpArticle` — the
+      two public counters are per-IP rate-limited via `lib/rate-limit`, since
+      `view_count` drives both the Popular ordering and search ranking) and
       operator CRUD (articles + categories, publish/unpublish, reorder) under
-      `withService` after the gate, plus **AI drafting** — `runHelpAiCommand`
+      `withService` after the gate. **`deleteHelpCategory` refuses a non-empty
+      category** (atomic `NOT EXISTS` guard on the DELETE — the conditional-write
+      pattern): the FK is `ON DELETE SET NULL`, so deleting one would strand its
+      articles with no category and therefore no URL. Storefront reads
+      (`searchHelpArticles`/`getPopularHelpArticles`) inner-join the category so
+      any legacy orphan stays invisible rather than showing an unlinkable hit.
+      Plus **AI drafting** — `runHelpAiCommand`
       (Gemini via `lib/ai/gemini.ts`, a fixed technical-writer system prompt in
       `brand/tasks/help-article.md`; output sanitized) is one flexible command
       that both writes-from-scratch and edits current content per a
@@ -1102,6 +1321,996 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
+
+22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
+    An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
+    SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
+    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
+    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    location foundation, with ZERO changes to existing inventory/checkout code:**
+    - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
+      every store auto-gets one `is_default` "Main" location) +
+      `inventory_levels` (the per-location source of truth: `on_hand`/`reserved`
+      per (location, product, variant-or-null)). SQL: `supabase/pos_00_locations.sql`,
+      `pos_01_inventory_levels.sql`, `pos_02_rpc_location.sql` (run as `postgres`,
+      in order). `products.stock` / `product_variants.stock` become a
+      **trigger-maintained AGGREGATE** = `SUM(on_hand)` across locations
+      (`sync_stock_aggregate` trigger), so the storefront, `lib/inventory/status.ts`,
+      shop pages and the current inventory dashboard read them UNCHANGED. New
+      products/variants get a default-location level row via seed triggers; a
+      migration guard FAILS if the aggregate ever drifts after backfill.
+    - **RPCs gain a location.** `reserve_stock_at` / `release_stock_at` /
+      `adjust_stock_at(p_location, …)` operate on `inventory_levels`; the OLD
+      signatures (`reserve_stock`/`release_stock`/`adjust_stock`) are REPLACED with
+      thin wrappers delegating to the store's default location
+      (`pos_ensure_default_location`) — so `checkout-actions`, `order-actions` and
+      `inventory-actions` keep working with NO code change. `stock_movements`
+      gained `location_id`. This works because post-create stock writes ALREADY
+      flow only through those RPCs (the product editor never writes stock).
+    - **Plan + settings + enable flow.** `PLAN_LIMITS.posEnabled` (pro) +
+      `posLocationsIncluded` (2) in `lib/plans.ts`. Setting `pos.enabled`
+      (registry, section `pos`, `minPlan: pro`, `hidden` so it's driven by a
+      dedicated control, not the generic editor — new `SettingDef.hidden` flag).
+      New `pos` dashboard section (`permissions.ts`, group Workspace) rendered
+      with a **three-state sidebar** in `app/dashboard/layout.tsx`: free/basic →
+      "Included in Pro" (badge → `/dashboard/plans`); pro-not-enabled → "Enable
+      POS"; enabled → Overview + Locations children. `lib/pos/locations.ts`
+      (`getPosState`/`isPosEnabled`/`getStoreLocations`).
+      `app/actions/pos-location-actions.ts` (`enablePos`/`disablePos` +
+      location CRUD, gated `getManagerIdentity("pos")`, Pro-checked server-side,
+      location-capped; tested). Dashboard pages: `app/dashboard/pos/` (overview +
+      `locations/`).
+    - **Phase 1 (done) = the `/pos` app shell + staff accounts + device
+      authorization.** POS is served at **`{slug}.storemink.com/pos`** — a
+      SEPARATE app shell from `/dashboard` (outside the `(storefront)` group, so
+      it gets only the root layout + its own dark chrome).
+      - **Staff have real accounts, created by invitation.** An admin adds a
+        cashier/manager by **name + email + role + locations**
+        (`inviteStaff`); the staff member gets an emailed link (Resend, the
+        `inviteUser` pattern) to **`/pos/register?token=…`** and self-registers:
+        **password (typed twice, must match) → phone OTP (Firebase Phone auth,
+        the signup wizard's invisible-reCAPTCHA pattern) → their own 8-digit
+        PIN (typed twice)**. That creates a Firebase account whose uid is stored
+        on `pos_staff.user_id`, flips `status` invited→active, consumes the
+        single-use token, and sets a **`cashier`/`manager` role claim** — which
+        is what makes `proxy.ts` bounce them out of `/dashboard` to `/pos`. The
+        admin NEVER sets or sees a PIN.
+      - **Login at `/pos` is email + PIN or email + password** (two modes on one
+        screen). PIN → `posLoginWithPin` (server-side scrypt verify → signed
+        `pos_operator` cookie); password → Firebase `signInWithEmailAndPassword`
+        - `establishSession` (the standard `sm_session`).
+      - **Self-service reset** ("Forgot PIN or password?" on the login screen):
+        `requestPosCredentialReset` mails a single-use, 1-hour link to
+        `/pos/reset?token=…` (`reset_token`/`reset_expires_at`, added by
+        `supabase/pos_04_staff_reset.sql`). It is **enumeration-safe** — always
+        returns success and is rate-limited per IP AND per address, so only the
+        inbox differs. The reset page offers two modes: a new 8-digit PIN
+        (hashed server-side) or a new password (written to Identity Platform via
+        `updateAuthUser` — the token, not a session, is the authorization). Only
+        `active` staff can reset; someone still `invited` must use their
+        invitation link. Both staff emails share `lib/pos/staff-email.ts`
+        (branded Resend transport + dev console fallback + `posAbsoluteUrl`,
+        which builds links from the REQUEST host so they work in local dev).
+      - **`/pos/login`, `/pos/register` and `/pos/reset` are public** in
+        `proxy.ts` (`POS_PUBLIC_PATHS`) — a new or locked-out staff member has
+        no credential by definition, and the emailed token is the authorization.
+      - **Hardening (`supabase/pos_05_device_hardening.sql`).** Four invariants
+        the register depends on:
+        1. **The operator cookie is never trusted for authorisation.**
+           `resolvePosOperator` re-reads `pos_staff` on EVERY resolve (active,
+           registered, still a POS role, still assigned to the device's
+           location), so deactivating, deleting, demoting or unassigning a staff
+           member ends their session at once instead of when the token lapses.
+        2. **Device-token rotation + clone detection.** The `pos_device` cookie
+           embeds a `nonce` matched against `pos_devices.token_nonce`, rotated on
+           every operator sign-in. A cookie COPIED off a trusted device carries a
+           retired nonce, so `getAuthorizedDevice` revokes the device and logs
+           `device_clone_detected` (a signature alone can't catch a clone — the
+           clone's signature is valid). A 2-minute `prev_nonce` grace window
+           absorbs in-flight requests so a real shop is never locked out; devices
+           enrolled before rotation adopt their presented nonce.
+        3. **POS cookies are host-only and `SameSite=Strict`** — unlike
+           `sm_session`, which spans `.storemink.com` by design. A register
+           credential is never transmitted to other stores' subdomains, the
+           platform apex, or the help centre.
+        4. **Append-only audit trail** (`pos_audit_log`, admin-readable,
+           service-role writes) for device authorized/revoked, clone detected,
+           operator login + failed login, via `lib/pos/audit.ts` — always
+           best-effort, so a logging failure can never block a sale. Surfaced on
+           **`/dashboard/pos/devices`** (`listPosActivity`) next to a **Revoked
+           devices** list showing WHY each died — without that, a clone-detected
+           auto-revoke is an unexplainable outage.
+           Pairing codes are additionally rate-limited **per store**, not just per
+           IP, so a distributed attacker can't grind them, and
+           `PLAN_LIMITS.posDevicesPerLocation` (pro: 5) caps authorized devices
+           per location — enforced in `registerDevice` (the choke point both
+           authorization paths funnel through) and pre-checked in
+           `createPairingCode` so an admin isn't handed an unusable code.
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): every operator's
+           register locks after `pos.idleLockMinutes` of inactivity (registry
+           setting, default 10, edited at `/dashboard/pos/settings`) with a
+           **2-minute** countdown, capped at half the idle window so a
+           1-minute setting doesn't show the banner permanently. It was 20s,
+           which is too little notice to finish serving the customer in front
+           of you first — and because the banner is the only part of the timer
+           anyone ever sees, 20s also got read as the whole lock time.
+           **Only the SUPERADMIN is exempt** (`isIdleLockExempt` — a delegated
+           dashboard admin locks like anyone else; see the discount rule in
+           Phase 2 for why the two are told apart). It targets the
+           walked-away-from-a-shared-till risk, and locking clears BOTH the
+           operator token and `sm_session` — so it ends a dashboard session as
+           well, which is exactly why the exemption exists rather than the lock
+           applying to everyone. It is a physical-presence
+           measure, NOT an authorization boundary (a client bypass keeps the
+           cookie until it expires); the server boundary remains the device gate
+           - per-request `pos_staff` re-validation.
+      - **Device authorization is the security boundary** (a cashier must not be
+        able to sell from their personal phone). A browser becomes an authorized
+        POS device when the **owner** either taps "Authorize this device" while
+        signed in on it (`authorizeThisDevice`) or enters an
+        authorization code generated in the dashboard (`createPairingCode` →
+        `pairDevice`, single-use, 10-min TTL). It then holds a long-lived signed
+        **`pos_device`** cookie `{deviceId,storeId,locationId}`. **Staff
+        (cashier/manager) can ONLY resolve as an operator on an authorized,
+        non-revoked device** (`lib/pos/devices.ts` `getAuthorizedDevice`, checked
+        in `resolvePosOperator` for BOTH the PIN and password paths); owners are
+        not device-restricted. Revoking a device kills its access (and any
+        operator session — the operator token carries its `deviceId`) on the next
+        request. Known limits: it's per-browser-profile, so clearing site data
+        de-authorizes (owner re-authorizes in seconds).
+      - Both POS cookies are HMAC-signed with **`POS_SESSION_SECRET`** and
+        verified in the Node-runtime `proxy.ts` with NO DB call (verify returns
+        null — never throws — when the secret is unset, so /pos degrades to the
+        login gate instead of 500ing).
+      - Modules: `lib/pos/session.ts` (sign/verify both cookies),
+        `lib/pos/pin.ts` (scrypt, **exactly 8 digits**), `lib/pos/permissions.ts`
+        (`posCan` — cashier=sell, manager=+refund/inventory/shift, owner=all),
+        `lib/pos/devices.ts`, `lib/pos/operator.ts` (`resolvePosOperator`:
+        owner → PIN operator → staff Firebase session). SQL:
+        `supabase/pos_03_staff_devices.sql` — `pos_staff` (email, role,
+        `user_id`, scrypt `pin_hash`, `status`, single-use `invite_token`),
+        `pos_staff_locations` (managers are location-bound, auto-scoped at
+        login), `pos_devices` (revocable), `pos_pairing_codes`. Actions:
+        `pos-staff-actions.ts` (invite/resend/update/activate/delete +
+        `getInviteInfo`/`completeStaffRegistration`) and `pos-auth-actions.ts`
+        (`authorizeThisDevice`/`createPairingCode`/`listDevices`/`revokeDevice`;
+        `pairDevice`/`posLoginWithPin`/`posLock`, rate-limited) — both tested,
+        plus pure-module tests for session/pin/permissions. `/pos` routes:
+        `layout.tsx` (store + Pro + pos.enabled gate), `page.tsx` (operator gate
+        → register shell + the owner's "authorize this device" card),
+        `login/` (email + PIN pad / password), `register/` (the 3-step
+        self-registration wizard). Dashboard: `/dashboard/pos/staff` +
+        `/dashboard/pos/devices`.
+    - **Phase 2 (v1, done) = the register.** `app/actions/pos-sale-actions.ts`
+      is the sell path's trust boundary and mirrors `placeOrder` (§12) step for
+      step: operator resolved server-side, prices RE-READ from the DB, discount
+      re-derived and authorised (see the owner-only rule below), tax
+      recomputed, stock reserved atomically **at the register's location**
+      (`reserve_stock_at`), service-role writes last, and a reverse rollback
+      chain on any failure. `getRegisterConfig` opens the register;
+      `placePosSale` rings it; `getPosReceipt` re-renders one.
+      - **★ ONLY THE SUPERADMIN MAY GIVE MONEY AWAY** (`pos.ownerOnlyDiscounts`,
+        default **on**). A discount is the till's one irreversible act that
+        leaves NOTHING missing from the shelf to count afterwards — no physical
+        trace — so it sits with the person whose money it is. Three parts:
+        - **The grant is `SUPERADMIN_ONLY` in `lib/pos/permissions.ts`** —
+          `discount`, `price_override` **and `authorize_device`**, held by
+          neither staff role (by OMISSION, so a role added later can't inherit
+          them by resembling a manager) and **not by a delegated dashboard admin
+          either**. Hence **FOUR actor roles**: `PosActorRole` gained
+          `superadmin` alongside `owner`, and `resolvePosOperator` distinguishes
+          them with `isStoreSuperadmin()` (access.ts — request-cached, and the
+          one gate here that FAILS CLOSED, since the cost of a DB blip is a
+          refused discount, not a locked-out admin). POS access is delegable;
+          giving money away — and handing out the ability to take it — is not.
+          Otherwise "owner only" quietly means "anyone ever given a dashboard
+          login with POS on".
+        - **GRANTING device trust is narrowed; REVOKING is deliberately not.**
+          `authorizeThisDevice` and `createPairingCode` (a pairing code IS an
+          authorization, posted to someone else to redeem) go through
+          `superadminIdentity()` in pos-auth-actions.ts; both failure modes
+          return the same message, so a delegated admin isn't told they'd have
+          passed the weaker gate. `revokeDevice` keeps `getManagerIdentity("pos")`
+          — revocation can only ever REDUCE what a browser may do, and making the
+          owner the only person who can kill a stolen or cloned till would buy
+          nothing while leaving it live for hours. Pinned by a test so it isn't
+          "tidied up" into symmetry. `pairDevice` is unchanged: the code is the
+          authorization, redeemed on the device by whoever holds it.
+        - **The idle lock now exempts ONLY the superadmin**
+          (`isIdleLockExempt`, used by `/pos` and `/pos/sell`). Not a
+          capability — it isn't something you may DO, it's whose screen may be
+          left unattended — and a delegated admin at a shared counter is the
+          same walked-away-from-an-open-till risk as any operator, with a
+          session that reaches further than a cashier's. ⚠ **Know what that
+          costs:** `posLock` clears `sm_session` as well as the operator token,
+          so an idle till now signs a delegated admin out of `/dashboard` too.
+          That is the intended trade for everyone except the person whose shop
+          it is — and it is why the exemption exists at all rather than the lock
+          simply applying to everybody. `IdleLock` also calls `endSession()`, so
+          the Firebase SDK left running in the page can't re-mint a session for
+          someone who has walked away; the manual "Lock" button has always done
+          both, and an unattended till has more need of it, not less.
+        - **Refused, NOT queued for approval.** Returning `needsApproval` would
+          put a PIN prompt on screen and let a **manager** wave through the very
+          thing they are being kept out of; their own PIN must not be the key.
+        - **All three mechanisms, or none.** An order discount, a per-line
+          markdown ("Less ₹50"), and repricing a ₹200 tin to ₹1 are the same act
+          with different arithmetic. Blocking one and leaving another open makes
+          the rule decorative — which is exactly what an open
+          `pos.allowPriceOverride` did for the first version of this. That
+          setting is now WHETHER the till may reprice at all (a store policy, so
+          it stops the superadmin too); WHO may is this rule.
+          The register hides both fields via `RegisterConfig.canDiscount` /
+          `canOverridePrice` — a field that always fails at the till, in front of
+          a customer, is worse than no field — but the server is the boundary, and
+          the config carries the ANSWER, never the policy.
+          Switching the setting OFF re-arms the pre-existing cap machinery
+          (`pos.requireManagerForDiscount` + `pos.maxDiscountPercent`: a cashier
+          needs a manager's PIN above the cap, and for an override), which now asks
+          `posCan(role, "discount_over_cap")` rather than an inline
+          `role === "cashier"` that could drift from the capability table.
+      - **★ A MANAGER'S APPROVAL IS A SIGNED GRANT, NOT A CLIENT FLAG**
+        (`lib/pos/approval.ts`). `verifyManagerPin` returned `{approved: true}`
+        and `placePosSale` trusted an `opts.managerApproved` boolean that came
+        from the browser — but both are server ACTIONS, so the register's own
+        JavaScript is not the only caller. A cashier with devtools could invoke
+        `placePosSale({managerApproved: true})` and take any over-cap discount
+        with nobody at the keypad: the PIN pad was a UI step, not a gate, and
+        the rate limit on `verifyManagerPin` guarded a door you could walk
+        around. The PIN check now MINTS a short HMAC token (over
+        `POS_SESSION_SECRET`, reusing `session.ts`'s `signToken`/`verifyToken`
+        so there is one signing implementation) and the sale VERIFIES it.
+        Bound to four things, each of them a bypass the boolean allowed:
+        store + location, the operator, a **fingerprint of the exact cart and
+        discount** (so "₹50 off" can't be replayed as "₹5,000 off", or against
+        another basket), and a 3-minute expiry — approval means "I am standing
+        here looking at this sale", not "this cashier may discount all shift".
+        The fingerprint hashes the CLIENT'S INPUTS, not the priced total: those
+        are what both calls carry, and the charge derives from them plus DB
+        prices the client can't touch. Lines are sorted, so a re-ordered cart
+        doesn't void an approval that was really given. ⚠ Residual: inside
+        those 3 minutes an identical cart could be rung twice on one approval —
+        strict single-use needs a used-nonce table, and the manager is standing
+        at the counter. This changes nothing under the default
+        `pos.ownerOnlyDiscounts`, where staff discounts are refused outright
+        before approval is ever consulted.
+      - **★ ONE total, shared by the screen and the sale** (`lib/pos/totals.ts`,
+        pure + tested). `posTotals` owns subtotal → line markdowns → capped
+        order discount → tax → total, and BOTH `placePosSale` and the sell
+        screen call it. The screen used to quote the PRE-TAX subtotal ("tax is
+        calculated on the server when the sale completes") while the server
+        charged the tax-inclusive total: a ₹238 cart on a 5% class was quoted
+        ₹238, rung up at ₹249.90, and ₹300 cash returned ₹50.10 instead of the
+        ₹62 promised — and tendering the quoted ₹238 was refused as "the payment
+        doesn't cover the total" by the same panel that said "Paid in full
+        ₹238". Rates reach the client via `RegisterConfig.taxRates` (class id →
+        rate) + `PosCatalogItem.taxClassId`, resolved with the store's
+        `defaultTaxClassId` exactly as the server resolves it — no round trip,
+        so the POS zero-network promise holds. Rates ride in the CONFIG, not the
+        cached catalog, because the catalog persists in IndexedDB and a stale
+        rate would misquote a customer; the catalog cache key now carries a
+        `SCHEMA_VERSION` so an older CatalogItem shape is re-synced rather than
+        served. Money is compared in PAISE (`coversTotal`/`changeDue`) — a
+        rupee-float compare can refuse an exactly-covering payment.
+      - **GST place of supply**: `lib/billing/gst.ts` — `splitGst` takes the tax
+        AMOUNT (not the rate) so it can never disagree with `computeTax`'s
+        rounding, and the halves re-sum exactly. Intra-state ⇒ CGST+SGST,
+        inter-state ⇒ IGST; unknown data defaults to INTRA. Snapshotted per line
+        (`order_items.tax_cgst/tax_sgst/tax_igst`).
+      - **Thermal receipt**: `lib/pos/receipt.ts` (pure `buildReceiptModel` off
+        the order snapshot) + `components/pos/thermal-receipt.tsx` + its CSS —
+        a 80mm roll format, deliberately NOT the A4 invoice of §17.
+      - **Barcode scanning, three engines behind one seam**
+        (`lib/pos/barcode-camera.ts`): a hardware scanner is a keyboard, so the
+        search input + its trailing Enter is the default and needs no
+        permission; on mobile the camera uses the native `BarcodeDetector`, and
+        `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
+        SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
+        entered in the product editor. StoreMink never prints its own.
+      - **★ STICKY FOCUS IS FOR KEYBOARD DEVICES ONLY** — on a tablet it was
+        the register's most-complained-about behaviour. Keeping the search box
+        focused is what makes a scan land with zero clicks, so the register
+        re-focused it on mount, on every cart change, and 80 ms after any blur.
+        On an iPad that means **tap a product, get the software keyboard**: the
+        tap blurs the box, focus is taken straight back, and iPadOS answers a
+        programmatic focus by opening the keyboard over half the till — every
+        single time. `isTouchPrimary()` (`lib/pos/keyboard-wedge.ts`,
+        `(hover: none) and (pointer: coarse)`) switches it off there;
+        `autoFocus` is gone for the same reason. The query pairs `hover: none`
+        WITH coarse so a touchscreen laptop — which has a real keyboard — keeps
+        the fast path. It reaches BEHAVIOUR only, never rendered markup: the
+        SSR snapshot is `false`, so a placeholder or class keyed off it would
+        be a hydration mismatch on the exact devices it targets.
+      - **★ SO A SCAN MUST WORK WITH NOTHING FOCUSED.** Turning sticky focus
+        off would otherwise cost an iPad + Bluetooth-scanner shop — a very
+        ordinary setup — its scanner, silently. `createKeyboardWedge()` (pure,
+        tested) is a document-level listener that reads a fast burst of
+        characters ending in Enter, and it is enabled on ALL devices: on a
+        desktop the box holds focus, so `isEditableTarget` hands every key to
+        it and behaviour is byte-for-byte what it was. It **swallows the burst**
+        (`preventDefault`) — after a tap the product tile is the focused
+        element and both Space and Enter activate a focused button, so an
+        unhandled scan would re-ring the TAPPED product instead of adding the
+        scanned one. It is not a scanner-vs-human heuristic (a human can't type
+        into an unfocused screen); the gap rule only stops stray keypresses
+        minutes apart from joining into one nonsense code.
+      - **Refocus is suppressed while ANY overlay is open** — tender, choices,
+        camera, layout, **customer search and the receipt**. The last two were
+        missing, and the customer panel `autoFocus`es its own search box: the
+        register grabbed focus back 80 ms later, so attaching a customer was
+        unusable on desktop too.
+      - **★ Local catalog cache — the "<50 ms, zero network" promise
+        (docs/pos-plan.md §10).** `lib/pos/catalog-index.ts` is the PURE
+        matching core (`buildIndex`/`scanLocal`/`searchLocal`/
+        `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
+        per **store+location** (stock is per-location and a browser can be
+        shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
+        the full catalog in the background via `getCatalogSnapshot` (keyset
+        paging over `products.id`, 300 products/page — pages stay stable while
+        the catalog is edited, and a product's variants can't split at a seam).
+        Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
+        keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
+        search is a plain linear scan rather than an inverted index that would
+        need invalidating on every sync. Three rules keep it honest: a local
+        MISS falls through to `lookupProducts` (a product created since the last
+        sync must stay sellable); nothing cached is authoritative (the server
+        re-prices and re-reserves, so staleness is a display bug at worst, never
+        a wrong charge or an oversell); and **every IndexedDB call degrades to a
+        no-op** when the API is missing or throws (private-mode Safari, kiosk
+        profiles, quota) so the register just falls back to the server. Sales
+        decrement the cache immediately (`applySold`); a 5-min interval
+        re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
+        finds an EXISTING customer of the store (phone/name/email, 2-char
+        floor, store-scoped) to attach to a sale; the register cannot CREATE
+        one, because `users.id` IS the Firebase uid and `(phone, store_id)` is
+        unique — a till-invented row would collide with, and break, that same
+        person's later online signup. Walk-in capture needs a claim/merge
+        story and belongs with the CRM phase. `placePosSale` **verifies the
+        customer belongs to this store** before writing (without it a sale
+        could be filed against another store's customer, who holds RLS SELECT
+        on their own orders and would see a foreign order in their history)
+        and **format-validates the GSTIN** (`isValidGstinFormat`, normalised
+        upper-case) since it prints on the invoice. The GSTIN is independent
+        of the attach — a business buyer needs no account to get it on the
+        bill. **Per-line discounts** mark down ONE line (a damaged tin) as
+        opposed to the whole sale: **owner-only like any other discount** (the
+        rule above), capped server-side at the line's own gross, and — when a
+        merchant has handed discounting to staff — counted toward the
+        manager-approval cap together with the order-level discount (so a
+        cashier can't stay under it by splitting the giveaway).
+        Persisted in `order_items.line_discount`
+        (`supabase/pos_07_line_discount.sql`) — `total` stays net of it, so
+        existing readers are unaffected, and the thermal receipt prints
+        "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
+        doesn't add up. Recording it also makes markdowns auditable per
+        cashier, which is the point of the cap.
+      - **A register sale is a SALE — it emits like one.** `placePosSale` ends
+        with `emitEvent("order.placed")` + `reportStockChanges` (§22
+        notifications). Without them an in-store sale wrote an `orders` row and
+        nothing else: no `/dashboard/activity` entry, no team alert, and no
+        low/out-of-stock warning even when it emptied the shelf — the one
+        channel physically in front of the merchant was the one they couldn't
+        see. `customerId` is null for a walk-in, which the fan-out reads as "no
+        customer audience" (right: they leave holding a receipt). NOTE the
+        coverage guard can't catch this class of gap — it asserts a key is
+        emitted SOMEWHERE, not that every path which should emit it does.
+      - **CANCELLING A POS SALE RESTOCKS AT ITS OWN LOCATION.**
+        `updateOrderStatus` returns `orders.location_id` with the
+        reserved→released claim and calls `release_stock_at` when it's set. The
+        plain `release_stock` wrapper delegates to the store's DEFAULT location
+        (`pos_02_rpc_location.sql`), so cancelling an in-store sale used to hand
+        the units to the wrong shop — the selling location never recovered its
+        stock and the default gained one it never had, silently, compounding
+        per cancellation. Online orders reserve against the default and keep the
+        wrapper. Both branches are regression-tested.
+      - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
+        to the end of the register grid — `isOutOfStock` in
+        `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
+        state and the ordering must agree), and `buildIndex` precomputes an
+        `ordered` array so the empty-query slice can't fill the first screen
+        with things nobody can sell. **`applyLayout`** then lets a manager or
+        owner (`edit_layout` capability, so never a cashier) choose exactly
+        which products the till shows and in what order — `/pos/sell` →
+        "Edit layout" (`layout-editor.tsx`: searchable catalogue on the left,
+        dnd-kit sortable grid on the right), stored per LOCATION in
+        `pos_layouts` (`supabase/pos_09_register_layout.sql`,
+        `app/actions/pos-layout-actions.ts`). Three rules: **no row = show the
+        whole catalogue**, so the feature could not blank a register that
+        predates it and a failed read degrades to everything rather than an
+        empty till; the sold-out shift is computed at RENDER, never written
+        back, so a restock returns a product to its chosen slot with no edit;
+        and **search always spans the whole catalogue** — the layout decides
+        what the IDLE grid shows, never what can be found and sold, or the
+        products left off would be unsellable. Entries are not FK-checked, so
+        a deleted product silently drops its tile; the header shows
+        "12 of 20 products" once configured.
+    - **Phase 3 (done) = shifts & cash reconciliation.** A shift is one
+      accounting period for a location's cash drawer:
+      `expected = float + net cash sales + paid-ins − payouts − drops`, and
+      `variance = counted − expected` (negative = short). `lib/pos/shifts.ts`
+      is the PURE math (tested); `app/actions/pos-shift-actions.ts` is the
+      gate; `/pos/shift` is the screen, which shows the whole equation rather
+      than just the answer — "expected ₹1,895" is only trustworthy if you can
+      see what fed it.
+      - **Per LOCATION, not per device.** Owners are not device-bound
+        (`resolvePosOperator` resolves them with no device), so a per-device
+        shift would have no home for an owner's cash sale. Every operator has a
+        `locationId`. A store running several drawers per shop wants a
+        `device_id` column and a wider partial unique index; nothing else
+        changes.
+      - **ONE open shift per location, enforced by a partial unique index** —
+        not by application logic. Two managers tapping "Open" at the same
+        moment cannot split a day's cash across two drawers; the loser gets a
+        friendly "already open" rather than a raw constraint error. Closing
+        claims the open→closed transition CONDITIONALLY (the order-cancellation
+        pattern), so a second tap can't overwrite the first count.
+      - **`orders.shift_id` is stamped at sale time**, not inferred from a time
+        window — a sale rung a second before midnight must not land in
+        tomorrow's drawer. If the drawer lookup fails the sale still completes
+        and goes unattributed, which reconciliation surfaces rather than hides.
+      - **★ Change is subtracted ONCE per order.** `placePosSale` writes the
+        SALE's `change_due` onto EVERY cash tender row, so a sale settled with
+        two cash tenders carries it twice. Summing would deduct it twice and
+        report the drawer short by that amount every time — a small, consistent
+        discrepancy that gets blamed on a cashier. `netCashFromSales` groups by
+        order and takes the max; `totalsByMethod` delegates to it rather than
+        re-implementing. Both directions are tested.
+      - Settings (convention #9): `pos.requireOpenShift` (default **off** —
+        turning it on can stop a till, so it stays the merchant's call) and
+        `pos.cashVarianceTolerance` (a hand-counted drawer is never exact to
+        the paise). Capabilities: `open_close_shift` to open/close,
+        `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
+        declare what was in it. A CLOSED shift reports the figures snapshotted
+        at close, so an old Z-report can't drift when an order is later edited.
+    - **Phase 4 (done) = inventory from the shop floor.** `/pos/inventory`
+      (`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`, so
+      a cashier sells stock but never declares how much exists). Search or
+      scan, then three actions per row: **receive/correct** a delta, **count**
+      to an absolute figure, or **send** stock to another location. The
+      location is ALWAYS the operator's session — the only location a caller
+      may name is a transfer's destination, verified against the store here
+      AND again inside the RPC.
+      - **A count is stored as a DELTA, not an absolute write.** It goes
+        through the same atomic `adjust_stock_at` and leaves the same ledger
+        row as any other correction — and a sale rung while someone was
+        counting the shelf isn't silently erased. A count that matches writes
+        nothing, so confirming a figure doesn't litter the history.
+      - **★ `transfer_stock` is ONE RPC because it touches TWO locations**
+        (`supabase/pos_11_transfer_stock.sql`). The app has no cross-statement
+        transaction over the pool — that's why placeOrder/placePosSale carry
+        manual rollback chains — so doing this as two adjustments could
+        decrement the source, fail to credit the destination, and the units
+        would simply cease to exist on the store's books. A plpgsql body is
+        one transaction, so both legs commit or neither does. The source
+        decrement is CONDITIONAL on having the stock, so two managers moving
+        the last 5 units can't both win. Writes paired `transfer_out` /
+        `transfer_in` ledger rows so each location's history explains its own
+        balance. **If `reserved` is ever brought into use, the guard must
+        become `on_hand - reserved >= qty`** or a transfer will ship units
+        already promised to an online order.
+      - Adjustments feed `reportStockChanges`, so a manual correction to zero
+        still fires the low/out-of-stock crossing (§22) rather than alerting
+        nobody.
+23. **Locations own capabilities; POS is one of them.** Locations used to live
+    under Point of Sale. They don't: a warehouse is a location with POS
+    switched off, and pickup/online-fulfilment/returns are storefront features
+    that merely depend on a location. So **`/dashboard/locations`** is its own
+    Workspace section (above Point of Sale), `/dashboard/pos/locations`
+    redirects to it, and `pos-location-actions.ts` became
+    `location-actions.ts`. Full design: `docs/locations-ia.md`; the phased
+    build: `docs/inventory-fulfilment-roadmap.md`.
+    - **`lib/locations/capabilities.ts` is a REGISTRY, not columns.** Six
+      capabilities (`pos`, `online_fulfil`, `pickup`, `returns`,
+      `receive_stock`, `transfer_stock`) with labels, `requires`, `minPlan` and
+      per-type creation defaults, stored in `store_locations.capabilities`
+      (jsonb, `locations_01_capabilities.sql`). Six boolean columns would make
+      a seventh capability a migration plus a check to forget in every
+      consumer; as jsonb it's one registry entry and `normalizeCapabilities()`
+      gives existing rows a sensible value with no migration — the same trade
+      `stores.settings.features` makes. **PUBLIC** — the storefront reads it to
+      decide whether to offer pickup, so no secrets.
+    - **`locationCan()` is the only read.** Three gates: the stored flag, every
+      capability in `requires`, and the plan. `pickup`/`returns` require `pos`
+      (someone has to hand the goods over) and are `minPlan: pro`.
+      `applyCapability()` cascades a switch-off to dependants so the stored
+      state can never disagree with what `locationCan` reports.
+    - **Two rules enforced server-side** in `saveLocationCapabilities` — a
+      disabled checkbox is not a permission: a capability whose dependency is
+      off is stored off, and **the last location fulfilling online orders
+      cannot be switched off** (the store would advertise products it has no
+      way to ship, and every checkout would fail with no visible cause).
+    - **The backfill is NOT the creation defaults.** A migration may not change
+      what a live store does, so a capability describing EXISTING behaviour is
+      backfilled ON (`online_fulfil` on the default location — the
+      `reserve_stock` wrapper sends every online order there) and one
+      introducing NEW behaviour is backfilled OFF (`pickup`, `returns`).
+    - **Location CRUD no longer requires POS to be switched on** — only Pro. A
+      warehouse that fulfils online orders needs no till. The sidebar entry is
+      hidden until the store has 2+ locations or POS is on, so a
+      single-location store never sees it.
+    - **The desk view can now target a shop (Phase C).**
+      `/dashboard/inventory` gained a location selector: **All locations** shows
+      the cross-location total and is READ-ONLY (you cannot adjust a sum), while
+      a specific shop is editable and routes every write through
+      `adjust_stock_at`. Omitting the location keeps the compatibility wrapper,
+      so a single-location store is untouched and never sees the selector.
+      Three things had to move together or the page would lie: the list reads
+      `inventory_levels.on_hand` at that shop instead of the `products.stock`
+      aggregate; **`setStock` computes its delta against THAT shelf** (against
+      the aggregate it would write a wildly wrong correction); and `bulkAdjust`
+      does the same for its batch baseline, treating a shop that has never
+      carried a SKU as zero rather than skipping it — which is the normal case
+      when stocking a new shop. The selector is also scope-aware (§B2): a
+      location-bound admin sees only their shops, and naming another one in the
+      URL is refused server-side.
+    - **Online orders are ROUTED to a location (Phase D).** Checkout used to
+      call the `reserve_stock` wrapper, which always targets the store's
+      DEFAULT location — so a store with stock in a second shop advertised it
+      and then failed the order. `lib/fulfilment/resolve.ts` now picks a
+      location and `placeOrder` reserves there and stamps `orders.location_id`,
+      which also brings online orders inside the §B2 location scope.
+      - **`lib/fulfilment/strategies.ts` is a REGISTRY** (roadmap §1.2), not a
+        switch. v1 registers `priority`; `nearest`/`most_stock`/`cheapest` each
+        become a file that registers itself, and checkout never learns their
+        names. An unknown strategy id resolves to the default rather than
+        stopping a store selling.
+      - **Falling back is deliberate.** No rules row, no eligible location, or
+        a failed query ⇒ null ⇒ the wrapper's default location, exactly as
+        before. Routing must never be the reason a sale is refused. A store
+        with one location short-circuits entirely.
+      - **★ `products.online_stock` is what the STOREFRONT promises.**
+        `products.stock` stays the all-locations total (the dashboard and POS
+        want that); `online_stock` is the same sum restricted to locations with
+        `online_fulfil` that are active. Both are maintained by the SAME
+        `_recompute_stock_aggregate`, so there is one place stock totals are
+        derived. A second trigger recomputes on a capability or `active`
+        change — without it, enabling fulfilment at a shop would leave the
+        website saying "out of stock" until something else touched that SKU.
+        The migration's guard FAILS if `online_stock > stock`, which can only
+        mean the capability filter is wrong.
+    - **Stock can be HELD as well as sold (Phase E).**
+      `supabase/locations_04_reservations.sql` puts
+      `inventory_levels.reserved` to work — it had been carried since pos_01
+      and never read — so **`available = on_hand − reserved`**, and every
+      existing guard (`reserve_stock_at`, `transfer_stock`) now subtracts it.
+      `stock_reservations` says WHOSE hold it is and when it lapses, which the
+      bare counter cannot. `lib/inventory/reservations.ts` is the API:
+      `holdStock` (reserved += qty, on_hand untouched — the goods are still on
+      the shelf), `commitHold` (the sale happened), `releaseHold` (it didn't),
+      `sweepExpiredHolds`. Purely ADDITIVE: nothing that existed changed
+      behaviour, because a store with no holds has `reserved = 0` everywhere.
+    - **Pick up in store (Phase F).** A shopper buys online and collects at a
+      shop. `supabase/locations_05_pickup.sql` adds `fulfilment_type` /
+      `pickup_location_id` / `pickup_status` / `pickup_expires_at` /
+      `collected_at` / `collected_by` to `orders` — columns, not a side table,
+      because a pickup IS an order (same money, items, invoice, history) and a
+      side table would mean every order read either joins it or silently
+      ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
+      where; `/pos/pickups` hands it over; the sweep rides on
+      `/api/cron/expire-pending-payments`. Config:
+      `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
+      `locations`, rendered on Locations → Online fulfilment).
+      - **A pickup HOLDS, it does not sell** — `placeOrder` calls `holdStock`
+        instead of `reserve_stock_at`. Selling would empty the shelf on screen
+        while the box is still physically on it, and the shop would reorder
+        stock it already has. Handing over commits the holds; cancelling or
+        expiring releases them.
+      - **★ SO THE ORDER CARRIES `stock_status: 'none'`.** The cancel path's
+        reserved→released claim RESTOCKS, and running it on a pickup would ADD
+        units that never left — inflating that shop's count on every
+        cancellation. `updateOrderStatus` releases the order's pickup holds
+        instead, which is idempotent, so a second cancel is a no-op.
+      - **A shop is offered only if it can actually serve the basket**:
+        the `pickup` capability (which itself `requires` `pos` — someone has to
+        hand the goods over — and is Pro), active, and enough **available**
+        (`on_hand − reserved`) stock. Offering a shop whose last unit is
+        already held for somebody else's collection is how two people are
+        promised the same box. A short shop is still LISTED, flagged and
+        disabled, rather than hidden — "not everything is in stock here" is
+        information; a silently missing shop is confusing.
+      - **The customer's choice OVERRIDES routing** (Phase D), and the chosen
+        shop's name + address ride into the `order.placed` payload, so the
+        confirmation tells them where to go instead of quoting a delivery
+        address they never gave. Delivery orders are untouched — the pickup
+        variables are only added when there IS a pickup.
+      - **Expiry cancels, it does not refund.** `sweepExpiredPickups` claims
+        awaiting/ready → expired per order, then releases the holds (that
+        order, so a hand-over racing the sweep can't lose). Refunds wait for
+        the returns machinery that records them (roadmap Phase G) — quietly
+        moving money on a schedule ahead of that is not a thing to build.
+      - **★ THE SHOPPER SEARCHES THE SHOP LIST; THE MERCHANT DOESN'T PREDICT
+        IT.** Every shop with the goods is offered, and the checkout picker
+        filters the list by postcode, city or shop name as they type. To keep a
+        specific shop off the list, turn off its `pickup` capability — that
+        route always existed.
+        ⚠ **`pickup_pincodes` was built (`locations_07`) and REMOVED
+        (`locations_08`); `lib/locations/pincodes.ts` is deleted.** It let a
+        merchant list the postcodes each shop collects to and hid pickup from
+        anyone outside them. It was reverted because the design argued against
+        itself: it needed a "Collecting somewhere else?" escape hatch precisely
+        BECAUSE hand-typed lists have gaps — and a shopper's DELIVERY postcode
+        is a guess at where they are, never a fact about where they will drive.
+        People collect near work, near family, on a route home; the merchant
+        cannot predict that and shouldn't be asked to. Nothing was lost in the
+        drop, because the column only ever decided what was OFFERED, never what
+        was permitted — `placeOrder` validated capability, store and stock then
+        and still does, and deliberately never refused on geography. Recorded
+        here so it isn't re-proposed as a new idea.
+      - **★ THE NUDGE IS A CLAIM, NOT A SCHEDULE.** `sweepPickupReminders`
+        warns 48 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ TWICE the
+        cron interval: window and schedule are not in phase, so the notice an
+        order gets is (W − I, W] — at W = I nothing slips through unwarned, but
+        an order expiring just after a run is warned just before it lapses, and
+        it spends the one email the claim allows) and claims
+        `orders.pickup_warned_at` NULL → now() in
+        the same conditional UPDATE it selects with
+        (`locations_06_pickup_reminder.sql`). The cron is a HEARTBEAT — it
+        re-reads the same rows every run — and `notifications`' UNIQUE on
+        (event, recipient) cannot dedupe this because every emit creates a NEW
+        event row. Without the claim, a merchant mails the same customer about
+        the same box daily, which is how people learn to ignore their email.
+        Reminders run AFTER the expiry sweep: an order that just lapsed is no
+        longer awaiting collection, and telling someone to hurry and collect
+        something already cancelled is worse than saying nothing.
+    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
+      metered extra-location billing (7), omnichannel/BOPIS (8), offline
+      outbox (9). See `docs/pos-plan.md`.
+
+24. **Notifications & email — one event log, registry-driven fan-out, one way
+    out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
+    decision lives, how to add one, troubleshooting). This section restores the
+    summary the POS merge overwrote.
+    - **EVERY action emits an EVENT** into append-only `activity_events` — the
+      audit trail, complete by construction, rendered at `/dashboard/activity`.
+      Only events with a non-empty `audiences` entry FAN OUT into per-recipient
+      `notifications` rows; `audiences: {}` is audit-only, which is how a busy
+      store gets full history without 400 badges a day.
+    - **ONE EVENT, TWO AUDIENCES.** "Order placed" tells the TEAM ("New order
+      ORD10011027 · ₹1,240") and the CUSTOMER ("Thanks for your order") — same
+      trigger, nothing else shared. Config is **per audience**
+      (`notification_settings.channels`/`templates` keyed `{team, customer}`),
+      because turning off team email must never stop a shopper's confirmation.
+      That was a real bug; there is a regression test.
+    - **Configuration resolves in THREE layers**, the settings-registry shape
+      (convention #9): code registry (`lib/notifications/events.ts`) ←
+      `notification_definitions` (operators) ← `notification_settings` (the
+      merchant). An empty database behaves exactly like the code defaults.
+      Console at **Settings → Notifications**, gated on the `notifications`
+      section; personal opt-outs at `…/notifications/me`.
+    - **EVERY registry entry HAS AN EMITTER — CI-enforced.**
+      `lib/notifications/coverage.test.ts` fails unless each key is emitted from
+      `app/`/`lib/` or listed in `PENDING` with the unbuilt feature it waits on.
+      27 of 38 were dead before it existed. **Its limit:** it asserts a key is
+      emitted SOMEWHERE, not that every path which should emit it does — which
+      is how POS sales stayed silent (§22).
+    - **`recordEvent` in crons/webhooks, `emitEvent` in server actions** —
+      `after()` has nothing to defer onto once a cron response is sent.
+    - **THRESHOLD EVENTS FIRE ON THE CROSSING, NOT THE STATE**, or a merchant
+      gets one mail per sale and stops reading all of them: `stockAlertFor`
+      (`lib/inventory/alerts.ts`), `aiWarnAt` (`lib/ai/quota.ts` — at 3 left
+      AND at 0, because the FREE plan's whole cap IS 3 and a single trigger
+      would have skipped the entire tier), `expiryWarnWindow` (`lib/plans.ts`,
+      24-hour bands at 7 and 1 days out), `campaign.sent` (conditional → done
+      claim), `customer.signed_up` (`xmax = 0`, so an upsert that only UPDATED
+      isn't a signup). All pure and tested.
+    - **A NEW MERCHANT GETS A WELCOME.** Store creation used to emit only
+      `platform.store_created` — operators, in-app — so the person who had just
+      finished signup received NOTHING: no confirmation, no store address, no
+      next step. `createStore` now emits **`store.created`** as well
+      (store-scoped, `store-admins`, BOTH channels, `configurable: false` —
+      nobody can have turned it off before they had an account). The two are
+      the same moment for different audiences, which is the §23 rule working as
+      intended, not duplication. - **SOME COPY IS HAND-WRITTEN** (`BESPOKE` in default-templates.ts). The
+      generated shape — intro, then a Reference/Who/When fact list — is right
+      for a report and wrong for anything a person should feel something about;
+      a welcome rendered as a fact list reads like a receipt for existing. Keep
+      the map small: an event that only needs a better opening line belongs in
+      `INTRO`. - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+      entry is in-app only: `plan.changed` + `subscription.payment_failed`
+      leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
+      email — nothing else warns before a lapse.
+    - **ROUTING HAS A LOCATION AXIS, AND IT IS A SCOPE NOT A MODE.**
+      `RoutingRule` was `mode: permission | roles | admins` with no idea where
+      anyone worked, so a manager bound to one shop was still emailed about
+      every other one. `scope` (`store` | `event_location`) COMPOSES with all
+      three modes — "people with the orders permission, AT this order's
+      location" is a mode AND a scope, and making location a fourth mode would
+      multiply the list every time another axis appears. It can only ever
+      NARROW what the mode selected. Two rules keep it from black-holing mail:
+      an event with **no** location is never narrowed by one (an online order
+      before routing resolves a shop, a blog comment, a plan change), and
+      **unrestricted staff still hear everything** — absence is not
+      restriction, the same contract as `lib/locations/scope.ts`. Defaults to
+      `store`, so nothing changes until a merchant switches an event over.
+      `EmitEventInput.locationId` carries it; `placePosSale` passes the
+      register's location and `placeOrder` the resolved fulfilment one.
+      The console renders it as a second **Where** section in the same
+      recipient popover (it composes with the mode, so it is a second
+      question, not more entries in the first list), shown ONLY when the
+      store has 2+ locations AND `EventDef.hasLocation` is set — a switch
+      that would do nothing is worse than no switch.
+    - **EVERY EMAIL LEAVES THROUGH `lib/email/send.ts`** (`sendEmail`), which
+      sends AND logs, never throws into its caller, and records failures as
+      readily as successes. There were EIGHT scattered `resend.emails.send`
+      calls and none recorded anything. **`send-coverage.test.ts` fails if a
+      ninth appears.** Batch workers can't use the single-message path without
+      losing batching, so they call `sendEmailBatch` + `logEmail` explicitly.
+    - **A BATCH ERROR IS NOT A VERDICT ON THE BATCH** (`lib/email/send-batch.ts`).
+      Resend validates the whole request, so one bad recipient errors all 100 —
+      and both workers used to mark all 100 failed, permanently in the campaign
+      worker, which has no retry. It now re-sends a failed slice message by
+      message so only the real culprit fails; three failures in a row is an
+      outage, not a poison pill, so it stops probing.
+    - **SENDING ≠ DELIVERY.** `/api/webhooks/resend` (Svix-verified,
+      `RESEND_WEBHOOK_SECRET`) writes permanent bounces + complaints to
+      **`email_suppressions`** — GLOBAL, no `store_id`, the one table here that
+      isn't tenant-scoped, because a hard bounce bounces for everyone and the
+      shared sending domain's reputation is the platform's. Only PERMANENT
+      signals suppress; an unknown bounce sub-type is treated as soft. Both
+      workers filter, failing OPEN. Failed rows surface in a panel on the
+      notifications page (`getDeliveryHealth` + `retryFailedEmail`) that renders
+      only when mail actually failed.
+    - **"INSTANT" RESTS ON THE WORKER KICK.** The cron heartbeat is DAILY, so if
+      `triggerEmailWorker` doesn't land, mail waits up to 24 h — silently.
+      The origin is **the current request's host** (`getRequestOrigin()`), not a
+      configured one: resolving it from env made a local dev order POST the kick
+      to `https://staging.storemink.com`, telling another environment to drain a
+      queue that wasn't ours. `PLATFORM_URL` remains the fallback for callers
+      with no request scope (the cron chaining itself).
+    - **EMAIL LOGS** at `/dashboard/activity/email-logs` (a child of Activity
+      Logs, same `activity` permission): To / From / Type / Provider / Status /
+      Sent at, filterable, with the body in a **sandboxed iframe** (no
+      `allow-same-origin`, no `allow-scripts`). `supabase/email_logs.sql`,
+      service-role only, pruned at 90 days. `lib/email/mailers.ts` is the
+      mail-TYPE catalog and marks `password_reset`, `staff_invite`,
+      `pos_staff_invite` and `pos_credential_reset` **sensitive** — their bodies
+      carry a working credential and are not stored. **`operator_otp` is
+      deliberately NOT redacted** (owner's decision, 2026-07-27): the code is
+      stored in full so a sign-in that "never arrived" can be checked. It's
+      platform mail (`store_id NULL`), so it only appears on the storemink.com
+      console — but an operator can read another operator's live code. Flipping
+      one flag reverses it; both behaviours are pinned by tests.
+    - **VALUES ARE FORMATTED FOR READING** (`lib/notifications/format.ts`, pure
+      - tested). Every value used to reach the email as `String(value)`, so an
+        order confirmation read "Total 281.4 / Currency INR / Payment method cod /
+        When 28/7/2026, 12:20:46 am" — four tells that nobody had looked at it,
+        while the variable catalog had been advertising `sample: "₹1,240.00"` all
+        along, so the console previewed something the send could never produce.
+        `formatVariable` maps by variable NAME (`items` and `total` are both
+        numbers; only one is a price): money → `₹281.40` via Intl with Indian
+        grouping, `payment_method` → "Cash on delivery", `status` → title case,
+        dates → "28 July 2026 at 5:50 am", `days_left` → "7 days". `link` passes
+        through untouched — formatting would corrupt a URL. `HIDDEN_VARIABLES`
+        drops `currency` from the summary: it rides on every amount, so its own
+        row was the email saying it twice. `summariseItems` replaces the bare
+        count with what was bought ("3 items · Amul Taaza Toned Milk (1 L), Tata
+        Salt × 2"), capped at three names — the difference between a receipt and a
+        log line. The CTA button is renderer chrome (`emailButton` from the
+        notification's url), not editable copy, so a body can never end up with
+        two of them.
+    - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
+      `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
+      passed it, so EVERY email rendered as team mail: a shopper's order
+      confirmation arrived with a "View in dashboard" button and a footer
+      inviting them to "change what you get emailed about" — linking to a
+      staff-only page they cannot open, about transactional mail that isn't
+      switchable in the first place (the customer audience has no preference
+      layer, by design). `isTeamRow` now derives it from the row, defaulting to
+      TEAM only for non-customer types so an unknown type can't silently turn a
+      receipt back into staff mail. `groupRows` keys on recipient_type too:
+      one person can be BOTH (an owner ordering from their own store), and
+      grouped without it their staff and customer rows shared one digest
+      rendered with whichever sorted first. Regression-tested in both
+      directions. - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
+      pure + tested). It cannot come through the merchant template system:
+      template values are ESCAPED strings — that escaping is the XSS boundary —
+      so a table would arrive as visible markup. It renders between the body and
+      the CTA button, like the button itself. All `<table>` with inline styles
+      and explicit widths, the only layout Outlook, Gmail clipping and a 320px
+      phone agree on. Items + totals ladder, discounts shown NEGATIVE (bare,
+      they read as another charge and the totals visibly stop adding up), capped
+      at 20 rows with "+N more", names escaped, and `""` when there's nothing to
+      show — the block is attached to every notification email and an empty
+      frame on "Blog approved" would look broken. - **THE ITEMS RIDE THEIR OWN FIELD, NOT THE PAYLOAD.** `EmitEventInput.email`
+      is display-only data for the email channel, snapshotted onto
+      `notification_email_queue.line_items`
+      (`supabase/notifications_06_email_items.sql`) at enqueue. It is separate
+      from `payload` because that one is the AUDIT record — kept small and
+      scalar on purpose (`sanitizePayload` drops objects and arrays) and read by
+      the bell, the activity feed and merchant `{{tokens}}`. Snapshotting (like
+      title/body/url) means the worker needs no joins and a receipt keeps the
+      prices it was written with. `sanitizeSummary` bounds it: 50 items, capped
+      names, coerced numbers. Emitted by `placeOrder` and `placePosSale`, so an
+      in-store customer's emailed copy and their printed receipt agree line for
+      line. - **The fact list and the table must not both carry the same thing.**
+      `HAS_ORDER_SUMMARY` + `SUMMARY_OWNED` (default-templates.ts) drop items
+      and every money row from the built-in copy for events that render a
+      summary — printing "Total ₹343.00" directly above a table ending in
+      ₹343.00 is what makes an email look auto-generated. The fact list keeps
+      what the table doesn't: reference, payment method, when. The tokens stay
+      declared, so a merchant who wants them can still use them. - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): the same neutral
+      palette for every store — white card, near-black text, one dark button.
+      The storefront accent is deliberately unused: pushed into an email it must
+      survive colour-managed clients and forced dark mode, and the failure mode
+      is a customer receiving something that looks broken. Identity comes from
+      the logo. Every email type routes through it.
+    - **Email is a QUEUE, never an inline send** (`notification_email_queue`):
+      the fan-out enqueues, `lib/email/notification-worker.ts` drains it from
+      `/api/cron/send-emails`. A Resend round-trip must never sit on a
+      checkout's code path. Retries back off (5/15/45 min, 3 attempts).
+      **Digests** date each row to the END of its window (clock-aligned, so one
+      window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
+      heartbeat is 00:00 UTC — **move it if the cron moves.**
+
+25. **Legal & consent — versioned policies, and consent as evidence.**
+    - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,
+      Privacy, Acceptable Use) live in **`legal_documents`** — platform-global,
+      no `store_id`, the `platform_admins`/`help_categories` model. A MERCHANT's
+      own store policies are ordinary `store_pages` rows at the existing
+      `terms`/`privacy-policy`/`refund-policy` slugs, written by a guided
+      editor: the deliberate decision NOT to build a second CMS when the website
+      builder already renders and versions pages.
+    - **A VERSION AND A CHECKSUM, OR IT'S WORTHLESS.** "They accepted the terms"
+      means nothing without "…which said THIS". Each version stores its exact
+      body plus a sha256, and an acceptance references the version id. So a
+      published row is **IMMUTABLE, enforced by a DB trigger** — a change is a
+      new version, never an UPDATE — and published rows cannot be deleted
+      because acceptances point at them. `legal_documents_current_key` (partial
+      unique on `is_current`) guarantees "what must be accepted right now?" has
+      exactly one answer per kind.
+    - **CONSENT IS NEVER A CLIENT BOOLEAN.** A checkbox is a UI affordance:
+      anyone can POST `accepted: true` and a form can be replayed. The row is
+      written SERVER-SIDE by `recordSignupConsent` (`lib/legal/store.ts`) from
+      the REQUEST's own IP and user agent, against the versions the server
+      re-reads — the client never says which version it agreed to.
+      `legal_acceptances` is **append-only, trigger-enforced**, service-role
+      writes only; retracting consent is a future event, never an edit to the
+      past. Idempotent on `(user_id, document_id)`, so the safety-net write in
+      `createStore` (for a wizard resumed past the account step) is a no-op when
+      the first one landed.
+    - **CONTENT LIVES IN CODE, TRUTH LIVES IN THE DB.** `lib/legal/content.ts`
+      holds v1 so it is reviewable in a diff; `scripts/seed-legal.ts` publishes
+      it idempotently (the `ensureHomepage` pattern). Once published the DB row
+      is authoritative and immutable — editing the file changes what the NEXT
+      version says, never what anyone already accepted. `/legal/[slug]` renders
+      the DB row with its version and effective date, because an acceptance
+      references a version and the reader must see which one.
+    - **THE TWO BOXES ARE DIFFERENT THINGS.** The mandatory tick names and links
+      the actual documents and gates BOTH signup paths (email and Google start
+      from the same screen). The optional product-updates box is unticked,
+      gates nothing, and writes to `admins.marketing_opt_in` — a preference on
+      the PERSON, kept apart from `legal_acceptances` because conflating a
+      contract with a mailing preference is what makes a consent record
+      arguable later.
+    - **ONE BOX, EVERY REQUIRED DOCUMENT — AND THE LIST COMES FROM THE
+      REGISTRY.** All three (Terms, Privacy, **Acceptable Use**) are
+      `requiredAtSignup`, so all three get a real acceptance row. The AUP was
+      briefly excluded on the theory that it rides along via the Terms clause
+      "which forms part of these Terms" — but one tick box names every required
+      document, so including it costs the merchant nothing: a third name in the
+      sentence, not a third box. And it is the document you actually ENFORCE
+      against when suspending a store, which is a bad thing to hold only by
+      reference from another document. The signup sentence, the acceptance
+      write and the re-acceptance gate all read `signupRequiredDocs()` —
+      hardcoding the names in the UI is how a merchant ends up ticking a box
+      for two documents while the server records three.
+    - **FAIL OPEN ON THE GATE, LOUD ON THE WRITE.** `outstandingDocs` (the
+      re-acceptance check) returns empty on a DB error — a hiccup must not lock
+      every merchant behind a consent screen they cannot pass. But a consent
+      write that finds no published documents logs an ERROR: an account created
+      with no recorded agreement is exactly what this exists to prevent.
+    - **⚠ THE POLICY TEXT IS NOT LAWYER-REVIEWED.** It covers the shields this
+      product structurally needs — platform-not-seller, funds settling directly
+      to merchants (§18), merchant-as-controller, "as is", liability capped at
+      12 months' fees, merchant indemnity — and carries `⚠ REVIEW` markers on
+      the clauses where wording most affects exposure. Get counsel on it before
+      taking real money.
+    - **EDITING A POLICY MEANS PUBLISHING A NEW VERSION.** There is no other
+      way, and three things enforce it: the DB trigger rejects an UPDATE to a
+      published body, `ensureLegalSeeded` skips a kind that already has a
+      current version, and `publishLegalVersion` refuses a version that isn't
+      strictly higher than the current one. Flow: edit the body in
+      `lib/legal/content.ts`, bump its `version`, run
+      `scripts/publish-legal.ts --publish`. The const is `LEGAL_CONTENT`, NOT
+      `_V1` — someone writing v2 must not be editing something named for v1.
+      **The retire and the insert are ONE transaction** (`withService` wraps in
+      BEGIN/COMMIT): `legal_documents_current_key` allows one current row per
+      kind, so insert-first violates it — and retire-first that dies before the
+      insert would leave the policy with NO current version, which makes the
+      signup screen nameless and `recordSignupConsent` log "no published
+      documents" for every new account. Order is pinned by a test.
+    - **THE PUBLISH SCRIPT IS DRY-RUN BY DEFAULT.** It cannot be undone and, with
+      the gate live, it interrupts every merchant on their next dashboard load.
+      It also **detects a body edited WITHOUT a version bump** by comparing the
+      checksum — otherwise that edit silently does nothing and whoever made it
+      believes the policy changed. (This is why `PublishedDoc` carries
+      `checksum`.)
+    - **THE RE-ACCEPTANCE GATE LIVES IN THE DASHBOARD LAYOUT, NOT `proxy.ts`.**
+      The proxy reads its claims straight from the verified session cookie and
+      does no DB query at all — that is its design — and "which documents has
+      this user not accepted?" cannot be answered from a cookie. Claims can't
+      carry it either: a claim set server-side doesn't reach an EXISTING session
+      until the cookie is re-minted, which is precisely the population a v2 must
+      reach. So the layout, which already resolves the viewer from the database,
+      calls `outstandingDocs(ctx.userId)` and redirects to
+      **`/auth/policy-update`** — under `/auth` because a route inside
+      `/dashboard` would be wrapped by the same layout and redirect to itself
+      forever, and because that is where the analogous `force_password_reset`
+      screen already lives. The gate sits AFTER the outage and no-access
+      branches: an unreachable database must never present as a consent demand.
+      `getSignupDocsCached` (60s, tag `LEGAL_TAG`, busted on publish) keeps it
+      to ONE indexed query per dashboard load; the consent WRITE path stays
+      uncached, because recording an acceptance against a superseded version is
+      the exact failure this feature exists to prevent.
+      **`unstable_cache` THROWS ("Invariant: incrementalCache missing") when
+      there is no render scope** — a server action, a route handler, a script.
+      `outstandingDocs` is called from the layout (has one) AND from
+      `acceptUpdatedPolicies` (does not), so the cached read is wrapped in a
+      try/catch that falls through to the uncached query. The cache is an
+      OPTIMISATION, never an input to correctness. Unguarded, the accept action
+      rejected and the screen hung on "Saving…" forever — which is also why the
+      client wraps the action in try/catch: **a thrown action inside
+      `startTransition` leaves `pending` true permanently and surfaces
+      nothing.** Both are regression-tested.
+    - **THE GATE CATCHES INVITED STAFF TOO**, not just owners — they reach the
+      dashboard through `/auth/set-password`, never the signup wizard, so they
+      had agreed to nothing at all. The screen has a **"Sign out instead"**
+      escape: someone who won't agree must be able to leave rather than be
+      stuck on a screen with one button. And `acceptUpdatedPolicies` re-derives
+      what is outstanding and VERIFIES the write stuck — `recordSignupConsent`
+      swallows its errors by design, so without the re-check a failure would
+      bounce the merchant back to the gate with no explanation.
+    - **A STORE'S OWN POLICIES ARE ORDINARY PAGES.** Settings → Policies
+      (`/dashboard/settings/policies`) edits Terms, Refund, Shipping and
+      Privacy as `store_pages` rows at the slugs the footer ALREADY links to —
+      so writing one fixes the dead link rather than adding a second address
+      for the same document. The registry is `lib/legal/store-policies.ts`.
+      Deliberately NOT the versioned/checksummed/immutable machinery of
+      `legal_documents`: that exists so you can prove what a merchant agreed to
+      years later, whereas a shop owner should be able to reword their returns
+      policy on a Tuesday without a release process. Saving PUBLISHES — a
+      draft-only refund policy is a broken link and an unreadable consent box —
+      and emptying one unpublishes rather than leaving a blank page live.
+      The editor is a plain TEXTAREA (`lib/legal/policy-text.ts`, pure +
+      tested): merchants write prose, `plainToHtml` escapes it into `<p>`
+      blocks. **`htmlToPlain` returns null for anything richer than paragraphs**
+      and the card sends them to the builder instead — the same page can be
+      edited there, and loading headings or lists into a textarea would destroy
+      them on the next save. The prompts are PROMPTS, never pre-written prose:
+      a generated policy nobody read looks authoritative and says things the
+      merchant never agreed to.
+    - **SHOPPER CONSENT: SIGNUP AND CHECKOUT.** The box is written server-side
+      at the two moments that matter — `upsertCustomerProfile` on a genuine
+      first insert (the same `xmax = 0` signal the signup event uses) and
+      `placeOrder` AFTER the order is safely persisted (the shopper agreed by
+      placing it; a consent write that could roll back a paid order would be
+      the tail wagging the dog). Checkout names only Terms + Refund
+      (`atCheckout` in the registry) — the privacy policy in a sentence about
+      paying is noise. `recordStorePolicyConsent` re-reads the live text and
+      HASHES it; the client never says which policy or which wording it agreed
+      to. **The box renders only when the store has published something**: one
+      naming documents nobody can read would manufacture a record of agreement
+      to a blank page, so `PolicyConsent` returns null and the caller must not
+      gate its button on a box that isn't there.
+    - **AN ACCEPTANCE IS ANCHORED TO EXACTLY ONE THING**
+      (`supabase/legal_02_store_consent.sql`): a platform `document_id`
+      (immutable, versioned) or a `policy_slug` + `policy_checksum`, enforced by
+      a CHECK — a row anchored to nothing records agreement to something
+      unspecified, which is worth less than no row. The checksum, not a
+      snapshot: 64 bytes answers "has this text changed since they agreed?",
+      and if it hasn't, the live page IS the evidence. Store-policy rows get
+      their OWN unique index `(user_id, store_id, policy_slug)` — the old
+      `(user_id, document_id)` key silently stops working when document_id is
+      NULL — and the append-only trigger gains one narrow exception so
+      re-accepting a reworded policy refreshes the checksum instead of throwing.
+      Identity (user/store/policy/actor) still can't change, and platform
+      acceptances remain fully immutable.
+    - **NOT YET BUILT:** consent at sign-in, an operator UI to publish v2 (the
+      script is the tool today), and seeding starter policy pages at signup —
+      until that lands, a new store's footer links to policy pages that do not
+      exist yet.
 
 ## 6. Commands
 
@@ -1190,7 +2399,17 @@ npm run format      # prettier --write
     identical, so every `admins`/`users` FK + the `app.current_user_id` GUC keep
     working with zero remapping.
 - **Vercel**: hosting + cron. Wildcard domain `*.storemink.com` → store subdomains.
-- **Resend**: transactional email + custom-domain DNS verification.
+- **Resend**: transactional email + custom-domain DNS verification. Delivery
+  webhooks post to `/api/webhooks/resend` and need **`RESEND_WEBHOOK_SECRET`**
+  (Svix signing secret) plus the endpoint registered in the Resend dashboard,
+  subscribed to `email.bounced` + `email.complained` — without it bounces are
+  never learned and dead addresses are mailed forever (§22). It is **per
+  ENDPOINT, therefore per env** (`_RESEND_WEBHOOK_SECRET_SECRET` in
+  `cloudbuild.yaml` → `RESEND_WEBHOOK_SECRET_{STAGING,PROD}`), unlike
+  `RESEND_API_KEY`, which is one account-wide key. It went unwired on Cloud Run
+  until 2026-08-01, so the whole suppression half of §24 was inert — the route
+  degrades by logging and dropping the event, which is the failure you don't
+  notice. Registration + secret creation runbook: `docs/gcp-ci-cd.md`.
 - **Google Cloud Storage** (media, GCP migration Phase 3 — `lib/storage/gcs.ts`):
   when **`GCS_BUCKET`** is set, new image/video uploads go to that GCS bucket
   (public, uniform bucket-level access) and public URLs are
@@ -1222,6 +2441,32 @@ npm run format      # prettier --write
   only) is env **`RAZORPAY_KEY_ID`** / **`RAZORPAY_KEY_SECRET`**. Cron routes
   (`/api/cron/*`) require **`CRON_SECRET`** (Vercel Cron sends it as a Bearer
   header).
+- **POS** (§22): the `/pos` device + operator cookies are HMAC-signed with env
+  **`POS_SESSION_SECRET`** (any high-entropy string; `openssl rand -base64 32`).
+  Required for the register to work; when unset, cookie VERIFY returns null
+  (never throws) so /pos falls back to the login gate rather than 500ing.
+  **That graceful degradation covers VERIFY only — MINTING a cookie cannot
+  degrade**, so with the secret absent `authorizeThisDevice` / `pairDevice` /
+  `posLoginWithPin` are dead. They now check `posSessionConfigured()` and return
+  `POS_SECRET_MISSING_ERROR` instead of throwing a raw 500 (staging ran without
+  the secret until 2026-07-27 — it was never added to `cloudbuild.yaml` — and
+  every "Authorize this device" click 500'd). `registerDevice` also SIGNS BEFORE
+  IT INSERTS: insert-then-sign left an orphan `pos_devices` row per failure, and
+  those rows count against `PLAN_LIMITS.posDevicesPerLocation`, so a broken
+  deployment eventually reported a bogus "already has 5 authorized devices".
+  Deploy wiring is per-env (`_POS_SESSION_SECRET_SECRET` → the
+  `POS_SESSION_SECRET_STAGING`/`_PROD` Secret Manager entries) — see
+  `docs/gcp-ci-cd.md`.
+- **Google Maps** (signup location step, §19): **`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`**
+  — a Maps JavaScript API key from Google Cloud. Needs a billing account with a
+  card even to stay inside the free allowance, and the key is public by nature
+  (it ships to the browser), so restrict it by HTTP referrer to the app's hosts
+  and enable only Maps JavaScript + Geocoding. **Entirely optional at runtime**:
+  `app/platform/signup/location-picker.tsx` renders the map only when the key is
+  set and falls back to the plain country/city form when it is missing, blocked,
+  or rejected — location is a REQUIRED signup step, so the map must never be
+  able to stop someone signing up. "Use my current location" is the browser's
+  own Geolocation API: free, keyless, and works with the map switched off.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&
@@ -1239,6 +2484,56 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   Search Console \_Domain property* (covers all `*.storemink.com`) and add the
   `storemink-run@…` SA as a property user. Custom-domain stores fall outside the
   property, so their Google submit no-ops (IndexNow + on-page canonicals cover them).
+  **⚠ A STORE'S PUBLIC ORIGIN IS `storeOrigin(store)` (`lib/site.ts`) — NEVER
+  `custom_domain ?? subdomain`.** The custom domain counts only once
+  `settings.custom_domain_verified === true`, which is the same rule
+  `lookupStoreByHost` (`lib/store/resolve.ts`) applies when deciding whether to
+  SERVE on that domain — and the two silently disagreed. `saveCustomDomain`
+  writes `custom_domain` while CLEARING the verified flag, so every merchant
+  passes through a state where the store is served on its subdomain while every
+  canonical, `og:url`, robots `Host:`, sitemap `<loc>` and IndexNow ping pointed
+  at a domain we don't serve. Google follows the canonical, fails to fetch it,
+  and drops the working subdomain URLs as "Alternate page with proper canonical
+  tag" — total silent deindexing of a tenant. `getStoreUrl()` (and therefore the
+  storefront `metadataBase`) routes through it; regression-tested in
+  `lib/site.test.ts`. Related: a store-SHAPED host that resolves to NO store
+  (unclaimed subdomain, suspended store, unseeded demo) now returns
+  `Disallow: /` + an empty sitemap instead of falling through to the platform's,
+  which had every parked subdomain advertising storemink.com's URLs as its own.
+  **`app/sitemap.ts` emits NO fabricated `lastmod`** — a request-time value makes
+  Google discard lastmod site-wide, including the values that are accurate — so
+  each URL derives it from a real content timestamp or omits it, guarded by
+  `app/sitemap.test.ts`. Products use **`products.content_updated_at`**
+  (`supabase/seo_01_product_content_timestamp.sql`), a trigger-maintained column
+  that moves only when a visitor-visible field changes: `updated_at` is bumped by
+  `_recompute_stock_aggregate` on every sale, so it would claim a content change
+  per purchase. Pages use `published_at`, not `updated_at`, which a BEFORE-UPDATE
+  trigger + `savePageDraft`'s autosave advance while an UNPUBLISHED draft is
+  edited.
+- **A NEW STORE IS NOT INDEXABLE UNTIL ITS OWNER PUBLISHES SOMETHING**
+  (`lib/store/launch.ts`). At creation a store is pure theme seed — the same
+  homepage, ~17 content pages and sample catalogue as every other store on that
+  template — and `createStore` used to submit exactly that to Google + IndexNow
+  the moment it existed. Mass-submitting near-duplicate placeholder stores spends
+  the whole `*.storemink.com` domain's reputation, and `robots.txt` cannot undo
+  it (Disallow stops crawling, not indexing). `stores.settings.launched` gates
+  `robots.ts` + `sitemap.ts`; `markStoreLaunched()` fires from `publishPage` and
+  the product publish path, which is now also where the one-time
+  `submitSitemapToGoogle` happens. **Absence of the flag means LAUNCHED** —
+  pre-existing stores have no key and treating them as unlaunched would deindex
+  live shops; `createStore` writes `launched: false` explicitly. Demo stores
+  (`settings.demo`) stay permanently out. Theme SAMPLE products now seed as
+  **drafts** (`applyTheme`'s `publishSampleProducts`, true only for demo stores):
+  published, every store on a theme served the same product pages whose own copy
+  says "replace it with your own".
+  Full audit, fixes and the re-index cadence: `docs/seo-action-plan.md`.
+- **StoreMink's own brand identity for schema lives in
+  `lib/seo/brand-identity.ts`** — one Organization node (`sameAs` for the
+  LinkedIn/YouTube/Instagram profiles, `contactPoint`, `address`) emitted from
+  BOTH the apex and `help.storemink.com` under a single `@id`, plus the matching
+  visible footer links. Two hand-written copies would drift, and a contradictory
+  entity is worse than an absent one. **Only public profile URLs belong in
+  `sameAs`** — never a `/admin/` dashboard URL.
 
 ## 8. Multi-tenant rollout status (as of 2026-07)
 

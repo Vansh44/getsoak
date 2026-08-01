@@ -27,6 +27,7 @@ import {
   users,
 } from "@/drizzle/schema";
 import { STORE_TAG, FALLBACK_STORE_ID } from "@/lib/store/resolve";
+import { emitEvent } from "@/lib/notifications/record";
 import { getThemeDefinition } from "@/lib/themes";
 import { applyTheme } from "@/lib/themes/apply";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
@@ -218,6 +219,13 @@ export async function setStoreStatus(
     return { error: "Could not update the store. Please try again." };
   }
   revalidateTag(STORE_TAG, "max");
+  emitEvent({
+    type: "platform.store_suspended",
+    storeId: null,
+    actor: { type: "operator", label: viewer.email },
+    subject: { type: "store", id: storeId },
+    payload: { status },
+  });
   return { success: true };
 }
 
@@ -313,6 +321,23 @@ export async function setStorePlan(
   // Plan gates feature settings (minPlan) — bust the cached store lookups so
   // the store's dashboard + storefront see the new plan immediately.
   revalidateTag(STORE_TAG, "max");
+
+  // Two events, two audiences: the MERCHANT is told their plan changed, and
+  // StoreMink operators see it on the platform feed.
+  emitEvent({
+    type: "plan.changed",
+    storeId,
+    actor: { type: "operator", label: viewer.email },
+    subject: { type: "plan", id: target, label: PLAN_META[target].name },
+    payload: { plan: target, note: "Changed by StoreMink" },
+  });
+  emitEvent({
+    type: "platform.plan_changed",
+    storeId: null,
+    actor: { type: "operator", label: viewer.email },
+    subject: { type: "store", id: storeId },
+    payload: { plan: target },
+  });
   return { success: true };
 }
 
@@ -741,6 +766,10 @@ export async function seedDemoStore(themeId: string): Promise<SeedDemoResult> {
   const result = await applyTheme(storeId, theme.id, {
     publish: true,
     reset: true,
+    // A demo store IS the showcase — its whole job is to look like a finished
+    // shop, so its sample catalogue must be live. Real merchant stores seed
+    // these as drafts (see applyTheme's publishSampleProducts).
+    publishSampleProducts: true,
   });
 
   revalidateTag(STORE_TAG, "max");

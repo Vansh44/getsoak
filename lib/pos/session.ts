@@ -1,0 +1,174 @@
+// POS signed sessions (docs/pos-plan.md §3). Two HMAC-signed, stateless cookies
+// distinct from the Firebase `sm_session`:
+//
+//   pos_device   — a paired register: {storeId, locationId, deviceId}. Long-lived.
+//                  Reaches /pos + the PIN pad, but can NOT sell on its own.
+//   pos_operator — the active staff after a PIN unlock: {staffId, storeId,
+//                  locationId, role}. Short-lived (+ idle). Authorises the sale.
+//
+// Both are verified with HMAC-SHA256 over POS_SESSION_SECRET — no DB call — so
+// the Node-runtime proxy can gate /pos cheaply. Revocation (a lost tablet) is a
+// DB check done in the /pos layout, not here. No `server-only`: proxy.ts (Node
+// middleware) verifies these, and node:crypto can't run in a browser bundle
+// anyway.
+
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export const POS_DEVICE_COOKIE = "pos_device";
+export const POS_OPERATOR_COOKIE = "pos_operator";
+
+// A paired register cookie lasts a season; an operator session is a shift.
+export const POS_DEVICE_MAX_AGE_S = 90 * 24 * 60 * 60;
+export const POS_OPERATOR_MAX_AGE_S = 12 * 60 * 60;
+
+function secretOrNull(): string | null {
+  return process.env.POS_SESSION_SECRET || null;
+}
+
+/**
+ * Can this deployment MINT POS credentials? Verification degrades quietly when
+ * the secret is missing (see below), but signing cannot — so every action that
+ * mints a cookie checks this first and returns a readable error.
+ *
+ * Without it a missing env var surfaces as a raw 500 on the register with no
+ * hint of the cause: staging ran without POS_SESSION_SECRET (it was never wired
+ * into cloudbuild.yaml) and "Authorize this device" simply threw, five times,
+ * leaving five orphan pos_devices rows against the per-location cap.
+ */
+export function posSessionConfigured(): boolean {
+  return secretOrNull() !== null;
+}
+
+/** Shown wherever a mint is refused for want of the secret. */
+export const POS_SECRET_MISSING_ERROR =
+  "Point of Sale isn't fully configured on this server (POS_SESSION_SECRET is missing). Contact support — this needs a deployment setting, not a change on your side.";
+
+// Signing MUST have a secret; verifying without one just means "no valid
+// session" (so the proxy never 500s when POS isn't configured — it falls to the
+// login/pro-gate instead of throwing).
+function requireSecret(): string {
+  const s = secretOrNull();
+  if (!s) {
+    throw new Error(
+      "POS_SESSION_SECRET is not set — cannot sign POS sessions.",
+    );
+  }
+  return s;
+}
+
+export interface BaseClaims {
+  iat: number;
+  exp: number;
+}
+
+export interface PosDeviceClaims extends BaseClaims {
+  t: "device";
+  deviceId: string;
+  storeId: string;
+  locationId: string;
+  /**
+   * Rotation nonce, checked against pos_devices.token_nonce. Rotated on every
+   * operator sign-in, so a COPIED cookie is detected the next time either copy
+   * is used (see getAuthorizedDevice). A signature alone can't catch a clone —
+   * the clone carries a perfectly valid signature.
+   */
+  nonce: string;
+}
+
+export interface PosOperatorClaims extends BaseClaims {
+  t: "operator";
+  staffId: string;
+  storeId: string;
+  locationId: string;
+  /** The authorized device this operator signed in on (ties the session to the
+   *  device, so revoking the device kills the operator session). */
+  deviceId: string;
+  role: "cashier" | "manager";
+  name: string;
+}
+
+function mac(payload: string, key: string): string {
+  return createHmac("sha256", key).update(payload).digest("base64url");
+}
+
+/**
+ * Sign an arbitrary claim set. Exported so short-lived, single-purpose tokens
+ * (see lib/pos/approval.ts) share ONE signing implementation with the two
+ * cookies — a second hand-rolled HMAC is a second place to get it wrong.
+ */
+export function signToken(payloadObj: Record<string, unknown>): string {
+  const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64url");
+  return `${payload}.${mac(payload, requireSecret())}`;
+}
+
+/** Counterpart to signToken. Null on a bad signature, wrong type, or expiry. */
+export function verifyToken<T extends BaseClaims>(
+  token: string | undefined | null,
+  expectedType: string,
+): T | null {
+  if (!token || typeof token !== "string") return null;
+  const key = secretOrNull();
+  if (!key) return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const payload = token.slice(0, dot);
+  const provided = token.slice(dot + 1);
+
+  // Constant-time compare of the signature.
+  const expected = mac(payload, key);
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (!obj || obj.t !== expectedType) return null;
+  if (typeof obj.exp !== "number" || obj.exp * 1000 < Date.now()) return null;
+  return obj as unknown as T;
+}
+
+export function signDeviceToken(
+  claims: Pick<
+    PosDeviceClaims,
+    "deviceId" | "storeId" | "locationId" | "nonce"
+  >,
+): string {
+  const now = Math.floor(Date.now() / 1000);
+  return signToken({
+    t: "device",
+    ...claims,
+    iat: now,
+    exp: now + POS_DEVICE_MAX_AGE_S,
+  });
+}
+
+export function verifyDeviceToken(
+  token: string | undefined | null,
+): PosDeviceClaims | null {
+  return verifyToken<PosDeviceClaims>(token, "device");
+}
+
+export function signOperatorToken(
+  claims: Pick<
+    PosOperatorClaims,
+    "staffId" | "storeId" | "locationId" | "deviceId" | "role" | "name"
+  >,
+): string {
+  const now = Math.floor(Date.now() / 1000);
+  return signToken({
+    t: "operator",
+    ...claims,
+    iat: now,
+    exp: now + POS_OPERATOR_MAX_AGE_S,
+  });
+}
+
+export function verifyOperatorToken(
+  token: string | undefined | null,
+): PosOperatorClaims | null {
+  return verifyToken<PosOperatorClaims>(token, "operator");
+}

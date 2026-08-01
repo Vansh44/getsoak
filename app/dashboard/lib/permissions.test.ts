@@ -6,6 +6,8 @@ import {
   roleBadgeClass,
   SECTIONS,
   ROLE_COLORS,
+  foldNestedSections,
+  type DashboardSection,
 } from "./permissions";
 
 // can() is the central RBAC predicate. Every server-action gate (via
@@ -96,12 +98,161 @@ describe("getSection", () => {
   // Happy path — known keys resolve to their config.
   it("returns the matching section by key", () => {
     expect(getSection("products")?.label).toBe("Products");
-    expect(getSection("blogs")?.group).toBe("Content");
+    expect(getSection("blogs")?.group).toBe("Storefront");
   });
 
   // Unknown keys must not crash callers; return undefined.
   it("returns undefined for an unknown key", () => {
     expect(getSection("nope")).toBeUndefined();
+  });
+});
+
+// The sidebar nests some sections under others (`parent`) so it can be
+// organised by task without collapsing the permission model. These guard the
+// two ways that goes wrong.
+describe("section nesting", () => {
+  it("every parent key refers to a real section", () => {
+    const keys = new Set(SECTIONS.map((s) => s.key));
+    const dangling = SECTIONS.filter((s) => s.parent && !keys.has(s.parent));
+    expect(dangling.map((s) => `${s.key} -> ${s.parent}`)).toEqual([]);
+  });
+
+  // A nested section renders inside its parent's sub-nav, so a parent that is
+  // itself nested would be two levels deep and simply never appear.
+  it("no section nests under another nested section", () => {
+    const nested = new Set(SECTIONS.filter((s) => s.parent).map((s) => s.key));
+    const twoDeep = SECTIONS.filter((s) => s.parent && nested.has(s.parent));
+    expect(twoDeep.map((s) => s.key)).toEqual([]);
+  });
+
+  // THE reason `parent` exists rather than reusing `children`. Children are
+  // rendered with no can() check, so anything needing its own permission must
+  // stay a section. If someone ever moves one of these into a parent's
+  // `children` array, staff without the permission get a link that denies them.
+  it("keeps separately-permissioned areas as sections, not plain children", () => {
+    for (const key of ["categories", "colors", "inventory", "enquiries"]) {
+      const s = getSection(key);
+      expect(s, `${key} must remain a section`).toBeDefined();
+      expect(s?.actions.length).toBeGreaterThan(0);
+      expect(s?.parent).toBeTruthy();
+    }
+  });
+
+  // Renaming a permission key silently revokes it for every existing role, so
+  // the label may drift but the key may not. `ai` is labelled "Plan & billing".
+  it("keeps the legacy `ai` key for the plan section", () => {
+    expect(getSection("ai")?.href).toBe("/dashboard/plans");
+  });
+});
+
+describe("foldNestedSections", () => {
+  const sec = (
+    key: string,
+    extra: Partial<DashboardSection> = {},
+  ): DashboardSection => ({
+    key,
+    label: key,
+    href: `/dashboard/${key}`,
+    icon: "home",
+    group: "Workspace",
+    actions: ["view"],
+    ...extra,
+  });
+
+  it("moves a nested section into its parent's children and off the top level", () => {
+    const [g] = foldNestedSections([
+      {
+        group: "Workspace",
+        items: [sec("products"), sec("categories", { parent: "products" })],
+      },
+    ]);
+    expect(g.items.map((i) => i.key)).toEqual(["products"]);
+    // The parent's own page is inserted first so it stays reachable once the
+    // sub-nav replaces the sidebar.
+    expect(g.items[0].children?.map((c) => c.href)).toEqual([
+      "/dashboard/products",
+      "/dashboard/categories",
+    ]);
+  });
+
+  // THE case the whole mechanism exists for: the permission filter runs before
+  // this, so a section the viewer can't see simply isn't in the input — and it
+  // must not reappear as an ungated child link.
+  it("cannot surface a section the caller already filtered out", () => {
+    const [g] = foldNestedSections([
+      { group: "Workspace", items: [sec("products")] },
+    ]);
+    expect(g.items[0].children ?? []).toEqual([]);
+  });
+
+  // A nested section whose parent was filtered out must stay reachable rather
+  // than vanish from the nav with no way in.
+  it("leaves an orphan at the top level when its parent is absent", () => {
+    const [g] = foldNestedSections([
+      {
+        group: "Workspace",
+        items: [sec("categories", { parent: "products" })],
+      },
+    ]);
+    expect(g.items.map((i) => i.key)).toEqual(["categories"]);
+  });
+
+  it("bubbles a nested badge up to a parent that has none", () => {
+    const [g] = foldNestedSections([
+      {
+        group: "Workspace",
+        items: [
+          sec("products"),
+          sec("inventory", {
+            parent: "products",
+            badge: "2",
+            badgeTone: "amber",
+          }),
+        ],
+      },
+    ]);
+    expect(g.items[0].badge).toBe("2");
+    expect(g.items[0].badgeTone).toBe("amber");
+    // and it survives on the child row too
+    expect(g.items[0].children?.at(-1)?.badge).toBe("2");
+  });
+
+  it("does not overwrite a badge the parent already has", () => {
+    const [g] = foldNestedSections([
+      {
+        group: "Workspace",
+        items: [
+          sec("orders", { badge: "12", badgeTone: "accent" }),
+          sec("inventory", { parent: "orders", badge: "2" }),
+        ],
+      },
+    ]);
+    expect(g.items[0].badge).toBe("12");
+  });
+
+  // The input items come from the shared module-level SECTIONS catalog. Pushing
+  // onto their `children` would grow the real catalog on every request until a
+  // merchant saw the same sub-item a hundred times.
+  it("never mutates the input", () => {
+    const products = sec("products");
+    const groups = [
+      {
+        group: "Workspace" as const,
+        items: [products, sec("categories", { parent: "products" })],
+      },
+    ];
+    foldNestedSections(groups);
+    foldNestedSections(groups);
+    expect(products.children).toBeUndefined();
+    expect(groups[0].items.length).toBe(2);
+  });
+
+  it("drops a group left empty after folding", () => {
+    const out = foldNestedSections([
+      { group: "Workspace", items: [sec("products")] },
+      { group: "Settings", items: [sec("roles", { parent: "products" })] },
+    ]);
+    expect(out.map((g) => g.group)).toEqual(["Workspace"]);
   });
 });
 

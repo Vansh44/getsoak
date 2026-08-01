@@ -1,11 +1,13 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getServerUser } from "@/lib/auth/server-user";
 import { updateAuthUser } from "@/lib/auth/firebase-users";
 import { withUser } from "@/lib/db/client";
+import { emitEvent } from "@/lib/notifications/record";
 import { users } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
+import { recordStorePolicyConsent } from "@/lib/legal/store-consent";
 
 export interface MyCustomer {
   id: string;
@@ -79,12 +81,13 @@ export async function updateCustomerProfile(formData: FormData) {
   const trimmedLast = lastName?.trim() || null;
   const trimmedEmail = email?.trim() || null;
 
+  const storeId = await getCurrentStoreId();
   const insertRow = {
     id: user.id,
     firstName: trimmedFirst,
     lastName: trimmedLast,
     email: trimmedEmail,
-    storeId: await getCurrentStoreId(),
+    storeId,
     ...(user.phone ? { phone: user.phone } : {}),
   };
   // Columns overwritten on conflict — never `id`, and only touch `phone` when
@@ -96,18 +99,53 @@ export async function updateCustomerProfile(formData: FormData) {
     ...(user.phone ? { phone: user.phone } : {}),
   };
 
+  // This is an UPSERT — it runs on every profile edit too. `xmax = 0` is the
+  // Postgres trick for "this row was INSERTed, not updated", so the signup
+  // notification fires exactly once, on the row's first write.
+  let isNewCustomer = false;
   try {
     // Own-row upsert under the customer's identity (RLS-scoped to user_id).
     // phone is filled from the verified auth identity, not the form.
-    await withUser({ uid: user.id, email: user.email }, (db) =>
+    const rows = await withUser({ uid: user.id, email: user.email }, (db) =>
       db
         .insert(users)
         .values(insertRow as typeof users.$inferInsert)
-        .onConflictDoUpdate({ target: users.id, set: conflictSet }),
+        .onConflictDoUpdate({ target: users.id, set: conflictSet })
+        .returning({ inserted: sql<boolean>`(xmax = 0)` }),
     );
+    isNewCustomer = rows[0]?.inserted === true;
   } catch (err) {
     console.error("Failed to update customer profile:", err);
     return { error: "Failed to save profile. Please try again." };
+  }
+
+  if (isNewCustomer) {
+    // Consent is recorded HERE, not from the tick box, and only on a genuine
+    // first insert — the same `xmax = 0` signal the signup event uses. The
+    // shopper agreed to the store's policies as they read at this moment; the
+    // server re-reads and hashes them rather than trusting anything sent.
+    // Best-effort: a failed audit row must never block someone's account.
+    await recordStorePolicyConsent({
+      userId: user.id,
+      email: user.email ?? trimmedEmail,
+      storeId,
+      context: "signup",
+    });
+
+    emitEvent({
+      type: "customer.signed_up",
+      storeId,
+      actor: {
+        type: "customer",
+        id: user.id,
+        label: [trimmedFirst, trimmedLast].filter(Boolean).join(" ") || null,
+      },
+      subject: {
+        type: "customer",
+        id: user.id,
+        label: [trimmedFirst, trimmedLast].filter(Boolean).join(" ") || null,
+      },
+    });
   }
 
   return { success: true };

@@ -1,13 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { makeDbMock, sqlParamValues } from "./_test-helpers";
+import { makeDbMock, sqlParamValues, sqlText } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+// Activity/notification bookkeeping is deferred with after(), so in a real
+// request it runs AFTER the action returns and never touches the action's own
+// DB scope. No-op it here so these assertions see only the action's queries.
+vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),
   getManagerIdentity: vi.fn(),
   getActingStoreId: vi.fn(async () => STORE),
+}));
+// Location scope is mocked at its own seam: these tests care about "restricted
+// or not", not how the binding is resolved (that is scope.test.ts).
+vi.mock("@/lib/locations/scope", () => ({
+  getViewerLocations: vi.fn(async () => null),
 }));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
@@ -27,6 +36,7 @@ import {
   getManagerIdentity,
   getManagerUserId,
 } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 
 const STORE = "a0000000-0000-4000-8000-000000000001";
 
@@ -95,6 +105,40 @@ describe("order-actions", () => {
     // the FULL identity — uid AND email — because the platform-operator branch
     // of the orders RLS policy (is_platform_admin) matches by auth.email().
     // A uid-only identity silently empties the list for platform operators.
+    // Phase B2: staff see only their location(s); owners see everything.
+    describe("location scope", () => {
+      it("adds no location filter for an unrestricted viewer", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(null);
+        await getOrders();
+        // Only the store filter (+ no location predicate) reaches the query.
+        expect(sqlText(dbHolder.current.calls.where[0])).not.toMatch(
+          /in |null/,
+        );
+      });
+
+      it("filters to the viewer's locations when restricted", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(["loc-1", "loc-2"]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/is null|in /);
+      });
+
+      // An order belonging to no shop (every online order until Phase D) stays
+      // visible, or location-bound staff lose the whole online order book.
+      it("keeps location-less orders visible to restricted staff", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/is null/);
+      });
+
+      // Assigned only to locations that have since been deleted: show NOTHING,
+      // never silently promote them to seeing the whole store.
+      it("shows nothing when the scope resolves to an empty list", async () => {
+        vi.mocked(getViewerLocations).mockResolvedValue([]);
+        await getOrders();
+        expect(sqlText(dbHolder.current.calls.where[0])).toMatch(/false/);
+      });
+    });
+
     it("opens the user scope with the full identity (uid + email)", async () => {
       const { withUser } = await import("@/lib/db/client");
       await getOrders();
@@ -198,6 +242,50 @@ describe("order-actions", () => {
 
       // The status update itself still lands.
       expect(dbHolder.current.calls.set[1]).toEqual({ status: "cancelled" });
+    });
+
+    // REGRESSION (POS merge). A register reserves stock at its OWN location via
+    // reserve_stock_at. The plain release_stock wrapper delegates to the store's
+    // DEFAULT location, so cancelling an in-store sale used to hand the units
+    // back to the wrong shop — the selling location never recovered its stock
+    // and the default gained a unit it never had. Silent, and it compounds.
+    it("returns a POS sale's stock to the location it was sold at", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "o1", location_id: "loc-2" }],
+        selectQueue: [[{ product_id: "p1", variant_id: null, quantity: 3 }]],
+      });
+
+      const result = await updateOrderStatus("o1", "cancelled");
+      expect(result.success).toBe(true);
+
+      const text = sqlText(dbHolder.current.calls.execute[0]);
+      expect(text).toContain("release_stock_at");
+      const params = sqlParamValues(dbHolder.current.calls.execute[0]);
+      // p_location sits second, right after the store.
+      expect(params).toEqual([
+        STORE,
+        "loc-2",
+        "p1",
+        null,
+        3,
+        "o1",
+        "order_cancelled",
+      ]);
+    });
+
+    // An online order has no location and reserved against the default, so the
+    // wrapper stays correct for it — the branch must not flip everything over.
+    it("still uses the default-location wrapper for an online order", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "o1", location_id: null }],
+        selectQueue: [[{ product_id: "p1", variant_id: "v1", quantity: 1 }]],
+      });
+
+      await updateOrderStatus("o1", "cancelled");
+
+      const text = sqlText(dbHolder.current.calls.execute[0]);
+      expect(text).toContain("release_stock");
+      expect(text).not.toContain("release_stock_at");
     });
 
     it("does not restock an order whose stock was never reserved or already released", async () => {

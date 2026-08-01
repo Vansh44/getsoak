@@ -40,6 +40,12 @@ vi.mock("@/lib/db/client", () => ({
   ),
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
+// Fulfilment routing is mocked at its own seam (its ranking is tested in
+// lib/fulfilment/strategies.test.ts). Left real it would consume entries from
+// the shared db mock queue and shift every later read.
+vi.mock("@/lib/fulfilment/resolve", () => ({
+  resolveFulfilmentLocation: vi.fn(async () => null),
+}));
 
 import {
   placeOrder,

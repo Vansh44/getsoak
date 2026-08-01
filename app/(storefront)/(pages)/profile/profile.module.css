@@ -357,3 +357,46 @@
     font-size: 32px;
   }
 }
+
+/* ---- Account quick links (orders / notifications) ---- */
+.quickLinks {
+  display: flex;
+  flex-direction: column;
+}
+
+.quickLink {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 2px;
+  border-top: 1px solid rgba(var(--sm-shadow-rgb), 0.08);
+  color: var(--sm-ink);
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+
+.quickLink:first-child {
+  border-top: none;
+}
+
+.quickLink:hover {
+  opacity: 0.72;
+}
+
+.quickLink > span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quickLink strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.quickLink small {
+  font-size: 13px;
+  color: var(--sm-ink-faint);
+}

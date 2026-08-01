@@ -13,6 +13,7 @@ import {
 import { STORE_TAG } from "@/lib/store/resolve";
 import { verifyWebhookSignature } from "@/lib/payments/razorpay";
 import { PLAN_META, normalizePlan } from "@/lib/plans";
+import { recordEvent } from "@/lib/notifications/record";
 import {
   resolveBillingEmail,
   sendBillingEmail,
@@ -253,6 +254,18 @@ async function sendLifecycleEmail(
       break;
     case "subscription.pending":
     case "subscription.halted":
+      // In-app record for the dashboard bell; the email is the platform
+      // billing one just below (see the note on the registry entry).
+      await recordEvent({
+        type: "subscription.payment_failed",
+        storeId,
+        actor: { type: "system", label: "Razorpay" },
+        subject: { type: "plan", id: plan, label: meta.name },
+        payload: {
+          plan: meta.name,
+          final: eventType === "subscription.halted",
+        },
+      });
       await sendBillingEmail(
         recip.email,
         paymentFailedTemplate({

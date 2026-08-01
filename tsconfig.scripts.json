@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./*"],
+      "server-only": ["./scripts/_stubs/server-only.ts"]
+    }
+  },
+  "include": ["scripts/**/*.ts", "lib/**/*.ts", "drizzle/**/*.ts"]
+}

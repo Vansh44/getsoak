@@ -34,6 +34,17 @@ export const SETTING_KEYS = [
   "marketing.showAllCoupons",
   "inventory.simpleTrackDefault",
   "inventory.lowStockThreshold",
+  "pos.enabled",
+  "pos.idleLockMinutes",
+  "pos.allowPriceOverride",
+  "pos.ownerOnlyDiscounts",
+  "pos.requireManagerForDiscount",
+  "pos.maxDiscountPercent",
+  "pos.requireOpenShift",
+  "pos.cashVarianceTolerance",
+  "fulfilment.offerPickup",
+  "fulfilment.pickupReadyDays",
+  "fulfilment.pickupHoldDays",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -58,6 +69,9 @@ export interface SettingDef {
   min?: number;
   /** For number types: maximum allowed value */
   max?: number;
+  /** Not shown in the generic settings editor — driven by a dedicated control
+   *  (e.g. pos.enabled is toggled by the Enable POS button, not a raw switch). */
+  hidden?: boolean;
 }
 
 export const SETTINGS: readonly SettingDef[] = [
@@ -124,6 +138,142 @@ export const SETTINGS: readonly SettingDef[] = [
     defaultValue: 5,
     min: 0,
     max: 1000,
+  },
+  {
+    key: "pos.enabled",
+    label: "Point of Sale",
+    description:
+      "Enable the in-store register at /pos for this store. Available on the Pro plan.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+    // Toggled via the Enable POS control on /dashboard/pos, not the raw editor.
+    hidden: true,
+  },
+  {
+    key: "pos.idleLockMinutes",
+    label: "Auto-lock the register after",
+    description:
+      "Minutes of inactivity before the register locks and asks for the cashier's PIN again. Stops the next person selling as whoever walked away.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 10,
+    min: 1,
+    max: 240,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.allowPriceOverride",
+    label: "Allow price overrides at the register",
+    description:
+      "Let the till change an item's price during a sale. Turn off to make listed prices final. Who may do it is governed by the setting below.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.ownerOnlyDiscounts",
+    label: "Only the owner can give discounts",
+    description:
+      "Cashiers and managers cannot discount a sale, mark a line down, or override a price — not even with a manager's PIN. A price override is a discount by another name, so it is covered here too. Turn this off to let cashiers discount up to the limit below, with a manager approving anything larger.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.requireManagerForDiscount",
+    label: "Require a manager's PIN for large discounts",
+    description:
+      "Only applies when 'Only the owner can give discounts' is off. Cashiers must then get a manager's PIN to discount beyond the limit below (managers and owners are never prompted).",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: true,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.maxDiscountPercent",
+    label: "Discount a cashier can give without approval",
+    description:
+      "Percent of the sale a cashier may discount before a manager's PIN is required. Only applies when 'Only the owner can give discounts' is off.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 10,
+    min: 0,
+    max: 100,
+    minPlan: "pro",
+    dependsOn: "pos.requireManagerForDiscount",
+  },
+  {
+    key: "pos.requireOpenShift",
+    label: "Require an open shift to sell",
+    description:
+      "Cashiers must open the drawer with a counted float before ringing a sale. Off by default — turning it on can stop a till, so it is the merchant's call.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+  },
+  {
+    key: "pos.cashVarianceTolerance",
+    label: "Cash variance tolerance",
+    description:
+      "Rupees a closing count may differ from expected before it is flagged as over or short. A drawer counted by hand is rarely exact.",
+    group: "Point of Sale",
+    section: "pos",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    minPlan: "pro",
+  },
+  {
+    key: "fulfilment.offerPickup",
+    label: "Offer pickup at checkout",
+    description:
+      "Shoppers can collect from a shop instead of having it delivered. Only locations with the Customer pickup capability are offered.",
+    group: "Checkout",
+    section: "locations",
+    type: "boolean",
+    defaultValue: false,
+    minPlan: "pro",
+  },
+  {
+    key: "fulfilment.pickupReadyDays",
+    label: "Orders are ready for collection in",
+    description:
+      "0 means same-day collection. Shown at checkout and in the confirmation email, and the hold window starts from this date.",
+    group: "Checkout",
+    section: "locations",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 30,
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
+  },
+  {
+    key: "fulfilment.pickupHoldDays",
+    label: "Hold uncollected orders for",
+    description:
+      "Counted from the day it's ready. After this, an uncollected order is cancelled and its stock returns to the shelf.",
+    group: "Checkout",
+    section: "locations",
+    type: "number",
+    defaultValue: 5,
+    min: 1,
+    max: 60,
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
   },
 ];
 

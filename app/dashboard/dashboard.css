@@ -1035,6 +1035,79 @@ a.dash-status-pill:hover {
   vertical-align: middle;
 }
 
+/* ---------- Compact mode for a narrowed content region ----------
+   Opening the Mink AI panel leaves the content region ~755px, under the 800px
+   floor above, so every wide table started scrolling horizontally. Pinning the
+   actions column (below) keeps them reachable, but the merchant still has to
+   scroll to read a row — the fix they actually want is for the table to FIT.
+
+   It fits easily, because the width was never really in the data: at 22px of
+   horizontal padding a side, a 6-column table spends 264px on padding and an
+   8-column one 352px. Tightening that to 10px reclaims ~150-190px, which is
+   more than the ~45-70px the table was over by, so the 800px floor can simply
+   be dropped at this size and the columns size themselves honestly.
+
+   A CONTAINER query, not a media query: what matters is how wide the CARD is,
+   which depends on the AI panel, the resizable sidebar and the viewport all at
+   once. A viewport breakpoint would be wrong the moment any of those changed
+   independently — the table would compact on a wide screen with the panel
+   closed, or stay wide on a narrow one with it open.
+
+   ── Browser support ────────────────────────────────────────────────────────
+   This needs `:has()` (Chrome 105+, Safari 15.4+, Firefox 121+) AND container
+   queries (Chrome 105+, Safari 16+, Firefox 110+). Both sit BELOW the floor
+   the app already has: Tailwind v4 depends on `@property` and `color-mix()`,
+   so it requires Chrome 111 / Safari 16.4 / Firefox 128 (see `browserslist` in
+   package.json). Any browser old enough to lack `:has()` cannot render this
+   dashboard at all.
+
+   The @supports guard is therefore belt-and-braces, not load-bearing — it
+   states the dependency in the file that depends on it, and keeps the failure
+   graceful if the floor is ever lowered: without the container, the 800px
+   floor stands and the table scrolls, which is what it did before this block
+   existed. The pinned actions column below is plain `position: sticky` and
+   keeps working either way, so edit/delete never goes missing.
+
+   `selector(:has(+ *))`, not `selector(:has(*))`: the latter reports true in
+   browsers that merely parse `:has()` forgivingly without implementing it. */
+@supports selector(:has(+ *)) and (container-type: inline-size) {
+  .dashboard-shell .dash-card:has(.dash-table-wide) {
+    container-type: inline-size;
+    container-name: dash-table-card;
+  }
+}
+
+@container dash-table-card (max-width: 880px) {
+  /* Enquiries (1040px) and Customers (860px) set their own, wider floors LOWER
+     in this file, so at equal specificity they would win on source order and
+     keep scrolling. Named explicitly rather than moved: their floors are right
+     for a full-width card, and this only relaxes them when the card is narrow. */
+  .dashboard-shell .dash-table-wide,
+  .dashboard-shell .enquiries-table,
+  .dashboard-shell .customers-table {
+    min-width: 0;
+  }
+
+  .dashboard-shell .dash-table-wide th,
+  .dashboard-shell .dash-table-wide td {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  /* The first cell is a checkbox and the second usually a thumbnail; neither
+     needs the gutter a text column does. */
+  .dashboard-shell .dash-table-wide th:first-child,
+  .dashboard-shell .dash-table-wide td:first-child {
+    padding-left: 14px;
+  }
+
+  /* Badges and money are the cells that wrap ugliest when squeezed — a status
+     pill breaking across two lines makes the row look broken. */
+  .dashboard-shell .dash-table-wide .dash-badge {
+    white-space: nowrap;
+  }
+}
+
 .dashboard-shell .dash-table tr:last-child td {
   border-bottom: none;
 }
@@ -1044,6 +1117,55 @@ a.dash-status-pill:hover {
 }
 
 .dashboard-shell .dash-table tbody tr:hover td {
+  background: var(--dash-surface-2);
+}
+
+/* ---------- Pinned row-actions column ----------
+   A wide table scrolls horizontally inside its card (min-width 800px above).
+   The moment anything narrows the content region — the Mink AI panel open, a
+   smaller laptop, a resized sidebar — the RIGHTMOST column is the one that
+   falls off, and that column is the row actions. Losing "edit / delete" behind
+   a horizontal scrollbar makes the row look read-only, so the actions column
+   stays pinned to the right edge instead.
+
+   Opt-in via `dash-col-actions` on the <th> AND every matching <td>, not
+   `:last-child`: the actions column is conditional on `canManage` in most of
+   these tables, so for a view-only role the last column is real data (Status,
+   Received) which must scroll normally like everything else.
+
+   The background is not decoration — a sticky cell paints over the scrolling
+   cells beneath it, so it has to be opaque and has to track the row's hover
+   state or the pinned cell visibly detaches from its own row.
+
+   Deliberately no JS: pinning is unconditional rather than toggled by an
+   overflow observer. `position: sticky` is inert on a table that already fits,
+   so the only cost is the hairline divider showing when there is nothing to
+   scroll — which reads as an ordinary column rule. The alternative fails the
+   wrong way: if the observer never runs, the actions column goes missing again
+   on exactly the narrow screens this exists for. */
+.dashboard-shell .dash-table th.dash-col-actions,
+.dashboard-shell .dash-table td.dash-col-actions {
+  position: sticky;
+  right: 0;
+  background: var(--dash-surface);
+  /* No divider or shadow. An earlier version drew a hairline here so the pinned
+     column read as floating above the cells sliding under it — but the compact
+     mode above means these tables now FIT, so the line was permanently visible
+     and separating nothing. Pinning stays as the backstop for a window narrow
+     enough to scroll anyway; it just no longer announces itself. */
+}
+
+/* Header sits above the body cells where they meet at the top-right corner. */
+.dashboard-shell .dash-table th.dash-col-actions {
+  background: var(--dash-surface-2);
+  z-index: 3;
+}
+
+.dashboard-shell .dash-table td.dash-col-actions {
+  z-index: 2;
+}
+
+.dashboard-shell .dash-table tbody tr:hover td.dash-col-actions {
   background: var(--dash-surface-2);
 }
 

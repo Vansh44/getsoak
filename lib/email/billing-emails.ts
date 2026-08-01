@@ -1,9 +1,10 @@
 import "server-only";
 
-import { Resend } from "resend";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { wrapBrandedEmail } from "./layout";
+import { EMAIL_THEME } from "./shell";
 import { PLATFORM_EMAIL_DOMAIN } from "./sender";
+import { sendEmail } from "./send";
 import type { StoreBrand } from "@/lib/store/brand";
 import { withService } from "@/lib/db/client";
 import { admins, storeBillingSettings, stores } from "@/drizzle/schema";
@@ -21,7 +22,9 @@ const BILLING_FROM = `StoreMink Billing <billing@${PLATFORM_EMAIL_DOMAIN}>`;
 const PLATFORM_BRAND: StoreBrand = {
   name: "StoreMink",
   logoUrl: null,
-  primaryColor: "#4f39f6",
+  // Unused by the email shell now (one global palette — see shell.ts);
+  // kept because StoreBrand requires it.
+  primaryColor: "#202223",
   tagline: null,
   blurb: null,
   legalName: "StoreMink",
@@ -33,12 +36,6 @@ const PLATFORM_BRAND: StoreBrand = {
   badges: [],
   domain: PLATFORM_EMAIL_DOMAIN,
 };
-
-function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || apiKey.includes("placeholder")) return null;
-  return new Resend(apiKey);
-}
 
 function escapeHtml(value: string): string {
   return value
@@ -66,12 +63,12 @@ function shortDate(iso: string): string {
 }
 
 const button = (href: string, label: string) =>
-  `<p style="margin:28px 0 8px;"><a href="${href}" style="display:inline-block; background:#4f39f6; color:#ffffff; font-weight:600; font-size:15px; text-decoration:none; padding:12px 22px; border-radius:10px;">${label}</a></p>`;
+  `<p style="margin:28px 0 8px;"><a href="${href}" style="display:inline-block; background:${EMAIL_THEME.ink}; color:#ffffff; font-weight:600; font-size:15px; text-decoration:none; padding:12px 22px; border-radius:10px;">${label}</a></p>`;
 
 function shell(bodyHtml: string): string {
   return wrapBrandedEmail(
     `${bodyHtml}
-    <p style="margin-top:32px; color:#6b7280; font-size:13px;">
+    <p style="margin-top:32px; color:${EMAIL_THEME.muted}; font-size:13px;">
       This is an automated message about your StoreMink subscription.<br />
       Questions? Reply to this email and our team will help.
     </p>`,
@@ -98,7 +95,7 @@ export function planActivatedTemplate(d: {
   return {
     subject: `You're on the ${d.planName} plan`,
     html: shell(
-      `<h1 style="margin:0 0 12px; font-size:20px; color:#111827;">Welcome to ${escapeHtml(d.planName)} 🎉</h1>
+      `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Welcome to ${escapeHtml(d.planName)} 🎉</h1>
        <p style="margin:0 0 12px;"><strong>${store}</strong> is now on the <strong>${escapeHtml(d.planName)}</strong> plan at <strong>${money(d.amountInr)}/${d.period === "yearly" ? "year" : "month"}</strong>.</p>
        <p style="margin:0 0 4px;">Autopay is set up, so it renews automatically${d.renewsOn ? ` on <strong>${shortDate(d.renewsOn)}</strong>` : ""}. You can change or cancel your plan anytime.</p>
        ${button(d.manageUrl, "Manage your plan")}`,
@@ -117,7 +114,7 @@ export function paymentReceiptTemplate(d: {
   return {
     subject: `Payment received — ${d.planName} plan`,
     html: shell(
-      `<h1 style="margin:0 0 12px; font-size:20px; color:#111827;">Payment received</h1>
+      `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Payment received</h1>
        <p style="margin:0 0 12px;">We charged <strong>${money(d.amountInr)}</strong> for <strong>${escapeHtml(d.storeName)}</strong>'s ${escapeHtml(d.planName)} plan (${d.period}).</p>
        <p style="margin:0 0 4px;">Your plan is active${d.renewsOn ? ` and renews on <strong>${shortDate(d.renewsOn)}</strong>` : ""}.</p>
        ${button(d.manageUrl, "View billing")}`,
@@ -138,11 +135,11 @@ export function paymentFailedTemplate(d: {
       : `We couldn't process your ${d.planName} payment`,
     html: shell(
       d.final
-        ? `<h1 style="margin:0 0 12px; font-size:20px; color:#b91c1c;">Your subscription is about to end</h1>
+        ? `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.danger};">Your subscription is about to end</h1>
            <p style="margin:0 0 12px;">We couldn't collect payment for <strong>${escapeHtml(d.storeName)}</strong>'s ${escapeHtml(d.planName)} plan after several attempts.</p>
            <p style="margin:0 0 4px;">Please update your payment method to keep your plan${d.accessUntil ? ` — access continues until <strong>${shortDate(d.accessUntil)}</strong>` : ""}, after which the store moves to the Free plan.</p>
            ${button(d.manageUrl, "Update payment method")}`
-        : `<h1 style="margin:0 0 12px; font-size:20px; color:#111827;">Payment didn't go through</h1>
+        : `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Payment didn't go through</h1>
            <p style="margin:0 0 12px;">A charge for <strong>${escapeHtml(d.storeName)}</strong>'s ${escapeHtml(d.planName)} plan failed. We'll retry automatically over the next few days.</p>
            <p style="margin:0 0 4px;">To avoid any interruption, please make sure your payment method is up to date.</p>
            ${button(d.manageUrl, "Check billing")}`,
@@ -159,7 +156,7 @@ export function subscriptionCancelledTemplate(d: {
   return {
     subject: `Your ${d.planName} subscription is cancelled`,
     html: shell(
-      `<h1 style="margin:0 0 12px; font-size:20px; color:#111827;">Subscription cancelled</h1>
+      `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Subscription cancelled</h1>
        <p style="margin:0 0 12px;">Autopay for <strong>${escapeHtml(d.storeName)}</strong>'s ${escapeHtml(d.planName)} plan is cancelled — no further payments will be taken.</p>
        <p style="margin:0 0 4px;">You keep ${escapeHtml(d.planName)}${d.accessUntil ? ` until <strong>${shortDate(d.accessUntil)}</strong>` : " until the current cycle ends"}, then the store moves to the Free plan. Changed your mind? You can re-subscribe anytime.</p>
        ${button(d.manageUrl, "Re-subscribe")}`,
@@ -175,7 +172,7 @@ export function planDowngradedTemplate(d: {
   return {
     subject: `Your store is now on the Free plan`,
     html: shell(
-      `<h1 style="margin:0 0 12px; font-size:20px; color:#111827;">Moved to the Free plan</h1>
+      `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Moved to the Free plan</h1>
        <p style="margin:0 0 12px;"><strong>${escapeHtml(d.storeName)}</strong>'s ${escapeHtml(d.fromPlanName)} plan has ended, so the store is now on <strong>Free</strong>.</p>
        <p style="margin:0 0 4px;">Your data is safe — nothing was deleted. Some paid features are paused until you upgrade again.</p>
        ${button(d.manageUrl, "Upgrade again")}`,
@@ -256,22 +253,24 @@ export async function resolveBillingEmail(
   };
 }
 
-/** Send a built billing email to a recipient. Best-effort — never throws. */
+/**
+ * Send a built billing email to a recipient. Best-effort — never throws.
+ *
+ * `storeId` is optional only because some callers have the recipient before
+ * they have the store; pass it whenever you can, or the send lands in the
+ * platform log instead of the merchant's own.
+ */
 export async function sendBillingEmail(
   to: string,
   built: BuiltEmail,
+  storeId?: string | null,
 ): Promise<void> {
-  const resend = getResend();
-  if (!resend) return;
-  try {
-    const { error } = await resend.emails.send({
-      from: BILLING_FROM,
-      to,
-      subject: built.subject,
-      html: built.html,
-    });
-    if (error) console.error("sendBillingEmail:", error);
-  } catch (e) {
-    console.error("sendBillingEmail:", e instanceof Error ? e.message : e);
-  }
+  await sendEmail({
+    storeId: storeId ?? null,
+    to,
+    from: BILLING_FROM,
+    subject: built.subject,
+    html: built.html,
+    mailer: "billing",
+  });
 }

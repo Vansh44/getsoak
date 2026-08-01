@@ -11,7 +11,6 @@ import {
   isNotNull,
   or,
 } from "drizzle-orm";
-import { Resend } from "resend";
 import { withService } from "@/lib/db/client";
 import {
   emailCampaignRecipients,
@@ -24,6 +23,7 @@ import { callGemini, brandSystemText } from "@/lib/ai/gemini";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
 import { consumeAiQuota } from "@/lib/ai/quota";
 import { triggerEmailWorker } from "@/lib/email/trigger-worker";
+import { emailConfigured } from "@/lib/email/send";
 import {
   mergeTokens,
   renderCouponEmail,
@@ -282,12 +282,6 @@ export async function renderCouponEmailPreview(input: {
 // Send — resolve the audience, merge per recipient, send via Resend in batches.
 // ---------------------------------------------------------------------------
 
-function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey || apiKey.includes("placeholder")) return null;
-  return new Resend(apiKey);
-}
-
 // Audience resolution is scoped to the acting store (CODEBASE.md §5.1): every
 // `users` read filters by store_id so a campaign can never resolve — or mail —
 // another store's customers, whatever audience/ids the client supplies.
@@ -365,7 +359,7 @@ export async function sendCouponEmail(
     return { error: "Add a subject and body before sending." };
 
   // Fail fast in the UI if email isn't set up (the worker checks again too).
-  if (!getResend())
+  if (!emailConfigured())
     return {
       error:
         "Email isn't configured (RESEND_API_KEY missing). Add it to send campaigns.",

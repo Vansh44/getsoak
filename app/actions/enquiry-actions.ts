@@ -2,6 +2,7 @@
 
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { emitEvent } from "@/lib/notifications/record";
 import { headers } from "next/headers";
 import { withService } from "@/lib/db/client";
 import { enquiries } from "@/drizzle/schema";
@@ -75,18 +76,23 @@ export async function submitEnquiry(
   }
 
   const storeId = await getCurrentStoreId();
+  let enquiryId: string | undefined;
   try {
-    await withService((db) =>
-      db.insert(enquiries).values({
-        name,
-        email,
-        phone,
-        subject,
-        subjectDetail,
-        message,
-        storeId,
-      }),
+    const inserted = await withService((db) =>
+      db
+        .insert(enquiries)
+        .values({
+          name,
+          email,
+          phone,
+          subject,
+          subjectDetail,
+          message,
+          storeId,
+        })
+        .returning({ id: enquiries.id }),
     );
+    enquiryId = inserted[0]?.id;
   } catch (err) {
     console.error("Failed to insert enquiry:", err);
     return {
@@ -107,6 +113,14 @@ export async function submitEnquiry(
     subject: emailSubject,
     message,
     brand,
+  });
+
+  emitEvent({
+    type: "enquiry.received",
+    storeId,
+    actor: { type: "customer", label: name },
+    subject: { type: "enquiry", id: enquiryId ?? null, label: subject },
+    payload: { subject: emailSubject },
   });
 
   revalidatePath("/dashboard/enquiries");

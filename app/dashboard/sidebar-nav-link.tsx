@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Bell,
   LayoutGrid,
   Package,
   ShoppingBag,
@@ -35,7 +36,10 @@ import {
   Gem,
   Sparkles,
   House,
+  Store,
+  MapPin,
   type LucideIcon,
+  Mail,
 } from "lucide-react";
 
 export const navIcons = {
@@ -59,6 +63,8 @@ export const navIcons = {
   media: Images,
   roles: KeyRound,
   activity: History,
+  mail: Mail,
+  notifications: Bell,
   settings: Settings,
   globe: Globe,
   rich_text: Type,
@@ -72,6 +78,8 @@ export const navIcons = {
   channels: CreditCard,
   ai: Sparkles,
   plans: Gem,
+  pos: Store,
+  location: MapPin,
 } satisfies Record<string, LucideIcon>;
 
 export type NavIconKey = keyof typeof navIcons;

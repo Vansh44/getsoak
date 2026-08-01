@@ -271,7 +271,9 @@ export function InvoiceDocument({
               <span className="inv-pay-badge">
                 {order.payment_method === "cash_on_delivery"
                   ? "Cash on Delivery"
-                  : order.payment_method}
+                  : order.payment_method === "pay_at_store"
+                    ? "Pay at Store"
+                    : order.payment_method}
               </span>{" "}
               ·{" "}
               {order.payment_status

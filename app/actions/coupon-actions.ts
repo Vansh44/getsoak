@@ -16,6 +16,7 @@ import {
   getActingStoreId,
   getViewerContext,
 } from "@/app/dashboard/lib/access";
+import { emitEvent } from "@/lib/notifications/record";
 import { can } from "@/app/dashboard/lib/permissions";
 import { TAGS } from "@/lib/storefront/tags";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -248,6 +249,18 @@ export async function createCoupon(
     form.restricted_group_ids,
     storeId,
   );
+
+  emitEvent({
+    type: "coupon.created",
+    storeId,
+    actor: { type: "admin", id: userId },
+    subject: {
+      type: "coupon",
+      id: created.id as string,
+      label: created.code as string,
+    },
+    payload: { code: String(created.code ?? "") },
+  });
 
   revalidateCoupons();
   return { success: true, data: created };

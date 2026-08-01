@@ -32,6 +32,9 @@ export const storeNoSeq = pgSequence("store_no_seq", {
 export const admins = pgTable(
   "admins",
   {
+    // The optional product-updates box at signup — a preference, not a
+    // contract (see supabase/legal_01_schema.sql).
+    marketingOptIn: boolean("marketing_opt_in").default(false).notNull(),
     id: text().primaryKey().notNull(),
     email: text().notNull(),
     role: text().default("member").notNull(),
@@ -1029,6 +1032,28 @@ export const orderItems = pgTable(
       .default(0)
       .notNull(),
     taxClassName: text("tax_class_name"),
+    // Per-line markdown (supabase/pos_07_line_discount.sql). `total` is
+    // already net of it — this records WHY the line is cheaper, so the
+    // receipt adds up and markdowns stay auditable.
+    lineDiscount: numeric("line_discount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    // India GST split (pos_06). tax_amount stays the TOTAL for this line;
+    // these three are how it divides — cgst+sgst (intra-state) XOR igst.
+    taxCgst: numeric("tax_cgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxSgst: numeric("tax_sgst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    taxIgst: numeric("tax_igst", { precision: 12, scale: 2, mode: "number" })
+      .default(0)
+      .notNull(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_order_items_order_id").using(
@@ -1066,16 +1091,76 @@ export const orderItems = pgTable(
   ],
 );
 
+// Split tenders for one sale (pos_06). orders.payment_method/payment_status
+// remain the SUMMARY; this is the itemised breakdown (cash + card + …).
+// Writes go through placePosSale under the service role, like order_items.
+export const orderPayments = pgTable(
+  "order_payments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    orderId: uuid("order_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    method: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    tendered: numeric({ precision: 12, scale: 2, mode: "number" }),
+    changeDue: numeric("change_due", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    reference: text(),
+    capturedAt: timestamp("captured_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("order_payments_order_idx").using(
+      "btree",
+      table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "order_payments_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "order_payments_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "order_payments_method_check",
+      sql`method = ANY (ARRAY['cash'::text, 'card'::text, 'upi'::text, 'gift_card'::text, 'store_credit'::text, 'razorpay'::text])`,
+    ),
+    pgPolicy("Store admins read order_payments", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(order_payments.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
 export const orders = pgTable(
   "orders",
   {
+    // Which cash-drawer period this sale belongs to (pos_10_shifts.sql).
+    // Explicit rather than inferred from a time window: a sale rung a second
+    // before midnight must not land in tomorrow's drawer.
+    shiftId: uuid("shift_id"),
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
-    customerId: text("customer_id").notNull(),
+    // Nullable since pos_06: a walk-in POS sale has no account and no
+    // delivery address. The customer-own RLS policy (customer_id = auth.uid())
+    // never matches NULL, so those orders stay admin-only.
+    customerId: text("customer_id"),
     status: text().default("pending").notNull(),
     paymentMethod: text("payment_method").default("cash_on_delivery").notNull(),
     paymentStatus: text("payment_status").default("pending").notNull(),
-    shippingAddress: jsonb("shipping_address").notNull(),
+    shippingAddress: jsonb("shipping_address"),
     billingAddress: jsonb("billing_address"),
     subtotal: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -1101,12 +1186,53 @@ export const orders = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    // Pick up in store (supabase/locations_05_pickup.sql). fulfilment_type is
+    // TEXT, not a boolean — ship-from-store and lockers are on the roadmap.
+    // pickupLocationId is where the shopper COLLECTS, distinct from locationId
+    // (where stock came from); for a pickup they match, for ship-from-store
+    // they will not.
+    fulfilmentType: text("fulfilment_type").default("delivery").notNull(),
+    pickupLocationId: uuid("pickup_location_id"),
+    pickupStatus: text("pickup_status"),
+    pickupExpiresAt: timestamp("pickup_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedAt: timestamp("collected_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    collectedBy: text("collected_by"),
+    // Claimed by the reminder job so the nudge fires exactly once
+    // (locations_06_pickup_reminder.sql).
+    // When the shop expects it ready (locations_09). The hold window is
+    // measured FROM this, not from order time.
+    pickupReadyAt: timestamp("pickup_ready_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    pickupWarnedAt: timestamp("pickup_warned_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     stockStatus: text("stock_status").default("none").notNull(),
     orderNo: integer("order_no").notNull(),
     orderRef: text("order_ref").notNull(),
     taxInclusive: boolean("tax_inclusive").default(false).notNull(),
     razorpayOrderId: text("razorpay_order_id"),
     razorpayPaymentId: text("razorpay_payment_id"),
+    // POS Phase 2 (pos_06_sell_path.sql). In-person sales share this table,
+    // tagged sales_channel='pos'; customerId/shippingAddress are nullable above
+    // because a walk-in has neither.
+    salesChannel: text("sales_channel").default("online").notNull(),
+    locationId: uuid("location_id"),
+    deviceId: uuid("device_id"),
+    cashierId: uuid("cashier_id"),
+    cashierName: text("cashier_name"),
+    receiptNo: text("receipt_no"),
+    placeOfSupplyState: text("place_of_supply_state"),
+    supplierState: text("supplier_state"),
+    customerGstin: text("customer_gstin"),
   },
   (table) => [
     index("idx_orders_customer_id").using(
@@ -1322,6 +1448,11 @@ export const productVariants = pgTable(
     productId: uuid("product_id").notNull(),
     name: text().notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     sku: text().notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1353,6 +1484,7 @@ export const productVariants = pgTable(
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     variantNo: integer("variant_no").notNull(),
+    barcode: text(),
   },
   (table) => [
     index("idx_product_variants_store_id").using(
@@ -1436,6 +1568,16 @@ export const products = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    // Moves only when a visitor-visible column changes — NOT on a sale. See
+    // supabase/seo_01_product_content_timestamp.sql: updated_at is bumped by
+    // _recompute_stock_aggregate on every inventory movement, so it cannot be
+    // used as the sitemap's lastmod. Trigger-maintained; never written by app code.
+    contentUpdatedAt: timestamp("content_updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
     basePrice: numeric("base_price", {
       precision: 10,
       scale: 2,
@@ -1454,12 +1596,21 @@ export const products = pgTable(
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),
     stock: integer().default(0).notNull(),
+    // Stock at locations that fulfil ONLINE orders — what the storefront may
+    // promise (supabase/locations_03_fulfilment.sql). `stock` stays the
+    // all-locations total, which the dashboard and POS want. Both are
+    // maintained by _recompute_stock_aggregate; never write either directly.
+    onlineStock: integer("online_stock").default(0).notNull(),
     lowStockThreshold: integer("low_stock_threshold"),
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     sku: text().notNull(),
     skuNo: integer("sku_no").notNull(),
     variantSeq: integer("variant_seq").default(0).notNull(),
     taxClassId: uuid("tax_class_id"),
+    // pos_06: the SUPPLIER barcode a cashier scans — distinct from the
+    // system-generated Luhn `sku`, which is ours and immutable.
+    barcode: text(),
+    hsnCode: text("hsn_code"),
   },
   (table) => [
     index("idx_products_category").using(
@@ -1648,6 +1799,7 @@ export const stockMovements = pgTable(
     reason: text().notNull(),
     balanceAfter: integer("balance_after").notNull(),
     orderId: uuid("order_id"),
+    locationId: uuid("location_id"),
     note: text(),
     createdBy: text("created_by"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -1686,6 +1838,11 @@ export const stockMovements = pgTable(
       foreignColumns: [productVariants.id],
       name: "stock_movements_variant_id_fkey",
     }).onDelete("set null"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_movements_location_id_fkey",
+    }).onDelete("set null"),
     pgPolicy("Store admins can read stock_movements", {
       as: "permissive",
       for: "select",
@@ -1717,6 +1874,10 @@ export const storeBillingSettings = pgTable(
       .defaultNow()
       .notNull(),
     updatedBy: text("updated_by"),
+    // pos_06 — India GST identity. The state code drives place-of-supply.
+    gstEnabled: boolean("gst_enabled").default(false).notNull(),
+    businessStateCode: text("business_state_code"),
+    legalName: text("legal_name"),
   },
   (table) => [
     foreignKey({
@@ -1740,6 +1901,629 @@ export const storeBillingSettings = pgTable(
       as: "permissive",
       for: "select",
       to: ["public"],
+    }),
+  ],
+);
+
+// POS Phase 0: physical/warehouse locations per store (supabase/pos_00_locations.sql).
+export const storeLocations = pgTable(
+  "store_locations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    name: text().notNull(),
+    type: text().default("shop").notNull(),
+    address: jsonb(),
+    gstin: text(),
+    stateCode: text("state_code"),
+    receiptPrefix: text("receipt_prefix"),
+    // What this location may DO (supabase/locations_01_capabilities.sql).
+    // jsonb rather than one boolean per capability so a new capability is a
+    // registry entry in lib/locations/capabilities.ts, not a migration plus a
+    // check to forget in every consumer. Read it through
+    // normalizeCapabilities() — never index into the raw blob.
+    // PUBLIC: the storefront reads it to decide whether to offer pickup.
+    capabilities: jsonb().default({}).notNull(),
+    isDefault: boolean("is_default").default(false).notNull(),
+    active: boolean().default(true).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("store_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.sortOrder.asc().nullsLast().op("int4_ops"),
+    ),
+    // At most one default location per store (partial unique index in SQL).
+    uniqueIndex("store_locations_one_default")
+      .using("btree", table.storeId.asc().nullsLast().op("uuid_ops"))
+      .where(sql`is_default`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_locations_type_check",
+      sql`type = ANY (ARRAY['shop'::text, 'warehouse'::text])`,
+    ),
+    pgPolicy("Store admins manage store_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(store_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// POS Phase 0: per-location stock — the source of truth; products.stock /
+// product_variants.stock are a trigger-maintained aggregate (SUM of on_hand).
+// Writes go only through the location-aware RPCs (supabase/pos_02_rpc_location.sql).
+// Note: the single-row-per-SKU-per-location UNIQUE index uses a COALESCE
+// expression on variant_id (see pos_01_inventory_levels.sql) — not modelled here.
+export const inventoryLevels = pgTable(
+  "inventory_levels",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    onHand: integer("on_hand").default(0).notNull(),
+    reserved: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("inventory_levels_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_product_idx").using(
+      "btree",
+      table.productId.asc().nullsLast().op("uuid_ops"),
+      table.variantId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("inventory_levels_location_idx").using(
+      "btree",
+      table.locationId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "inventory_levels_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "inventory_levels_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId],
+      foreignColumns: [products.id],
+      name: "inventory_levels_product_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.variantId],
+      foreignColumns: [productVariants.id],
+      name: "inventory_levels_variant_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read inventory_levels", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(inventory_levels.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// POS Phase 1: in-store operators (cashier/manager). PIN-authenticated; NOT
+// dashboard admins. pin_hash is sensitive (scrypt) — admin-only via RLS.
+export const posStaff = pgTable(
+  "pos_staff",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    userId: text("user_id"),
+    name: text().notNull(),
+    email: text().notNull(),
+    role: text().default("cashier").notNull(),
+    pinHash: text("pin_hash"),
+    status: text().default("invited").notNull(),
+    inviteToken: text("invite_token"),
+    inviteExpiresAt: timestamp("invite_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resetToken: text("reset_token"),
+    resetExpiresAt: timestamp("reset_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    active: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_staff_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_staff_role_check",
+      sql`role = ANY (ARRAY['cashier'::text, 'manager'::text])`,
+    ),
+    pgPolicy("Store admins manage pos_staff", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posStaffLocations = pgTable(
+  "pos_staff_locations",
+  {
+    staffId: uuid("staff_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    isPrimary: boolean("is_primary").default(false).notNull(),
+  },
+  (table) => [
+    index("pos_staff_locations_staff_idx").using(
+      "btree",
+      table.staffId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.staffId],
+      foreignColumns: [posStaff.id],
+      name: "pos_staff_locations_staff_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_staff_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_staff_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.staffId, table.locationId],
+      name: "pos_staff_locations_pkey",
+    }),
+    pgPolicy("Store admins manage pos_staff_locations", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_staff_locations.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// A register paired to a location (a signed pos_device cookie references one).
+export const posDevices = pgTable(
+  "pos_devices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    label: text().default("").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+    lastSeenAt: timestamp("last_seen_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    // Rotation state for clone detection (pos_05_device_hardening.sql).
+    tokenNonce: text("token_nonce"),
+    prevNonce: text("prev_nonce"),
+    prevNonceUntil: timestamp("prev_nonce_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    revokedReason: text("revoked_reason"),
+    revokedBy: text("revoked_by"),
+    authorizedBy: text("authorized_by"),
+    lastIp: text("last_ip"),
+  },
+  (table) => [
+    index("pos_devices_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_devices_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_devices_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_devices", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_devices.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+// Append-only POS security trail (pos_05_device_hardening.sql). Admin-readable;
+// written only via the service role.
+// Manager-arranged register grid, per location (supabase/pos_09_register_layout.sql).
+// NO ROW = NO LAYOUT = show the whole catalogue, so adding this feature could
+// not blank an existing register. `items` is deliberately not FK-checked —
+// a deleted product drops out at render rather than wedging the layout.
+// Restricts a dashboard admin to specific locations (locations_02_admin_scope.sql).
+// NO ROWS = UNRESTRICTED — absence is not restriction, so this changes nothing
+// until a merchant deliberately assigns someone. Read through
+// lib/locations/scope.ts getViewerLocations(), never inline.
+export const adminLocations = pgTable(
+  "admin_locations",
+  {
+    adminId: text("admin_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("admin_locations_admin_idx").using(
+      "btree",
+      table.adminId.asc().nullsLast().op("text_ops"),
+    ),
+    index("admin_locations_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.adminId],
+      foreignColumns: [admins.id],
+      name: "admin_locations_admin_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "admin_locations_location_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "admin_locations_store_id_fkey",
+    }).onDelete("cascade"),
+    primaryKey({
+      columns: [table.adminId, table.locationId],
+      name: "admin_locations_pkey",
+    }),
+  ],
+);
+
+// Where online orders ship from (supabase/locations_03_fulfilment.sql).
+// `strategy` names a resolver in lib/fulfilment/strategies.ts, so adding
+// "nearest" later needs no schema change. `priority` is an ordered array of
+// location ids, deliberately not FK-checked: a deleted location drops out of
+// the order rather than blocking the delete. NO ROW = fall back to the default
+// location, which is every store's behaviour before Phase D.
+export const storeFulfilmentRules = pgTable(
+  "store_fulfilment_rules",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    strategy: text().default("priority").notNull(),
+    priority: jsonb().default([]).notNull(),
+    skipInactive: boolean("skip_inactive").default(true).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_fulfilment_rules_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// Units held but not sold (supabase/locations_04_reservations.sql).
+// available = inventory_levels.on_hand - reserved. `owner_type` is text rather
+// than a column per kind so pickup, marketplace and anything later need no
+// migration. Every read/write goes through the atomic RPCs in
+// lib/inventory/reservations.ts — never UPDATE this from application code.
+export const stockReservations = pgTable(
+  "stock_reservations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    quantity: integer().notNull(),
+    ownerType: text("owner_type").notNull(),
+    ownerId: text("owner_id"),
+    status: text().default("held").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    index("stock_reservations_owner_idx").using(
+      "btree",
+      table.ownerType.asc().nullsLast().op("text_ops"),
+      table.ownerId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "stock_reservations_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "stock_reservations_location_id_fkey",
+    }).onDelete("cascade"),
+    check("stock_reservations_qty_check", sql`quantity > 0`),
+    check(
+      "stock_reservations_status_check",
+      sql`status = ANY (ARRAY['held'::text, 'committed'::text, 'released'::text, 'expired'::text])`,
+    ),
+  ],
+);
+
+export const posLayouts = pgTable(
+  "pos_layouts",
+  {
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").primaryKey().notNull(),
+    items: jsonb().default([]).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  (table) => [
+    index("idx_pos_layouts_store").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_layouts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_layouts_location_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// Per-location receipt numbers (supabase/pos_06_sell_path.sql). Allocated
+// ONLY through the next_pos_receipt_no() RPC — a single atomic UPDATE, the
+// same allocator pattern as next_order_no — so nothing reads or writes this
+// table through Drizzle. Declared for completeness: a live counter leaks sales
+// volume, which is why it is service-role only, and a schema file that omits
+// it invites someone to "add" it later with different semantics.
+export const posLocationCounters = pgTable(
+  "pos_location_counters",
+  {
+    locationId: uuid("location_id").primaryKey().notNull(),
+    receiptSeq: integer("receipt_seq").default(0).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_location_counters_location_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// POS Phase 3 — one cash-drawer accounting period per location
+// (supabase/pos_10_shifts.sql). At most one open at a time, enforced by a
+// partial unique index rather than by application logic.
+export const posShifts = pgTable(
+  "pos_shifts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    status: text().default("open").notNull(),
+    openedAt: timestamp("opened_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    openedBy: text("opened_by"),
+    // Denormalised so a report still names whoever opened it after that staff
+    // member is deleted — the audit outlives the employment.
+    openedByName: text("opened_by_name"),
+    openingFloat: numeric("opening_float", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true, mode: "string" }),
+    closedBy: text("closed_by"),
+    closedByName: text("closed_by_name"),
+    // Snapshotted at close so a historical Z-report can never drift.
+    countedCash: numeric("counted_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    expectedCash: numeric("expected_cash", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    variance: numeric({ precision: 12, scale: 2, mode: "number" }),
+    note: text(),
+  },
+  (table) => [
+    index("idx_pos_shifts_store_opened").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_shifts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_shifts_location_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_shifts_status_check",
+      sql`status = ANY (ARRAY['open'::text, 'closed'::text])`,
+    ),
+  ],
+);
+
+// Cash into or out of the drawer that ISN'T a sale. `amount` is always
+// positive; `type` carries the direction.
+export const posCashMovements = pgTable(
+  "pos_cash_movements",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    shiftId: uuid("shift_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    type: text().notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    reason: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    createdBy: text("created_by"),
+    createdByName: text("created_by_name"),
+  },
+  (table) => [
+    index("idx_pos_cash_movements_shift").using(
+      "btree",
+      table.shiftId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.shiftId],
+      foreignColumns: [posShifts.id],
+      name: "pos_cash_movements_shift_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_cash_movements_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "pos_cash_movements_type_check",
+      sql`type = ANY (ARRAY['drop'::text, 'payout'::text, 'paid_in'::text])`,
+    ),
+  ],
+);
+
+export const posAuditLog = pgTable(
+  "pos_audit_log",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    event: text().notNull(),
+    // Deliberately no FK — the trail must outlive the device/staff it describes.
+    deviceId: uuid("device_id"),
+    staffId: uuid("staff_id"),
+    locationId: uuid("location_id"),
+    actor: text(),
+    ip: text(),
+    detail: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_audit_log_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_audit_log_store_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins read pos_audit_log", {
+      as: "permissive",
+      for: "select",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_audit_log.store_id) AS is_store_admin)`,
+    }),
+  ],
+);
+
+export const posPairingCodes = pgTable(
+  "pos_pairing_codes",
+  {
+    code: text().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("pos_pairing_codes_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "pos_pairing_codes_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "pos_pairing_codes_location_id_fkey",
+    }).onDelete("cascade"),
+    pgPolicy("Store admins manage pos_pairing_codes", {
+      as: "permissive",
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
+      withCheck: sql`( SELECT is_store_admin(pos_pairing_codes.store_id) AS is_store_admin)`,
     }),
   ],
 );
@@ -1776,6 +2560,37 @@ export const storeCounters = pgTable(
       columns: [table.storeId],
       foreignColumns: [stores.id],
       name: "store_counters_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// The site-wide header + footer, with the same draft/published contract as
+// store_pages (supabase/builder_01_store_chrome.sql). Supersedes store_menus,
+// which is left in place unread until the builder has shipped a release.
+// `draft` is REVOKED from anon at the DB layer — storefront reads must select
+// named columns and never `*`.
+export const storeChrome = pgTable(
+  "store_chrome",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    draft: jsonb().default({}).notNull(),
+    published: jsonb(),
+    publishedAt: timestamp("published_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_chrome_store_id_fkey",
     }).onDelete("cascade"),
   ],
 );
@@ -2567,6 +3382,436 @@ export const helpArticles = pgTable(
       to: ["public"],
       using: sql`( SELECT is_platform_admin())`,
       withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Notifications & activity (supabase/notifications_01_schema.sql).
+// `storeId` is NULLABLE on all three: NULL means a PLATFORM-level row (an
+// operator event / an operator's preferences), mirroring platform_admins.
+// Writes are service-role only — see the migration's header for why.
+// ---------------------------------------------------------------------------
+export const activityEvents = pgTable(
+  "activity_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    type: text().notNull(),
+    actorType: text("actor_type").default("system").notNull(),
+    actorId: text("actor_id"),
+    actorLabel: text("actor_label"),
+    subjectType: text("subject_type"),
+    subjectId: text("subject_id"),
+    subjectLabel: text("subject_label"),
+    payload: jsonb().default({}).notNull(),
+    ip: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("activity_events_store_idx").on(table.storeId, table.createdAt),
+    index("activity_events_store_type_idx").on(
+      table.storeId,
+      table.type,
+      table.createdAt,
+    ),
+    index("activity_events_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "activity_events_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "activity_events_actor_type_check",
+      sql`actor_type = ANY (ARRAY['customer'::text, 'admin'::text, 'operator'::text, 'system'::text])`,
+    ),
+    pgPolicy("Read activity_events", {
+      for: "select",
+      to: ["public"],
+      using: sql`CASE WHEN store_id IS NULL THEN ( SELECT is_platform_admin()) ELSE ( SELECT is_store_admin(store_id)) END`,
+    }),
+  ],
+);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    eventId: uuid("event_id").notNull(),
+    recipientType: text("recipient_type").notNull(),
+    recipientId: text("recipient_id").notNull(),
+    type: text().notNull(),
+    title: text().notNull(),
+    body: text(),
+    url: text(),
+    severity: text().default("info").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true, mode: "string" }),
+    archivedAt: timestamp("archived_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notifications_event_recipient_key").on(
+      table.eventId,
+      table.recipientId,
+    ),
+    index("notifications_recipient_idx").on(table.recipientId, table.createdAt),
+    index("notifications_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notifications_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.eventId],
+      foreignColumns: [activityEvents.id],
+      name: "notifications_event_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notifications_recipient_type_check",
+      sql`recipient_type = ANY (ARRAY['admin'::text, 'customer'::text, 'operator'::text])`,
+    ),
+    check(
+      "notifications_severity_check",
+      sql`severity = ANY (ARRAY['info'::text, 'success'::text, 'warning'::text, 'critical'::text])`,
+    ),
+    // Operators are keyed by lowercased email (platform_admins is an email
+    // allowlist with no uid); everyone else by Firebase uid.
+    pgPolicy("Read own notifications", {
+      for: "select",
+      to: ["public"],
+      using: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+    }),
+    pgPolicy("Update own notifications", {
+      for: "update",
+      to: ["public"],
+      using: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+      withCheck: sql`CASE WHEN recipient_type = 'operator'::text THEN lower(( SELECT auth.email())) = recipient_id ELSE ( SELECT auth.uid() AS uid) = recipient_id END`,
+    }),
+  ],
+);
+
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    scope: text().default("user").notNull(),
+    recipientId: text("recipient_id").default("").notNull(),
+    eventKey: text("event_key").notNull(),
+    // Nullable on purpose: NULL = "no override at this level", so a store
+    // default doesn't freeze every staff member's personal choice.
+    inApp: boolean("in_app"),
+    email: boolean(),
+    digest: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("notification_preferences_lookup_idx").on(
+      table.recipientId,
+      table.storeId,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_preferences_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_preferences_scope_check",
+      sql`scope = ANY (ARRAY['store'::text, 'user'::text])`,
+    ),
+    check(
+      "notification_preferences_digest_check",
+      sql`digest IS NULL OR digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+    check(
+      "notification_preferences_scope_recipient_check",
+      sql`(scope = 'store'::text AND recipient_id = ''::text) OR (scope = 'user'::text AND recipient_id <> ''::text)`,
+    ),
+    pgPolicy("Manage own notification_preferences", {
+      for: "all",
+      to: ["public"],
+      using: sql`scope = 'user'::text AND ( SELECT auth.uid() AS uid) = recipient_id`,
+      withCheck: sql`scope = 'user'::text AND ( SELECT auth.uid() AS uid) = recipient_id`,
+    }),
+    pgPolicy("Manage store notification_preferences", {
+      for: "all",
+      to: ["public"],
+      using: sql`scope = 'store'::text AND store_id IS NOT NULL AND ( SELECT is_store_admin(store_id))`,
+      withCheck: sql`scope = 'store'::text AND store_id IS NOT NULL AND ( SELECT is_store_admin(store_id))`,
+    }),
+  ],
+);
+
+// Notification EMAIL queue (supabase/notifications_02_email_queue.sql).
+// Worker-only: RLS is enabled with NO policies, so only the service scope can
+// touch it — the rows hold recipients' addresses.
+// StoreMink's OWN policies, versioned and immutable once published — see
+// supabase/legal_01_schema.sql. Platform-global: no store_id.
+export const legalDocuments = pgTable("legal_documents", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  kind: text().notNull(),
+  version: integer().notNull(),
+  title: text().notNull(),
+  body: text().notNull(),
+  checksum: text().notNull(),
+  effectiveAt: timestamp("effective_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  publishedAt: timestamp("published_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  isCurrent: boolean("is_current").default(false).notNull(),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Who agreed to what, when, from where. APPEND-ONLY (DB trigger).
+export const legalAcceptances = pgTable("legal_acceptances", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  // Anchored to EITHER a platform document OR a store policy page — exactly
+  // one, enforced by legal_acceptances_anchor_check (legal_02_store_consent).
+  documentId: uuid("document_id"),
+  kind: text().notNull(),
+  version: integer().notNull(),
+  userId: text("user_id").notNull(),
+  email: text(),
+  actorType: text("actor_type").notNull(),
+  storeId: uuid("store_id"),
+  context: text().notNull(),
+  /** Store-policy anchor: the page slug, and a hash of the text they saw. */
+  policySlug: text("policy_slug"),
+  policyChecksum: text("policy_checksum"),
+  ip: text(),
+  userAgent: text("user_agent"),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Every email the platform sends — see supabase/email_logs.sql. A LOG, not a
+// queue: nothing reads it to decide what to do next.
+export const emailLogs = pgTable("email_logs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id"),
+  toEmail: text("to_email").notNull(),
+  fromEmail: text("from_email").notNull(),
+  cc: text(),
+  bcc: text(),
+  subject: text(),
+  mailer: text().notNull(),
+  provider: text().default("resend").notNull(),
+  status: text().notNull(),
+  error: text(),
+  providerMessageId: text("provider_message_id"),
+  bodyHtml: text("body_html"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+// Global, NOT tenant-scoped, on purpose — see supabase/notifications_05_suppressions.sql.
+export const emailSuppressions = pgTable("email_suppressions", {
+  email: text().primaryKey().notNull(),
+  reason: text().notNull(),
+  detail: text(),
+  source: text().default("resend").notNull(),
+  lastEventAt: timestamp("last_event_at", {
+    withTimezone: true,
+    mode: "string",
+  })
+    .defaultNow()
+    .notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const notificationEmailQueue = pgTable(
+  "notification_email_queue",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id"),
+    eventId: uuid("event_id").notNull(),
+    recipientId: text("recipient_id").notNull(),
+    recipientType: text("recipient_type").notNull(),
+    email: text().notNull(),
+    eventKey: text("event_key").notNull(),
+    digest: text().default("instant").notNull(),
+    title: text().notNull(),
+    body: text(),
+    url: text(),
+    severity: text().default("info").notNull(),
+    // Snapshotted at enqueue, like subject/body — see notifications_04_email_cc.sql.
+    cc: text(),
+    bcc: text(),
+    // Display-only order summary, snapshotted at enqueue — see
+    // supabase/notifications_06_email_items.sql for why it isn't in the payload.
+    lineItems: jsonb("line_items"),
+    status: text().default("pending").notNull(),
+    sendAfter: timestamp("send_after", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
+    attempts: integer().default(0).notNull(),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_email_queue_event_recipient_key").on(
+      table.eventId,
+      table.recipientId,
+    ),
+    index("notification_email_queue_recipient_idx").on(
+      table.recipientId,
+      table.sendAfter,
+    ),
+    index("notification_email_queue_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_email_queue_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.eventId],
+      foreignColumns: [activityEvents.id],
+      name: "notification_email_queue_event_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_email_queue_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'sending'::text, 'sent'::text, 'failed'::text])`,
+    ),
+    check(
+      "notification_email_queue_digest_check",
+      sql`digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Notification CONSOLE (supabase/notifications_03_console.sql).
+// notification_definitions is PLATFORM-GLOBAL (no store_id — the
+// platform_admins model); notification_settings is per store.
+// Resolution: code registry ← definition ← store settings.
+// ---------------------------------------------------------------------------
+export const notificationDefinitions = pgTable(
+  "notification_definitions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    key: text().notNull(),
+    displayName: text("display_name"),
+    description: text(),
+    category: text(),
+    group: text(),
+    // NULL = defer to the code registry's defaults.
+    channels: jsonb(),
+    isActive: boolean("is_active").default(true).notNull(),
+    // Operator-registered but not emitted by any code path yet.
+    isCustom: boolean("is_custom").default(false).notNull(),
+    createdBy: text("created_by"),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_definitions_key_key").on(table.key),
+    index("notification_definitions_category_idx").on(
+      table.category,
+      table.key,
+    ),
+    pgPolicy("Read notification_definitions", {
+      for: "select",
+      to: ["public"],
+      using: sql`true`,
+    }),
+    pgPolicy("Write notification_definitions", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_platform_admin())`,
+      withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);
+
+export const notificationSettings = pgTable(
+  "notification_settings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventKey: text("event_key").notNull(),
+    /** {"email": true, "web": false} — absent keys defer to the default. */
+    channels: jsonb().default({}).notNull(),
+    /** permission | roles | admins. Targeting NARROWS, never widens. */
+    routing: text().default("permission").notNull(),
+    // Location axis for routing (supabase/notifications_07_routing_scope.sql).
+    // 'store' (default) = today's behaviour; 'event_location' = only staff
+    // assigned where the event happened. See lib/notifications/routing.ts.
+    routingScope: text("routing_scope").default("store").notNull(),
+    targetRoles: text("target_roles").array().default([]).notNull(),
+    targetAdmins: text("target_admins").array().default([]).notNull(),
+    /** Merchant copy per channel; absent channels use the built-in copy. */
+    templates: jsonb().default({}).notNull(),
+    digest: text().default("instant").notNull(),
+    isEnabled: boolean("is_enabled").default(true).notNull(),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("notification_settings_store_event_key").on(
+      table.storeId,
+      table.eventKey,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "notification_settings_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "notification_settings_routing_check",
+      sql`routing = ANY (ARRAY['permission'::text, 'roles'::text, 'admins'::text])`,
+    ),
+    check(
+      "notification_settings_digest_check",
+      sql`digest = ANY (ARRAY['instant'::text, 'hourly'::text, 'daily'::text])`,
+    ),
+    pgPolicy("Manage notification_settings", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_store_admin(store_id))`,
+      withCheck: sql`( SELECT is_store_admin(store_id))`,
     }),
   ],
 );

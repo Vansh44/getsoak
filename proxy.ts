@@ -2,6 +2,21 @@ import { type NextRequest, NextResponse } from "next/server";
 import { parseHost, isHelpHost } from "@/lib/store/host";
 import { logError } from "@/lib/observability/logger";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/auth/session-cookie";
+import {
+  POS_DEVICE_COOKIE,
+  POS_OPERATOR_COOKIE,
+  verifyDeviceToken,
+  verifyOperatorToken,
+} from "@/lib/pos/session";
+
+// POS routes served without any POS credential (see the /pos gate below).
+const POS_PUBLIC_PATHS = ["/pos/login", "/pos/register", "/pos/reset"];
+
+// File types served from public/ (today: ico, svg, txt, webp) plus the ones a
+// future asset or app route would plausibly use. Deliberately explicit: see the
+// note at the call site for what a permissive version cost us.
+const ASSET_EXTENSION =
+  /\.(?:avif|css|eot|gif|ico|jpe?g|js|json|map|mp4|otf|pdf|png|svg|ttf|txt|webm|webp|woff2?|xml|zip)$/i;
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -11,10 +26,18 @@ export async function proxy(request: NextRequest) {
   // --- Static public assets (e.g. /themes/arcade/preview.webp, svgs) ---
   // Serve them as-is on EVERY host. Without this, the platform/help rewrites
   // below would map /themes/... to /platform/themes/... and 404 the file.
-  // Anything with a file extension is a public asset (app routes never have
-  // dots except robots.txt/sitemap.xml, which should also skip the rewrite —
-  // they're host-aware app routes at the root).
-  if (/\.[a-z0-9]+$/i.test(pathname)) {
+  // (robots.txt / sitemap.xml are host-aware app routes at the root, and also
+  // need to skip the rewrite — the extension list covers them.)
+  //
+  // ⚠ This is an ALLOWLIST of real asset extensions, not "any path with a
+  // dot". It used to be the latter, on the assumption that app routes never
+  // contain dots — which stopped being true the moment a route segment carried
+  // an id with a dot in it (the notification console's `order.placed`). Such a
+  // path matched here, skipped the session gate below, and reached the page
+  // with no edge auth check at all. The page's own requireSectionAccess still
+  // held, so nothing leaked, but a route is not supposed to depend on a single
+  // layer. Keep this list to genuine file types; never widen it back to `\.\w+`.
+  if (ASSET_EXTENSION.test(pathname)) {
     return NextResponse.next();
   }
 
@@ -36,9 +59,28 @@ export async function proxy(request: NextRequest) {
   }
 
   // --- Store hosts ({slug}.storemink.com / custom domains) ---
-  // Only the dashboard + auth routes need the session gate; the storefront stays
-  // anonymous + cache-friendly (no per-request auth check).
-  if (!pathname.startsWith("/dashboard") && !pathname.startsWith("/auth")) {
+  // Only the dashboard, auth, and POS routes need the session gate; the
+  // storefront stays anonymous + cache-friendly (no per-request auth check).
+  if (
+    !pathname.startsWith("/dashboard") &&
+    !pathname.startsWith("/auth") &&
+    !pathname.startsWith("/pos")
+  ) {
+    // Surface the builder's ?preview=1 to the storefront LAYOUT as a header.
+    // The layout renders the header and footer, and needs to know whether to
+    // show the merchant their unpublished chrome — but a layout cannot read
+    // searchParams at all (Next 16: "Layouts do not rerender on navigation, so
+    // they cannot access search params"), and only pages get the prop. A
+    // request header is the one channel that reaches both.
+    //
+    // This is a HINT, not authorisation: getDraftChromeForPreview still runs
+    // the same getManagerUserId("builder") gate as the page-draft loader, so
+    // anyone can set this header and still see only published content.
+    if (request.nextUrl.searchParams.get("preview") === "1") {
+      const headers = new Headers(request.headers);
+      headers.set("x-sm-preview", "1");
+      return NextResponse.next({ request: { headers } });
+    }
     return NextResponse.next();
   }
 
@@ -55,9 +97,56 @@ export async function proxy(request: NextRequest) {
       return NextResponse.redirect(url);
     };
 
+    // --- POS gate: /pos requires a Firebase session (owner/admin), a paired
+    //     device, or an active operator. Fine-grained checks (Pro + pos.enabled,
+    //     operator resolution, device revocation) live in the /pos layout. The
+    //     signature-only verify here is cheap and DB-free; it returns null (→
+    //     login) when POS_SESSION_SECRET is unset, never 500s. ---
+    if (pathname.startsWith("/pos")) {
+      // Public POS entry points — reachable with NO session, device or operator.
+      //   /pos/login    — the sign-in / authorize-device screen.
+      //   /pos/register — invited staff completing setup from their email link,
+      //                   typically on their own phone. The emailed TOKEN is the
+      //                   authorization and is validated server-side by
+      //                   getInviteInfo; requiring a credential here would make
+      //                   the invitation impossible to accept.
+      //   /pos/reset    — same reasoning for the forgot-PIN/password link: a
+      //                   locked-out cashier has no credential by definition.
+      if (
+        POS_PUBLIC_PATHS.some(
+          (p) => pathname === p || pathname.startsWith(`${p}/`),
+        )
+      ) {
+        return NextResponse.next();
+      }
+      const hasDevice = !!verifyDeviceToken(
+        request.cookies.get(POS_DEVICE_COOKIE)?.value,
+      );
+      const hasOperator = !!verifyOperatorToken(
+        request.cookies.get(POS_OPERATOR_COOKIE)?.value,
+      );
+      if (!user && !hasDevice && !hasOperator) {
+        return redirectTo("/pos/login");
+      }
+      return NextResponse.next();
+    }
+
     // --- Gate 1: Auth check for /dashboard routes ---
     if (pathname.startsWith("/dashboard")) {
-      if (!user) return redirectTo("/auth/login");
+      if (!user) {
+        // A POS-only device/operator (no Firebase session) has no business in
+        // the dashboard — send it to the register, not the admin login.
+        const posOnly =
+          verifyDeviceToken(request.cookies.get(POS_DEVICE_COOKIE)?.value) ||
+          verifyOperatorToken(request.cookies.get(POS_OPERATOR_COOKIE)?.value);
+        return redirectTo(posOnly ? "/pos" : "/auth/login");
+      }
+
+      // POS staff (cashier/manager) have Firebase accounts but are POS-only —
+      // their role claim keeps them out of the dashboard entirely.
+      if (user.claims.role === "cashier" || user.claims.role === "manager") {
+        return redirectTo("/pos");
+      }
 
       // --- Gate 2: Force password reset ---
       if (user.claims.forcePasswordReset)
@@ -73,8 +162,18 @@ export async function proxy(request: NextRequest) {
       }
     }
 
-    // --- Gate for /auth/set-password: must be authenticated ---
-    if (pathname === "/auth/set-password" && !user) {
+    // --- Gate for the "authenticated, but not yet allowed onward" screens ---
+    // /auth/set-password  — a forced password reset (claim-driven, above).
+    // /auth/policy-update — a policy published at a new version since this
+    //                       person last agreed. Which documents are outstanding
+    //                       needs a DB query, so the REDIRECT to here lives in
+    //                       the dashboard layout; the proxy only enforces that
+    //                       you can't reach the screen signed out.
+    if (
+      (pathname === "/auth/set-password" ||
+        pathname === "/auth/policy-update") &&
+      !user
+    ) {
       return redirectTo("/auth/login");
     }
 

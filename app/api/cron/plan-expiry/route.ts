@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { and, inArray, lte, ne } from "drizzle-orm";
+import { and, gt, inArray, lte, ne } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { planEvents, stores } from "@/drizzle/schema";
 import { STORE_TAG } from "@/lib/store/resolve";
-import { PLAN_META, normalizePlan } from "@/lib/plans";
+import { recordEvent } from "@/lib/notifications/record";
+import {
+  PLAN_META,
+  normalizePlan,
+  EXPIRY_WARN_DAYS,
+  expiryWarnWindow,
+} from "@/lib/plans";
 import {
   resolveBillingEmail,
   sendBillingEmail,
@@ -121,7 +127,69 @@ async function handle(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, expired: events.length });
+  const warned = await warnExpiringPlans(nowIso);
+
+  return NextResponse.json({ ok: true, expired: events.length, warned });
+}
+
+// Warn merchants BEFORE a timed plan lapses. The horizons and the 24-hour-band
+// rule that keeps each warning once-only live in lib/plans.ts (pure + tested).
+async function warnExpiringPlans(nowIso: string): Promise<number> {
+  const now = new Date(nowIso);
+  let warned = 0;
+
+  for (const days of EXPIRY_WARN_DAYS) {
+    const { from, to } = expiryWarnWindow(now, days);
+
+    let due: { id: string; plan: string; planExpiresAt: string | null }[];
+    try {
+      due = await withService((db) =>
+        db
+          .select({
+            id: stores.id,
+            plan: stores.plan,
+            planExpiresAt: stores.planExpiresAt,
+          })
+          .from(stores)
+          .where(
+            and(
+              ne(stores.plan, "free"),
+              gt(stores.planExpiresAt, from),
+              lte(stores.planExpiresAt, to),
+            ),
+          ),
+      );
+    } catch (err) {
+      console.error(
+        `plan-expiry (warn ${days}d):`,
+        err instanceof Error ? err.message : err,
+      );
+      continue;
+    }
+
+    for (const store of due) {
+      // recordEvent, not emitEvent: a cron response is already gone by the
+      // time after() would run.
+      await recordEvent({
+        type: "plan.expiring",
+        storeId: store.id,
+        actor: { type: "system" },
+        subject: {
+          type: "plan",
+          id: store.plan,
+          label: PLAN_META[normalizePlan(store.plan)].name,
+        },
+        payload: {
+          plan: PLAN_META[normalizePlan(store.plan)].name,
+          daysLeft: days,
+          expiresOn: store.planExpiresAt ?? "",
+        },
+      });
+      warned++;
+    }
+  }
+
+  return warned;
 }
 
 export const GET = handle;

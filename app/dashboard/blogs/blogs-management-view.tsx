@@ -393,7 +393,7 @@ export function BlogsManagementView({
                 <th>Status</th>
                 <th>Published</th>
                 <th>Tags</th>
-                {canManage && <th>Actions</th>}
+                {canManage && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -405,7 +405,7 @@ export function BlogsManagementView({
                   }
                 >
                   {canManage && (
-                    <td className="dash-checkbox-cell">
+                    <td className="dash-col-actions dash-checkbox-cell">
                       <RowCheckbox
                         checked={selection.isSelected(blog.id)}
                         onToggle={() => selection.toggle(blog.id)}
@@ -520,7 +520,7 @@ export function BlogsManagementView({
 
                   {/* Actions */}
                   {canManage && (
-                    <td>
+                    <td className="dash-col-actions">
                       <DropdownMenu>
                         <DropdownMenuTrigger className="dash-row-menu">
                           <MoreHorizontal className="h-4 w-4" />

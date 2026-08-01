@@ -496,16 +496,58 @@ export async function updateHelpCategory(
   }
 }
 
-/** Delete a category. Articles survive (category_id → NULL via FK). */
+/**
+ * Delete a category — ONLY if it holds no articles.
+ *
+ * The FK is ON DELETE SET NULL, so deleting a non-empty category used to orphan
+ * its articles: they kept status='published' but lost the category that gives
+ * them their URL (/help/{category}/{slug}), leaving them unreachable and
+ * invisible (the storefront queries inner-join the category). Rather than
+ * silently stranding content, refuse and tell the operator to move or delete the
+ * articles first (Shopify-style).
+ *
+ * The guard is the `NOT EXISTS` on the DELETE itself, so it's atomic — a
+ * concurrent "add article to this category" can't slip between a check and the
+ * delete (the conditional-write pattern used by increment_coupon_usage and the
+ * order stock claims). The count is read only when the delete is refused, purely
+ * to write a useful message.
+ */
 export async function deleteHelpCategory(id: string): Promise<ActionResult> {
   const op = await requireOperator();
   if (!op) return { error: "Not authorized." };
   try {
-    await withService((db) =>
-      db.delete(helpCategories).where(eq(helpCategories.id, id)),
-    );
-    revalidateTag(TAGS.help, "max");
-    return { success: true };
+    return await withService(async (db) => {
+      const deleted = await db
+        .delete(helpCategories)
+        .where(
+          and(
+            eq(helpCategories.id, id),
+            sql`NOT EXISTS (SELECT 1 FROM ${helpArticles} WHERE ${helpArticles.categoryId} = ${helpCategories.id})`,
+          ),
+        )
+        .returning({ id: helpCategories.id });
+
+      if (deleted.length > 0) {
+        revalidateTag(TAGS.help, "max");
+        return { success: true };
+      }
+
+      // Nothing deleted: either the category still has articles, or it was
+      // already gone. Distinguish so the operator gets an actionable message.
+      const [{ n } = { n: 0 }] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(helpArticles)
+        .where(eq(helpArticles.categoryId, id));
+
+      if (n > 0) {
+        return {
+          error: `This category still has ${n} article${n === 1 ? "" : "s"}. Move ${n === 1 ? "it" : "them"} to another category (or delete ${n === 1 ? "it" : "them"}) first.`,
+        };
+      }
+      // Already deleted by someone else — the end state matches the intent.
+      revalidateTag(TAGS.help, "max");
+      return { success: true };
+    });
   } catch (e) {
     return { error: dbMessage(e) };
   }
@@ -707,12 +749,24 @@ function dbMessage(e: unknown): string {
 }
 
 // Ping IndexNow for a newly-published article (prod only, non-blocking).
+//
+// THREE urls, not one. Publishing an article also changes the two pages that
+// list it — its category page and the help hub — and the category page in
+// particular may be entering the sitemap for the very first time (empty
+// categories are pruned; see app/sitemap.ts). Announcing only the article left
+// crawlers to rediscover its own inbound links on their own schedule, which is
+// the opposite of the "new article indexed fast" goal. IndexNow takes up to
+// 10,000 urls per request, so the extra two are free.
 function pingArticle(categoryId: string | null, slug: string) {
   if (!SEARCH_INDEXABLE || !categoryId) return;
   after(async () => {
     const cats = await getHelpCategories().catch(() => []);
     const catSlug = cats.find((c) => c.id === categoryId)?.slug;
     if (!catSlug) return;
-    await pingIndexNow([`${HELP_URL}/help/${catSlug}/${slug}`]).catch(() => {});
+    await pingIndexNow([
+      `${HELP_URL}/help/${catSlug}/${slug}`,
+      `${HELP_URL}/help/${catSlug}`,
+      `${HELP_URL}/help`,
+    ]).catch(() => {});
   });
 }

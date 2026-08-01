@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
+import Link from "next/link";
+import { Bell, ChevronRight, Package } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { updateCustomerProfile } from "@/app/actions/customer-profile";
 import { useAuth } from "@/app/(storefront)/components/auth/AuthProvider";
@@ -152,6 +154,30 @@ export default function ProfilePage() {
                 {isPendingProfile ? "Saving..." : "Save Changes"}
               </button>
             </form>
+          </div>
+
+          {/* Quick links into the rest of the account area. Orders and
+              notifications are their own pages — this is just the signpost. */}
+          <div className={styles.card}>
+            <h2 className={styles.cardTitle}>My activity</h2>
+            <div className={styles.quickLinks}>
+              <Link href="/orders" className={styles.quickLink}>
+                <Package size={18} strokeWidth={1.75} />
+                <span>
+                  <strong>My orders</strong>
+                  <small>Track deliveries and download invoices</small>
+                </span>
+                <ChevronRight size={16} />
+              </Link>
+              <Link href="/notifications" className={styles.quickLink}>
+                <Bell size={18} strokeWidth={1.75} />
+                <span>
+                  <strong>Notifications</strong>
+                  <small>Updates about your orders and account</small>
+                </span>
+                <ChevronRight size={16} />
+              </Link>
+            </div>
           </div>
 
           {/* Address Book Card */}

@@ -313,7 +313,7 @@ export function ProductsManagementView({
                 <th>Price</th>
                 <th>Variants</th>
                 <th>Status</th>
-                {canManage && <th>Actions</th>}
+                {canManage && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -333,7 +333,7 @@ export function ProductsManagementView({
                 >
                   {canManage && (
                     <td
-                      className="dash-checkbox-cell"
+                      className="dash-col-actions dash-checkbox-cell"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <RowCheckbox
@@ -428,7 +428,10 @@ export function ProductsManagementView({
                     </span>
                   </td>
                   {canManage && (
-                    <td onClick={(ev) => ev.stopPropagation()}>
+                    <td
+                      className="dash-col-actions"
+                      onClick={(ev) => ev.stopPropagation()}
+                    >
                       <DropdownMenu>
                         <DropdownMenuTrigger className="dash-row-menu">
                           <MoreHorizontal className="h-4 w-4" />

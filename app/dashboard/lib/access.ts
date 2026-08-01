@@ -323,6 +323,26 @@ export async function getManagerIdentity(
 }
 
 /**
+ * Is the signed-in user a SUPERADMIN of the current store? Platform operators
+ * count — they are implicit superadmins of every store (`is_platform_admin()`).
+ *
+ * This is a narrower question than `getManagerIdentity(section)`, which a
+ * delegated admin also passes. Ask it only where a capability must not be
+ * delegable at all: today the POS money-losing actions (discounts and price
+ * overrides — CODEBASE §22). Reads the request-cached viewer context, so on a
+ * page that already resolved it this costs nothing.
+ *
+ * FAILS CLOSED, unlike the gates above: `getViewerContext` labels a DB error
+ * rather than throwing, so an outage answers "not a superadmin". That is the
+ * right side to err on here — the consequence is a refused discount, not a
+ * locked-out admin, and the write it guards couldn't have succeeded anyway.
+ */
+export async function isStoreSuperadmin(): Promise<boolean> {
+  const ctx = await getViewerContext();
+  return !!ctx?.isSuperadmin;
+}
+
+/**
  * The same gate, when the caller only needs the id (an auth check, a
  * `created_by`/`updated_by` value) and never opens a user-scoped transaction.
  * If you are about to call `withUser`, use `getManagerIdentity` instead — its
