@@ -6,6 +6,7 @@ import { razorpayPlans } from "@/drizzle/schema";
 import { getPlatformRazorpayCreds } from "./provider";
 import { rzpCreatePlan, type RazorpayCreds } from "./razorpay";
 import { PLAN_META, type Plan } from "@/lib/plans";
+import { getPlanPricingLive } from "@/lib/plans/pricing";
 
 // Recurring-billing helpers: resolve the Razorpay Plan id for a (tier, period)
 // on the PLATFORM account, creating + caching it on first use so we never
@@ -14,13 +15,27 @@ import { PLAN_META, type Plan } from "@/lib/plans";
 
 export type BillingPeriod = "monthly" | "yearly";
 
-/** Server-computed price (paise) for a paid plan + period — the ONLY source of
- *  the amount a merchant is charged (never trusted from the client). */
-export function planAmountPaise(plan: Plan, period: BillingPeriod): number {
-  const meta = PLAN_META[plan];
-  const inr = period === "yearly" ? meta.yearlyInr : meta.monthlyInr;
+/**
+ * Server-computed price (paise) for a paid plan + period — the ONLY source of
+ * the amount a merchant is charged (never trusted from the client).
+ *
+ * Reads the LIVE pricing, not the cached one: this number decides what someone
+ * is billed, and quoting from a cache a reprice has not yet reached would
+ * charge the old amount. It falls back to the lib/plans.ts constants when the
+ * table is empty or unreadable (see lib/plans/pricing.ts).
+ */
+export async function planAmountPaise(
+  plan: Plan,
+  period: BillingPeriod,
+): Promise<number> {
+  const pricing = await getPlanPricingLive();
+  const p = pricing[plan];
+  const inr = period === "yearly" ? p.yearlyInr : p.monthlyInr;
   return inr * 100;
 }
+
+/** How much room to leave above the top plan when authorising a mandate. */
+const MANDATE_HEADROOM = 2;
 
 /** Total billing cycles Razorpay requires up front — set effectively "forever"
  *  (10 years) so the subscription renews until cancelled. */
@@ -46,7 +61,7 @@ export async function resolveRazorpayPlanId(
   const creds = getPlatformRazorpayCreds();
   if (!creds) return null;
 
-  const amountPaise = planAmountPaise(plan, period);
+  const amountPaise = await planAmountPaise(plan, period);
 
   const cached = await withService((db) =>
     db
@@ -103,8 +118,72 @@ async function createPlan(
   return res.data.id;
 }
 
-/** The mandate's upper charge limit (paise). Set to the TOP plan's yearly price
- *  so a later upgrade never exceeds the authorised mandate. */
-export function mandateMaxPaise(): number {
-  return planAmountPaise("pro", "yearly");
+/**
+ * The mandate's upper charge limit (paise). Set to the TOP plan's yearly price
+ * so a later upgrade never exceeds the authorised mandate.
+ *
+ * ⚠ Now that an operator can reprice from the console, this is a moving
+ * number — and a mandate already authorised at the OLD ceiling keeps that
+ * ceiling. Raising Pro's yearly price above what an existing mandate
+ * authorised means that merchant cannot upgrade into it without re-authorising.
+ * That is the correct, safe failure (Razorpay refuses rather than over-charging
+ * a mandate), but if repricing upward becomes routine this wants headroom —
+ * a deliberate multiple of the top price rather than exactly it.
+ */
+export async function mandateMaxPaise(): Promise<number> {
+  // HEADROOM, deliberately. The ceiling is fixed when the mandate is
+  // authorised and can never be raised without the merchant re-authorising —
+  // so pinning it to today's top price means any later price rise locks
+  // existing subscribers out of upgrading, with "cancel and subscribe again"
+  // as the only route. Doubling it costs nothing (a mandate is a ceiling, not
+  // a charge; Razorpay only ever debits the plan amount) and absorbs a
+  // reprice.
+  const top = await planAmountPaise("pro", "yearly");
+  return top * MANDATE_HEADROOM;
+}
+
+/**
+ * What a Razorpay plan id actually costs, from our own cache of the plans we
+ * created. Used to price a change against what the merchant pays TODAY rather
+ * than against the catalog — an existing subscriber may be grandfathered on an
+ * older, cheaper plan, and comparing to the catalog would misread a real
+ * increase as a decrease and schedule it instead of charging it.
+ *
+ * Null when the id is unknown (a plan created before this cache, or by hand in
+ * the dashboard); callers fall back to the catalog price.
+ */
+export async function amountForRzpPlan(
+  rzpPlanId: string | null | undefined,
+): Promise<number | null> {
+  if (!rzpPlanId) return null;
+  const rows = await withService((db) =>
+    db
+      .select({ amount_paise: razorpayPlans.amountPaise })
+      .from(razorpayPlans)
+      .where(eq(razorpayPlans.rzpPlanId, rzpPlanId))
+      .limit(1),
+  ).catch(() => [] as { amount_paise: number }[]);
+  return rows[0]?.amount_paise ?? null;
+}
+
+/** The plan + period a Razorpay plan id maps to. The webhook needs both: after
+ *  a period change the subscription's stored period is stale until we read it
+ *  back from the plan Razorpay is actually billing. */
+export async function planForRzpPlan(
+  rzpPlanId: string | null | undefined,
+): Promise<{ plan: string; period: BillingPeriod } | null> {
+  if (!rzpPlanId) return null;
+  const rows = await withService((db) =>
+    db
+      .select({ plan: razorpayPlans.plan, period: razorpayPlans.period })
+      .from(razorpayPlans)
+      .where(eq(razorpayPlans.rzpPlanId, rzpPlanId))
+      .limit(1),
+  ).catch(() => [] as { plan: string; period: string }[]);
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    plan: r.plan,
+    period: r.period === "yearly" ? "yearly" : "monthly",
+  };
 }

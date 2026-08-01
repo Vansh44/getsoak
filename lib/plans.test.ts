@@ -116,10 +116,10 @@ describe("catalog consistency", () => {
 
   it("prices match the owner-approved catalog", () => {
     expect(PLAN_META.free.monthlyInr).toBe(0);
-    expect(PLAN_META.basic.monthlyInr).toBe(500);
-    expect(PLAN_META.basic.yearlyInr).toBe(5000);
-    expect(PLAN_META.pro.monthlyInr).toBe(1500);
-    expect(PLAN_META.pro.yearlyInr).toBe(15000);
+    expect(PLAN_META.basic.monthlyInr).toBe(1500);
+    expect(PLAN_META.basic.yearlyInr).toBe(15000);
+    expect(PLAN_META.pro.monthlyInr).toBe(5000);
+    expect(PLAN_META.pro.yearlyInr).toBe(50000);
   });
 
   it("yearly is cheaper than 12× monthly", () => {

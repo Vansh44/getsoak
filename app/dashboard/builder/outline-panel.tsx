@@ -28,7 +28,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { navIcons } from "../sidebar-nav-link";
+import { navIcons } from "../nav-icons";
 import {
   SECTION_TYPE_META,
   summarizeSection,

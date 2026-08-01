@@ -142,7 +142,7 @@ export default async function HelpArticlePage({ params, searchParams }: Props) {
     publishedAt: article.publishedAt,
     updatedAt: article.updatedAt,
     publisherName: "StoreMink",
-    logoUrl: `${PLATFORM_URL}/icon.svg`,
+    logoUrl: `${PLATFORM_URL}/brand/storemink-mark.png`,
   });
   const breadcrumbLd = breadcrumbSchema(HELP_URL, [
     { name: "Help Centre", path: "/help" },

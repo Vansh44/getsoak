@@ -33,8 +33,13 @@ import {
   totalCyclesFor,
   mandateMaxPaise,
   planAmountPaise,
+  amountForRzpPlan,
   type BillingPeriod,
 } from "@/lib/payments/subscription";
+import {
+  canUpdateSubscription,
+  decidePlanChange,
+} from "@/lib/payments/plan-change";
 import {
   resolveBillingEmail,
   sendBillingEmail,
@@ -191,7 +196,7 @@ async function startPlanSubscriptionForStore(
     rzpSubscriptionId: sub.data.id,
     rzpPlanId: resolved.rzpPlanId,
     status: sub.data.status || "created",
-    mandateMaxPaise: mandateMaxPaise(),
+    mandateMaxPaise: await mandateMaxPaise(),
     cancelAtPeriodEnd: false,
     updatedAt: new Date().toISOString(),
   };
@@ -219,7 +224,7 @@ async function startPlanSubscriptionForStore(
     subscriptionId: sub.data.id,
     keyId: creds.keyId,
     planName: PLAN_META[plan].name,
-    amountPaise: planAmountPaise(plan, billingPeriod),
+    amountPaise: await planAmountPaise(plan, billingPeriod),
   };
 }
 
@@ -387,7 +392,7 @@ async function confirmSubscriptionForStore(
       planActivatedTemplate({
         storeName: recip.storeName,
         planName: PLAN_META[plan].name,
-        amountInr: planAmountPaise(plan, period) / 100,
+        amountInr: (await planAmountPaise(plan, period)) / 100,
         period,
         renewsOn: expiresAt.toISOString(),
         manageUrl: manageUrl(recip.slug),
@@ -478,15 +483,25 @@ export async function cancelSubscription(): Promise<SubscriptionActionResult> {
  *   "cycle_end"  → the new plan starts at the next renewal (recorded as a
  *                  scheduled change; the webhook applies it when it bills).
  */
+/**
+ * Move an existing subscription to a different plan and/or billing period.
+ *
+ * WHEN it takes effect is DERIVED, never passed in: dearer applies now with
+ * Razorpay prorating the difference, cheaper waits for the paid cycle to run
+ * out. See lib/payments/plan-change.ts for why the merchant does not get to
+ * choose (short version: "apply now" on a downgrade means refunding money
+ * they already paid, and refunds are the messiest thing in billing).
+ */
 export async function changePlan(
   targetPlan: string,
-  when: string,
+  targetPeriodRaw: string,
 ): Promise<SubscriptionActionResult> {
   const userId = await getManagerUserId("ai");
   if (!userId) return { error: "You don't have permission to do this." };
 
   if (!isPaidPlan(targetPlan)) return { error: "Choose a paid plan." };
-  const scheduleChangeAt = when === "now" ? "now" : "cycle_end";
+  const targetPeriod: BillingPeriod =
+    targetPeriodRaw === "yearly" ? "yearly" : "monthly";
 
   const creds = getPlatformRazorpayCreds();
   if (!creds) return { error: "Subscriptions aren't available right now." };
@@ -496,6 +511,7 @@ export async function changePlan(
     db
       .select({
         rzp_subscription_id: storeSubscriptions.rzpSubscriptionId,
+        rzp_plan_id: storeSubscriptions.rzpPlanId,
         plan: storeSubscriptions.plan,
         period: storeSubscriptions.period,
         status: storeSubscriptions.status,
@@ -507,47 +523,67 @@ export async function changePlan(
   ).catch(() => []);
   const row = rows[0];
 
-  if (!row?.rzp_subscription_id || TERMINAL.has(row.status ?? "")) {
+  if (!row?.rzp_subscription_id) {
     return { error: "No active subscription to change." };
   }
-  if (row.plan === targetPlan) {
-    return {
-      error: `You're already on the ${PLAN_META[targetPlan].name} plan.`,
-    };
-  }
+  // Razorpay only updates `authenticated` and `active` subscriptions. Checking
+  // here turns a raw gateway error into an explanation — and `halted`/`pending`
+  // mean a payment failed, which is exactly when someone comes to downgrade.
+  const usable = canUpdateSubscription(row.status);
+  if (!usable.ok) return { error: usable.reason! };
 
-  const period = (row.period as BillingPeriod) ?? "monthly";
-  const targetAmount = planAmountPaise(targetPlan, period);
+  const currentPeriod: BillingPeriod =
+    row.period === "yearly" ? "yearly" : "monthly";
 
-  // A higher charge than the authorised mandate can't be auto-debited — the
-  // merchant would need to re-authorise (we set the mandate to the top plan at
-  // signup, so this should never trigger, but guard anyway).
+  // What they pay TODAY — read from the Razorpay plan actually attached to the
+  // subscription, not from the catalog, because a subscriber may be
+  // grandfathered on an older price. Falling back to the catalog only if that
+  // lookup fails.
+  const currentAmountPaise =
+    (await amountForRzpPlan(row.rzp_plan_id)) ??
+    (await planAmountPaise(row.plan as Plan, currentPeriod));
+  const targetAmountPaise = await planAmountPaise(targetPlan, targetPeriod);
+
+  const decision = decidePlanChange({
+    currentPlan: row.plan,
+    currentPeriod,
+    currentAmountPaise,
+    targetPlan,
+    targetPeriod,
+    targetAmountPaise,
+  });
+  if (decision.kind === "noop") return { error: decision.reason };
+
+  // A charge above the authorised mandate cannot be auto-debited. Only an
+  // increase can trip this, so it is checked only when one is happening.
   const mandateMax = row.mandate_max_paise ?? 0;
-  if (mandateMax > 0 && targetAmount > mandateMax) {
+  if (decision.immediate && mandateMax > 0 && targetAmountPaise > mandateMax) {
     return {
       error:
-        "This upgrade exceeds your authorised autopay limit. Please cancel and re-subscribe to the higher plan.",
+        "This plan costs more than your autopay limit allows. Cancel your current subscription and subscribe again to authorise the higher amount.",
     };
   }
 
-  const resolved = await resolveRazorpayPlanId(targetPlan, period);
+  const resolved = await resolveRazorpayPlanId(targetPlan, targetPeriod);
   if (!resolved)
     return { error: "Couldn't set up the plan. Please try again." };
 
   const res = await rzpUpdateSubscription(creds, row.rzp_subscription_id, {
     planId: resolved.rzpPlanId,
-    scheduleChangeAt,
+    scheduleChangeAt: decision.when,
   });
   if (!res.ok) {
     console.error("changePlan:", res.error);
     return { error: "Couldn't change the plan. Please try again." };
   }
 
-  if (scheduleChangeAt === "now") {
-    // Immediate: reflect it now (the webhook is still the authority on expiry).
+  const targetName = PLAN_META[targetPlan].name;
+
+  if (decision.immediate) {
+    // Applied now: reflect it (the webhook remains the authority on expiry).
     const currentEnd = res.data.current_end
       ? new Date(res.data.current_end * 1000)
-      : fallbackExpiry(period);
+      : fallbackExpiry(targetPeriod);
 
     let planActivated = false;
     try {
@@ -556,8 +592,10 @@ export async function changePlan(
           .update(storeSubscriptions)
           .set({
             plan: targetPlan,
+            period: targetPeriod,
             rzpPlanId: resolved.rzpPlanId,
             scheduledPlan: null,
+            scheduledPeriod: null,
             currentEnd: currentEnd.toISOString(),
             updatedAt: new Date().toISOString(),
           })
@@ -585,31 +623,38 @@ export async function changePlan(
           toPlan: targetPlan,
           source: "paid",
           actor: "subscription",
-          note: "plan change (now)",
+          note: `plan change (now, ${targetPeriod})`,
         });
         return true;
       });
     } catch (err) {
       console.error("changePlan (persist now):", err);
     }
-    // Only bust the store cache when the store's plan actually changed
-    // (matches the original — a comp plan is left untouched).
     if (planActivated) revalidateTag(STORE_TAG, "max");
     return {
       success: true,
-      message: `You're now on the ${PLAN_META[targetPlan].name} plan.`,
+      message: decision.periodChanged
+        ? `You're on ${targetName}, billed ${targetPeriod}.`
+        : `You're now on the ${targetName} plan.`,
     };
   }
 
-  // Scheduled for cycle end — record it; the webhook applies it at renewal.
+  // Scheduled for cycle end — record BOTH axes; the webhook applies whichever
+  // actually moved when the renewal charge lands.
   await withService((db) =>
     db
       .update(storeSubscriptions)
-      .set({ scheduledPlan: targetPlan, updatedAt: new Date().toISOString() })
+      .set({
+        scheduledPlan: targetPlan,
+        scheduledPeriod: targetPeriod,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(storeSubscriptions.storeId, storeId)),
   ).catch((err) => console.error("changePlan (persist scheduled):", err));
   return {
     success: true,
-    message: `${PLAN_META[targetPlan].name} will start at your next renewal.`,
+    message: decision.periodChanged
+      ? `${targetName} billed ${targetPeriod} starts at your next renewal. Nothing is charged today.`
+      : `${targetName} will start at your next renewal. Nothing is charged today.`,
   };
 }

@@ -3,7 +3,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeDbMock, sqlParamValues } from "./_test-helpers";
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({
+  revalidateTag: vi.fn(),
+  revalidatePath: vi.fn(),
+  // platform.ts now imports lib/plans/pricing, whose module scope wraps the
+  // price read in unstable_cache. Pass the function straight through so the
+  // resolver under test runs uncached.
+  unstable_cache: (fn: unknown) => fn,
+}));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
 // platform.ts pulls STORE_TAG/FALLBACK_STORE_ID from resolve.ts, whose module
 // scope calls unstable_cache — stub the constants instead of loading it.

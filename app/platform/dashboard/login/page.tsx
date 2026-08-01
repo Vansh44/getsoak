@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandMark } from "../../brand-mark";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -85,7 +86,10 @@ export default function OperatorLoginPage() {
         onSubmit={step === "email" ? sendCode : verify}
       >
         <Link href="/" className="stq-logo" style={{ fontSize: 20 }}>
-          Stor<span>eMink</span>
+          <BrandMark size={22} priority />
+          <em>
+            Store<span>Mink</span>
+          </em>
         </Link>
         <h1 style={{ marginTop: 18 }}>Operator login</h1>
         <p className="sub">

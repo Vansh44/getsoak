@@ -134,12 +134,23 @@ export async function proxy(request: NextRequest) {
     // --- Gate 1: Auth check for /dashboard routes ---
     if (pathname.startsWith("/dashboard")) {
       if (!user) {
-        // A POS-only device/operator (no Firebase session) has no business in
-        // the dashboard — send it to the register, not the admin login.
-        const posOnly =
-          verifyDeviceToken(request.cookies.get(POS_DEVICE_COOKIE)?.value) ||
-          verifyOperatorToken(request.cookies.get(POS_OPERATOR_COOKIE)?.value);
-        return redirectTo(posOnly ? "/pos" : "/auth/login");
+        // ALWAYS the admin login. A POS cookie is not an identity, and it must
+        // never decide where a signed-out human is sent.
+        //
+        // This used to check for a pos_device/pos_operator cookie and redirect
+        // to /pos instead — "this browser is a till, so send it to the till".
+        // It locked OWNERS out of their own dashboard, and by construction only
+        // owners: authorizeThisDevice is superadmin-only, so the owner's laptop
+        // is the one browser that can be both an authorised till AND an admin
+        // session. pos_device lasts 90 days, sm_session 14 — so two weeks after
+        // authorising a device, the owner opening /dashboard was bounced to a
+        // PIN pad they may not even have a PIN for, with no way back.
+        //
+        // Nothing is lost by dropping it: POS staff have Firebase accounts, so
+        // they arrive here WITH a user and the role check below sends them to
+        // /pos correctly. Anyone genuinely POS-only just sees a login page,
+        // which is the honest answer to "you need an admin account for this".
+        return redirectTo("/auth/login");
       }
 
       // POS staff (cashier/manager) have Firebase accounts but are POS-only —

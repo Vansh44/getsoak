@@ -126,6 +126,7 @@ async function processSubscription(eventType: string, sub: RzpSubEntity) {
         plan: storeSubscriptions.plan,
         period: storeSubscriptions.period,
         scheduled_plan: storeSubscriptions.scheduledPlan,
+        scheduled_period: storeSubscriptions.scheduledPeriod,
       })
       .from(storeSubscriptions)
       .where(eq(storeSubscriptions.rzpSubscriptionId, sub.id))
@@ -135,7 +136,10 @@ async function processSubscription(eventType: string, sub: RzpSubEntity) {
   if (!row) return; // not one of ours
 
   const storeId = row.store_id;
-  const period = (row.period ?? "monthly") as "monthly" | "yearly";
+  // Period, like plan, is resolved from the plan Razorpay is BILLING — the
+  // stored value goes stale the moment a scheduled period change lands, and it
+  // feeds the amount printed in the renewal email.
+  let period = (row.period ?? "monthly") as "monthly" | "yearly";
   const currentEnd = sub.current_end ? new Date(sub.current_end * 1000) : null;
   const currentStart = sub.current_start
     ? new Date(sub.current_start * 1000)
@@ -149,15 +153,24 @@ async function processSubscription(eventType: string, sub: RzpSubEntity) {
   if (sub.plan_id) {
     const plRows = await withService((db) =>
       db
-        .select({ plan: razorpayPlans.plan })
+        .select({ plan: razorpayPlans.plan, period: razorpayPlans.period })
         .from(razorpayPlans)
         .where(eq(razorpayPlans.rzpPlanId, sub.plan_id!))
         .limit(1),
     );
     if (plRows[0]?.plan) plan = plRows[0].plan;
+    if (plRows[0]?.period) {
+      period = plRows[0].period === "yearly" ? "yearly" : "monthly";
+    }
   }
-  // A scheduled change is fulfilled once billing actually moves to that plan.
-  const clearScheduled = row.scheduled_plan && plan === row.scheduled_plan;
+  // A scheduled change is fulfilled once billing actually moves to it. BOTH
+  // axes must match: a same-tier period switch never changes the plan, so
+  // checking the plan alone would clear the schedule on the next renewal while
+  // the period switch was still pending.
+  const clearScheduled =
+    (!!row.scheduled_plan || !!row.scheduled_period) &&
+    (!row.scheduled_plan || plan === row.scheduled_plan) &&
+    (!row.scheduled_period || period === row.scheduled_period);
 
   // Always keep the subscription row's status + cycle window (+ resolved plan)
   // in sync.
@@ -167,7 +180,10 @@ async function processSubscription(eventType: string, sub: RzpSubEntity) {
       .set({
         status: sub.status,
         plan,
-        ...(clearScheduled ? { scheduledPlan: null } : {}),
+        period,
+        ...(clearScheduled
+          ? { scheduledPlan: null, scheduledPeriod: null }
+          : {}),
         currentStart: currentStart?.toISOString() ?? null,
         currentEnd: currentEnd?.toISOString() ?? null,
         updatedAt: new Date().toISOString(),

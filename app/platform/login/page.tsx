@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandMark } from "../brand-mark";
 import { useState } from "react";
 import Link from "next/link";
 
@@ -38,7 +39,10 @@ export default function StoreLoginPage() {
     <div className="stq-auth-wrap">
       <form className="stq-auth" onSubmit={go}>
         <Link href="/" className="stq-logo" style={{ fontSize: 20 }}>
-          Store<span>Mink</span>
+          <BrandMark size={22} priority />
+          <em>
+            Store<span>Mink</span>
+          </em>
         </Link>
         <h1 style={{ marginTop: 18 }}>Log in to your store</h1>
         <p className="sub">Enter your store address to continue.</p>

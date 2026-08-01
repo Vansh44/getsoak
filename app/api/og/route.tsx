@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 
@@ -52,10 +54,45 @@ function clamp(s: string | null, max: number): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
+/**
+ * A logo for the card, as a data URI.
+ *
+ * Read off disk and inlined rather than given to Satori as a URL: an <img src>
+ * makes the renderer fetch over the network while a crawler waits, and a slow
+ * or failed fetch produces a BROKEN share card — the one image you never get a
+ * second chance at. Read once at module scope; it is a 63 KB file that never
+ * changes between deploys.
+ *
+ * ⚠ Only a path under public/ is accepted, and only from our own callers. A
+ * remote URL is deliberately NOT supported: it would let any query string make
+ * this route fetch an arbitrary host (SSRF) on every crawl.
+ */
+const LOGO_CACHE = new Map<string, string | null>();
+
+function localLogoDataUri(path: string | undefined): string | null {
+  if (!path || !path.startsWith("/brand/")) return null;
+  if (LOGO_CACHE.has(path)) return LOGO_CACHE.get(path)!;
+  let uri: string | null = null;
+  try {
+    // No "..": the prefix check above already pins it to public/brand, but a
+    // traversal attempt should fail closed rather than read something else.
+    if (!path.includes("..")) {
+      const buf = readFileSync(join(process.cwd(), "public", path));
+      uri = `data:image/png;base64,${buf.toString("base64")}`;
+    }
+  } catch {
+    uri = null; // a missing file must not break the card
+  }
+  LOGO_CACHE.set(path, uri);
+  return uri;
+}
+
 function parsePayload(raw: string | null): {
   title?: string;
   subtitle?: string;
   color?: string;
+  logo?: string;
+  footer?: string;
 } {
   if (!raw) return {};
   try {
@@ -72,6 +109,11 @@ export function GET(request: NextRequest) {
   const subtitle = clamp(data.subtitle ?? null, 90);
   const color = normalizeColor(data.color ?? null);
   const ink = readableInk(color);
+  const logo = localLogoDataUri(data.logo);
+  // Defaults to the title, which is right for a store (its own name under the
+  // rule). The platform passes its domain instead — with a logo and a headline
+  // above it, a third "StoreMink" is just repetition.
+  const footer = clamp(data.footer ?? null, 60) || title;
   const faint =
     ink === "#ffffff" ? "rgba(255,255,255,0.72)" : "rgba(23,19,15,0.66)";
   const rule =
@@ -90,16 +132,29 @@ export function GET(request: NextRequest) {
         padding: "90px",
       }}
     >
-      <div
-        style={{
-          width: 64,
-          height: 8,
-          borderRadius: 8,
-          backgroundColor: ink,
-          marginBottom: 40,
-          display: "flex",
-        }}
-      />
+      {logo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={logo}
+          width={104}
+          height={104}
+          alt=""
+          style={{ marginBottom: 36 }}
+        />
+      ) : (
+        // No logo (a store that hasn't uploaded one) keeps the plain rule —
+        // better an intentional mark than someone else's brand on their card.
+        <div
+          style={{
+            width: 64,
+            height: 8,
+            borderRadius: 8,
+            backgroundColor: ink,
+            marginBottom: 40,
+            display: "flex",
+          }}
+        />
+      )}
       <div
         style={{
           fontSize: title.length > 26 ? 76 : 96,
@@ -136,7 +191,7 @@ export function GET(request: NextRequest) {
           display: "flex",
         }}
       >
-        {title}
+        {footer}
       </div>
     </div>,
     {

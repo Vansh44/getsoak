@@ -42,6 +42,7 @@ import {
   normalizePlan,
   type Plan,
 } from "@/lib/plans";
+import type { PlanPricing } from "@/lib/plans/pricing";
 
 const KIND_META: Record<
   AiUsagePageData["ledger"][number]["kind"],
@@ -89,17 +90,24 @@ export function PlansBillingClient({
   subscription,
   packs,
   canManage,
+  pricing,
 }: {
   initialData: AiUsagePageData;
   subscription: SubscriptionState;
   packs: CreditPack[];
   canManage: boolean;
+  /** Resolved server-side (code defaults + operator overrides). Never read
+   *  PLAN_META prices here — they ignore what an operator has set, so the card
+   *  and the charge would disagree. */
+  pricing: PlanPricing;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
   const data = initialData;
   const [buyingPack, setBuyingPack] = useState<string | null>(null);
-  const [period, setPeriod] = useState<"monthly" | "yearly">("monthly");
+  // Yearly by default, matching the public pricing page. It is the cheaper
+  // per-month figure and the one we want anchored before a comparison.
+  const [period, setPeriod] = useState<"monthly" | "yearly">("yearly");
   const [upgradeTo, setUpgradeTo] = useState<Plan | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
@@ -246,9 +254,11 @@ export function PlansBillingClient({
 
         <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
           <Detail label="Price">
-            {planMeta.monthlyInr === 0
+            {/* Resolved pricing, not PLAN_META — after an operator reprice the
+                constant is no longer what this store is on. */}
+            {pricing[plan].monthlyInr === 0
               ? "Free"
-              : `₹${planMeta.monthlyInr.toLocaleString("en-IN")}/mo`}
+              : `₹${pricing[plan].monthlyInr.toLocaleString("en-IN")}/mo`}
           </Detail>
           <Detail label="Status">{status.label}</Detail>
           <Detail label={expired ? "Expired on" : "Renews / expires"}>
@@ -572,8 +582,15 @@ export function PlansBillingClient({
             const meta = PLAN_META[p];
             const isCurrent = p === plan;
             const isUpgrade = PLAN_RANK[p] > PLAN_RANK[plan];
-            const price =
-              period === "yearly" ? meta.yearlyInr : meta.monthlyInr;
+            const p_ = pricing[p];
+            // The headline is ALWAYS per month so the two tabs compare like
+            // for like; the annual total is spelled out below rather than
+            // hidden until checkout.
+            const perMonth =
+              period === "yearly"
+                ? Math.round(p_.yearlyInr / 12)
+                : p_.monthlyInr;
+            const billed = period === "yearly" ? p_.yearlyInr : p_.monthlyInr;
             return (
               <div
                 key={p}
@@ -592,17 +609,20 @@ export function PlansBillingClient({
                   {meta.name}
                 </div>
                 <div className="mt-1 text-2xl font-bold text-[#111827]">
-                  {price === 0 ? (
+                  {perMonth === 0 ? (
                     "₹0"
                   ) : (
                     <>
-                      ₹{price.toLocaleString("en-IN")}
+                      ₹{perMonth.toLocaleString("en-IN")}
                       <span className="text-sm font-medium text-[#5b6472]">
-                        {period === "yearly" ? "/yr" : "/mo"}
+                        /month
                       </span>
                     </>
                   )}
                 </div>
+                {billed === 0 && (
+                  <p className="mt-0.5 text-xs text-[#5b6472]">Free forever</p>
+                )}
                 <p className="mt-1 text-xs text-[#5b6472]">{meta.tagline}</p>
 
                 <ul className="mt-4 flex-1 space-y-2">
@@ -661,6 +681,9 @@ export function PlansBillingClient({
             setUpgradeTo(null);
             refresh();
           }}
+          pricing={pricing}
+          currentPlan={plan}
+          currentPeriod={subscription.period ?? "monthly"}
         />
       )}
     </div>
@@ -716,6 +739,9 @@ function UpgradeModal({
   hasActiveSubscription,
   onClose,
   onActivated,
+  pricing,
+  currentPlan,
+  currentPeriod,
 }: {
   plan: Plan;
   period: "monthly" | "yearly";
@@ -723,14 +749,34 @@ function UpgradeModal({
   hasActiveSubscription: boolean;
   onClose: () => void;
   onActivated: () => void;
+  pricing: PlanPricing;
+  currentPlan: Plan;
+  currentPeriod: "monthly" | "yearly";
 }) {
   const meta = PLAN_META[plan];
-  const price = period === "yearly" ? meta.yearlyInr : meta.monthlyInr;
+  // From the resolved pricing, not PLAN_META — this dialog is the last thing
+  // someone reads before authorising a payment, so it must state the amount
+  // that is actually taken.
+  const price =
+    period === "yearly" ? pricing[plan].yearlyInr : pricing[plan].monthlyInr;
   const [working, setWorking] = useState(false);
 
   // No live mandate yet (free, or an operator-granted paid plan) → start a
   // fresh subscription for the target plan. An existing active subscription →
   // change the plan on that same mandate (now / at renewal).
+  // Predicts what the server will decide, so the button can say which one it
+  // is. The SERVER is authoritative (lib/payments/plan-change.ts) and compares
+  // against what the merchant actually pays, which for a grandfathered
+  // subscriber can differ from the catalog price used here — in which case
+  // they simply get the gentler outcome than the button promised.
+  const currentAmount =
+    currentPeriod === "yearly"
+      ? pricing[currentPlan].yearlyInr
+      : pricing[currentPlan].monthlyInr;
+  const targetAmount =
+    period === "yearly" ? pricing[plan].yearlyInr : pricing[plan].monthlyInr;
+  const dearer = targetAmount > currentAmount;
+
   const isPlanChange = hasActiveSubscription && purchasesAvailable;
   const isNewSubscription = !hasActiveSubscription && purchasesAvailable;
 
@@ -774,9 +820,12 @@ function UpgradeModal({
     }
   }
 
-  async function doChange(when: "now" | "cycle_end") {
+  async function doChange() {
     setWorking(true);
-    const res = await changePlan(plan, when);
+    // No `when` — the server derives it from the direction of the change.
+    // Offering "switch now" on a downgrade looks helpful and is the option
+    // that triggers a refund of money already paid.
+    const res = await changePlan(plan, period);
     setWorking(false);
     if (res.error) {
       toast.error(res.error);
@@ -838,24 +887,18 @@ function UpgradeModal({
             {working ? "Opening…" : "Subscribe & set up autopay"}
           </button>
         ) : isPlanChange ? (
-          <div className="mt-5 space-y-2">
-            <button
-              type="button"
-              onClick={() => doChange("now")}
-              disabled={working}
-              className="dash-btn dash-btn-primary w-full justify-center"
-            >
-              {working ? "Working…" : "Switch now (prorated)"}
-            </button>
-            <button
-              type="button"
-              onClick={() => doChange("cycle_end")}
-              disabled={working}
-              className="dash-btn w-full justify-center"
-            >
-              Start at next renewal
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={doChange}
+            disabled={working}
+            className="dash-btn dash-btn-primary mt-5 w-full justify-center"
+          >
+            {working
+              ? "Working…"
+              : dearer
+                ? "Switch now (prorated)"
+                : "Schedule for next renewal"}
+          </button>
         ) : (
           <a
             href="mailto:support@storemink.com?subject=Change%20my%20plan"

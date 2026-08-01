@@ -100,15 +100,18 @@ export const PLAN_META: Record<Plan, PlanMeta> = {
     id: "basic",
     name: "Basic",
     tagline: "Run a real business — domain, payments, AI",
-    monthlyInr: 500,
-    yearlyInr: 5000,
+    monthlyInr: 1500,
+    // Ten months for twelve — the "two months free" the pricing page and the
+    // FAQ both promise. Keep the 10× relationship if these ever move, or that
+    // promise quietly stops being true.
+    yearlyInr: 15000,
   },
   pro: {
     id: "pro",
     name: "Pro",
     tagline: "Scale with your team — campaigns, no product limits",
-    monthlyInr: 1500,
-    yearlyInr: 15000,
+    monthlyInr: 5000,
+    yearlyInr: 50000,
   },
 };
 

@@ -1051,6 +1051,42 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     direction**, with a duration picker (1/3/6/12 months / custom date /
     indefinite). Merchant-facing subscription billing is a later phase.
 
+15b. **Plan changes — direction decides timing, not the merchant**
+(`lib/payments/plan-change.ts`, pure + tested). A merchant can move tier,
+billing period, or both. `decidePlanChange` compares AMOUNTS, and the rule
+is Shopify's: **dearer applies now** (Razorpay prorates and charges the
+difference), **cheaper or equal waits for the paid cycle to end**. - **Not the merchant's choice, deliberately.** "Apply now" on a downgrade
+is the option that looks helpful and triggers a refund of money already
+paid. Waiting for the cycle removes refunds — and the disputes, partial
+reversals and reconciliation that come with them — from the system
+entirely. Nobody loses money; they keep what they bought until it runs
+out. The dialog now offers ONE button and says which case it is. - **AMOUNTS, not tiers.** Rank would read monthly→yearly as "no change"
+(same tier, 10× the charge), and would ignore that a subscriber may be
+GRANDFATHERED on an older price — so a tier downgrade can be a real
+price increase. The current amount is read from the Razorpay plan
+actually attached to the subscription (`amountForRzpPlan`), falling back
+to the catalog. - **Period changes are supported by Razorpay** — "if the plans have
+different billing cycles, the new plan is billed at the new interval".
+They were impossible here only because `changePlan` ignored period and
+refused same-plan. monthly→yearly is an upgrade; yearly→monthly is a
+downgrade and is scheduled. - **`scheduled_period` exists because `scheduled_plan` cannot express a
+same-tier period switch** (`plans_04_scheduled_period.sql`). Worse, the
+webhook clears a schedule once billing reaches `scheduled_plan` — which
+for a period-only change is true immediately, so the pending switch would
+cancel itself at the next renewal. The webhook now resolves BOTH axes
+from the billed plan id and clears only when both match. - **`halted` and `pending` are refused with an explanation.** Razorpay
+only updates `authenticated`/`active`, and those two are the states a
+subscription lands in AFTER a payment fails — exactly when someone comes
+to downgrade. Without the check they got a raw gateway error at the worst
+moment. - **The mandate ceiling carries 2× headroom.** It is fixed when authorised
+and can only be raised by re-authorising, so pinning it to today's top
+price meant any later price rise locked existing subscribers out of
+upgrading. A mandate is a ceiling, not a charge. - **Price rises grandfather existing subscribers**, as a consequence of
+`razorpayPlans` being keyed on (plan, period, amountPaise): a reprice
+mints a NEW Razorpay plan and a live mandate keeps its own. There is no
+migration path for existing subscribers by design — silently raising a
+running subscription is how you get chargebacks.
+
 16. **Per-store brand voice + AI quota.** Every AI copy feature (product
     description, SEO, coupon email, brand-voice setup) speaks in the STORE's
     voice: `lib/ai/brand-voice.ts` `getBrandSoulForStore(storeId)` reads
