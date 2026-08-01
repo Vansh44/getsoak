@@ -12,10 +12,17 @@ export function brandOgImageUrl(params: {
   title: string;
   subtitle?: string | null;
   color?: string | null;
+  /** A path under public/brand — StoreMink's own surfaces only. A store's card
+   *  stays logo-less rather than carrying our mark (see the route). */
+  logo?: string | null;
+  /** Small line under the rule. Defaults to the title. */
+  footer?: string | null;
 }): string {
   const payload: Record<string, string> = { title: params.title };
   if (params.subtitle) payload.subtitle = params.subtitle;
   if (params.color) payload.color = params.color;
+  if (params.logo) payload.logo = params.logo;
+  if (params.footer) payload.footer = params.footer;
   const sp = new URLSearchParams({ d: JSON.stringify(payload) });
   return `/api/og?${sp.toString()}`;
 }
