@@ -1,7 +1,20 @@
 /**
  * Publish version 1 of StoreMink's policies into legal_documents.
  *
- *   npx tsx scripts/seed-legal.ts
+ *   npx tsx --tsconfig tsconfig.scripts.json scripts/seed-legal.ts
+ *
+ * ⚠ `--tsconfig` is NOT optional. lib/legal/store.ts imports `server-only`,
+ * which Next's bundler provides and npm never installs, so a plain `npx tsx`
+ * dies with "Cannot find module 'server-only'". That tsconfig maps it to
+ * scripts/_stubs/server-only.ts. (This line said plain `npx tsx` until
+ * 2026-08-01 — the stub arrived after the script did.)
+ *
+ * ⚠ CHECK WHICH DATABASE YOU ARE SEEDING. `.env` points at STAGING
+ * (DB_NAME=storemink_staging), and staging + prod are two databases in ONE
+ * Cloud SQL instance, so the proxy being up says nothing about which one you
+ * hit. A shell variable beats .env, so prod is:
+ *
+ *   DB_NAME=storemink npx tsx --tsconfig tsconfig.scripts.json scripts/seed-legal.ts
  *
  * Idempotent: a kind that already has a current version is skipped, and a
  * published row cannot be edited (the DB enforces it), so re-running is safe.

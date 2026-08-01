@@ -21,6 +21,17 @@
  * deliberate second command rather than a fast one.
  *
  * Needs the Cloud SQL proxy up and .env loaded, like any DB script.
+ *
+ * ⚠ AND CHECK WHICH DATABASE. `.env` points at STAGING
+ * (DB_NAME=storemink_staging), and staging + prod are two databases in ONE
+ * Cloud SQL instance — the proxy being up says nothing about which one you
+ * hit. A shell variable beats .env, so prod is:
+ *
+ *   DB_NAME=storemink npx tsx --tsconfig tsconfig.scripts.json scripts/publish-legal.ts --publish
+ *
+ * Getting this wrong is quiet in the worst way: the dry run reads the WRONG
+ * database, reports the version as outstanding, and --publish then "succeeds"
+ * against staging while prod still serves the old policy.
  */
 import { loadEnvConfig } from "@next/env";
 
