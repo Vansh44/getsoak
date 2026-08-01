@@ -21,6 +21,7 @@ import { STORE_TAG } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { PLAN_META, type Plan } from "@/lib/plans";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
+import { logError } from "@/lib/observability/logger";
 import {
   rzpCreateSubscription,
   rzpFetchSubscription,
@@ -212,10 +213,10 @@ async function startPlanSubscriptionForStore(
         }),
     );
   } catch (err) {
-    console.error(
-      "startPlanSubscription (persist):",
-      err instanceof Error ? err.message : err,
-    );
+    // logError, not console.error: a Drizzle error's message is only "Failed
+    // query: …", and the actual reason is on `cause`. Losing it is what turned
+    // a missing column into an unexplained "Couldn't start the subscription".
+    logError("startPlanSubscription (persist)", err, { storeId, plan });
     return { error: "Couldn't start the subscription. Please try again." };
   }
 

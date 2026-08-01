@@ -1074,7 +1074,18 @@ same-tier period switch** (`plans_04_scheduled_period.sql`). Worse, the
 webhook clears a schedule once billing reaches `scheduled_plan` — which
 for a period-only change is true immediately, so the pending switch would
 cancel itself at the next renewal. The webhook now resolves BOTH axes
-from the billed plan id and clears only when both match. - **`halted` and `pending` are refused with an explanation.** Razorpay
+from the billed plan id and clears only when both match. - **★ NEVER ADD A COLUMN BY EDITING A `CREATE TABLE IF NOT EXISTS`
+MIGRATION.** `scheduled_plan` was added to `subscriptions_01_schema.sql`
+after prod had already run that file, so re-running it was a silent no-op
+and the column never arrived — prod held a table matching an older copy
+of the file while the code wrote every column Drizzle knew about. Every
+upgrade then failed with "Couldn't start the subscription", and because
+the Razorpay subscription is created BEFORE that insert, each attempt
+left an orphan at the gateway. Repaired additively by
+`subscriptions_02_scheduled_plan.sql`; anything added to an existing
+table needs its own file. The failure was also invisible from the app
+logs — a Drizzle error's `message` is only "Failed query: …" and the
+reason lives on `cause`, which `logError` now emits. - **`halted` and `pending` are refused with an explanation.** Razorpay
 only updates `authenticated`/`active`, and those two are the states a
 subscription lands in AFTER a payment fails — exactly when someone comes
 to downgrade. Without the check they got a raw gateway error at the worst
