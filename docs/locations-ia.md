@@ -156,8 +156,8 @@ adjust a number that is a sum.
 
 ### 3.5 `/dashboard/pos/settings` — unchanged
 
-All seven existing `pos.*` settings are genuinely about the till and stay put:
-`enabled`, `idleLockMinutes`, `allowPriceOverride`,
+All existing `pos.*` settings are genuinely about the till and stay put:
+`enabled`, `idleLockMinutes`, `allowPriceOverride`, `ownerOnlyDiscounts`,
 `requireManagerForDiscount`, `maxDiscountPercent`, `requireOpenShift`,
 `cashVarianceTolerance`.
 

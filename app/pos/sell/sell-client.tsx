@@ -42,6 +42,13 @@ import { CustomerPanel } from "./customer-panel";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
+import {
+  createKeyboardWedge,
+  isEditableTarget,
+  isTouchPrimary,
+  subscribeTouchPrimary,
+} from "@/lib/pos/keyboard-wedge";
+import { isIdleLockExempt } from "@/lib/pos/permissions";
 import { useCatalog } from "@/lib/pos/use-catalog";
 import {
   applyLayout,
@@ -153,13 +160,34 @@ export function SellClient({
   // A hardware scanner is a keyboard: it "types" the barcode then hits Enter.
   // Keeping this input focused means a scan lands in the cart with no clicks —
   // the single biggest factor in per-sale time.
+  //
+  // ★ BUT ONLY WHERE THERE IS A REAL KEYBOARD. On a touch-primary device the
+  // same trick is the thing cashiers complain about: every tap on a product
+  // blurs the box, focus is taken straight back, and iPadOS answers a
+  // programmatic focus by opening the software keyboard over half the till. Tap
+  // a product, get a keyboard. So sticky focus is switched off there and the
+  // wedge below carries the scanner instead — a tablet does not lose scanning,
+  // it stops being interrupted.
+  const touchPrimary = useSyncExternalStore(
+    subscribeTouchPrimary,
+    isTouchPrimary,
+    () => false,
+  );
   const scanRef = useRef<HTMLInputElement>(null);
+  // Every overlay is listed: each one owns an input of its own (tender amount,
+  // customer search) and pulling focus out from under it 80 ms later would make
+  // that field impossible to type in.
+  const overlayOpen =
+    tendering ||
+    !!choices ||
+    cameraOpen ||
+    layoutOpen ||
+    customerOpen ||
+    !!saleId;
   const refocus = useCallback(() => {
-    // Don't steal focus while a modal owns the screen — grabbing it back would
-    // fight the camera view and the tender inputs.
-    if (!tendering && !choices && !cameraOpen && !layoutOpen)
-      scanRef.current?.focus();
-  }, [tendering, choices, cameraOpen, layoutOpen]);
+    if (touchPrimary || overlayOpen) return;
+    scanRef.current?.focus();
+  }, [touchPrimary, overlayOpen]);
   useEffect(() => {
     refocus();
   }, [refocus, cart.length]);
@@ -250,6 +278,32 @@ export function SellClient({
     },
     [catalog, resolveScan],
   );
+
+  // The scan path that needs NO focused input. On a desktop this never fires —
+  // the search box holds focus, so `isEditableTarget` sends every key to it and
+  // behaviour is exactly as before. On a tablet it is the whole scanner story:
+  // the cashier taps products with their finger, focus lives wherever the last
+  // tap left it, and a scan still drops into the cart.
+  //
+  // Swallowing the burst matters as much as reading it. After a tap the product
+  // tile is the focused element, and both Space and Enter activate a focused
+  // button — so an unhandled scan would ring up the tapped product a second
+  // time instead of the scanned one.
+  useEffect(() => {
+    const wedge = createKeyboardWedge();
+    const onKey = (e: KeyboardEvent) => {
+      if (overlayOpen) return;
+      // A shortcut or a paste is not a scan.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditableTarget(e.target)) return;
+      const res = wedge.handleKey(e.key, e.timeStamp);
+      if (res.type === "ignored") return;
+      e.preventDefault();
+      if (res.type === "scan") void runScan(res.code);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlayOpen, runScan]);
 
   // Browse-as-you-type. Against the local index the grid is DERIVED, not
   // stored: recomputing during render costs ~1 ms at a few thousand SKUs and
@@ -398,7 +452,13 @@ export function SellClient({
           walked-away-from-a-shared-till risk, and since posLock now ends the
           Firebase session it would otherwise sign an owner out of the
           dashboard for standing still. */}
-      {config.role !== "owner" && <IdleLock minutes={idleLockMinutes} />}
+      {/* Only the SUPERADMIN is exempt now. A delegated admin at a shared
+          counter is the same walked-away-from-an-open-till risk as any
+          operator — more so, since their session reaches further than a
+          cashier's. Note the cost that buys: posLock clears sm_session, so an
+          idle till signs them out of the dashboard too. That is the intended
+          trade for everyone except the person whose shop it is. */}
+      {!isIdleLockExempt(config.role) && <IdleLock minutes={idleLockMinutes} />}
 
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-2 font-semibold">
@@ -527,11 +587,13 @@ export function SellClient({
                   <input
                     ref={scanRef}
                     value={query}
-                    autoFocus
                     onChange={(e) => {
                       setQuery(e.target.value);
                       setError(null);
                     }}
+                    // No autoFocus: on a tablet it opens the software keyboard
+                    // the moment the register loads. The mount pass of the
+                    // effect above focuses it where sticky focus applies.
                     onBlur={() => setTimeout(refocus, 80)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && query.trim()) {
@@ -697,33 +759,38 @@ export function SellClient({
                     </span>
                   </div>
                   {/* Per-line markdown — for the one damaged or expiring unit,
-                      as opposed to a discount across the whole sale. */}
-                  <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                    <label className="flex items-center gap-1.5 text-white/50">
-                      Less ₹
-                      <input
-                        value={l.lineDiscount || ""}
-                        inputMode="numeric"
-                        onChange={(e) =>
-                          setLineDiscount(
-                            l.key,
-                            Number(e.target.value.replace(/\D/g, "")) || 0,
-                          )
-                        }
-                        placeholder="0"
-                        className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
-                      />
-                    </label>
-                    {l.lineDiscount > 0 && (
-                      <span className="font-semibold text-white">
-                        ₹
-                        {(
-                          l.unitPrice * l.quantity -
-                          l.lineDiscount
-                        ).toLocaleString("en-IN")}
-                      </span>
-                    )}
-                  </div>
+                      as opposed to a discount across the whole sale. Hidden
+                      unless this operator may discount: a field that always
+                      fails at the till, in front of a customer, is worse than
+                      no field. The server is the actual boundary. */}
+                  {config.canDiscount && (
+                    <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                      <label className="flex items-center gap-1.5 text-white/50">
+                        Less ₹
+                        <input
+                          value={l.lineDiscount || ""}
+                          inputMode="numeric"
+                          onChange={(e) =>
+                            setLineDiscount(
+                              l.key,
+                              Number(e.target.value.replace(/\D/g, "")) || 0,
+                            )
+                          }
+                          placeholder="0"
+                          className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
+                        />
+                      </label>
+                      {l.lineDiscount > 0 && (
+                        <span className="font-semibold text-white">
+                          ₹
+                          {(
+                            l.unitPrice * l.quantity -
+                            l.lineDiscount
+                          ).toLocaleString("en-IN")}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -766,18 +833,20 @@ export function SellClient({
                 <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
               </div>
             )}
-            <label className="mb-2 flex items-center justify-between gap-2 text-sm">
-              <span className="text-white/60">Discount ₹</span>
-              <input
-                value={discount || ""}
-                inputMode="numeric"
-                onChange={(e) =>
-                  setDiscount(Number(e.target.value.replace(/\D/g, "")) || 0)
-                }
-                placeholder="0"
-                className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
-              />
-            </label>
+            {config.canDiscount && (
+              <label className="mb-2 flex items-center justify-between gap-2 text-sm">
+                <span className="text-white/60">Discount ₹</span>
+                <input
+                  value={discount || ""}
+                  inputMode="numeric"
+                  onChange={(e) =>
+                    setDiscount(Number(e.target.value.replace(/\D/g, "")) || 0)
+                  }
+                  placeholder="0"
+                  className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
+                />
+              </label>
+            )}
             {tax > 0 && (
               <div className="mb-2 flex items-center justify-between text-sm">
                 <span className="text-white/60">
