@@ -157,10 +157,16 @@ describe("hoursUntil", () => {
 });
 
 describe("PICKUP_WARN_HOURS", () => {
-  // The reaper runs DAILY. A window shorter than the interval lets an order
-  // slip between two runs and expire with no warning at all.
-  it("is at least the cron interval", () => {
-    expect(PICKUP_WARN_HOURS).toBeGreaterThanOrEqual(24);
+  const CRON_INTERVAL_HOURS = 24; // expire-pending-payments runs daily
+
+  // The window and the schedule are not in phase, so the notice an order
+  // actually gets is (W − I, W]. At W = I that bottoms out at ~nothing: an
+  // order expiring just after a run is warned just before it lapses. Twice the
+  // interval is what makes the WORST case a full interval of notice.
+  it("gives at least one full cron interval of notice, worst case", () => {
+    expect(PICKUP_WARN_HOURS - CRON_INTERVAL_HOURS).toBeGreaterThanOrEqual(
+      CRON_INTERVAL_HOURS,
+    );
   });
 });
 

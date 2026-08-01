@@ -299,14 +299,17 @@ the fulfilment strategy entirely.
    the same box.
 
 **The pre-expiry nudge** (`order.pickup_expiring`, `sweepPickupReminders`)
-fires once per order, 24 hours out, and the exactly-once property is a CLAIM on
+fires once per order, 48 hours out, and the exactly-once property is a CLAIM on
 `orders.pickup_warned_at` (`locations_06_pickup_reminder.sql`) — not a
 schedule. The cron is a heartbeat, and `notifications`' UNIQUE on
 (event, recipient) can't dedupe it because each emit creates a NEW event row;
 without the claim a daily run would mail the same customer about the same box
 every day, which is how people learn to ignore a merchant's email.
-`PICKUP_WARN_HOURS` must stay ≥ the cron interval or an order can slip the
-whole window between two runs and expire unwarned. Reminders run AFTER the
+`PICKUP_WARN_HOURS` must stay ≥ TWICE the cron interval. Window and schedule
+are not in phase, so the notice an order gets is (W − I, W]: at W = I nothing
+slips through unwarned, but an order expiring just after a run is warned just
+before it lapses — and it spends the one email the claim allows. Reminders run
+AFTER the
 expiry sweep: telling someone to hurry and collect an order we just cancelled
 is worse than saying nothing.
 
