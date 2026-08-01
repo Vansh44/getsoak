@@ -682,6 +682,8 @@ export function PlansBillingClient({
             refresh();
           }}
           pricing={pricing}
+          currentPlan={plan}
+          currentPeriod={subscription.period ?? "monthly"}
         />
       )}
     </div>
@@ -738,6 +740,8 @@ function UpgradeModal({
   onClose,
   onActivated,
   pricing,
+  currentPlan,
+  currentPeriod,
 }: {
   plan: Plan;
   period: "monthly" | "yearly";
@@ -746,6 +750,8 @@ function UpgradeModal({
   onClose: () => void;
   onActivated: () => void;
   pricing: PlanPricing;
+  currentPlan: Plan;
+  currentPeriod: "monthly" | "yearly";
 }) {
   const meta = PLAN_META[plan];
   // From the resolved pricing, not PLAN_META — this dialog is the last thing
@@ -758,6 +764,19 @@ function UpgradeModal({
   // No live mandate yet (free, or an operator-granted paid plan) → start a
   // fresh subscription for the target plan. An existing active subscription →
   // change the plan on that same mandate (now / at renewal).
+  // Predicts what the server will decide, so the button can say which one it
+  // is. The SERVER is authoritative (lib/payments/plan-change.ts) and compares
+  // against what the merchant actually pays, which for a grandfathered
+  // subscriber can differ from the catalog price used here — in which case
+  // they simply get the gentler outcome than the button promised.
+  const currentAmount =
+    currentPeriod === "yearly"
+      ? pricing[currentPlan].yearlyInr
+      : pricing[currentPlan].monthlyInr;
+  const targetAmount =
+    period === "yearly" ? pricing[plan].yearlyInr : pricing[plan].monthlyInr;
+  const dearer = targetAmount > currentAmount;
+
   const isPlanChange = hasActiveSubscription && purchasesAvailable;
   const isNewSubscription = !hasActiveSubscription && purchasesAvailable;
 
@@ -801,9 +820,12 @@ function UpgradeModal({
     }
   }
 
-  async function doChange(when: "now" | "cycle_end") {
+  async function doChange() {
     setWorking(true);
-    const res = await changePlan(plan, when);
+    // No `when` — the server derives it from the direction of the change.
+    // Offering "switch now" on a downgrade looks helpful and is the option
+    // that triggers a refund of money already paid.
+    const res = await changePlan(plan, period);
     setWorking(false);
     if (res.error) {
       toast.error(res.error);
@@ -865,24 +887,18 @@ function UpgradeModal({
             {working ? "Opening…" : "Subscribe & set up autopay"}
           </button>
         ) : isPlanChange ? (
-          <div className="mt-5 space-y-2">
-            <button
-              type="button"
-              onClick={() => doChange("now")}
-              disabled={working}
-              className="dash-btn dash-btn-primary w-full justify-center"
-            >
-              {working ? "Working…" : "Switch now (prorated)"}
-            </button>
-            <button
-              type="button"
-              onClick={() => doChange("cycle_end")}
-              disabled={working}
-              className="dash-btn w-full justify-center"
-            >
-              Start at next renewal
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={doChange}
+            disabled={working}
+            className="dash-btn dash-btn-primary mt-5 w-full justify-center"
+          >
+            {working
+              ? "Working…"
+              : dearer
+                ? "Switch now (prorated)"
+                : "Schedule for next renewal"}
+          </button>
         ) : (
           <a
             href="mailto:support@storemink.com?subject=Change%20my%20plan"
