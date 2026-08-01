@@ -620,13 +620,9 @@ export function PlansBillingClient({
                     </>
                   )}
                 </div>
-                <p className="mt-0.5 text-xs text-[#5b6472]">
-                  {billed === 0
-                    ? "Free forever"
-                    : period === "yearly"
-                      ? `₹${billed.toLocaleString("en-IN")} billed once a year`
-                      : `₹${billed.toLocaleString("en-IN")} billed every month`}
-                </p>
+                {billed === 0 && (
+                  <p className="mt-0.5 text-xs text-[#5b6472]">Free forever</p>
+                )}
                 <p className="mt-1 text-xs text-[#5b6472]">{meta.tagline}</p>
 
                 <ul className="mt-4 flex-1 space-y-2">
