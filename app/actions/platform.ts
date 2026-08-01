@@ -1,8 +1,9 @@
 "use server";
 
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
-import { revalidateTag } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { deleteAuthUser } from "@/lib/auth/firebase-users";
+import { logError } from "@/lib/observability/logger";
 import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
@@ -17,6 +18,7 @@ import {
   categories,
   emailCampaigns,
   planEvents,
+  planPrices,
   platformAdmins,
   productReviews,
   productVariants,
@@ -32,6 +34,11 @@ import { getThemeDefinition } from "@/lib/themes";
 import { applyTheme } from "@/lib/themes/apply";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
+import {
+  bustPlanPricing,
+  getPlanPricingLive,
+  type PlanPricing,
+} from "@/lib/plans/pricing";
 import { currentPeriod } from "@/lib/ai/quota";
 
 // A Storemink platform operator (from platform_admins, by JWT email).
@@ -781,4 +788,144 @@ export async function seedDemoStore(themeId: string): Promise<SeedDemoResult> {
     };
   }
   return { success: true, slug };
+}
+
+// ── Plan pricing (platform superadmin) ──────────────────────────────────────
+// Prices were compiled into lib/plans.ts, so moving one meant a deploy. These
+// let an operator set them from the console; lib/plans/pricing.ts folds the
+// stored rows onto the code defaults, so an empty table behaves exactly as
+// before and a failed read falls back to the constants rather than to nothing.
+//
+// EXISTING SUBSCRIBERS ARE NOT REPRICED. lib/payments/subscription.ts keys its
+// Razorpay plan cache on (plan, period, amountPaise), so a new price mints a
+// NEW Razorpay plan and anyone already subscribed keeps the amount they agreed
+// to. That grandfathering is deliberate.
+
+/** A sane ceiling. Guards a typo — a trailing zero on a price page is the kind
+ *  of mistake that is only noticed by the first person who refuses to pay. */
+const MAX_PLAN_PRICE_INR = 500_000;
+
+export interface PlanPriceInput {
+  plan: string;
+  monthlyInr: number;
+  yearlyInr: number;
+  /** Struck-through list price. Null / 0 / blank clears the offer. */
+  baseMonthlyInr: number | null;
+  baseYearlyInr: number | null;
+}
+
+export async function getPlanPricingForConsole(): Promise<
+  { pricing: PlanPricing } | { error: string }
+> {
+  const viewer = await getPlatformViewer();
+  if (!viewer) return { error: "Not authorized." };
+  // Live, not cached: an operator editing prices must see what is stored, not
+  // what the public page happens to be serving.
+  return { pricing: await getPlanPricingLive() };
+}
+
+export async function savePlanPricing(
+  input: PlanPriceInput[],
+): Promise<ActionResult> {
+  const viewer = await getPlatformViewer();
+  if (viewer?.role !== "superadmin") {
+    return { error: "Only a platform superadmin can change pricing." };
+  }
+  if (!Array.isArray(input) || input.length === 0) {
+    return { error: "Nothing to save." };
+  }
+
+  const rows: {
+    plan: string;
+    monthlyInr: number;
+    yearlyInr: number;
+    baseMonthlyInr: number | null;
+    baseYearlyInr: number | null;
+    updatedBy: string | null;
+  }[] = [];
+
+  for (const p of input) {
+    if (!(PLAN_IDS as readonly string[]).includes(p.plan)) {
+      return { error: `Unknown plan: ${p.plan}` };
+    }
+    const num = (v: unknown, label: string): number | { error: string } => {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0 || n > MAX_PLAN_PRICE_INR) {
+        return {
+          error: `${label} must be a whole number between 0 and ${MAX_PLAN_PRICE_INR}.`,
+        };
+      }
+      return n;
+    };
+    const monthly = num(p.monthlyInr, `${p.plan} monthly price`);
+    if (typeof monthly !== "number") return monthly;
+    const yearly = num(p.yearlyInr, `${p.plan} yearly price`);
+    if (typeof yearly !== "number") return yearly;
+
+    // A blank or zero base means "no offer running" — not a free list price.
+    const baseM =
+      p.baseMonthlyInr === null || Number(p.baseMonthlyInr) === 0
+        ? null
+        : num(p.baseMonthlyInr, `${p.plan} base monthly price`);
+    if (baseM !== null && typeof baseM !== "number") return baseM;
+    const baseY =
+      p.baseYearlyInr === null || Number(p.baseYearlyInr) === 0
+        ? null
+        : num(p.baseYearlyInr, `${p.plan} base yearly price`);
+    if (baseY !== null && typeof baseY !== "number") return baseY;
+
+    // The DB has a CHECK for this too; catching it here gives the operator a
+    // sentence instead of a constraint violation.
+    if (baseM !== null && baseM < monthly) {
+      return {
+        error: `${p.plan}: the struck-through price must be at least the price you charge.`,
+      };
+    }
+    if (baseY !== null && baseY < yearly) {
+      return {
+        error: `${p.plan}: the struck-through yearly price must be at least the yearly price.`,
+      };
+    }
+
+    rows.push({
+      plan: p.plan,
+      monthlyInr: monthly,
+      yearlyInr: yearly,
+      baseMonthlyInr: baseM,
+      baseYearlyInr: baseY,
+      updatedBy: viewer.email ?? null,
+    });
+  }
+
+  try {
+    await withService(async (db) => {
+      for (const r of rows) {
+        await db
+          .insert(planPrices)
+          .values(r)
+          .onConflictDoUpdate({
+            target: planPrices.plan,
+            set: {
+              monthlyInr: r.monthlyInr,
+              yearlyInr: r.yearlyInr,
+              baseMonthlyInr: r.baseMonthlyInr,
+              baseYearlyInr: r.baseYearlyInr,
+              updatedBy: r.updatedBy,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+      }
+    });
+  } catch (error) {
+    logError("savePlanPricing failed", error);
+    return { error: "Couldn't save pricing. Please try again." };
+  }
+
+  // Public pages read through a cached loader — without this the change would
+  // not show until the 5-minute window lapsed, which is not "real time".
+  bustPlanPricing();
+  revalidatePath("/platform");
+  revalidatePath("/platform/pos");
+  revalidatePath("/dashboard/plans");
+  return { success: true };
 }

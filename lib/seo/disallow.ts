@@ -54,6 +54,10 @@ export const STOREFRONT_DISALLOW: readonly DisallowRule[] = [
  * sitemap and linked from every CTA.
  */
 export const PLATFORM_DISALLOW: readonly DisallowRule[] = [
+  // ⚠ `/pos` is deliberately NOT here. On a store host it is the register and
+  // is blocked above; on the apex it is the Point of Sale MARKETING page, one
+  // of our most important entry points from search. Same path, opposite
+  // intent — which is the whole reason these two lists are separate.
   { path: "/dashboard" },
   { path: "/auth" },
   { path: "/api" },

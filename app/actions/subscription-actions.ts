@@ -191,7 +191,7 @@ async function startPlanSubscriptionForStore(
     rzpSubscriptionId: sub.data.id,
     rzpPlanId: resolved.rzpPlanId,
     status: sub.data.status || "created",
-    mandateMaxPaise: mandateMaxPaise(),
+    mandateMaxPaise: await mandateMaxPaise(),
     cancelAtPeriodEnd: false,
     updatedAt: new Date().toISOString(),
   };
@@ -219,7 +219,7 @@ async function startPlanSubscriptionForStore(
     subscriptionId: sub.data.id,
     keyId: creds.keyId,
     planName: PLAN_META[plan].name,
-    amountPaise: planAmountPaise(plan, billingPeriod),
+    amountPaise: await planAmountPaise(plan, billingPeriod),
   };
 }
 
@@ -387,7 +387,7 @@ async function confirmSubscriptionForStore(
       planActivatedTemplate({
         storeName: recip.storeName,
         planName: PLAN_META[plan].name,
-        amountInr: planAmountPaise(plan, period) / 100,
+        amountInr: (await planAmountPaise(plan, period)) / 100,
         period,
         renewsOn: expiresAt.toISOString(),
         manageUrl: manageUrl(recip.slug),
@@ -517,7 +517,7 @@ export async function changePlan(
   }
 
   const period = (row.period as BillingPeriod) ?? "monthly";
-  const targetAmount = planAmountPaise(targetPlan, period);
+  const targetAmount = await planAmountPaise(targetPlan, period);
 
   // A higher charge than the authorised mandate can't be auto-debited — the
   // merchant would need to re-authorise (we set the mandate to the top plan at

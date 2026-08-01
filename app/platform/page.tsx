@@ -8,6 +8,15 @@ import {
   platformWebsiteSchema,
 } from "@/lib/seo/brand-identity";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
+import { BrandMark } from "./brand-mark";
+import { PricingCards, type PricingCard } from "./pricing-cards";
+import { getPlanPricing } from "@/lib/plans/pricing";
+import {
+  BuilderArt,
+  InvoiceArt,
+  RegisterArt,
+  StorefrontArt,
+} from "./product-art";
 import {
   ArrowRight,
   Building2,
@@ -32,39 +41,41 @@ import {
 // gateway), B2B + D2C together, live in a day, dogfooded on WholeSip.
 // ---------------------------------------------------------------------------
 
+// Short on purpose. Six cards each carrying a three-line paragraph is a wall of
+// text pretending to be a grid — the heading is the point, the line under it is
+// a caption, not an essay.
 const FEATURES = [
   {
     icon: LayoutTemplate,
-    title: "A storefront that feels yours",
-    body: "Your brand, logo and colours at your-name.storemink.com — or your own domain. A homepage you compose section by section, no code.",
+    title: "Your own storefront",
+    body: "Your brand, your colours, your domain.",
   },
   {
     icon: PenLine,
-    title: "Blogs your customers write too",
-    body: "A full blog engine with community submissions and an approval queue you control — or let posts go live instantly. Your store, your rules.",
+    title: "Blogs and community posts",
+    body: "Customers can write them. You approve them.",
   },
   {
     icon: Megaphone,
-    title: "Marketing built in, not bolted on",
-    body: "Coupons, customer groups, targeted offers and email campaigns — the tools other platforms sell as paid apps are simply here.",
+    title: "Marketing built in",
+    body: "Coupons, segments and email campaigns.",
   },
   {
     icon: Star,
-    title: "Reviews & social proof",
-    body: "Product reviews, ratings and rich product pages that build trust and rank on Google — structured data included.",
+    title: "Reviews and ratings",
+    body: "Social proof, with Google-ready markup.",
   },
   {
     icon: Users,
-    title: "A real team dashboard",
-    body: "Invite staff with roles and granular permissions. Enquiries, media library, analytics — one operations centre for the whole business.",
+    title: "A team, with permissions",
+    body: "Staff roles down to the individual action.",
   },
   {
     icon: Building2,
-    title: "D2C and B2B, one store",
-    body: "Sell to shoppers and to businesses from the same place — enquiry-based selling, customer groups and wholesale workflows.",
+    title: "D2C and B2B together",
+    body: "Retail and wholesale from one store.",
   },
 ];
-
 const COMPARE: {
   label: string;
   mink: { ok: boolean; text: string };
@@ -110,6 +121,17 @@ const COMPARE: {
     mink: { ok: true, text: "Enquiry-based selling built in" },
     other: { ok: false, text: "Enterprise plans, lakhs per month" },
   },
+  {
+    label: "Point of Sale (in-store till)",
+    // Pro includes PLAN_LIMITS.pro.posLocationsIncluded locations.
+    mink: { ok: true, text: "Included on Pro — 2 locations" },
+    other: { ok: false, text: "Paid add-on, charged per location" },
+  },
+  {
+    label: "GST invoicing",
+    mink: { ok: true, text: "Included on every plan, free included" },
+    other: { ok: false, text: "Paid app" },
+  },
 ];
 
 // Derived from the canonical plan catalog (lib/plans.ts) — prices and AI
@@ -120,8 +142,12 @@ const PLANS = [
     meta: PLAN_META.free,
     who: "Try everything. Launch your first store.",
     features: [
-      "Storefront at you.storemink.com",
+      "Storefront on your own subdomain",
+      "Website builder — every section type",
       `Up to ${PLAN_LIMITS.free.maxProducts} products`,
+      "Blogs, reviews and enquiries",
+      "GST invoicing and tax classes",
+      "Cash on delivery checkout",
       "Full admin dashboard",
       `${PLAN_LIMITS.free.aiGenerationsPerMonth} AI generations a month`,
     ],
@@ -132,10 +158,13 @@ const PLANS = [
     meta: PLAN_META.basic,
     who: "For new brands getting their first orders.",
     features: [
-      "Everything in Free",
+      "Everything in Free, plus:",
       "Your own custom domain",
-      "Online payments — your own gateway",
-      `${PLAN_LIMITS.basic.maxProducts} products & ${PLAN_LIMITS.basic.maxStaff} staff accounts`,
+      "Online payments — your own gateway, 0% to us",
+      `${PLAN_LIMITS.basic.maxProducts} products`,
+      `${PLAN_LIMITS.basic.maxStaff} staff accounts with roles`,
+      "Coupons and customer groups",
+      "Media library",
       `${PLAN_LIMITS.basic.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.basic.name}`,
@@ -143,18 +172,21 @@ const PLANS = [
   },
   {
     meta: PLAN_META.pro,
-    who: "For growing brands ready to scale with a team.",
+    who: "For growing brands, a team, and a counter.",
     features: [
-      `Everything in ${PLAN_META.basic.name}`,
-      "Unlimited products & staff",
+      `Everything in ${PLAN_META.basic.name}, plus:`,
+      "Point of Sale — till, staff PINs, shifts",
+      `${PLAN_LIMITS.pro.posLocationsIncluded} shop locations, ${PLAN_LIMITS.pro.posDevicesPerLocation} tills each`,
+      "Stock per location, and transfers",
+      "Buy online, collect in store",
       "Email campaigns",
+      "Unlimited products and staff",
       `${PLAN_LIMITS.pro.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.pro.name}`,
     popular: false,
   },
 ];
-
 const priceInr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
 const FAQS = [
@@ -184,24 +216,44 @@ const FAQS = [
   },
 ];
 
-export default function StoreminkLanding() {
+export default async function StoreminkLanding() {
+  // Operator-set prices, folded onto the code defaults. Cached + tag-busted on
+  // save, so a change in the console shows here immediately.
+  const pricing = await getPlanPricing();
+
   // One explicit Offer per plan, derived from the canonical catalog so the
   // structured data can never drift from what the page (and billing) actually
   // charge. Each carries a per-MONTH UnitPriceSpecification so Google reads the
   // exact recurring price (₹0 / ₹500 / ₹1,500) rather than scraping a figure
   // out of the prose — which is how a stale "₹399" leaked into an AI Overview.
+  // "From ₹X/month" in the hero must track the operator's prices too, or the
+  // headline contradicts the cards further down the same page.
+  const cheapestPaidInr = Math.min(
+    ...PLANS.map((p) => pricing[p.meta.id].monthlyInr).filter((n) => n > 0),
+  );
+
+  const pricingCards: PricingCard[] = PLANS.map((plan) => ({
+    id: plan.meta.id,
+    name: plan.meta.name,
+    who: plan.who,
+    features: plan.features,
+    cta: plan.cta,
+    popular: plan.popular,
+    ...pricing[plan.meta.id],
+  }));
+
   const planOffers = PLANS.map((plan) => ({
     "@type": "Offer",
     name: `StoreMink ${plan.meta.name}`,
     description: plan.meta.tagline,
     priceCurrency: "INR",
-    price: plan.meta.monthlyInr,
+    price: pricing[plan.meta.id].monthlyInr,
     url: `${PLATFORM_URL}/#pricing`,
     availability: "https://schema.org/InStock",
     priceSpecification: {
       "@type": "UnitPriceSpecification",
       priceCurrency: "INR",
-      price: plan.meta.monthlyInr,
+      price: pricing[plan.meta.id].monthlyInr,
       // Recurring monthly subscription (P1M = one-month billing period).
       billingDuration: 1,
       billingIncrement: 1,
@@ -236,7 +288,7 @@ export default function StoreminkLanding() {
           "@type": "AggregateOffer",
           priceCurrency: "INR",
           lowPrice: 0,
-          highPrice: PLAN_META.pro.monthlyInr,
+          highPrice: pricing.pro.monthlyInr,
           offerCount: PLANS.length,
           offers: planOffers,
         },
@@ -253,10 +305,14 @@ export default function StoreminkLanding() {
       <div className="stq-navbar">
         <nav className="stq-nav">
           <Link href="/" className="stq-logo">
-            Store<span>Mink</span>
+            <BrandMark size={26} priority />
+            <em>
+              Store<span>Mink</span>
+            </em>
           </Link>
           <div className="stq-nav-links">
             <a href="#features">Features</a>
+            <Link href="/pos">Point of Sale</Link>
             <a href="#compare">Compare</a>
             <a href="#pricing">Pricing</a>
             <a href="#faq">FAQ</a>
@@ -282,14 +338,13 @@ export default function StoreminkLanding() {
             </span>
             <h1 className="stq-rise stq-rise-1">
               Launch your store in a day.{" "}
-              <span className="stq-grad">Keep 100% of every sales.</span>
+              <span className="stq-grad">Keep 100% of every sale.</span>
             </h1>
             <p className="stq-sub stq-rise stq-rise-2">
               StoreMink is the India-first store builder with everything
               included — storefront, blogs, reviews, coupons, email campaigns
-              and a full team dashboard. From{" "}
-              {priceInr(PLAN_META.basic.monthlyInr)}/month. No apps to buy. No
-              transaction fees. Ever.
+              and a full team dashboard. From {priceInr(cheapestPaidInr)}/month.
+              No apps to buy. No transaction fees. Ever.
             </p>
             <div className="stq-hero-cta stq-rise stq-rise-3">
               <Link href="/signup" className="stq-btn stq-btn-primary">
@@ -313,51 +368,7 @@ export default function StoreminkLanding() {
           </div>
 
           <div className="stq-mock-wrap stq-rise stq-rise-2">
-            <div className="stq-mock" aria-hidden="true">
-              <div className="stq-mock-bar">
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-dot" />
-                <span className="stq-mock-url">
-                  🔒 <strong>yourbrand</strong>.storemink.com
-                </span>
-              </div>
-              <div className="stq-mock-body">
-                <div className="stq-mock-store-head">
-                  <span className="stq-mock-logo">
-                    <i /> yourbrand
-                  </span>
-                  <span className="stq-mock-navlinks">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
-                </div>
-                <div className="stq-mock-hero">
-                  <b>Made with care. Delivered with pride.</b>
-                  <span>Fresh from our kitchen to your doorstep.</span>
-                  <br />
-                  <span className="stq-mock-pill">SHOP NOW</span>
-                </div>
-                <div className="stq-mock-grid">
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹249</div>
-                  </div>
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹329</div>
-                  </div>
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹199</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <StorefrontArt />
             <div className="stq-float stq-float-1" aria-hidden="true">
               <CircleCheck size={17} /> Order received — ₹648
             </div>
@@ -525,6 +536,103 @@ export default function StoreminkLanding() {
         </div>
       </section>
 
+      {/* --------------------------- product showcase ----------------------- */}
+      {/* A dark band, because the page was white end to end and had no rhythm
+          for a visual to sit against. Each card's artwork is DRAWN IN CSS (see
+          platform.css) rather than photographed — we have no brand photography,
+          and stock imagery is the look of a product with nothing to show. What
+          these depict is real: the register, the builder, GST invoicing. */}
+      <section className="stq-showcase" id="showcase">
+        <div className="stq-showcase-inner">
+          <div className="stq-sec-head">
+            <span className="stq-kicker">Not a roadmap</span>
+            <h2>The parts other people charge extra for.</h2>
+            <p>All in the same plan. All working today.</p>
+          </div>
+
+          <div className="stq-show-grid">
+            {/* --- register --- */}
+            <article className="stq-show-card">
+              <RegisterArt compact />
+              <h3>Sell at the counter</h3>
+              <p>Your counter, sharing one catalogue with your website.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Barcode scanner, or your phone&apos;s
+                  camera
+                </li>
+                <li>
+                  <Check size={15} /> Shifts, cash drops and an end-of-day count
+                </li>
+                <li>
+                  <Check size={15} /> Stock per shop, and transfers between them
+                </li>
+                <li>
+                  <Check size={15} /> Buy online, collect in store
+                </li>
+              </ul>
+              <span className="stq-show-tag">Pro · 2 locations included</span>
+              <p className="stq-show-more">
+                <Link href="/pos">
+                  Everything in Point of Sale <ArrowRight size={15} />
+                </Link>
+              </p>
+            </article>
+
+            {/* --- builder --- */}
+            <article className="stq-show-card">
+              <BuilderArt />
+              <h3>Build the site yourself</h3>
+              <p>Every page, section by section. No code, ever.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Twelve section types, drag to reorder
+                </li>
+                <li>
+                  <Check size={15} /> Live preview as you type
+                </li>
+                <li>
+                  <Check size={15} /> Draft and publish, with undo
+                </li>
+                <li>
+                  <Check size={15} /> Your own domain from Basic up
+                </li>
+              </ul>
+              <span className="stq-show-tag">Every plan</span>
+            </article>
+
+            {/* --- GST --- */}
+            <article className="stq-show-card">
+              <InvoiceArt />
+              <h3>GST that works itself out</h3>
+              <p>Set a rate once. Every invoice after that is correct.</p>
+              <ul className="stq-show-list">
+                <li>
+                  <Check size={15} /> Tax classes per product, 5% / 12% / 18%
+                </li>
+                <li>
+                  <Check size={15} /> Prices inclusive or exclusive — your call
+                </li>
+                <li>
+                  <Check size={15} /> Printable invoices customers can download
+                </li>
+                <li>
+                  <Check size={15} /> Place of supply decides the split
+                </li>
+              </ul>
+              <span className="stq-show-tag">Every plan, Free included</span>
+            </article>
+          </div>
+
+          <div className="stq-showcase-foot">
+            <p>No add-ons. No upgrade tier. No app store.</p>
+            <Link href="/signup" className="stq-btn stq-btn-light">
+              Create your store free <ArrowRight size={17} />
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* ------------------------------ steps ------------------------------ */}
       <section className="stq-section-lg" style={{ paddingTop: 0 }}>
         <div className="stq-sec-head">
@@ -597,44 +705,9 @@ export default function StoreminkLanding() {
         <div className="stq-sec-head">
           <span className="stq-kicker">Simple, honest pricing</span>
           <h2>Priced in rupees. Not in surprises.</h2>
-          <p>
-            Start free, upgrade when you grow. Annual billing gets you two
-            months free.
-          </p>
+          <p>Start free. Upgrade when you grow.</p>
         </div>
-        <div className="stq-pricing">
-          {PLANS.map((plan) => (
-            <div
-              className={`stq-price-card${plan.popular ? " popular" : ""}`}
-              key={plan.meta.id}
-            >
-              {plan.popular && (
-                <span className="stq-price-flag">Most popular</span>
-              )}
-              <h3>{plan.meta.name}</h3>
-              <p className="who">{plan.who}</p>
-              <div className="stq-price">
-                {priceInr(plan.meta.monthlyInr)}
-                <sub>/month</sub>
-              </div>
-              <ul>
-                {plan.features.map((f) => (
-                  <li key={f}>
-                    <Check size={16} /> {f}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href="/signup"
-                className={`stq-btn ${
-                  plan.popular ? "stq-btn-primary" : "stq-btn-ghost"
-                } stq-btn-block`}
-              >
-                {plan.cta}
-              </Link>
-            </div>
-          ))}
-        </div>
+        <PricingCards plans={pricingCards} />
         <p className="stq-price-note">
           Every plan: <b>0% transaction fees</b> — connect your own Razorpay or
           Cashfree and keep everything you earn.
@@ -681,7 +754,10 @@ export default function StoreminkLanding() {
         <div className="stq-footer2-inner">
           <div className="stq-footer2-brand">
             <Link href="/" className="stq-logo">
-              Store<span>Mink</span>
+              <BrandMark size={26} />
+              <em>
+                Store<span>Mink</span>
+              </em>
             </Link>
             <p>
               The India-first store builder with everything included. Launch

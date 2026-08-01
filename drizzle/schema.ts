@@ -3815,3 +3815,17 @@ export const notificationSettings = pgTable(
     }),
   ],
 );
+
+// Operator-editable plan pricing (supabase/plans_03_pricing.sql). Platform-
+// global — no store_id, like platformAdmins and legalDocuments.
+export const planPrices = pgTable("plan_prices", {
+  plan: text().primaryKey().notNull(),
+  monthlyInr: integer("monthly_inr").notNull(),
+  yearlyInr: integer("yearly_inr").notNull(),
+  baseMonthlyInr: integer("base_monthly_inr"),
+  baseYearlyInr: integer("base_yearly_inr"),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedBy: text("updated_by"),
+});
