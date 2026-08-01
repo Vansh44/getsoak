@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { ExternalLink, ShieldCheck } from "lucide-react";
 import { acceptUpdatedPolicies } from "@/app/actions/legal-actions";
 import { endSession } from "@/lib/auth/firebase-client";
@@ -28,7 +27,6 @@ export function AcceptForm({
   docs: OutstandingDoc[];
   email: string | null;
 }) {
-  const router = useRouter();
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
@@ -48,8 +46,22 @@ export function AcceptForm({
           setError(result.error);
           return;
         }
-        router.replace("/dashboard");
-        router.refresh();
+        // A HARD navigation, not router.replace(). This screen is only ever
+        // reached by being BOUNCED off /dashboard, which means the client
+        // router has already cached /dashboard's RSC payload — and that cached
+        // payload IS the redirect back to here. A soft navigation replays it,
+        // lands on the page we are standing on, and the transition never
+        // settles: the button reads "Saving…" for good even though the consent
+        // was written. (router.refresh() afterwards is too late; the stale
+        // entry has already been consumed.)
+        //
+        // The server side is not the problem — outstandingDocs reads the
+        // acceptance rows UNCACHED, so /dashboard lets you in the instant the
+        // row exists, which is why a manual reload always worked.
+        //
+        // A full load costs one round trip on a screen crossed once per policy
+        // version, and in exchange the router cache cannot strand anyone.
+        window.location.assign("/dashboard");
       } catch {
         setError("Something went wrong. Please try again.");
       }
@@ -62,7 +74,10 @@ export function AcceptForm({
   const signOut = () => {
     startTransition(async () => {
       await endSession();
-      router.replace("/auth/login");
+      // Hard navigation for the same reason, plus one of its own: the session
+      // is gone, so every cached authenticated payload in the client router is
+      // now a lie. Reloading discards the lot.
+      window.location.assign("/auth/login");
     });
   };
 

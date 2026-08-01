@@ -1965,6 +1965,11 @@
 .stq-logo {
   display: inline-flex;
   align-items: center;
+}
+/* Only when there IS a mark. A bare `Store<span>Mink</span>` lockup has the
+   text node and the span as two flex items, so an unconditional gap split the
+   wordmark in half — it rendered as "Store Mink" on both login screens. */
+.stq-logo:has(img) {
   gap: 9px;
 }
 .stq-logo em {

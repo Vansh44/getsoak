@@ -34,6 +34,9 @@ export async function planAmountPaise(
   return inr * 100;
 }
 
+/** How much room to leave above the top plan when authorising a mandate. */
+const MANDATE_HEADROOM = 2;
+
 /** Total billing cycles Razorpay requires up front — set effectively "forever"
  *  (10 years) so the subscription renews until cancelled. */
 export function totalCyclesFor(period: BillingPeriod): number {
@@ -128,5 +131,59 @@ async function createPlan(
  * a deliberate multiple of the top price rather than exactly it.
  */
 export async function mandateMaxPaise(): Promise<number> {
-  return planAmountPaise("pro", "yearly");
+  // HEADROOM, deliberately. The ceiling is fixed when the mandate is
+  // authorised and can never be raised without the merchant re-authorising —
+  // so pinning it to today's top price means any later price rise locks
+  // existing subscribers out of upgrading, with "cancel and subscribe again"
+  // as the only route. Doubling it costs nothing (a mandate is a ceiling, not
+  // a charge; Razorpay only ever debits the plan amount) and absorbs a
+  // reprice.
+  const top = await planAmountPaise("pro", "yearly");
+  return top * MANDATE_HEADROOM;
+}
+
+/**
+ * What a Razorpay plan id actually costs, from our own cache of the plans we
+ * created. Used to price a change against what the merchant pays TODAY rather
+ * than against the catalog — an existing subscriber may be grandfathered on an
+ * older, cheaper plan, and comparing to the catalog would misread a real
+ * increase as a decrease and schedule it instead of charging it.
+ *
+ * Null when the id is unknown (a plan created before this cache, or by hand in
+ * the dashboard); callers fall back to the catalog price.
+ */
+export async function amountForRzpPlan(
+  rzpPlanId: string | null | undefined,
+): Promise<number | null> {
+  if (!rzpPlanId) return null;
+  const rows = await withService((db) =>
+    db
+      .select({ amount_paise: razorpayPlans.amountPaise })
+      .from(razorpayPlans)
+      .where(eq(razorpayPlans.rzpPlanId, rzpPlanId))
+      .limit(1),
+  ).catch(() => [] as { amount_paise: number }[]);
+  return rows[0]?.amount_paise ?? null;
+}
+
+/** The plan + period a Razorpay plan id maps to. The webhook needs both: after
+ *  a period change the subscription's stored period is stale until we read it
+ *  back from the plan Razorpay is actually billing. */
+export async function planForRzpPlan(
+  rzpPlanId: string | null | undefined,
+): Promise<{ plan: string; period: BillingPeriod } | null> {
+  if (!rzpPlanId) return null;
+  const rows = await withService((db) =>
+    db
+      .select({ plan: razorpayPlans.plan, period: razorpayPlans.period })
+      .from(razorpayPlans)
+      .where(eq(razorpayPlans.rzpPlanId, rzpPlanId))
+      .limit(1),
+  ).catch(() => [] as { plan: string; period: string }[]);
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    plan: r.plan,
+    period: r.period === "yearly" ? "yearly" : "monthly",
+  };
 }
