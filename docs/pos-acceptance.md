@@ -1,6 +1,6 @@
 # POS & Locations — acceptance tests
 
-Everything built across POS Phases 0–4 and Locations Phases A–F.1, as stories
+Everything built across POS Phases 0–4 and Locations Phases A–F, as stories
 you can run against staging. **Keep this current: a phase isn't done until its
 stories are here.**
 

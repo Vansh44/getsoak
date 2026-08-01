@@ -1920,28 +1920,24 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
-      - **★ WHICH POSTCODES A SHOP COLLECTS TO** (`pickup_pincodes` text[],
-        `locations_07`; pure rules in `lib/locations/pincodes.ts`). Merchant
-        text in three forms — exact `400001`, prefix `400*`, range
-        `400001-400104`. The prefix is what makes it usable: Mumbai is a
-        hundred postcodes, and a merchant who can only type exact codes will
-        type five and blame the feature. Parsed SERVER-side, and it validates
-        what was TYPED rather than what survives stripping — strip-then-check
-        turns `oops!!` into the perfectly valid-looking code `OOPS`. It **fails
-        OPEN both ways**: no rules = everywhere (so the column changes nothing
-        for an existing store — a migration may not change what a live store
-        does) and an unknown postcode matches (a first-time shopper has typed
-        no address). It decides what is OFFERED, never what is permitted:
-        `placeOrder` still validates capability, store and stock and
-        deliberately does NOT refuse on a postcode, because a merchant
-        forgetting a suburb should cost them a listing, not a sale. Geography
-        hides exactly ONE thing — the pickup toggle, when nothing serves them;
-        within pickup, far shops sit behind "Collecting somewhere else?"
-        rather than being dropped, since people collect near work or family
-        and a delivery postcode is a guess at where they are, not a fact about
-        where they will drive. That dependency is also why the chooser sits
-        BELOW the address step. Rules are KEPT when pickup is switched off
-        (inert, and retyping a hundred postcodes is a real cost).
+      - **★ THE SHOPPER SEARCHES THE SHOP LIST; THE MERCHANT DOESN'T PREDICT
+        IT.** Every shop with the goods is offered, and the checkout picker
+        filters the list by postcode, city or shop name as they type. To keep a
+        specific shop off the list, turn off its `pickup` capability — that
+        route always existed.
+        ⚠ **`pickup_pincodes` was built (`locations_07`) and REMOVED
+        (`locations_08`); `lib/locations/pincodes.ts` is deleted.** It let a
+        merchant list the postcodes each shop collects to and hid pickup from
+        anyone outside them. It was reverted because the design argued against
+        itself: it needed a "Collecting somewhere else?" escape hatch precisely
+        BECAUSE hand-typed lists have gaps — and a shopper's DELIVERY postcode
+        is a guess at where they are, never a fact about where they will drive.
+        People collect near work, near family, on a route home; the merchant
+        cannot predict that and shouldn't be asked to. Nothing was lost in the
+        drop, because the column only ever decided what was OFFERED, never what
+        was permitted — `placeOrder` validated capability, store and stock then
+        and still does, and deliberately never refused on geography. Recorded
+        here so it isn't re-proposed as a new idea.
       - **★ THE NUDGE IS A CLAIM, NOT A SCHEDULE.** `sweepPickupReminders`
         warns 48 hours out (`PICKUP_WARN_HOURS`, which must stay ≥ TWICE the
         cron interval: window and schedule are not in phase, so the notice an
