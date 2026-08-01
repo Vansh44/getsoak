@@ -10,24 +10,17 @@ import {
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import {
   ArrowRight,
-  Banknote,
   Building2,
   Check,
   CircleCheck,
-  FileText,
   Globe,
   IndianRupee,
   LayoutTemplate,
   Mail,
-  MapPin,
   Megaphone,
   PenLine,
-  Percent,
-  Receipt,
   Rocket,
-  ScanLine,
   Star,
-  Store,
   Users,
   X,
 } from "lucide-react";
@@ -70,6 +63,17 @@ const FEATURES = [
     title: "D2C and B2B, one store",
     body: "Sell to shoppers and to businesses from the same place — enquiry-based selling, customer groups and wholesale workflows.",
   },
+];
+
+// Photography for the hero mock and the category strip. These are the BASKET
+// THEME's own bundled assets (public/themes/basket) — the same images a
+// merchant gets when they pick that template at signup. Deliberately not stock
+// photos of some other product: everything shown here is something the visitor
+// can go and see running at the demo store below.
+const MOCK_PRODUCTS = [
+  { img: "/themes/basket/p-milk.webp", price: "₹249" },
+  { img: "/themes/basket/p-cookies.webp", price: "₹329" },
+  { img: "/themes/basket/p-juice.webp", price: "₹199" },
 ];
 
 const COMPARE: {
@@ -351,28 +355,30 @@ export default function StoreminkLanding() {
                     <span />
                   </span>
                 </div>
-                <div className="stq-mock-hero">
+                <div
+                  className="stq-mock-hero stq-mock-shot"
+                  style={
+                    {
+                      "--stq-shot": "url(/themes/basket/hero.webp)",
+                    } as React.CSSProperties
+                  }
+                >
                   <b>Made with care. Delivered with pride.</b>
                   <span>Fresh from our kitchen to your doorstep.</span>
                   <br />
                   <span className="stq-mock-pill">SHOP NOW</span>
                 </div>
                 <div className="stq-mock-grid">
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹249</div>
-                  </div>
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹329</div>
-                  </div>
-                  <div className="stq-mock-card">
-                    <div className="img" />
-                    <div className="t" />
-                    <div className="p">₹199</div>
-                  </div>
+                  {MOCK_PRODUCTS.map((p) => (
+                    <div className="stq-mock-card" key={p.img}>
+                      <div
+                        className="img stq-shot"
+                        style={{ backgroundImage: `url(${p.img})` }}
+                      />
+                      <div className="t" />
+                      <div className="p">{p.price}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -543,151 +549,141 @@ export default function StoreminkLanding() {
         </div>
       </section>
 
-      {/* ------------------------------- POS -------------------------------- */}
-      {/* Everything claimed here is shipped (CODEBASE §22/§23) — the register,
-          PIN sign-in, device authorization, shifts, transfers and pickup. Note
-          what is deliberately NOT claimed: selling while OFFLINE. The catalogue
-          cache makes search and scan instant with no round trip, but a sale
-          still needs the server, and the offline outbox is unbuilt. */}
-      <section className="stq-section-lg" style={{ paddingTop: 0 }} id="pos">
-        <div className="stq-split">
-          <div>
-            <span className="stq-kicker">
-              <Store size={13} style={{ verticalAlign: "-2px" }} /> Also sells
-              in person
-            </span>
-            <h2>Your counter and your website, one system.</h2>
+      {/* --------------------------- product showcase ----------------------- */}
+      {/* A dark band, because the page was white end to end and had no rhythm
+          for a visual to sit against. Each card's artwork is DRAWN IN CSS (see
+          platform.css) rather than photographed — we have no brand photography,
+          and stock imagery is the look of a product with nothing to show. What
+          these depict is real: the register, the builder, GST invoicing. */}
+      <section className="stq-showcase" id="showcase">
+        <div className="stq-showcase-inner">
+          <div className="stq-sec-head">
+            <span className="stq-kicker">Not a roadmap</span>
+            <h2>The parts other people charge extra for.</h2>
             <p>
-              Turn any tablet or laptop into a till. Same products, same stock,
-              same customers as online — so a sale at the counter and a sale on
-              the website are the same business, not two spreadsheets you
-              reconcile on Sunday night.
+              A till for your counter, a builder for your website and Indian tax
+              done properly — all in the same plan, all working today.
             </p>
-            <ul className="stq-checklist">
-              <li>
-                <ScanLine size={19} />
-                <span>
-                  <b>Scan and sell</b> — a barcode scanner or just your phone
-                  camera. Search resolves instantly from a catalogue held on the
-                  device.
-                </span>
-              </li>
-              <li>
-                <Users size={19} />
-                <span>
-                  <b>Staff sign in with a PIN,</b> on registers you have
-                  authorised — not from a cashier&apos;s own phone.
-                </span>
-              </li>
-              <li>
-                <Banknote size={19} />
-                <span>
-                  <b>Shifts and cash-up</b> — open with a float, count at close,
-                  see the variance rather than guess at it.
-                </span>
-              </li>
-              <li>
-                <MapPin size={19} />
-                <span>
-                  <b>More than one shop?</b> Stock is tracked per location, and
-                  you can move it between them. Two locations included on Pro.
-                </span>
-              </li>
-              <li>
-                <Store size={19} />
-                <span>
-                  <b>Buy online, collect in store</b> — held on the shelf for
-                  the customer, handed over at the counter.
-                </span>
-              </li>
-            </ul>
           </div>
-          <div className="stq-money" aria-hidden="true">
-            <div className="stq-money-row">
-              <span>Amul Taaza Toned Milk (1 L) × 2</span>
-              <b>₹128</b>
-            </div>
-            <div className="stq-money-row">
-              <span>Tata Salt (1 kg)</span>
-              <b>₹28</b>
-            </div>
-            <div className="stq-money-row">
-              <span>CGST 2.5% + SGST 2.5%</span>
-              <b>₹7.80</b>
-            </div>
-            <div className="stq-money-row stq-money-total">
-              <span>Total</span>
-              <b>₹163.80</b>
-            </div>
-            <div className="stq-money-row">
-              <span>Cash tendered</span>
-              <b>₹200</b>
-            </div>
-            <div className="stq-money-row">
-              <span>Change</span>
-              <b>₹36.20</b>
-            </div>
-          </div>
-        </div>
-      </section>
 
-      {/* ------------------------------- GST -------------------------------- */}
-      <section className="stq-section-lg" style={{ paddingTop: 0 }} id="gst">
-        <div className="stq-sec-head">
-          <span className="stq-kicker">
-            <Percent size={13} style={{ verticalAlign: "-2px" }} /> Built for
-            Indian tax
-          </span>
-          <h2>GST that works itself out.</h2>
-          <p>
-            Set a tax rate against a product once. Every order, invoice and
-            receipt after that gets it right on its own — online and at the
-            counter, on every plan including Free.
-          </p>
-        </div>
-        <div className="stq-grid">
-          <div className="stq-feature">
-            <div className="stq-feature-icon">
-              <Percent size={20} />
-            </div>
-            <h3>Rates you set once</h3>
-            <p>
-              Group products into 5%, 12%, 18% — whatever your catalogue needs —
-              and show prices inclusive or exclusive of tax. Your choice, store
-              wide.
-            </p>
-          </div>
-          <div className="stq-feature">
-            <div className="stq-feature-icon">
-              <MapPin size={20} />
-            </div>
-            <h3>CGST, SGST and IGST, decided for you</h3>
-            <p>
-              Split within your state, IGST across it — worked out from the
-              place of supply on every order, so you are not doing it by hand at
-              filing time.
-            </p>
-          </div>
-          <div className="stq-feature">
-            <div className="stq-feature-icon">
-              <Receipt size={20} />
-            </div>
-            <h3>Selling to a business</h3>
-            <p>
-              Take a buyer&apos;s GSTIN at checkout or at the till and it prints
-              on the invoice, with HSN codes against each line.
-            </p>
-          </div>
-          <div className="stq-feature">
-            <div className="stq-feature-icon">
-              <FileText size={20} />
-            </div>
-            <h3>Invoices that stay put</h3>
-            <p>
-              Printable invoices carrying your business identity, and customers
-              can download their own. Change your tax settings tomorrow and last
-              month&apos;s invoices are untouched.
-            </p>
+          <div className="stq-show-grid">
+            {/* --- register --- */}
+            <article className="stq-show-card">
+              <div className="stq-viz stq-viz-pos" aria-hidden="true">
+                <div className="pane till">
+                  <div className="grid">
+                    {Array.from({ length: 9 }).map((_, i) => (
+                      <span className="tile" key={i} />
+                    ))}
+                  </div>
+                  <div className="cart">
+                    <span className="bar" />
+                    <span className="bar" />
+                    <span className="bar" />
+                    <span className="bar" />
+                    <span className="total" />
+                  </div>
+                </div>
+                <div className="pane phone">
+                  <span className="amt" />
+                  <span className="row">
+                    <span className="bar" />
+                    <span className="bar" />
+                  </span>
+                  <span className="row">
+                    <span className="bar" />
+                    <span className="bar" />
+                  </span>
+                  <span className="pay" />
+                </div>
+              </div>
+              <h3>Sell at the counter</h3>
+              <p>
+                Turn a tablet into a till. Scan a barcode, take cash or card,
+                and the sale lands in the same orders list as your website.
+                Staff sign in with a PIN, shifts cash up at the end of the day,
+                and stock is tracked shop by shop.
+              </p>
+              <span className="stq-show-tag">Pro · 2 locations included</span>
+            </article>
+
+            {/* --- builder --- */}
+            <article className="stq-show-card">
+              <div className="stq-viz stq-viz-builder" aria-hidden="true">
+                <div className="pane app">
+                  <div className="chrome">
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                  <div className="body">
+                    <div className="rail">
+                      <span className="bar" />
+                      <span className="bar on" />
+                      <span className="bar" />
+                      <span className="bar" />
+                      <span className="bar" />
+                    </div>
+                    <div className="canvas">
+                      <div className="hero" />
+                      <div className="cards">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <h3>Build the site yourself</h3>
+              <p>
+                Compose every page from ready-made sections — hero, product
+                grids, offers, FAQs — and watch it change as you type. Header
+                and footer too. Save a draft, publish when it&apos;s right, and
+                never open a code editor unless you want to.
+              </p>
+              <span className="stq-show-tag">Every plan</span>
+            </article>
+
+            {/* --- GST --- */}
+            <article className="stq-show-card">
+              <div className="stq-viz stq-viz-invoice" aria-hidden="true">
+                <div className="pane sheet back" />
+                <div className="pane sheet">
+                  <div className="head">
+                    <i />
+                    <b>TAX INVOICE</b>
+                  </div>
+                  <div className="line">
+                    <span className="bar" />
+                    <span className="bar" />
+                  </div>
+                  <div className="line">
+                    <span className="bar" />
+                    <span className="bar" />
+                  </div>
+                  <div className="line">
+                    <span className="bar" />
+                    <span className="bar" />
+                  </div>
+                  <div className="gst">
+                    <div className="split">
+                      <span />
+                      <span />
+                    </div>
+                    <div className="total" />
+                  </div>
+                </div>
+              </div>
+              <h3>GST that works itself out</h3>
+              <p>
+                Set a rate against a product once. CGST and SGST inside your
+                state, IGST outside it, HSN codes on the line, and your
+                buyer&apos;s GSTIN on the bill. Change your settings tomorrow —
+                last month&apos;s invoices stay exactly as they were issued.
+              </p>
+              <span className="stq-show-tag">Every plan, Free included</span>
+            </article>
           </div>
         </div>
       </section>
