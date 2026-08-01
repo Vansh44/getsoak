@@ -4,6 +4,7 @@ import { PLATFORM_URL } from "@/lib/site";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import { BrandMark } from "../brand-mark";
 import { RegisterArt } from "../product-art";
+import { getPlanPricing, inr } from "@/lib/plans/pricing";
 import {
   ArrowRight,
   Banknote,
@@ -142,7 +143,9 @@ const FAQS = [
   },
 ];
 
-export default function PosMarketingPage() {
+export default async function PosMarketingPage() {
+  const pricing = await getPlanPricing();
+
   return (
     <div className="stq">
       {/* ------------------------------- nav ------------------------------- */}
@@ -334,12 +337,10 @@ export default function PosMarketingPage() {
           </div>
           <div className="stq-showcase-foot">
             <p>
-              Point of Sale is part of {PLAN_META.pro.name} at ₹
-              {PLAN_LIMITS.pro.maxProducts === null
-                ? PLAN_META.pro.monthlyInr.toLocaleString("en-IN")
-                : PLAN_META.pro.monthlyInr.toLocaleString("en-IN")}
-              /month — with two shops, unlimited products and unlimited staff.
-              Not an add-on, not per terminal.
+              Part of {PLAN_META.pro.name}, at{" "}
+              {inr(Math.round(pricing.pro.yearlyInr / 12))}/month billed yearly.
+              Two shops, unlimited products and staff. Not an add-on, not per
+              terminal.
             </p>
             <Link href="/signup" className="stq-btn stq-btn-light">
               Start free <ArrowRight size={17} />

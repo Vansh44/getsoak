@@ -9,6 +9,8 @@ import {
 } from "@/lib/seo/brand-identity";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import { BrandMark } from "./brand-mark";
+import { PricingCards, type PricingCard } from "./pricing-cards";
+import { getPlanPricing } from "@/lib/plans/pricing";
 import {
   BuilderArt,
   InvoiceArt,
@@ -214,24 +216,44 @@ const FAQS = [
   },
 ];
 
-export default function StoreminkLanding() {
+export default async function StoreminkLanding() {
+  // Operator-set prices, folded onto the code defaults. Cached + tag-busted on
+  // save, so a change in the console shows here immediately.
+  const pricing = await getPlanPricing();
+
   // One explicit Offer per plan, derived from the canonical catalog so the
   // structured data can never drift from what the page (and billing) actually
   // charge. Each carries a per-MONTH UnitPriceSpecification so Google reads the
   // exact recurring price (₹0 / ₹500 / ₹1,500) rather than scraping a figure
   // out of the prose — which is how a stale "₹399" leaked into an AI Overview.
+  // "From ₹X/month" in the hero must track the operator's prices too, or the
+  // headline contradicts the cards further down the same page.
+  const cheapestPaidInr = Math.min(
+    ...PLANS.map((p) => pricing[p.meta.id].monthlyInr).filter((n) => n > 0),
+  );
+
+  const pricingCards: PricingCard[] = PLANS.map((plan) => ({
+    id: plan.meta.id,
+    name: plan.meta.name,
+    who: plan.who,
+    features: plan.features,
+    cta: plan.cta,
+    popular: plan.popular,
+    ...pricing[plan.meta.id],
+  }));
+
   const planOffers = PLANS.map((plan) => ({
     "@type": "Offer",
     name: `StoreMink ${plan.meta.name}`,
     description: plan.meta.tagline,
     priceCurrency: "INR",
-    price: plan.meta.monthlyInr,
+    price: pricing[plan.meta.id].monthlyInr,
     url: `${PLATFORM_URL}/#pricing`,
     availability: "https://schema.org/InStock",
     priceSpecification: {
       "@type": "UnitPriceSpecification",
       priceCurrency: "INR",
-      price: plan.meta.monthlyInr,
+      price: pricing[plan.meta.id].monthlyInr,
       // Recurring monthly subscription (P1M = one-month billing period).
       billingDuration: 1,
       billingIncrement: 1,
@@ -266,7 +288,7 @@ export default function StoreminkLanding() {
           "@type": "AggregateOffer",
           priceCurrency: "INR",
           lowPrice: 0,
-          highPrice: PLAN_META.pro.monthlyInr,
+          highPrice: pricing.pro.monthlyInr,
           offerCount: PLANS.length,
           offers: planOffers,
         },
@@ -321,9 +343,8 @@ export default function StoreminkLanding() {
             <p className="stq-sub stq-rise stq-rise-2">
               StoreMink is the India-first store builder with everything
               included — storefront, blogs, reviews, coupons, email campaigns
-              and a full team dashboard. From{" "}
-              {priceInr(PLAN_META.basic.monthlyInr)}/month. No apps to buy. No
-              transaction fees. Ever.
+              and a full team dashboard. From {priceInr(cheapestPaidInr)}/month.
+              No apps to buy. No transaction fees. Ever.
             </p>
             <div className="stq-hero-cta stq-rise stq-rise-3">
               <Link href="/signup" className="stq-btn stq-btn-primary">
@@ -684,44 +705,9 @@ export default function StoreminkLanding() {
         <div className="stq-sec-head">
           <span className="stq-kicker">Simple, honest pricing</span>
           <h2>Priced in rupees. Not in surprises.</h2>
-          <p>
-            Start free, upgrade when you grow. Annual billing gets you two
-            months free.
-          </p>
+          <p>Start free. Upgrade when you grow.</p>
         </div>
-        <div className="stq-pricing">
-          {PLANS.map((plan) => (
-            <div
-              className={`stq-price-card${plan.popular ? " popular" : ""}`}
-              key={plan.meta.id}
-            >
-              {plan.popular && (
-                <span className="stq-price-flag">Most popular</span>
-              )}
-              <h3>{plan.meta.name}</h3>
-              <p className="who">{plan.who}</p>
-              <div className="stq-price">
-                {priceInr(plan.meta.monthlyInr)}
-                <sub>/month</sub>
-              </div>
-              <ul>
-                {plan.features.map((f) => (
-                  <li key={f}>
-                    <Check size={16} /> {f}
-                  </li>
-                ))}
-              </ul>
-              <Link
-                href="/signup"
-                className={`stq-btn ${
-                  plan.popular ? "stq-btn-primary" : "stq-btn-ghost"
-                } stq-btn-block`}
-              >
-                {plan.cta}
-              </Link>
-            </div>
-          ))}
-        </div>
+        <PricingCards plans={pricingCards} />
         <p className="stq-price-note">
           Every plan: <b>0% transaction fees</b> — connect your own Razorpay or
           Cashfree and keep everything you earn.

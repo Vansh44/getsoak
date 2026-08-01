@@ -5,6 +5,8 @@ import { getPlatformViewer, listAllStores } from "@/app/actions/platform";
 import { THEME_META } from "@/lib/themes/meta";
 import { StoresConsole } from "./stores-console";
 import { ThemesPanel } from "./themes-panel";
+import { PricingPanel } from "./pricing-panel";
+import { getPlanPricingLive } from "@/lib/plans/pricing";
 
 export const metadata = { title: "StoreMink Admin" };
 
@@ -56,7 +58,10 @@ export default async function PlatformDashboard({
         rootDomain={ROOT_DOMAIN}
       />
       {viewer.role === "superadmin" && (
-        <ThemesPanel rootDomain={ROOT_DOMAIN} demoSlugsLive={demoSlugsLive} />
+        <>
+          <PricingPanel pricing={await getPlanPricingLive()} />
+          <ThemesPanel rootDomain={ROOT_DOMAIN} demoSlugsLive={demoSlugsLive} />
+        </>
       )}
     </div>
   );

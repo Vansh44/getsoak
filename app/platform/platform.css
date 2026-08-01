@@ -2837,3 +2837,71 @@
 .sm-art-register.is-compact .art-totals div {
   gap: 8px;
 }
+
+/* ---------------------------------------------------------------------------
+   Monthly / yearly switch + discounted prices.
+   --------------------------------------------------------------------------- */
+.stq-billing-switch {
+  display: inline-flex;
+  gap: 3px;
+  margin: 0 auto 32px;
+  padding: 4px;
+  background: var(--stq-soft);
+  border: 1px solid var(--stq-line);
+  border-radius: 999px;
+  /* the section is centred text; the switch is a flex box and needs telling */
+  align-self: center;
+}
+.stq-pricing-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.stq-billing-switch button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--stq-muted);
+  padding: 8px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+.stq-billing-switch button span {
+  font-weight: 500;
+  opacity: 0.75;
+}
+.stq-billing-switch button.is-on {
+  background: #fff;
+  color: var(--stq-ink);
+  box-shadow: 0 1px 3px rgba(13, 17, 23, 0.14);
+}
+/* The struck-through list price sits ABOVE the real one rather than beside it:
+   inline, the two numbers read as a range. */
+.stq-price s {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--stq-muted);
+  opacity: 0.65;
+  text-decoration-thickness: 1.5px;
+  margin-bottom: 2px;
+}
+.stq-price b {
+  font-weight: inherit;
+  font-size: inherit;
+}
+.stq-card-note {
+  margin: 6px 0 16px;
+  font-size: 13px;
+  color: var(--stq-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stq-billing-switch button {
+    transition: none !important;
+  }
+}
