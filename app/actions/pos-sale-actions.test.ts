@@ -3,6 +3,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeDbMock, sqlText } from "./_test-helpers";
 
+// Approval tokens are HMAC-signed, so the tests need a key to sign with.
+process.env.POS_SESSION_SECRET = "unit-test-pos-secret-please-change";
+
 vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
@@ -45,6 +48,7 @@ import {
   placePosSale,
   searchPosCustomers,
 } from "./pos-sale-actions";
+import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -126,6 +130,24 @@ function seedHappyPath(over: { productRows?: any[] } = {}) {
 
 const line = { productId: "p1", variantId: null, quantity: 1 };
 const cash = [{ method: "cash" as const, amount: 118, tendered: 200 }];
+
+/**
+ * A genuine manager approval for a given cart, as verifyManagerPin would mint
+ * it. Tests use the REAL token rather than a stubbed flag, so "an approval
+ * doesn't unlock this" means the same thing here as at the till.
+ */
+function approvalFor(
+  sale: { lines: any[]; orderDiscount?: number },
+  op: { storeId: string; locationId: string; staffId: string | null } = CASHIER,
+): string {
+  return signApprovalToken({
+    storeId: op.storeId,
+    locationId: op.locationId,
+    operatorId: op.staffId,
+    approverId: "mgr-1",
+    fingerprint: saleFingerprint(sale),
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -276,9 +298,11 @@ describe("placePosSale — only the owner may discount", () => {
   it("★ cannot be unlocked with a manager's PIN", async () => {
     // The manager is one of the people being kept out, so their own PIN must
     // not be the key. This is the whole point of refusing rather than queuing.
+    // Note the approval here is REAL and correctly signed — it still doesn't
+    // open this door.
     const r = await placePosSale([line], [{ method: "cash", amount: 1 }], {
       orderDiscount: 50,
-      managerApproved: true,
+      approvalToken: approvalFor({ lines: [line], orderDiscount: 50 }),
     });
     expect(r.error).toMatch(/only the owner/i);
     expect(dbHolder.current.calls.insert).toHaveLength(0);
@@ -348,7 +372,7 @@ describe("placePosSale — only the owner may override a price", () => {
     const r = await placePosSale(
       [cheap],
       [{ method: "cash", amount: 59, tendered: 59 }],
-      { managerApproved: true },
+      { approvalToken: approvalFor({ lines: [cheap] }) },
     );
     expect(r.error).toMatch(/only the owner can change a price/i);
     expect(r.needsApproval).toBeUndefined();
@@ -441,12 +465,122 @@ describe("placePosSale — the cap, when staff may discount", () => {
     const r = await placePosSale(
       [line],
       [{ method: "cash", amount: 59, tendered: 59 }],
-      { orderDiscount: 50, managerApproved: true },
+      {
+        orderDiscount: 50,
+        approvalToken: approvalFor({ lines: [line], orderDiscount: 50 }),
+      },
     );
     expect(r.error).toBeUndefined();
     const order = dbHolder.current.calls.values[0];
     expect(order.discount).toBe(50);
     expect(order.total).toBe(59);
+  });
+
+  // ── The approval must be a GRANT, not a claim ────────────────────────────
+  // These are the regression tests for the bypass this replaced: the action
+  // took `managerApproved: true` straight from the client, so a cashier with
+  // devtools could ring any discount without a manager ever being present.
+
+  it("★ refuses a claimed approval with no token at all", async () => {
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      { orderDiscount: 50, approvalToken: "true" },
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ refuses a token signed with the wrong key", async () => {
+    const saved = process.env.POS_SESSION_SECRET;
+    process.env.POS_SESSION_SECRET = "an-attacker's-key";
+    const forged = approvalFor({ lines: [line], orderDiscount: 50 });
+    process.env.POS_SESSION_SECRET = saved;
+
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      { orderDiscount: 50, approvalToken: forged },
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ refuses an approval given for a SMALLER discount", async () => {
+    // The manager looked at ₹10 off and said yes. Replaying that on ₹50 off is
+    // the bypass the fingerprint exists to stop.
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      {
+        orderDiscount: 50,
+        approvalToken: approvalFor({ lines: [line], orderDiscount: 10 }),
+      },
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ refuses an approval given for a different cart", async () => {
+    // Approved: ₹100 off one unit. Submitted: ₹100 off FIVE — still over the
+    // cap, but not the sale anybody agreed to.
+    const r = await placePosSale(
+      [{ ...line, quantity: 5 }],
+      [{ method: "cash", amount: 472, tendered: 472 }],
+      {
+        orderDiscount: 100,
+        approvalToken: approvalFor({ lines: [line], orderDiscount: 100 }),
+      },
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ refuses an approval minted at another till", async () => {
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      {
+        orderDiscount: 50,
+        approvalToken: approvalFor(
+          { lines: [line], orderDiscount: 50 },
+          { ...CASHIER, locationId: "loc-2" },
+        ),
+      },
+    );
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("survives the cart being re-ordered between approval and sale", async () => {
+    // The fingerprint sorts its lines: an approval a manager really did give
+    // must not evaporate because the UI rebuilt the cart in another order.
+    const other = { productId: "p0", variantId: null, quantity: 1 };
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [PRODUCT, { ...PRODUCT, id: "p0", selling_price: 0 }],
+        [BILLING],
+        [TAX_CLASS],
+        [{ state_code: "07" }],
+        [{ prefix: "DEL" }],
+      ],
+      executeQueue: [[{ seq: 42 }], [{ reserved: true }], [{ reserved: true }]],
+      returning: [{ id: "o1", order_ref: "ORD100110006" }],
+    });
+
+    const r = await placePosSale(
+      [line, other],
+      [{ method: "cash", amount: 59, tendered: 59 }],
+      {
+        orderDiscount: 50,
+        approvalToken: approvalFor({
+          lines: [other, line],
+          orderDiscount: 50,
+        }),
+      },
+    );
+    expect(r.needsApproval).toBeUndefined();
+    expect(r.error).toBeUndefined();
   });
 
   it("lets a manager discount freely", async () => {

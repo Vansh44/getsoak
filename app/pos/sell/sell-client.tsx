@@ -411,25 +411,28 @@ export function SellClient({
   const cappedDiscount = totals.orderDiscount;
   const estTotal = totals.total;
 
+  // ONE description of the cart, used both to ask a manager to approve and to
+  // ring the sale. They must be byte-identical: the approval token is bound to
+  // a fingerprint of exactly these fields, so building them twice is how an
+  // approval would mysteriously stop fitting the sale it was given for.
+  const saleLines = () =>
+    cart.map((l) => ({
+      productId: l.productId,
+      variantId: l.variantId,
+      quantity: l.quantity,
+      lineDiscount: l.lineDiscount || undefined,
+    }));
+
   const completeSale = async (
     tenders: PosTender[],
-    managerApproved?: boolean,
+    approvalToken?: string,
   ): Promise<{ error?: string; needsApproval?: boolean }> => {
-    const res = await placePosSale(
-      cart.map((l) => ({
-        productId: l.productId,
-        variantId: l.variantId,
-        quantity: l.quantity,
-        lineDiscount: l.lineDiscount || undefined,
-      })),
-      tenders,
-      {
-        orderDiscount: cappedDiscount,
-        managerApproved,
-        customerId: customer?.id ?? null,
-        customerGstin: gstin.trim() || null,
-      },
-    );
+    const res = await placePosSale(saleLines(), tenders, {
+      orderDiscount: cappedDiscount,
+      approvalToken,
+      customerId: customer?.id ?? null,
+      customerGstin: gstin.trim() || null,
+    });
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
     }
@@ -943,7 +946,12 @@ export function SellClient({
           total={estTotal}
           onCancel={() => setTendering(false)}
           onComplete={completeSale}
-          onVerifyManager={verifyManagerPin}
+          onVerifyManager={(pin) =>
+            verifyManagerPin(pin, {
+              lines: saleLines(),
+              orderDiscount: cappedDiscount,
+            })
+          }
         />
       )}
 

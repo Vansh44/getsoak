@@ -37,6 +37,16 @@ import { reportStockChanges } from "@/lib/inventory/alerts";
 import { summariseItems } from "@/lib/notifications/format";
 import { posCan, type PosActorRole } from "@/lib/pos/permissions";
 import { verifyPin } from "@/lib/pos/pin";
+import {
+  type ApprovableSale,
+  saleFingerprint,
+  signApprovalToken,
+  verifyApprovalToken,
+} from "@/lib/pos/approval";
+import {
+  posSessionConfigured,
+  POS_SECRET_MISSING_ERROR,
+} from "@/lib/pos/session";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import {
   posTotals,
@@ -556,14 +566,25 @@ export async function searchPosCustomers(
 
 /**
  * Verify a manager's PIN for an override (discount over the cap, price
- * override). Returns only a boolean — no session is minted, so approving does
- * not switch the operator.
+ * override) and mint a signed approval for THAT sale.
+ *
+ * The token — not a boolean — is what `placePosSale` accepts. Returning
+ * `{approved: true}` and letting the client tell the sale so was the whole
+ * gate: a cashier could call placePosSale directly with `managerApproved:
+ * true` and never touch the keypad. See lib/pos/approval.ts for what the
+ * token is bound to.
+ *
+ * No session is minted, so approving does not switch the operator.
  */
 export async function verifyManagerPin(
   pin: string,
-): Promise<{ approved?: boolean; error?: string }> {
+  sale: ApprovableSale,
+): Promise<{ approved?: boolean; token?: string; error?: string }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
+  // Minting can't degrade the way verification does — say so plainly rather
+  // than throwing a 500 at a cashier mid-sale.
+  if (!posSessionConfigured()) return { error: POS_SECRET_MISSING_ERROR };
 
   const rl = await rateLimit(`pos-approve:${op.storeId}:${op.locationId}`, {
     max: 10,
@@ -596,8 +617,21 @@ export async function verifyManagerPin(
         )
         .limit(50),
     );
-    const ok = rows.some((r) => verifyPin(pin, r.pin_hash));
-    return ok ? { approved: true } : { error: "Incorrect manager PIN." };
+    const approver = rows.find((r) => verifyPin(pin, r.pin_hash));
+    if (!approver) return { error: "Incorrect manager PIN." };
+
+    return {
+      approved: true,
+      token: signApprovalToken({
+        storeId: op.storeId,
+        locationId: op.locationId,
+        operatorId: op.staffId,
+        approverId: approver.id,
+        // The cart as the client will submit it — the manager is approving
+        // THIS sale, not this cashier for the next three minutes.
+        fingerprint: saleFingerprint(sale ?? { lines: [] }),
+      }),
+    };
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't verify.") };
   }
@@ -627,7 +661,9 @@ export async function placePosSale(
     customerId?: string | null;
     customerGstin?: string | null;
     orderDiscount?: number;
-    managerApproved?: boolean;
+    /** A manager's approval, as minted by `verifyManagerPin` for THIS cart.
+     *  Never a boolean: a flag from the client is a flag the client can set. */
+    approvalToken?: string | null;
     note?: string | null;
   } = {},
 ): Promise<PosSaleResult> {
@@ -715,6 +751,20 @@ export async function placePosSale(
   // out deliberately.
   const ownerOnlyDiscounts = settings["pos.ownerOnlyDiscounts"] !== false;
   const mayDiscount = posCan(op.role, "discount");
+
+  // A manager's approval is a SIGNED grant for this exact cart at this exact
+  // till, minted by verifyManagerPin. An unverifiable, stale, tampered or
+  // absent token all land in the same place — unapproved — so a caller that
+  // skips the PIN pad entirely gets nowhere.
+  const managerApproved = !!verifyApprovalToken(opts.approvalToken, {
+    storeId: op.storeId,
+    locationId: op.locationId,
+    operatorId: op.staffId,
+    fingerprint: saleFingerprint({
+      lines,
+      orderDiscount: opts.orderDiscount,
+    }),
+  });
 
   // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
   // reconciliation never has to infer it from a timestamp. A store may require
@@ -869,7 +919,7 @@ export async function placePosSale(
       // Legacy path (owner-only discounts switched off): a cashier needs a
       // manager's PIN, a manager and above don't. `discount_over_cap` is that
       // set, named — it used to be an inline `role === "cashier"`.
-      if (!opts.managerApproved && !posCan(op.role, "discount_over_cap")) {
+      if (!managerApproved && !posCan(op.role, "discount_over_cap")) {
         needsApproval = true;
       }
       unit = l.priceOverride;
@@ -946,7 +996,7 @@ export async function placePosSale(
     !posCan(op.role, "discount_over_cap")
   ) {
     const pct = (discount / subtotal) * 100;
-    if (pct > maxDiscountPct && !opts.managerApproved) needsApproval = true;
+    if (pct > maxDiscountPct && !managerApproved) needsApproval = true;
   }
   if (needsApproval) {
     return {
