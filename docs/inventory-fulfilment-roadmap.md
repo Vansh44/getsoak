@@ -313,33 +313,35 @@ AFTER the
 expiry sweep: telling someone to hurry and collect an order we just cancelled
 is worse than saying nothing.
 
-**Phase F.1 — postcode serviceability (DONE).** A warehouse in Pune and a shop
-in Mumbai should not both be offered to a Chennai shopper.
-`store_locations.pickup_pincodes` (text[], `locations_07`) holds merchant-typed
-rules in three forms — exact `400001`, prefix `400*`, range `400001-400104` —
-parsed and matched by the pure `lib/locations/pincodes.ts`. Prefixes are what
-make it usable: Mumbai is a hundred postcodes, and a merchant who can only type
-exact codes will type five and blame the feature.
+**Phase F.1 — postcode serviceability (BUILT, THEN REMOVED).** ⚠ The column,
+the module and the checkout behaviour are all GONE — `locations_08` drops
+`store_locations.pickup_pincodes` and `lib/locations/pincodes.ts` is deleted.
+Nothing below is live; it is kept only so the idea isn't re-proposed as new.
 
-It **fails open in both directions**: no rules = offered everywhere (so the
-column changes nothing for existing stores), and an unknown postcode matches
-(a first-time shopper hasn't typed an address yet). It decides what is OFFERED,
-never what is permitted — `placeOrder` still validates capability, store and
-stock and deliberately does NOT refuse on a postcode. A merchant forgetting a
-suburb should cost them a listing, not a sale.
+The idea was that a merchant lists the postcodes each shop collects to (exact
+`400001`, prefix `400*`, range `400001-400104`) and the checkout hides pickup
+from anyone outside them.
 
-Geography HIDES exactly one thing: the pickup toggle, when no shop serves the
-shopper. Within pickup, shops outside their area are **disclosed behind
-"Collecting somewhere else?", not dropped** — people collect near work, near
-family, on a route home, and their delivery postcode is a good guess at where
-they are rather than a fact about where they will drive. This also forced the
-chooser BELOW the address step: which shops can collect depends on a postcode,
-so the question cannot be asked before we know it.
+**Why it was reverted:** the design argued against itself. It needed a
+"Collecting somewhere else?" escape hatch precisely BECAUSE hand-typed lists
+have gaps — and a shopper's DELIVERY postcode is a guess at where they are, not
+a fact about where they will drive. People collect near work, near family, on a
+route home. Asking the merchant to predict that is asking the wrong person.
+
+**What replaced it** (the ALDO/Shopify/IKEA model): offer pickup to everyone,
+list every shop that has the goods, and let the SHOPPER search the list by
+postcode, city or shop name. They know where they'll be. Excluding a specific
+shop was always possible without any of this — turn off its `pickup`
+capability. Nothing was lost in the drop: the column only ever decided what was
+OFFERED, never what was permitted, so no order state depended on it.
+
+One consequence outlived it: the chooser no longer has to sit below the address
+step, since which shops can collect no longer depends on a postcode.
 
 **Deliberately not built:** radius from lat/lng. It is the more correct answer
 and it puts a geocoding call on the checkout render path — cost, latency, and a
-failure mode on the one page that must never break. Revisit when a merchant has
-enough shops that prefix lists stop scaling.
+failure mode on the one page that must never break. Revisit alongside the
+`nearest` routing strategy, which needs the same geocoding (Step 8).
 
 **Deliberately not built:** automatic refunds on expiry. The order is cancelled
 and the stock comes back; moving money on a schedule waits for the returns

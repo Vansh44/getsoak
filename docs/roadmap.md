@@ -29,7 +29,7 @@ sequence; those are the specifications.**
 | —      | POS 3: shifts & cash reconciliation                                 | ✅ done        |
 | —      | POS 4: inventory from the shop floor, transfers                     | ✅ done        |
 | —      | LOC A–C: capabilities, Locations section, scope, inventory selector | ✅ done        |
-| —      | LOC D–F.1: routing, reservations, pickup, postcode serviceability   | ✅ done        |
+| —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done        |
 | **1**  | **Finish pickup + close the gaps**                                  | ⏭ next        |
 | **2**  | **Refunds & cancellation** — the money-out path                     | ⏭ blocks 3, 4 |
 | **3**  | Returns (POS 5 = LOC G)                                             | ⏳             |
@@ -246,8 +246,9 @@ money and stock together, which is exactly where they get broken.
 4. **Cross-location writes are one RPC**, because there is no cross-statement
    transaction over the pool.
 5. **A disabled control is not a permission.** Re-enforce server-side.
-6. **Never refuse a sale over an optional feature.** Routing, pickup and
-   postcodes all fail open.
+6. **Never refuse a sale over an optional feature.** Routing and pickup both
+   fail open — no rules, no eligible location, or a failed query all fall back
+   rather than stopping a checkout.
 7. **Every action emits an event.** The coverage guard fails the build
    otherwise — but note it only asserts a key is emitted _somewhere_, not that
    every path which should emit it does.
