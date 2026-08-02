@@ -102,7 +102,10 @@ async function api<T>(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : "certificate manager request failed",
+      error:
+        err instanceof Error
+          ? err.message
+          : "certificate manager request failed",
     };
   }
 }
@@ -338,5 +341,7 @@ export async function deprovision(domain: string): Promise<{ error?: string }> {
   }
   // Deliberately vague to the merchant, specific in the logs: a leftover
   // certificate keeps billing, so this needs to be visible to an operator.
-  return failed ? { error: "Some certificate resources couldn't be removed." } : {};
+  return failed
+    ? { error: "Some certificate resources couldn't be removed." }
+    : {};
 }
