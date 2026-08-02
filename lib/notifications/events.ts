@@ -106,6 +106,9 @@ export const EVENT_KEYS = [
   "order.payment_received",
   "order.payment_failed",
   "order.refund_issued",
+  "order.return_requested",
+  "order.return_approved",
+  "order.return_rejected",
   "order.ready_for_pickup",
   "order.collected",
   "order.pickup_expiring",
@@ -269,6 +272,37 @@ export const EVENTS: readonly EventDef[] = [
     group: "Orders",
     section: "orders",
     severity: "info",
+    audiences: { "store-admins": IN_APP, customer: BOTH },
+  },
+  {
+    key: "order.return_requested",
+    label: "Return requested",
+    description: "A customer asked to send something back.",
+    group: "Orders",
+    section: "orders",
+    severity: "warning",
+    // Team only, and by EMAIL: a request nobody sees is a customer waiting.
+    // The shopper already knows — they just pressed the button — so telling
+    // them their own action happened is noise.
+    audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "order.return_approved",
+    label: "Return approved",
+    description:
+      "A return was accepted. The customer is told what to send back and what they'll get.",
+    group: "Orders",
+    section: "orders",
+    severity: "success",
+    audiences: { "store-admins": IN_APP, customer: BOTH },
+  },
+  {
+    key: "order.return_rejected",
+    label: "Return declined",
+    description: "A return was declined, with the store's reason.",
+    group: "Orders",
+    section: "orders",
+    severity: "warning",
     audiences: { "store-admins": IN_APP, customer: BOTH },
   },
 

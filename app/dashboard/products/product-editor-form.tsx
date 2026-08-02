@@ -95,6 +95,8 @@ const EMPTY: ProductFormData = {
   sku: "",
   barcode: "",
   tax_class_id: null,
+  returnable: true,
+  return_window_days: null,
 };
 
 function toForm(product: Product): ProductFormData {
@@ -119,6 +121,8 @@ function toForm(product: Product): ProductFormData {
     sku: product.sku ?? "",
     barcode: product.barcode ?? "",
     tax_class_id: product.tax_class_id,
+    returnable: product.returnable !== false,
+    return_window_days: product.return_window_days,
     variants: (product.variants ?? []).map((v) => ({
       id: v.id, // preserve DB id for reconcile (stable variant ids)
       name: v.name,
@@ -712,6 +716,55 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                     Products without a tax class use the store default. Applies
                     at checkout when tax is enabled (Invoices &amp; Billing).
                   </p>
+                </div>
+
+                {/* Returns. Per-product because a setting can't address one
+                    SKU — perishables, personalised items and clearance are
+                    final sale while the rest of the catalogue isn't. */}
+                <div>
+                  <label className={labelClass}>Returns</label>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={form.returnable === false}
+                      onChange={(e) => {
+                        const finalSale = e.target.checked;
+                        set("returnable", !finalSale);
+                        // A window on something that can never come back is
+                        // dead config that will confuse whoever reads it next.
+                        if (finalSale) set("return_window_days", null);
+                      }}
+                    />
+                    <span>
+                      Final sale — this product can&apos;t be returned
+                    </span>
+                  </label>
+                  {form.returnable !== false && (
+                    <div className="mt-2">
+                      <input
+                        type="number"
+                        min={0}
+                        max={365}
+                        className={fieldClass}
+                        placeholder="Use store default"
+                        value={form.return_window_days ?? ""}
+                        onChange={(e) =>
+                          set(
+                            "return_window_days",
+                            e.target.value === ""
+                              ? null
+                              : Number(e.target.value),
+                          )
+                        }
+                      />
+                      <p className={hintClass}>
+                        Days after delivery this product can be returned. Leave
+                        blank to follow the store&apos;s window (Orders →
+                        Settings). 0 means same day only.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div>

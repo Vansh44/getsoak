@@ -30,6 +30,8 @@ export const PRODUCT_COLUMNS = {
   sku: products.sku,
   barcode: products.barcode,
   tax_class_id: products.taxClassId,
+  returnable: products.returnable,
+  return_window_days: products.returnWindowDays,
   created_at: products.createdAt,
   updated_at: products.updatedAt,
 };

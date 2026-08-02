@@ -1203,6 +1203,13 @@ export const orders = pgTable(
       mode: "string",
     }),
     collectedBy: text("collected_by"),
+    // When the parcel actually LANDED (refunds_01_gateway.sql). The return
+    // window starts here — measured from created_at, a 7-day window on a
+    // 10-day delivery expires before the customer has the goods.
+    deliveredAt: timestamp("delivered_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     // Claimed by the reminder job so the nudge fires exactly once
     // (locations_06_pickup_reminder.sql).
     // When the shop expects it ready (locations_09). The hold window is
@@ -1607,6 +1614,10 @@ export const products = pgTable(
     skuNo: integer("sku_no").notNull(),
     variantSeq: integer("variant_seq").default(0).notNull(),
     taxClassId: uuid("tax_class_id"),
+    // Return policy (returns_01_product_policy.sql). `returnable` FALSE = final
+    // sale; `returnWindowDays` NULL = use the store's returns.windowDays.
+    returnable: boolean().notNull().default(true),
+    returnWindowDays: integer("return_window_days"),
     // pos_06: the SUPPLIER barcode a cashier scans — distinct from the
     // system-generated Luhn `sku`, which is ours and immutable.
     barcode: text(),
@@ -3848,12 +3859,50 @@ export const orderReturns = pgTable("order_returns", {
   amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
   tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
   total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** The customer's own words. `reasonCode` is the one that decides fees. */
   reason: text(),
   actor: text(),
   createdAt: timestamp("created_at", {
     withTimezone: true,
     mode: "string",
   }).defaultNow(),
+  // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
+  /** requested → approved → received → completed, or rejected/cancelled.
+   *  DEFAULTS to 'completed': every pre-existing row is a finished till
+   *  return, and pos-return-actions still doesn't set it. */
+  status: text().notNull().default("completed"),
+  /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
+  channel: text().notNull().default("pos"),
+  requestedBy: text("requested_by"),
+  /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
+  reasonCode: text("reason_code"),
+  photos: jsonb().notNull().default([]),
+  /** Snapshotted at decision time, never recomputed. */
+  restockingFee: numeric("restocking_fee", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
+  returnShippingFee: numeric("return_shipping_fee", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  /** Shown to the CUSTOMER, so a rejection is never a silent no. */
+  reviewNote: text("review_note"),
+  receivedAt: timestamp("received_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
 });
 
 export const orderReturnItems = pgTable("order_return_items", {
@@ -3884,6 +3933,13 @@ export const orderRefunds = pgTable("order_refunds", {
   amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
   /** Razorpay refund id — UNIQUE, so a replay can't record it twice. */
   gatewayRefundId: text("gateway_refund_id"),
+  /** Ours, generated BEFORE the gateway call — UNIQUE. The gateway id can only
+   *  make the RECORD idempotent; this makes the CALL idempotent. */
+  idempotencyKey: text("idempotency_key"),
+  /** Why the money went back (a cancellation has no order_returns row). */
+  reason: text(),
+  /** Proof for money moved outside a gateway — a typed UPI transaction id. */
+  reference: text(),
   status: text().notNull(),
   actor: text(),
   createdAt: timestamp("created_at", {

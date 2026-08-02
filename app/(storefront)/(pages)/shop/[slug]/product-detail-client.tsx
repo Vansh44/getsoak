@@ -60,6 +60,9 @@ export interface DetailProduct {
   stock: number;
   low_stock_threshold: number | null;
   allow_backorder: boolean;
+  /** FALSE = final sale. Said BEFORE the sale — discovering it afterwards is
+   *  how a return policy becomes an argument. */
+  returnable?: boolean;
   variants: DetailVariant[];
 }
 
@@ -365,6 +368,15 @@ export default function ProductDetailClient({
               Only {lowStockAmount} left in stock!
             </div>
           ) : null}
+
+          {/* Final sale. Shown regardless of whether the store has switched
+              returns on: it is a statement about THIS product, and a shopper
+              is entitled to it before they pay rather than after. */}
+          {product.returnable === false && (
+            <div className="mb-2 ml-2 inline-block rounded-sm bg-zinc-100 px-2 py-1 text-xs font-bold uppercase tracking-wider text-zinc-600">
+              Final sale · no returns
+            </div>
+          )}
 
           <h1 className="pdp-name">{product.name}</h1>
 

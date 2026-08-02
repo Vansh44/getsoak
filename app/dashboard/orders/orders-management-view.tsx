@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Search, ShoppingBag } from "lucide-react";
+import Link from "next/link";
+import { RotateCcw, Search, Settings, ShoppingBag } from "lucide-react";
 import { formatPrice } from "@/lib/pricing";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
 import type { OrderStatusCounts } from "@/app/actions/order-actions";
@@ -179,6 +180,22 @@ export function OrdersManagementView({
             <div>
               <h1>Orders</h1>
               <p>View and manage all customer orders</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/dashboard/orders/returns"
+                className="dash-btn dash-btn-ghost"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Returns
+              </Link>
+              <Link
+                href="/dashboard/orders/settings"
+                className="dash-btn dash-btn-ghost"
+              >
+                <Settings className="h-4 w-4" />
+                Settings
+              </Link>
             </div>
           </header>
 

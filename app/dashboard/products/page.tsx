@@ -84,6 +84,9 @@ export interface Product {
   sku: string | null;
   barcode: string | null;
   tax_class_id: string | null;
+  // Return policy (returns_01_product_policy.sql)
+  returnable: boolean;
+  return_window_days: number | null;
   created_at: string;
   updated_at: string;
   // Joined

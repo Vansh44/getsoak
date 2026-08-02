@@ -292,12 +292,21 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
+│   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
+│   │   │                      # cancelMyReturn (shopper) + getReturnQueue/reviewReturn/
+│   │   │                      # receiveReturn (merchant). Never moves money.
+│   │   ├── refund-actions.ts  # ★ Money OUT (§26): refundOrder (pending-row-FIRST
+│   │   │                      # idempotency, FOR UPDATE cap, unknown ≠ failure) +
+│   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
 │   │   │                      # getMyOrders/getMyOrder. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
 │   │   │                      # DIFFERENT store while browsing this one.
+│   │   │                      # ★ cancelMyOrder (§26): ONE button, TWO outcomes —
+│   │   │                      # cancels outright while stoppable, otherwise emits
+│   │   │                      # order.cancellation_requested. Never moves money.
 │   │   ├── customer-notification-actions.ts # ★ The shopper's notification
 │   │   │                      # centre (§22): list/unread/mark-read over the
 │   │   │                      # same notifications table the staff bell uses,
@@ -333,6 +342,20 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
+│   ├── returns/               # ★ §28: reasons.ts (the eight-reason vocabulary +
+│   │                          # feesFor — merchantFault WAIVES fees wholesale, and
+│   │                          # the deduction is capped at the goods value so a
+│   │                          # refund can never go negative) + eligibility.ts (the
+│   │                          # ONE answer to "can this come back, and until when";
+│   │                          # the window starts at POSSESSION, and it fails OPEN
+│   │                          # on a dateless legacy row). Both pure + tested.
+│   ├── orders/                # ★ cancel.ts (§26): the ONE implementation of what
+│   │                          # cancelling DOES to stock — reserved stock released
+│   │                          # AT THE LOCATION THAT RESERVED IT, pickup holds
+│   │                          # released instead (their units never left the shelf).
+│   │                          # Takes a `runner` so the dashboard keeps its
+│   │                          # withUser(admin) scope while the customer path uses
+│   │                          # withService after proving ownership itself.
 │   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
 │   │                          # every event, its audiences + default channels),
 │   │                          # render.ts (audience-aware copy, pure), record.ts
@@ -485,7 +508,11 @@ wholesip/
 │   ├── payments/              # ★ Online payments (§18): crypto.ts (AES-256-GCM cred
 │   │                          # encryption), razorpay.ts (server fetch client + HMAC verify,
 │   │                          # tested), provider.ts (store/platform cred loaders),
-│   │                          # razorpay-client.ts (client checkout.js loader + modal)
+│   │                          # razorpay-client.ts (client checkout.js loader + modal),
+│   │                          # ★ refunds.ts (§26: PURE refund arithmetic — the cap,
+│   │                          # the status map, the gateway matcher; tested) +
+│   │                          # refund-reconcile.ts (settles refunds whose gateway
+│   │                          # answer never arrived: reconcile-on-read + cron sweep)
 │   ├── billing/               # ★ Invoices & tax (§17): types.ts (BillingSettings/
 │   │                          # TaxClass + row mappers + defaults), tax.ts (pure
 │   │                          # inclusive/exclusive tax math, tested), invoice-data.ts
@@ -569,6 +596,17 @@ wholesip/
 │   ├── payment_providers.sql  # ★ store_payment_providers (BYO Razorpay creds,
 │   │                          # service-role only, app-layer encrypted secret) — §18
 │   ├── payments_01_orders.sql # ★ orders.razorpay_order_id/payment_id + indexes — §18
+│   ├── returns_02_requests.sql # ★ §28: the order_returns LIFECYCLE (requested →
+│   │                          # approved → received → completed) + channel/reason_code/
+│   │                          # photos/fee snapshots/review fields, and customer SELECT
+│   │                          # RLS. status DEFAULTS 'completed' — every existing row
+│   │                          # is a finished till return
+│   ├── returns_01_product_policy.sql # ★ §28: products.returnable (backfilled TRUE
+│   │                          # — nothing was final-sale before) + return_window_days
+│   │                          # (NULLABLE override, never a copy of the store value)
+│   ├── refunds_01_gateway.sql # ★ §26: order_refunds.idempotency_key (UNIQUE)/reason/
+│   │                          # reference + orders.delivered_at (backfilled). Its OWN
+│   │                          # file — pos_12 has run, so editing it is a silent no-op
 │   ├── homepage_to_store_pages.sql  # Phase 4a data migration: homepage_sections → slug ""
 │   ├── wholesip_static_pages_seed.sql  # Phase 4b: seed the 17 legacy static pages
 │   │                          # (our-story, faqs, privacy-policy…) as published
@@ -2358,6 +2396,204 @@ group, span}` (span = columns of the 4-wide desktop grid),
       script is the tool today), and seeding starter policy pages at signup —
       until that lands, a new store's footer links to policy pages that do not
       exist yet.
+
+26. **Refunds — money out, and the one place a RETRY is dangerous.**
+    Design + the full returns/exchanges plan this is step one of:
+    **`docs/returns-exchanges-plan.md`** (roadmap Step 2).
+    - **★ THE ROW IS WRITTEN BEFORE THE MONEY MOVES.** `gateway_refund_id` is
+      UNIQUE, which makes the RECORD idempotent — but it cannot make the CALL
+      idempotent, because you do not have a Razorpay refund id until the call
+      returns, and **a timeout is indistinguishable from a success you never
+      read**. So `refundOrder` inserts `order_refunds` as `pending` carrying an
+      `idempotency_key` WE generated, sends that key to Razorpay as both the
+      idempotency header AND inside the refund's `notes`, and only then claims
+      `pending → completed|failed`. The `notes` copy is the load-bearing half:
+      it still works if the header is ever unsupported or renamed, and it is
+      what reconciliation looks the refund up by.
+    - **★ AN UNKNOWN OUTCOME IS NOT A FAILURE.** `RzpResult`'s error arm carries
+      `outcome: "rejected" | "unknown"` — a 4xx is a verdict (nothing happened,
+      so fail the row and free the amount), a 5xx or a network throw is not (the
+      refund may exist). On `unknown` the action returns `pendingReconcile` with
+      **no error**, and the UI says "we're checking — don't send it again".
+      Reporting it as a failure is precisely how a customer gets paid twice.
+    - **THE CAP COUNTS PENDING REFUNDS.** `refundableAmount`
+      (`lib/payments/refunds.ts`, pure + tested) excludes only `failed` rows. A
+      refund in flight has not settled but might; ignoring it lets a second
+      refund be raised for the same money. And the whole read-check-insert runs
+      inside ONE `withService` transaction behind `SELECT … FOR UPDATE` on the
+      order — two admins clicking Refund would otherwise both read the same
+      headroom and both pass.
+    - **MATCHED BY KEY, NEVER BY AMOUNT.** Two legitimate ₹500 refunds on one
+      order are indistinguishable by amount, and settling the wrong row is
+      unrecoverable. An unknown gateway status maps to `pending`, never to
+      settled.
+    - **RECONCILE-ON-READ + A CRON BACKSTOP** (`refund-reconcile.ts`), the §18
+      decision unchanged — no webhook endpoint to secure. Opening the order
+      settles it in practice; `/api/cron/expire-pending-payments` sweeps the
+      ones nobody opens, on **both** its return paths (money out is a different
+      queue from money in). `syncOrderRefundState` DERIVES
+      `orders.payment_status` from refunds that actually settled, so a failed
+      refund moves an order back off `refunded` instead of stranding it.
+    - **`PAYMENT_STATUSES` IS SPLIT FROM `SETTABLE_PAYMENT_STATUSES`**
+      (order-actions). `refunded` / `partially_refunded` are derived and must be
+      FILTERABLE — the till has been writing `refunded` since pos_12 and the
+      orders list treated it as invalid, so merchants could not find their own
+      refunded orders — but not SETTABLE, because picking one asserts money went
+      back with no `order_refunds` row saying so. The drawer renders them as a
+      read-only pill, and `updateField` now sends `paymentStatus` only when it
+      is what changed (echoing it back would fail every fulfilment edit on a
+      refunded order).
+    - **THE TENDER DECIDES WHERE THE MONEY GOES**, never a preference. Online
+      orders offer the gateway; COD offers `manual` — a record of money the
+      merchant moved themselves, with a **required** reference, because that is
+      the only evidence such a row ever carries. There is deliberately no
+      "refund as cash" on an online order: buy with a stolen card, return for
+      cash is the card-not-present laundering path. RazorpayX payouts drop in
+      later as one more `method`, no schema change.
+    - **`orders.delivered_at`** stamped `coalesce(delivered_at, now())` so
+      re-marking an order delivered cannot restart a return window. Nothing
+      reads it yet — the returns settings do.
+    - **A refund is NOT a restock** (roadmap invariant 8): returned goods may be
+      damaged, and a cancellation has no goods at all. `pos_12_returns.sql`
+      keeps `order_returns` and `order_refunds` apart; keep them apart.
+    - **⚠ Never exercised against a live Razorpay account**, and the exact
+      idempotency header name should be re-checked against their current docs.
+
+27. **Cancellation — and why nothing pays automatically.** The other half of
+    roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10.
+    - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
+      on cancel was considered and refused — not even as a setting — for the
+      same reason §22 gives for owner-only discounts: money leaving with no
+      human looking at it is the one irreversible act with no physical trace.
+      So the OBLIGATION is made loud instead of automatic.
+    - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
+      cancelled order that was paid for. **Derived**, never stored: a flag
+      would need clearing on refund, on partial refund and on reinstatement,
+      and the one you forget is the one that nags a merchant forever.
+    - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
+      `refundDueForOrder` and rides `refund_due` into the
+      `order.pickup_expired` payload — the merchant learns it in the channel
+      they already read. `refund_due` had to be added to `MONEY` in
+      `lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
+      "Total 281.4" failure), and declared in `variables.ts` to be a usable
+      `{{token}}`.
+    - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
+      inline in `updateOrderStatus`; a second hand-written copy for the
+      customer path would fail SILENTLY — stock simply never comes back, and
+      it surfaces in a stock count weeks later. It preserves both branches
+      exactly: reserved stock releases at the location that reserved it (a POS
+      sale must not restock at the store's default shop), and a pickup order
+      releases HOLDS because its units never left the shelf.
+    - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
+      neither.** Stoppable (`pending`/`processing`, not collected, inside the
+      window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
+      Too late ⇒ `order.cancellation_requested` and the order is untouched. The
+      status is re-checked INSIDE the statement that changes it, so a dispatch
+      racing a cancel means one matches nothing rather than both "succeeding".
+      `withService` after the WHERE re-proves ownership + store scope, because
+      a shopper holds SELECT but not UPDATE on their own orders (convention
+      #12's model).
+    - **The button does NOT disappear once an order ships.** Someone who wants
+      out still wants out, and hiding it just becomes a support email the
+      merchant handles by hand anyway.
+    - Settings (group **Orders**, section `orders`, at
+      `/dashboard/orders/settings`): `orders.allowCustomerCancellation`
+      (**default OFF** — new behaviour on a live store, invariant 1) and
+      `orders.cancellationWindowHours` (24). Enforced server-side; a hidden
+      button is not a permission.
+    - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
+      Every registry event has a real emitter;
+      `order.cancellation_requested` was the last one waiting. Keep it that
+      way — an entry there is a deliberate act, not a way to silence the guard.
+
+28. **Returns — the policy surface.** Config + the pure rules; the request flow
+    itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,
+    build order §7; what shipped: §11).
+    - **★ "ONLY CERTAIN PRODUCTS" IS A COLUMN, NOT A SETTING.**
+      `lib/settings/registry.ts` holds one boolean or number PER STORE and
+      cannot address a single SKU, so `products.returnable` + optional
+      `products.return_window_days` sit on the row, exactly like
+      `tax_class_id`. Deliberately NOT a `return_profiles` table: tax classes
+      exist because rates vary per product BY LAW and the buckets need naming;
+      return rules rarely vary by more than "returnable or not, and for how
+      long". The upgrade path is a nullable `return_profile_id`, which is
+      additive.
+    - **The window override is NULLABLE, never a copy of the store value.**
+      Writing the store's window into each product at save time freezes it, so
+      a merchant widening it later would silently not reach any product ever
+      saved. For the same reason `0` is MEANINGFUL (same-day only) and survives
+      a null check rather than `||`.
+    - **★ A FEE IS NEVER CHARGED FOR THE MERCHANT'S OWN MISTAKE**
+      (`lib/returns/reasons.ts`). `merchantFault` is the load-bearing field:
+      damaged / defective / wrong item / not as described / arrived late waive
+      fees WHOLESALE and put return postage on the store. A flat "10%
+      restocking fee on everything" bills the customer for a parcel that
+      arrived broken. Three guards fell out of it: the deduction is **capped at
+      the goods value** (a ₹50 postage fee on a ₹25 item would otherwise
+      compute a NEGATIVE refund); an **absent reason is not merchant-fault**,
+      or anyone waives fees by not answering; and a photo is only asked for
+      where one could **settle** the claim.
+    - **The reason list is CODE, not a table.** Merchant-editable reasons make
+      the data useless across two stores — "damaged" and "Damaged/Broken" can't
+      be compared — and unlike a label this vocabulary carries BEHAVIOUR.
+    - **★ ONE ELIGIBILITY ANSWER** (`lib/returns/eligibility.ts`), so the
+      storefront badge, the request form, the review queue and the till cannot
+      disagree. The window starts at POSSESSION — `delivered_at` →
+      `collected_at` → `created_at` (POS only). Two decisions: **undelivered is
+      not expired** (`not_yet_delivered` is its own answer; collapsing them
+      tells someone their day-old order is too old to return), and it **FAILS
+      OPEN** when a delivered order has no timestamp — refusing a genuine
+      return because OUR backfill couldn't date a legacy row is the store's
+      problem to absorb.
+    - **Settings**: twelve `returns.*` keys, group Returns, section `orders`,
+      at `/dashboard/orders/settings`. Almost all `dependsOn: returns.enabled`,
+      so an unenabled store sees ONE switch rather than a wall of config.
+      `returns.enabled` defaults OFF (invariant 1); `returns.allowInStore` is
+      Pro (it needs POS). **Only two are enforced today** —
+      `ownerOnlyRefunds` and `maxRefundWithoutApproval` gate `refundOrder`
+      (§26) via `isStoreSuperadmin()`, and ★ the cap is re-checked INSIDE the
+      transaction once the amount resolves, because an omitted amount means
+      "refund everything left" and checking only `input.amount` is bypassed by
+      leaving the field blank. The rest are consumed by Steps 3–5.
+    - **Final sale is said BEFORE the sale**: a badge on both PDP layouts,
+      shown regardless of whether returns are switched on, because it is a
+      statement about that product and discovering it afterwards is how a
+      return policy becomes an argument.
+    - **THE REQUEST FLOW** (`app/actions/return-actions.ts`, both ends of the
+      object in one file; `/orders/[id]` for the shopper,
+      `/dashboard/orders/returns` for the merchant). A return is
+      **requested → approved → received → completed**, or rejected/cancelled.
+      It **never moves money**: approving says what is owed and a human presses
+      Refund, the same rule cancellation follows (§27).
+      - **★ `order_returns.status` DEFAULTS TO `completed`.** Every row that
+        existed before the lifecycle is a till return that finished when it was
+        written, and `pos-return-actions.ts` still doesn't set the column.
+        Defaulting to `requested` would reopen every return the shop has ever
+        taken. The lifecycle went on the EXISTING table for the same reason a
+        sibling `return_requests` was rejected: a counter return and a posted
+        one are the same fact by different routes, and two tables means every
+        reader either joins both or silently ignores one.
+      - **★ AUTO-APPROVE NEVER COVERS A FAULT CLAIM.** A merchant-fault reason
+        waives every fee, so auto-approving it lets anyone opt out of a store's
+        return charges with a radio button. Not a setting — it is what makes
+        `returns.autoApprove` safe to offer at all.
+      - **★ A REJECTION MUST CARRY A REASON**, refused server-side. The
+        customer reads it verbatim; a silent no is the most complained-about
+        thing a returns process does.
+      - **★ ONLY `sellable` UNITS REACH THE SHELF**, and condition is decided at
+        RECEIPT with the goods in front of someone — never at request time.
+      - **★ Only OPEN statuses hold units.** A rejected or cancelled request
+        gives its quantities back, or one decline makes those items
+        unreturnable forever. `countReturnedUnits` fails toward REFUSING (a DB
+        error returns MAX_SAFE_INTEGER per line) because "we don't know" must
+        never read as "nothing returned yet".
+      - Customer RLS is `customer_id` **AND** store, the
+        `pos_08_customer_order_store_scope.sql` pairing — a Firebase uid is
+        global. Writes stay service-role.
+      - **Not built:** photo upload (column + sanitiser + dashboard rendering
+        exist; the storefront only warns one may be asked for), per-line
+        damaged marking at receipt (books in as sellable, like the till), and
+        exchanges (Step 4).
 
 ## 6. Commands
 

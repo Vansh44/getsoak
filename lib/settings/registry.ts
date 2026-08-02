@@ -45,6 +45,20 @@ export const SETTING_KEYS = [
   "fulfilment.offerPickup",
   "fulfilment.pickupReadyDays",
   "fulfilment.pickupHoldDays",
+  "orders.allowCustomerCancellation",
+  "orders.cancellationWindowHours",
+  "returns.enabled",
+  "returns.windowDays",
+  "returns.selfServe",
+  "returns.autoApprove",
+  "returns.allowExchanges",
+  "returns.restockingFeePercent",
+  "returns.returnShippingFee",
+  "returns.requireReason",
+  "returns.requirePhotoForDamage",
+  "returns.allowInStore",
+  "returns.ownerOnlyRefunds",
+  "returns.maxRefundWithoutApproval",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -274,6 +288,181 @@ export const SETTINGS: readonly SettingDef[] = [
     max: 60,
     minPlan: "pro",
     dependsOn: "fulfilment.offerPickup",
+  },
+  {
+    key: "orders.allowCustomerCancellation",
+    label: "Let customers cancel their own orders",
+    description:
+      "A shopper can cancel from their order page while it hasn't shipped and is inside the window below. Stock returns automatically; the refund is still yours to approve.",
+    group: "Orders",
+    section: "orders",
+    type: "boolean",
+    // OFF: new behaviour on a live store, so it is the merchant's decision to
+    // switch on (roadmap invariant 1). A store that has been handling
+    // cancellations by phone must not silently start accepting them online.
+    defaultValue: false,
+  },
+  {
+    key: "orders.cancellationWindowHours",
+    label: "Customers can cancel within",
+    description:
+      "Hours from when the order was placed. BOTH conditions must hold: past this window, or once it has shipped, the button becomes a request the store reviews rather than an instant cancellation.",
+    group: "Orders",
+    section: "orders",
+    type: "number",
+    defaultValue: 24,
+    min: 1,
+    max: 720,
+    dependsOn: "orders.allowCustomerCancellation",
+  },
+
+  // ── Returns (docs/returns-exchanges-plan.md §2.2) ────────────────────────
+  // Everything below hangs off `returns.enabled`, so a store that hasn't
+  // switched returns on sees ONE switch rather than a wall of config for a
+  // feature it doesn't use.
+  {
+    key: "returns.enabled",
+    label: "Accept returns",
+    description:
+      "The master switch. Off, nothing here applies and no return can be started anywhere.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    // ★ OFF. New behaviour on a live store is the merchant's decision
+    // (roadmap invariant 1) — a shop that has never taken a return must not
+    // wake up advertising one.
+    defaultValue: false,
+  },
+  {
+    key: "returns.windowDays",
+    label: "Returns accepted within",
+    description:
+      "Days from DELIVERY, not from the order date — a window counted from checkout can expire before a slow parcel even arrives. Individual products can override this.",
+    group: "Returns",
+    section: "orders",
+    type: "number",
+    defaultValue: 7,
+    min: 0,
+    max: 365,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.selfServe",
+    label: "Customers can start a return themselves",
+    description:
+      "Off, they have to contact you and you record the return yourself.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: true,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.autoApprove",
+    label: "Approve straightforward returns automatically",
+    description:
+      "Only ever applies to no-fault reasons. A claim that the item was damaged or wrong always goes to a person — otherwise anyone could waive your fees by picking that reason.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: false,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.allowExchanges",
+    label: "Offer exchanges as well as refunds",
+    description:
+      "An exchange keeps the sale — it costs you less than a refund, so it's on by default.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: true,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.restockingFeePercent",
+    label: "Restocking fee",
+    description:
+      "Percent of the returned goods value. NEVER charged when the return is your fault — damaged, faulty, wrong item, not as described, or late.",
+    group: "Returns",
+    section: "orders",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 50,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.returnShippingFee",
+    label: "Return postage charged to the customer",
+    description:
+      "A flat amount deducted when they post it back. Waived on the same fault reasons as the restocking fee.",
+    group: "Returns",
+    section: "orders",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 10000,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.requireReason",
+    label: "Ask why it's coming back",
+    description:
+      "The reason decides whether fees apply, so leaving it optional means fees rarely do.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: true,
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.requirePhotoForDamage",
+    label: "Ask for a photo when something arrived damaged",
+    description:
+      "Only for claims a picture can actually settle — never for a change of mind.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: true,
+    dependsOn: "returns.requireReason",
+  },
+  {
+    key: "returns.allowInStore",
+    label: "Accept online returns in your shops",
+    description:
+      "Customers can bring an online order back to a counter. Each location still needs the Accept returns capability.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    defaultValue: false,
+    // Needs POS, which is Pro.
+    minPlan: "pro",
+    dependsOn: "returns.enabled",
+  },
+  {
+    key: "returns.ownerOnlyRefunds",
+    label: "Only the owner can refund",
+    description:
+      "Staff who manage orders can do everything else, but not send money back.",
+    group: "Returns",
+    section: "orders",
+    type: "boolean",
+    // Weaker than the POS discount rule ON PURPOSE: a refund leaves a physical
+    // trace (the goods come back and can be counted), a discount leaves none.
+    defaultValue: false,
+  },
+  {
+    key: "returns.maxRefundWithoutApproval",
+    label: "Refunds above this need the owner",
+    description:
+      "0 means no limit. Below it, anyone who manages orders can refund; above it, only the owner can.",
+    group: "Returns",
+    section: "orders",
+    type: "number",
+    defaultValue: 0,
+    min: 0,
+    max: 1000000,
   },
 ];
 

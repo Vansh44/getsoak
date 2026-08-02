@@ -26,8 +26,11 @@ import { EVENT_KEYS } from "./events";
  * silence the test.
  */
 const PENDING: Record<string, string> = {
-  "order.cancellation_requested":
-    "Order cancellation isn't built yet (see docs/ — cancellation phase).",
+  // Empty, and that is the point: every registry event now has a real emitter.
+  // `order.cancellation_requested` was the last entry — it is emitted by
+  // cancelMyOrder (customer-order-actions.ts) when an order has moved too far
+  // to stop, which is exactly the "asked to cancel and awaiting review" case
+  // the registry describes.
 };
 
 /**

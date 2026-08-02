@@ -37,6 +37,7 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { releaseHold } from "@/lib/inventory/reservations";
 import { recordEvent } from "@/lib/notifications/record";
+import { refundDueForOrder } from "@/lib/payments/refund-reconcile";
 import { lineKey, type OrderLineForRouting } from "./resolve";
 
 export interface PickupLocation {
@@ -234,6 +235,8 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
     order_ref: string | null;
     customer_id: string | null;
     pickup_location_id: string | null;
+    total: number | null;
+    payment_status: string | null;
   }> = [];
 
   try {
@@ -262,6 +265,9 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
           pickup_location_id: orders.pickupLocationId,
+          // Needed to work out what the store now owes — see below.
+          total: orders.total,
+          payment_status: orders.paymentStatus,
         }),
     );
   } catch (err) {
@@ -290,6 +296,19 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
       console.error("sweepExpiredPickups (holds):", order.id, err);
     }
 
+    // ★ A CRON CANNOT PROMPT, SO IT HAS TO TELL.
+    // An expired pickup that was PAID FOR leaves the store holding money for
+    // goods nobody collected, and the decision (returns-exchanges-plan §2.2)
+    // is that nothing pays that back on a schedule — money must never leave
+    // without a human looking at it. The obligation therefore rides into the
+    // notification the merchant already reads, rather than sitting invisible
+    // in the database until a customer chases it.
+    const refundDue = await refundDueForOrder({
+      id: order.id,
+      total: order.total,
+      paymentStatus: order.payment_status,
+    });
+
     recordEvent({
       type: "order.pickup_expired",
       storeId: order.store_id,
@@ -297,6 +316,11 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
       actor: { type: "system" },
       subject: { type: "order", id: order.id, label: order.order_ref ?? "" },
       customerId: order.customer_id,
+      payload: {
+        orderRef: order.order_ref ?? "",
+        currency: "INR",
+        ...(refundDue > 0 ? { refund_due: refundDue } : {}),
+      },
     });
   }
 
