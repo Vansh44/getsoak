@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   canUpdateSubscription,
+  cancelsAtCycleEnd,
   decidePlanChange,
   describePlanChange,
+  hasLiveMandate,
   type PlanChangeRequest,
 } from "./plan-change";
 
@@ -157,5 +159,62 @@ describe("describePlanChange", () => {
       "monthly",
     );
     expect(later).toMatch(/nothing is charged today/i);
+  });
+});
+
+describe("hasLiveMandate", () => {
+  // The bug: this was "anything not cancelled/completed", so `created` counted.
+  // We create the subscription at Razorpay BEFORE showing the mandate screen,
+  // so closing the upgrade modal leaves a `created` row behind for good — and
+  // the billing card then told a store paying nothing that autopay would renew
+  // it, offered a Cancel that the gateway refused, and routed later upgrades
+  // through changePlan (which Razorpay only allows on authenticated/active),
+  // so one abandoned checkout disabled upgrading entirely.
+  it("is false for a subscription the merchant never authorised", () => {
+    expect(hasLiveMandate("created")).toBe(false);
+  });
+
+  it("is true once a mandate exists, including after a failed charge", () => {
+    // `pending` and `halted` are post-failure states: the mandate is real, and
+    // the merchant must still be able to cancel it.
+    for (const s of ["authenticated", "active", "pending", "halted"]) {
+      expect(hasLiveMandate(s), s).toBe(true);
+    }
+  });
+
+  it("is false for terminal states, null and unknown ones", () => {
+    for (const s of [
+      "cancelled",
+      "completed",
+      "expired",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(hasLiveMandate(s), String(s)).toBe(false);
+    }
+    // An allowlist, so a state Razorpay adds later reads as "no mandate" —
+    // a Subscribe button rather than controls that error.
+    expect(hasLiveMandate("some_future_state")).toBe(false);
+  });
+});
+
+describe("cancelsAtCycleEnd", () => {
+  // Razorpay refuses cancel_at_cycle_end when no cycle is running:
+  // "Subscription cannot be cancelled since no billing cycle is going on".
+  it("is false before the first charge, when no cycle exists", () => {
+    expect(cancelsAtCycleEnd("authenticated", null)).toBe(false);
+    expect(cancelsAtCycleEnd("created", null)).toBe(false);
+  });
+
+  it("is true only when active AND a cycle end is known", () => {
+    expect(cancelsAtCycleEnd("active", "2026-09-01T00:00:00Z")).toBe(true);
+    // Active with no current_end means we haven't seen the cycle yet; asking
+    // for a cycle-end cancel would be the call the gateway rejects.
+    expect(cancelsAtCycleEnd("active", null)).toBe(false);
+  });
+
+  it("is false for a paused or failed subscription", () => {
+    expect(cancelsAtCycleEnd("halted", "2026-09-01T00:00:00Z")).toBe(false);
   });
 });
