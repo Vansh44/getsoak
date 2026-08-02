@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { withAnon } from "@/lib/db/client";
 import { stores } from "@/drizzle/schema";
 import { parseHost } from "@/lib/store/host";
+import { PLAN_LIMITS, effectivePlan } from "@/lib/plans";
 
 // Re-exported so existing importers (and resolve.test.ts) keep working.
 export { parseHost, type HostKind } from "@/lib/store/host";
@@ -89,16 +90,20 @@ const lookupStoreByHost = unstable_cache(
     );
     const store = (rows[0] as Store | undefined) ?? null;
 
-    // A custom domain must be proven-owned before we serve on it — otherwise a
-    // store could pre-claim a domain it doesn't control. Ownership is confirmed
-    // via the Resend DNS-verification flow, which flips settings.custom_domain_verified.
-    // (Store subdomains are inherently ours, so they need no such check.)
-    if (
-      store &&
-      kind.type === "custom-domain" &&
-      store.settings?.custom_domain_verified !== true
-    ) {
-      return null;
+    // A custom domain must clear BOTH gates before we serve on it. Store
+    // subdomains are inherently ours and need neither.
+    if (store && kind.type === "custom-domain") {
+      // (1) Proven owned. Otherwise a store could pre-claim a domain it does
+      // not control, and we would serve its content on someone else's address.
+      if (store.settings?.custom_domain_verified !== true) return null;
+
+      // (2) Still entitled. Custom domains are a Pro feature, and the plan can
+      // lapse long after the domain was verified — effectivePlan() is what
+      // makes an expired timed plan read as free here rather than as whatever
+      // `plan` still says. Serving is the enforcement point ON PURPOSE: gating
+      // only the dashboard would let a store connect on Pro, drop to free, and
+      // keep the benefit forever.
+      if (!PLAN_LIMITS[effectivePlan(store)].customDomain) return null;
     }
     return store;
   },

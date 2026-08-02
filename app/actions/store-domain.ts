@@ -12,6 +12,8 @@ import {
 } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
+import { PLAN_LIMITS, effectivePlan, type Plan } from "@/lib/plans";
+import { validateDomain } from "@/lib/domains/domain";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -48,6 +50,34 @@ function clean(v: string | null | undefined): string | null {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s ? s : null;
 }
+
+/**
+ * Is this store entitled to a custom domain right now?
+ *
+ * Read from the EFFECTIVE plan, so a lapsed timed plan is treated as free —
+ * the same rule lookupStoreByHost applies when deciding whether to serve. The
+ * two must agree: a dashboard that lets you connect a domain the router will
+ * refuse to serve is worse than one that says no up front.
+ */
+async function storeAllowsCustomDomain(
+  storeId: string,
+): Promise<{ allowed: boolean; plan: Plan }> {
+  const rows = await withService((db) =>
+    db
+      .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1),
+  ).catch(() => []);
+  // Fail CLOSED. Unlike the serving path — where a hiccup must not take a live
+  // shop offline — the cost here is a merchant retrying a form, and the cost of
+  // failing open is handing out a paid feature on a database error.
+  const plan = effectivePlan(rows[0] ?? { plan: "free" });
+  return { allowed: PLAN_LIMITS[plan].customDomain, plan };
+}
+
+const UPGRADE_MESSAGE =
+  "Connecting your own domain is part of the Pro plan. Upgrade to add one.";
 
 // The acting store's domain fields.
 async function readStoreDomainRow(storeId: string) {
@@ -102,7 +132,23 @@ export async function updateCustomDomain(
   }
 
   const storeId = await getActingStoreId();
-  const cleanDomain = clean(domainName);
+
+  // Validate BEFORE touching Resend or the database: the old code sent whatever
+  // was typed straight to the gateway, so "https://shop.acme.com/" was stored
+  // verbatim and could never match the Host header the router compares against.
+  let cleanDomain: string | null = null;
+  if (clean(domainName)) {
+    const check = validateDomain(domainName);
+    if (!check.ok) return { error: check.message ?? "Invalid domain." };
+    cleanDomain = check.domain ?? null;
+  }
+
+  // Pro only, enforced server-side. Disconnecting (a null domain) is always
+  // allowed — a merchant who downgrades must still be able to tidy up.
+  if (cleanDomain) {
+    const { allowed } = await storeAllowsCustomDomain(storeId);
+    if (!allowed) return { error: UPGRADE_MESSAGE };
+  }
 
   // 1. Get existing info
   let store: Awaited<ReturnType<typeof readStoreDomainRow>> | undefined;
