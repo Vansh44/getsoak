@@ -28,8 +28,7 @@
 // item may be damaged, and a cancellation has no goods at all) — roadmap
 // invariant 8, and pos_12_returns.sql already keeps the two tables apart.
 
-import { randomUUID } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -43,22 +42,12 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { getStoreGateway } from "@/lib/payments/provider";
 import {
-  capturedPayment,
-  rzpFetchOrderPayments,
-  rzpRefund,
-} from "@/lib/payments/razorpay";
-import {
-  checkRefundAmount,
   DASHBOARD_REFUND_METHODS,
   refundableAmount,
-  toPaise,
   type RefundStatus,
 } from "@/lib/payments/refunds";
-import {
-  reconcileOrderRefunds,
-  syncOrderRefundState,
-} from "@/lib/payments/refund-reconcile";
-import { logError } from "@/lib/observability/logger";
+import { reconcileOrderRefunds } from "@/lib/payments/refund-reconcile";
+import { issueRefund } from "@/lib/payments/issue-refund";
 
 export type DashboardRefundMethod = (typeof DASHBOARD_REFUND_METHODS)[number];
 
@@ -298,265 +287,69 @@ export async function refundOrder(
     return { error: "Only the store owner can issue refunds." };
   }
 
-  // Settle anything still in flight before deciding what's left — otherwise a
-  // refund that timed out earlier is invisible to the cap and its amount gets
-  // handed back a second time.
-  await reconcileOrderRefunds(orderId);
+  // The mechanism lives in lib/payments/issue-refund.ts — shared with the
+  // till (BORIS), because the money mechanics are identical and a second
+  // hand-written copy of the pending-row-first idempotency is how a customer
+  // gets refunded twice. Everything above this line is the DASHBOARD's
+  // authorization; everything below it is reporting.
+  const res = await issueRefund({
+    storeId,
+    orderId,
+    amount: input.amount,
+    method: input.method,
+    actor: admin.email ?? admin.uid,
+    reason,
+    reference,
+    // ★ Re-checked INSIDE the row lock, not just up front: an omitted amount
+    // means "refund everything left", and what that resolves to is only known
+    // there. A cap enforced solely against `input.amount` would be trivially
+    // bypassed by leaving the field blank.
+    checkAmount: (amount: number) =>
+      approvalCap > 0 && amount > approvalCap && !superadmin
+        ? `Refunds over ${formatCap(approvalCap)} need the store owner.`
+        : null,
+  });
 
-  // ── 1. Reserve the amount and write the row, in ONE transaction ──────────
-  // withService wraps the callback in BEGIN/COMMIT, and the SELECT ... FOR
-  // UPDATE locks the order row — so two admins clicking Refund at the same
-  // moment serialise here. Without the lock both would read the same
-  // "refundable" and both would pass the cap, which is how an order gets
-  // refunded twice with every individual check passing.
-  let reserved:
-    | { refundId: string; key: string; amount: number; order: OrderForRefund }
-    | { error: string };
-  try {
-    reserved = await withService(async (db) => {
-      const rows = await db
-        .select({
-          id: orders.id,
-          store_id: orders.storeId,
-          order_ref: orders.orderRef,
-          customer_id: orders.customerId,
-          status: orders.status,
-          total: orders.total,
-          payment_method: orders.paymentMethod,
-          payment_status: orders.paymentStatus,
-          razorpay_payment_id: orders.razorpayPaymentId,
-          razorpay_order_id: orders.razorpayOrderId,
-        })
-        .from(orders)
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
-        .limit(1)
-        .for("update");
-      const found = rows[0];
-      if (!found) return { error: "Order not found." };
-      const order: OrderForRefund = {
-        ...found,
-        total: Number(found.total ?? 0),
-      };
+  if (res.error) {
+    // Tell a merchant at a desk where to fix it — they can actually get there.
+    return {
+      error:
+        res.code === "gateway_not_connected"
+          ? "Your Razorpay account isn't connected. Reconnect it in Channels, or record the refund manually."
+          : res.code === "no_captured_payment"
+            ? `${res.error} Refund it from your Razorpay dashboard and record it here as a manual refund.`
+            : res.error,
+    };
+  }
 
-      if (input.method === "razorpay") {
-        if (order.payment_method !== "razorpay") {
-          return {
-            error:
-              "This order wasn't paid online, so it can't be refunded through the gateway.",
-          };
-        }
-        if (order.payment_status !== "paid") {
-          return {
-            error: "This order was never paid, so there's nothing to refund.",
-          };
-        }
-      }
-
-      const existing = await db
-        .select({ amount: orderRefunds.amount, status: orderRefunds.status })
-        .from(orderRefunds)
-        .where(eq(orderRefunds.orderId, orderId));
-
-      const refundable = refundableAmount({
-        orderTotal: order.total,
-        refunds: existing.map((r) => ({
-          amount: Number(r.amount ?? 0),
-          status: r.status,
-        })),
-      });
-      const checked = checkRefundAmount(input.amount, refundable);
-      if ("error" in checked) return { error: checked.error };
-
-      // ★ Re-checked HERE, not just up front: an omitted amount means "refund
-      // everything left", and what that resolves to is only known now. A cap
-      // enforced solely against `input.amount` would be trivially bypassed by
-      // leaving the field blank.
-      if (approvalCap > 0 && checked.amount > approvalCap && !superadmin) {
-        return {
-          error: `Refunds over ${formatCap(approvalCap)} need the store owner.`,
-        };
-      }
-
-      const key = randomUUID();
-      const inserted = await db
-        .insert(orderRefunds)
-        .values({
-          storeId,
-          orderId,
-          method: input.method,
-          amount: checked.amount,
-          // A manual refund records money the merchant has ALREADY moved, so
-          // there is nothing in flight and nothing to reconcile. Only the
-          // gateway path starts life pending.
-          status: input.method === "razorpay" ? "pending" : "completed",
-          idempotencyKey: key,
-          reason,
-          reference,
-          actor: admin.email ?? admin.uid,
-        })
-        .returning({ id: orderRefunds.id });
-
-      return {
-        refundId: inserted[0]!.id,
-        key,
-        amount: checked.amount,
-        order,
-      };
+  // A refund still in flight hasn't happened yet — announcing it would tell a
+  // customer their money is back when it may still fail.
+  if (res.status !== "pending") {
+    emitEvent({
+      type: "order.refund_issued",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "order", id: orderId, label: res.orderRef ?? null },
+      customerId: res.customerId ?? null,
+      payload: {
+        orderRef: res.orderRef ?? "",
+        total: res.amount ?? 0,
+        currency: "INR",
+        paymentMethod: input.method,
+      },
     });
-  } catch (err) {
-    logError("refund.reserve", err, { orderId });
-    return { error: dbErrorMessage(err, "Couldn't start the refund.") };
   }
-  if ("error" in reserved) return { error: reserved.error };
-
-  const { refundId, key, amount, order } = reserved;
-
-  // ── 2. Manual: nothing to call, the money already moved ──────────────────
-  if (input.method === "manual") {
-    await syncOrderRefundState(orderId);
-    await announce(order, storeId, admin, amount, "manual");
-    revalidatePath("/dashboard/orders");
-    return { refundId, status: "completed", amount };
-  }
-
-  // ── 3. Gateway ───────────────────────────────────────────────────────────
-  const gateway = await getStoreGateway(storeId);
-  if (!gateway) {
-    await failRefund(refundId, "Razorpay isn't connected for this store.");
-    return {
-      error:
-        "Your Razorpay account isn't connected. Reconnect it in Channels, or record the refund manually.",
-    };
-  }
-
-  let paymentId = order.razorpay_payment_id;
-  if (!paymentId && order.razorpay_order_id) {
-    const payments = await rzpFetchOrderPayments(
-      gateway.creds,
-      order.razorpay_order_id,
-    );
-    if (payments.ok) paymentId = capturedPayment(payments.data)?.id ?? null;
-  }
-  if (!paymentId) {
-    await failRefund(refundId, "No captured payment found for this order.");
-    return {
-      error:
-        "We couldn't find the captured payment for this order at Razorpay. Refund it from your Razorpay dashboard and record it here as a manual refund.",
-    };
-  }
-
-  const res = await rzpRefund(gateway.creds, {
-    paymentId,
-    amountPaise: toPaise(amount),
-    idempotencyKey: key,
-    notes: {
-      sm_order_ref: order.order_ref ?? "",
-      sm_store_id: storeId,
-    },
-  });
-
-  if (!res.ok) {
-    if (res.outcome === "unknown") {
-      // ★ DO NOT fail the row and DO NOT retry. The refund may well exist at
-      // Razorpay; reconcile will find it by the key we planted. Telling the
-      // merchant "it failed" here is what produces a second refund of the
-      // same money.
-      logError("refund.gateway_unknown", res.error, { orderId, refundId });
-      return {
-        refundId,
-        status: "pending",
-        amount,
-        pendingReconcile: true,
-      };
-    }
-    // A 4xx is a verdict: nothing happened, so free the amount.
-    await failRefund(refundId, res.error);
-    return { error: res.error };
-  }
-
-  // Razorpay returns `processed` straight away for most refunds and `pending`
-  // for the instant/UPI ones that settle later — mapped, never assumed.
-  const next = mapCreateStatus(res.data.status);
-  const claimed = await withService((db) =>
-    db
-      .update(orderRefunds)
-      .set({ status: next, gatewayRefundId: res.data.id })
-      .where(
-        and(eq(orderRefunds.id, refundId), eq(orderRefunds.status, "pending")),
-      )
-      .returning({ id: orderRefunds.id }),
-  ).catch((err) => {
-    // The money IS moving; only our record of it failed to update. Reconcile
-    // fixes this from the gateway, so it must not read as a failed refund.
-    logError("refund.settle_write", err, { orderId, refundId });
-    return [] as { id: string }[];
-  });
-
-  // Losing the claim means something else settled this row first (a concurrent
-  // reconcile) or the write failed. Either way we don't know the outcome from
-  // here, and "pending" is the honest answer — it sends the UI to "we're
-  // checking" rather than asserting a state we didn't write.
-  const status: RefundStatus = claimed.length ? next : "pending";
-  if (status === "completed") await syncOrderRefundState(orderId);
-  await announce(order, storeId, admin, amount, "razorpay");
 
   revalidatePath("/dashboard/orders");
-  return { refundId, status, amount, pendingReconcile: status === "pending" };
+  return {
+    refundId: res.refundId,
+    status: res.status,
+    amount: res.amount,
+    pendingReconcile: res.pendingReconcile,
+  };
 }
 
 /** ₹ for a message, without dragging Intl into a hot path. */
 function formatCap(amount: number): string {
   return `₹${amount.toFixed(2)}`;
-}
-
-function mapCreateStatus(rzpStatus: string): RefundStatus {
-  return rzpStatus === "processed"
-    ? "completed"
-    : rzpStatus === "failed"
-      ? "failed"
-      : "pending";
-}
-
-/** Free the reserved amount when the gateway definitively refused. Conditional
- *  on still being pending, so it can never overwrite a settled refund. */
-async function failRefund(refundId: string, why: string): Promise<void> {
-  await withService((db) =>
-    db
-      .update(orderRefunds)
-      .set({ status: "failed", reason: sql`left(${why}, 200)` })
-      .where(
-        and(eq(orderRefunds.id, refundId), eq(orderRefunds.status, "pending")),
-      ),
-  ).catch((err) => logError("refund.mark_failed", err, { refundId }));
-}
-
-/**
- * Tell the team and the customer.
- *
- * `order.refund_issued` is already registered and already emitted by the till
- * (pos-return-actions), so no coverage change is needed — but the till was the
- * ONLY emitter, which is exactly the gap §24 warns the coverage guard cannot
- * catch: it asserts a key is emitted somewhere, not that every path which
- * should emit it does.
- */
-async function announce(
-  order: OrderForRefund,
-  storeId: string,
-  admin: { uid: string; email: string | null },
-  amount: number,
-  method: string,
-): Promise<void> {
-  emitEvent({
-    type: "order.refund_issued",
-    storeId,
-    actor: { type: "admin", id: admin.uid, label: admin.email },
-    subject: { type: "order", id: order.id, label: order.order_ref },
-    customerId: order.customer_id,
-    payload: {
-      orderRef: order.order_ref ?? "",
-      total: amount,
-      currency: "INR",
-      paymentMethod: method,
-    },
-  });
 }

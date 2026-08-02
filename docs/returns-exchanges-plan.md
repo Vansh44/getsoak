@@ -1,7 +1,8 @@
 # Returns, exchanges & refunds — the design
 
-**Status:** design, with **Steps 1–4 built** — see §9 (refunds), §10
-(cancellation), §11 (returns config), §12 (the request flow), §13 (exchanges).
+**Status:** design, with **Steps 1–5 built** — see §9 (refunds), §10
+(cancellation), §11 (returns config), §12 (the request flow), §13 (exchanges),
+§14 (BORIS).
 **Slots into:** `docs/roadmap.md` Steps 2 (refunds), 3 (returns), 4 (store credit).
 **Depends on:** `CODEBASE.md` §12 (checkout), §17 (tax/invoices), §18 (Razorpay),
 §22 (POS), §23 (locations), §24 (notifications), §25 (policies).
@@ -840,3 +841,80 @@ want.
 
 **New event** `order.exchange_ready`, emitted when the replacement order is
 raised. **Never run in a browser.** New acceptance cases: PS-14.1 – PS-14.10.
+
+---
+
+## 14. Step 5 — what shipped
+
+Buy Online, Return In Store. The `returns` location capability has been in the
+registry since Phase 0 and read by nothing; this is what reads it.
+
+### The bug that made BORIS impossible
+
+`getReturnableSale` filtered on `orders.location_id = op.locationId`. An online
+order's location is its FULFILMENT location — or null — so the till could never
+find one. It is now **store-scoped**, and the location question splits into the
+two it always was:
+
+- **Whose shelf gains the stock?** The shop they walked into. Unchanged.
+- **May this counter accept it?** `canTakeReturnHere` — a new question.
+
+### One extraction, because the money mechanics must not be copied
+
+`lib/payments/issue-refund.ts` now holds the refund mechanism, and both
+`refundOrder` (dashboard) and `processReturn` (till) call it after their own
+authorization — the same split `lib/orders/cancel.ts` uses.
+
+★ A second hand-written copy of "reserve under a row lock, write the pending
+row first, call the gateway with our key, treat an unknown outcome as
+not-a-failure" is the last thing this codebase should have. Get one of those
+wrong in the copy and a customer is refunded twice — silently, at a till, where
+nobody is watching a log.
+
+It returns a stable `code` alongside the message so each caller can say
+something its OWN audience can act on: "Reconnect it in Channels" is right for
+a merchant at a desk and useless to a cashier who has no way to get there.
+
+### `lib/returns/in-store.ts` (pure, 14 tests)
+
+★ **A sale rung at THIS counter is ALWAYS returnable here**, regardless of the
+BORIS settings. Not a loophole — invariant 1. The till has taken its own
+returns since `pos_12`; making that conditional on a setting introduced later
+would break every shop doing it today the moment they upgrade.
+`returns.allowInStore` governs the NEW capability and nothing else.
+
+★ **THE TENDER DECIDES WHERE THE MONEY GOES.** An online order refunds to the
+gateway and the till shows **no cash button at all** — a control that always
+fails server-side, in front of a customer, is worse than no control.
+`isTenderAllowed` is the server refusing it anyway. Handing cash back for a
+card sale is the card-not-present laundering path: buy online with a stolen
+card, return in store, walk out with clean cash. COD is the one case where cash
+at the counter is right.
+
+★ **A gateway refund carries NO `location_id` and NO `shift_id`.** It never
+touches the drawer, and stamping a shift would make the cash report count money
+that never left the till.
+
+### Two failure modes worth stating
+
+- **A failed gateway refund does NOT undo the return.** The customer has handed
+  the items over and is walking away with nothing; the goods are booked in, the
+  return stands, and the till shows a _warning_ naming what to do. Unwinding
+  the receipt would lose a restock that physically happened.
+- **`borisGates` fails CLOSED.** Refusing a return the merchant can still take
+  by hand is recoverable; accepting one at a counter that isn't set up for it
+  puts stock on the wrong shelf and money out of the wrong drawer.
+
+### Also shipped
+
+`findOrderForReturn` — store-scoped search by order ref, receipt, phone or
+email, behind `/pos/returns`. It shows orders the counter may NOT accept,
+labelled "Bought elsewhere", because an empty result reads as "your order
+doesn't exist" and a labelled one reads as an answer.
+
+**Not built:** the return window and final-sale rules are NOT enforced at the
+till. Adding them would change what the counter does today (invariant 1), and
+the merchant is standing right there and can refuse. Wire them in behind an
+explicit setting if a merchant asks.
+
+**Never run in a browser.** New acceptance cases: PS-15.1 – PS-15.10.

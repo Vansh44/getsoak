@@ -9,6 +9,9 @@ vi.mock("./pos-shift-actions", () => ({
 }));
 vi.mock("@/lib/notifications/record", () => ({ emitEvent: vi.fn() }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
+vi.mock("@/lib/payments/issue-refund", () => ({
+  issueRefund: vi.fn(async () => ({ refundId: "rf-1", status: "completed" })),
+}));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 vi.mock("@/lib/db/client", () => ({
@@ -17,6 +20,7 @@ vi.mock("@/lib/db/client", () => ({
 
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { emitEvent } from "@/lib/notifications/record";
+import { issueRefund } from "@/lib/payments/issue-refund";
 import { getReturnableSale, processReturn } from "./pos-return-actions";
 
 const MANAGER = {
@@ -45,6 +49,11 @@ function seedSale(
           total: 262.5,
           discount: 0,
           payment_method: "cash",
+          payment_status: "paid",
+          // Rung at THIS register — the ordinary till case, which stays
+          // returnable here regardless of the BORIS settings.
+          location_id: "loc-1",
+          sales_channel: "pos",
         },
       ],
       [
@@ -175,5 +184,187 @@ describe("processReturn", () => {
         payload: expect.objectContaining({ total: 52.5, paymentMethod: "upi" }),
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BORIS — returning an ONLINE order at a counter (roadmap Step 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * An order that was NOT rung at this register. `borisGates` runs two extra
+ * selects (the store, then the location) before the sale is returned.
+ */
+function seedBroughtIn(opts: {
+  paymentMethod?: string;
+  storeAllows?: boolean;
+  locationAccepts?: boolean;
+}) {
+  const {
+    paymentMethod = "razorpay",
+    storeAllows = true,
+    locationAccepts = true,
+  } = opts;
+  dbHolder.current = makeDbMock({
+    selectQueue: [
+      [
+        {
+          id: "o1",
+          receipt_no: null,
+          order_ref: "ORD10011027",
+          created_at: "2026-07-30T10:00:00Z",
+          total: 210,
+          discount: 0,
+          payment_method: paymentMethod,
+          payment_status: "paid",
+          // Fulfilled elsewhere — or online, where it's null.
+          location_id: null,
+          sales_channel: "online",
+        },
+      ],
+      [
+        {
+          id: "li-a",
+          product_id: "p1",
+          variant_id: null,
+          name: "Milk",
+          variant_name: null,
+          quantity: 2,
+          price: 100,
+          total: 200,
+          line_discount: 0,
+          tax_amount: 10,
+        },
+      ],
+      [], // prior returns
+      // borisGates: store, then location
+      [
+        {
+          settings: {
+            features: {
+              "returns.enabled": storeAllows,
+              "returns.allowInStore": storeAllows,
+            },
+          },
+          plan: "pro",
+          plan_expires_at: null,
+        },
+      ],
+      [
+        {
+          capabilities: locationAccepts
+            ? { pos: true, returns: true }
+            : { pos: true, returns: false },
+          type: "shop",
+        },
+      ],
+    ],
+    returning: [{ id: "ret-1" }],
+  });
+}
+
+describe("BORIS — an order this counter didn't sell", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
+  });
+
+  it("★ is FOUND at all — the lookup is store-scoped, not location-scoped", async () => {
+    // The old `location_id = op.locationId` predicate could never match an
+    // online order, so BORIS found nothing whatsoever.
+    seedBroughtIn({});
+    const { sale, error } = await getReturnableSale("o1");
+    expect(error).toBeUndefined();
+    expect(sale?.broughtIn).toBe(true);
+  });
+
+  it("★ routes an online order's refund to the GATEWAY, with no counter choice", async () => {
+    seedBroughtIn({ paymentMethod: "razorpay" });
+    const { sale } = await getReturnableSale("o1");
+    expect(sale?.refundRoute.method).toBe("razorpay");
+    expect(sale?.refundRoute.counterChoice).toBe(false);
+    expect(sale?.refundRoute.affectsDrawer).toBe(false);
+  });
+
+  it("offers the counter tenders for a COD order", async () => {
+    seedBroughtIn({ paymentMethod: "cash_on_delivery" });
+    const { sale } = await getReturnableSale("o1");
+    expect(sale?.refundRoute.counterChoice).toBe(true);
+    expect(sale?.refundRoute.affectsDrawer).toBe(true);
+  });
+
+  it("★ is refused when the store hasn't enabled in-store returns", async () => {
+    seedBroughtIn({ storeAllows: false });
+    const { sale, error } = await getReturnableSale("o1");
+    expect(sale).toBeUndefined();
+    expect(error).toContain("only take back");
+  });
+
+  it("★ is refused when THIS location lacks the returns capability", async () => {
+    seedBroughtIn({ locationAccepts: false });
+    const { error } = await getReturnableSale("o1");
+    expect(error).toContain("Locations");
+  });
+
+  it("★ REFUSES cash for a card order, even called directly", async () => {
+    // The till hides the option; this is the server saying no anyway. Cash
+    // back for a card sale is the card-not-present laundering path.
+    seedBroughtIn({ paymentMethod: "razorpay" });
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(res.error).toContain("go back the same way");
+    expect(issueRefund).not.toHaveBeenCalled();
+  });
+
+  it("★ sends a card order's refund through the shared core, with NO shift", async () => {
+    seedBroughtIn({ paymentMethod: "razorpay" });
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "razorpay",
+    );
+    expect(res.error).toBeUndefined();
+    expect(issueRefund).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: "o1", method: "razorpay" }),
+    );
+    // A gateway refund never touches the drawer — stamping a shift would make
+    // the cash report count money that never left the till.
+    const call = vi.mocked(issueRefund).mock.calls[0][0] as any;
+    expect(call.shiftId).toBeUndefined();
+    expect(call.locationId).toBeUndefined();
+  });
+
+  it("★ keeps the return when the gateway refund fails — the goods ARE back", async () => {
+    seedBroughtIn({ paymentMethod: "razorpay" });
+    vi.mocked(issueRefund).mockResolvedValueOnce({
+      error: "Razorpay isn't connected.",
+      code: "gateway_not_connected",
+    } as any);
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "razorpay",
+    );
+    // NOT an error: the customer handed the items over and walked away.
+    expect(res.error).toBeUndefined();
+    expect(res.returnId).toBeTruthy();
+    expect(res.note).toContain("couldn't be sent");
+  });
+
+  it("warns without inviting a retry when the gateway hasn't confirmed", async () => {
+    seedBroughtIn({ paymentMethod: "razorpay" });
+    vi.mocked(issueRefund).mockResolvedValueOnce({
+      refundId: "rf-1",
+      status: "pending",
+      pendingReconcile: true,
+    } as any);
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "razorpay",
+    );
+    expect(res.note).toContain("don't send it again");
   });
 });

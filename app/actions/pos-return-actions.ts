@@ -17,7 +17,7 @@
 // that wrong means refunding cash from a till that never took it. It belongs
 // with the online-order returns (BORIS) that need the gateway anyway.
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -38,9 +38,27 @@ import {
 } from "@/lib/pos/returns";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { storeLocations, stores } from "@/drizzle/schema";
+import {
+  locationCan,
+  normalizeCapabilities,
+  type LocationType,
+} from "@/lib/locations/capabilities";
+import { resolveStoreSettings } from "@/lib/settings/registry";
+import { effectivePlan } from "@/lib/plans";
+import {
+  canTakeReturnHere,
+  isTenderAllowed,
+  refundRouteFor,
+  type RefundRoute,
+} from "@/lib/returns/in-store";
+import { issueRefund } from "@/lib/payments/issue-refund";
 
 /** Tenders a shop can hand money back through at the counter. */
-const REFUND_METHODS = ["cash", "card", "upi"] as const;
+// What a counter can hand money back through, PLUS the gateway — which the
+// operator never chooses (refundRouteFor decides it from the tender) but which
+// processReturn must accept when that is where the money has to go.
+const REFUND_METHODS = ["cash", "card", "upi", "razorpay"] as const;
 export type RefundMethod = (typeof REFUND_METHODS)[number];
 
 export type ReturnCondition = "sellable" | "damaged";
@@ -70,6 +88,164 @@ export interface ReturnableSale {
   orderDiscount: number;
   paymentMethod: string;
   lines: ReturnableSaleLine[];
+  /** TRUE when this order was NOT rung at this counter — an online order, or
+   *  one sold at another shop (BORIS, roadmap Step 5). */
+  broughtIn: boolean;
+  /** Where the money must go, and whether the counter gets a say. Computed
+   *  server-side from the TENDER, never offered as a preference. */
+  refundRoute: RefundRoute;
+}
+
+export interface FoundOrder {
+  orderId: string;
+  label: string;
+  createdAt: string | null;
+  total: number;
+  paymentMethod: string;
+  /** Not rung at this counter — needs the BORIS gates. */
+  broughtIn: boolean;
+}
+
+/**
+ * Find an order to take back, from whatever the customer walked in with.
+ *
+ * ★ STORE-scoped, deliberately NOT location-scoped. Someone returning an
+ * online order has an order number or a phone, not a receipt from this shop,
+ * and the whole point of BORIS is that they didn't buy it here. Whether this
+ * counter may ACCEPT it is a separate question, answered by getReturnableSale
+ * — showing them the order and then refusing is a better experience than
+ * pretending it doesn't exist.
+ */
+export async function findOrderForReturn(
+  query: string,
+): Promise<{ results: FoundOrder[]; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { results: [], error: "Not signed in." };
+  if (!posCan(op.role, "refund")) {
+    return { results: [], error: "You don't have permission to take returns." };
+  }
+
+  const q = typeof query === "string" ? query.trim() : "";
+  // Two characters matches half the shop. Order refs and phone numbers are
+  // both long, so a real lookup always clears this.
+  if (q.length < 4) return { results: [] };
+  const like = `%${q}%`;
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          receipt_no: orders.receiptNo,
+          created_at: orders.createdAt,
+          total: orders.total,
+          payment_method: orders.paymentMethod,
+          location_id: orders.locationId,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, op.storeId),
+            // Nothing already cancelled or fully refunded — there is nothing
+            // left to hand back.
+            inArray(orders.status, [
+              "processing",
+              "shipped",
+              "delivered",
+              "completed",
+            ]),
+            or(
+              ilike(orders.orderRef, like),
+              ilike(orders.receiptNo, like),
+              // The shopper's phone, from the address they gave. Cast because
+              // shipping_address is jsonb.
+              sql`${orders.shippingAddress}->>'phone' ilike ${like}`,
+              sql`${orders.shippingAddress}->>'email' ilike ${like}`,
+            ),
+          ),
+        )
+        .orderBy(desc(orders.createdAt))
+        .limit(20),
+    );
+
+    return {
+      results: rows.map((r) => ({
+        orderId: r.id,
+        label: r.order_ref ?? r.receipt_no ?? r.id.slice(0, 8),
+        createdAt: r.created_at,
+        total: Number(r.total ?? 0),
+        paymentMethod: r.payment_method ?? "",
+        broughtIn: r.location_id !== op.locationId,
+      })),
+    };
+  } catch (err) {
+    console.error("findOrderForReturn:", err);
+    return { results: [], error: "Couldn't search orders." };
+  }
+}
+
+/**
+ * The two store-side gates BORIS needs: the `returns.allowInStore` setting and
+ * this location's `returns` capability.
+ *
+ * Read together in one place so the answer can't drift between the lookup and
+ * the write. Fails CLOSED on an error — refusing a return the merchant can
+ * still take by hand is recoverable; accepting one at a counter that isn't set
+ * up for it puts stock on the wrong shelf and money out of the wrong drawer.
+ */
+async function borisGates(
+  storeId: string,
+  locationId: string,
+): Promise<{ storeAllows: boolean; locationAccepts: boolean }> {
+  try {
+    const [storeRow, locRow] = await withService(async (db) => {
+      const st = await db
+        .select({
+          settings: stores.settings,
+          plan: stores.plan,
+          plan_expires_at: stores.planExpiresAt,
+        })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1);
+      const loc = await db
+        .select({
+          capabilities: storeLocations.capabilities,
+          type: storeLocations.type,
+        })
+        .from(storeLocations)
+        .where(eq(storeLocations.id, locationId))
+        .limit(1);
+      return [st[0], loc[0]] as const;
+    });
+    if (!storeRow || !locRow) {
+      return { storeAllows: false, locationAccepts: false };
+    }
+
+    const plan = effectivePlan({
+      plan: storeRow.plan,
+      plan_expires_at: storeRow.plan_expires_at,
+    });
+    const settings = resolveStoreSettings(
+      storeRow.settings as Record<string, unknown> | null,
+      plan,
+    );
+    const caps = normalizeCapabilities(
+      locRow.capabilities,
+      locRow.type as LocationType,
+    );
+
+    return {
+      storeAllows:
+        settings["returns.enabled"] === true &&
+        settings["returns.allowInStore"] === true,
+      locationAccepts: locationCan(caps, "returns", { plan }),
+    };
+  } catch (err) {
+    console.error("borisGates:", err);
+    return { storeAllows: false, locationAccepts: false };
+  }
 }
 
 /** The sale, with how much of each line is still returnable. */
@@ -95,16 +271,18 @@ export async function getReturnableSale(
           total: orders.total,
           discount: orders.discount,
           payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+          location_id: orders.locationId,
+          sales_channel: orders.salesChannel,
         })
         .from(orders)
-        .where(
-          and(
-            eq(orders.id, orderId),
-            eq(orders.storeId, op.storeId),
-            // The operator's own shop, never a location from the client.
-            eq(orders.locationId, op.locationId),
-          ),
-        )
+        // ★ STORE-scoped, not location-scoped (roadmap Step 5). The old
+        // `location_id = op.locationId` predicate could never find an ONLINE
+        // order — its location is the FULFILMENT one, or null — so BORIS
+        // found nothing at all. The location question doesn't disappear; it
+        // splits in two, and `canTakeHere` below answers the permission half
+        // while the stock half stays "the shop they walked into".
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId)))
         .limit(1);
       const order = orderRows[0];
       if (!order) return null;
@@ -163,9 +341,27 @@ export async function getReturnableSale(
       (Number(order.discount) || 0) - lineDiscounts,
     );
 
+    // ── May this counter take it? ────────────────────────────────────────
+    // A sale rung HERE is always returnable here (invariant 1 — the till has
+    // done this since pos_12). Anything else is BORIS, and needs both the
+    // store switch and this location's `returns` capability.
+    const broughtIn = order.location_id !== op.locationId;
+    if (broughtIn) {
+      const verdict = canTakeReturnHere({
+        soldHere: false,
+        ...(await borisGates(op.storeId, op.locationId)),
+      });
+      if (!verdict.allowed) return { error: verdict.reason };
+    }
+
     return {
       sale: {
         orderId: order.id,
+        broughtIn,
+        refundRoute: refundRouteFor({
+          paymentMethod: order.payment_method,
+          paymentStatus: order.payment_status,
+        }),
         receiptNo: order.receipt_no ?? "",
         orderRef: order.order_ref ?? "",
         createdAt: order.created_at,
@@ -210,6 +406,9 @@ export interface ReturnLineInput {
 export interface ReturnResult {
   returnId?: string;
   refunded?: number;
+  /** The goods came back but the money needs a word — a gateway refund that
+   *  failed or hasn't confirmed. NOT an error: the return stands. */
+  note?: string;
   error?: string;
 }
 
@@ -238,9 +437,23 @@ export async function processReturn(
     return { error: "Choose what's coming back." };
   }
 
+  // getReturnableSale re-runs the BORIS gates, so a counter that may not take
+  // this order can't reach the write by calling processReturn directly.
   const { sale, error } = await getReturnableSale(orderId);
   if (error || !sale)
     return { error: error ?? "That sale isn't from this shop." };
+
+  // ★ THE TENDER DECIDES WHERE THE MONEY GOES — the till hides the wrong
+  // options, and this is the server refusing them anyway. Handing cash back
+  // for a card sale is the card-not-present laundering path.
+  const route = sale.refundRoute;
+  if (!isTenderAllowed(route, method)) {
+    return {
+      error: route.counterChoice
+        ? "Choose how the money goes back."
+        : "This order was paid online, so the refund has to go back the same way.",
+    };
+  }
 
   const returnable: ReturnableLine[] = sale.lines.map((l) => ({
     id: l.id,
@@ -302,17 +515,27 @@ export async function processReturn(
         })),
       );
 
-      await db.insert(orderRefunds).values({
-        storeId: op.storeId,
-        orderId,
-        returnId: id,
-        locationId: op.locationId,
-        shiftId: shiftId ?? null,
-        method,
-        amount: breakdown.total,
-        status: "completed",
-        actor: op.staffId ?? op.name,
-      });
+      // ★ A COUNTER refund is recorded here, inside the same transaction as
+      // the goods — the money is already across the counter, so the row must
+      // not be able to exist without the return, or vice versa.
+      //
+      // A GATEWAY refund is NOT written here: it has to call Razorpay, which
+      // cannot happen inside a transaction, and it is issued below through the
+      // shared lib/payments/issue-refund.ts so the till inherits the
+      // pending-row-first idempotency rather than reimplementing it.
+      if (method !== "razorpay") {
+        await db.insert(orderRefunds).values({
+          storeId: op.storeId,
+          orderId,
+          returnId: id,
+          locationId: op.locationId,
+          shiftId: shiftId ?? null,
+          method,
+          amount: breakdown.total,
+          status: "completed",
+          actor: op.staffId ?? op.name,
+        });
+      }
 
       return id;
     });
@@ -368,6 +591,36 @@ export async function processReturn(
     );
   }
 
+  // ── Gateway refunds go out through the shared core ──────────────────────
+  // The goods are already booked in. If the gateway call fails, the RETURN
+  // still stands (the customer handed the items over and is walking away with
+  // nothing) — the merchant is told and can retry from the order. Unwinding
+  // the receipt instead would lose a restock that physically happened.
+  let gatewayNote: string | undefined;
+  if (method === "razorpay") {
+    const res = await issueRefund({
+      storeId: op.storeId,
+      orderId,
+      amount: breakdown.total,
+      method: "razorpay",
+      actor: op.staffId ?? op.name,
+      reason: reason?.trim().slice(0, 200) || "Returned in store",
+      returnId,
+      // ★ Deliberately NO locationId/shiftId: a gateway refund never touches
+      // the drawer, and stamping a shift would make the cash report count
+      // money that never left the till.
+    });
+    if (res.error) {
+      gatewayNote =
+        res.code === "gateway_not_connected"
+          ? "Items taken back, but the card refund couldn't be sent — ask the owner to refund it from the dashboard."
+          : `Items taken back, but the refund failed: ${res.error}`;
+    } else if (res.pendingReconcile) {
+      gatewayNote =
+        "Items taken back. The refund is with the bank and hasn't confirmed yet — don't send it again.";
+    }
+  }
+
   // Fully returned ⇒ the sale is refunded. Partially ⇒ leave it alone: it is
   // still a completed sale for the part the customer kept.
   const allBack = sale.lines.every(
@@ -399,5 +652,5 @@ export async function processReturn(
   });
 
   revalidatePath("/pos/sales");
-  return { returnId, refunded: breakdown.total };
+  return { returnId, refunded: breakdown.total, note: gatewayNote };
 }

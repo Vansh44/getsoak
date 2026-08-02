@@ -901,6 +901,58 @@ once (the hold is committed, not re-reserved). The customer is notified.
 Receive a return with no swaps.
 **Expect:** no new order, no hold committed.
 
+## 10f. BORIS — returning an online order at a counter (CODEBASE §28)
+
+Needs: Order Settings → Accept returns AND "Accept online returns in your
+shops" on, plus the location's **Accept returns** capability (Locations). Sign
+in at `/pos` as a manager.
+
+**PS-15.1 ★ — An online order is FOUND at all**
+`/pos/returns`, search the online order's reference.
+**Expect:** it appears, tagged "Bought elsewhere". Before this step the till
+filtered by its own location and could never see one.
+
+**PS-15.2 — Search by phone**
+Search the customer's phone number instead.
+**Expect:** the same order.
+
+**PS-15.3 ★ — A card order shows NO cash button**
+Open an online (Razorpay-paid) order.
+**Expect:** no tender buttons at all — just "Refunded to the card or account
+they paid with… 5–7 working days".
+
+**PS-15.4 ★ — And the server refuses cash anyway**
+Call `processReturn(orderId, lines, "cash")` directly.
+**Expect:** refused. Cash back for a card sale is the card-not-present
+laundering path.
+
+**PS-15.5 — A COD order DOES offer the counter tenders**
+**Expect:** Cash / Card / UPI, and cash reduces the drawer.
+
+**PS-15.6 ★ — A gateway refund never touches the drawer**
+Take a card-order return, then open `/pos/shift`.
+**Expect:** expected cash is UNCHANGED. The `order_refunds` row has no
+`shift_id` and no `location_id`.
+
+**PS-15.7 — Stock lands at THIS shop**
+**Expect:** the returning location's `inventory_levels.on_hand` goes up — not
+the shop that sold it, and not the store default.
+
+**PS-15.8 ★ — Turn the location capability off**
+Untick "Accept returns" for this location and retry.
+**Expect:** refused, naming Locations. Same when `returns.allowInStore` is off.
+
+**PS-15.9 ★ — But this till's OWN sales still work**
+With both BORIS switches OFF, return a sale rung at this register.
+**Expect:** works exactly as before. Invariant 1 — the till has done this since
+pos_12 and a later setting must not break it.
+
+**PS-15.10 ★ — A failed gateway refund keeps the return**
+Disconnect Razorpay in Channels, then return a card order.
+**Expect:** the return SUCCEEDS with a warning telling the cashier to have the
+owner refund from the dashboard. The customer handed the goods over — undoing
+that would be worse.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

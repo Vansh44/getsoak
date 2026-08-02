@@ -32,7 +32,11 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
   const router = useRouter();
   const [qty, setQty] = useState<Record<string, number>>({});
   const [damaged, setDamaged] = useState<Record<string, boolean>>({});
-  const [method, setMethod] = useState<RefundMethod>("cash");
+  // ★ The route comes from the SERVER, computed from the tender that paid.
+  // A card sale offers no cash button at all — a control that always fails
+  // server-side, in front of a customer, is worse than no control.
+  const route = sale.refundRoute;
+  const [method, setMethod] = useState<RefundMethod>(route.method);
   const [reason, setReason] = useState("");
   const [pending, start] = useTransition();
 
@@ -75,7 +79,17 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
         toast.error(res.error);
         return;
       }
-      toast.success(`Refunded ${money(res.refunded ?? 0)}`);
+      // A gateway refund that failed or hasn't confirmed still means the goods
+      // came back — so it is a WARNING, not an error, and the return stands.
+      if (res.note) {
+        toast.warning(res.note, { duration: 8000 });
+      } else {
+        toast.success(
+          route.counterChoice
+            ? `Refunded ${money(res.refunded ?? 0)}`
+            : `${money(res.refunded ?? 0)} on its way back to their card`,
+        );
+      }
       router.push("/pos/sales");
     });
 
@@ -202,22 +216,31 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
               <div className="text-xs font-medium tracking-wide text-white/50 uppercase">
                 Money goes back as
               </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {METHODS.map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setMethod(m.id)}
-                    className={`rounded-lg py-2.5 text-sm font-semibold ${
-                      method === m.id
-                        ? "bg-white text-neutral-900"
-                        : "bg-white/10 hover:bg-white/20"
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
+              {route.counterChoice ? (
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {METHODS.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setMethod(m.id)}
+                      className={`rounded-lg py-2.5 text-sm font-semibold ${
+                        method === m.id
+                          ? "bg-white text-neutral-900"
+                          : "bg-white/10 hover:bg-white/20"
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                // No buttons. The tender decided this, and there is nothing
+                // for the cashier to pick — so say what will happen instead,
+                // in words they can read out to the customer.
+                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2.5 text-sm text-white/80">
+                  {route.copy}
+                </p>
+              )}
               <input
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}

@@ -342,7 +342,10 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
-│   ├── returns/               # ★ §28: exchange.ts (settlement + the v1 boundary —
+│   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
+│   │                          # refundRouteFor: the TENDER decides where money goes,
+│   │                          # and a sale rung HERE is always returnable here),
+│   │                          # exchange.ts (settlement + the v1 boundary —
 │   │                          # a replacement may not cost MORE, because collecting a
 │   │                          # difference is a payment flow that doesn't exist yet),
 │   │                          # reasons.ts (the eight-reason vocabulary +
@@ -512,6 +515,9 @@ wholesip/
 │   │                          # encryption), razorpay.ts (server fetch client + HMAC verify,
 │   │                          # tested), provider.ts (store/platform cred loaders),
 │   │                          # razorpay-client.ts (client checkout.js loader + modal),
+│   │                          # ★ issue-refund.ts (§26/§28: THE refund mechanism,
+│   │                          # shared by the dashboard and the till — authorization
+│   │                          # is the caller's job),
 │   │                          # ★ refunds.ts (§26: PURE refund arithmetic — the cap,
 │   │                          # the status map, the gateway matcher; tested) +
 │   │                          # refund-reconcile.ts (settles refunds whose gateway
@@ -2514,123 +2520,131 @@ group, span}` (span = columns of the 4-wide desktop grid),
 
 28. **Returns — the policy surface.** Config + the pure rules; the request flow
     itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,
-    build order §7; what shipped: §11).
-    - **★ "ONLY CERTAIN PRODUCTS" IS A COLUMN, NOT A SETTING.**
-      `lib/settings/registry.ts` holds one boolean or number PER STORE and
-      cannot address a single SKU, so `products.returnable` + optional
-      `products.return_window_days` sit on the row, exactly like
-      `tax_class_id`. Deliberately NOT a `return_profiles` table: tax classes
-      exist because rates vary per product BY LAW and the buckets need naming;
-      return rules rarely vary by more than "returnable or not, and for how
-      long". The upgrade path is a nullable `return_profile_id`, which is
-      additive.
-    - **The window override is NULLABLE, never a copy of the store value.**
-      Writing the store's window into each product at save time freezes it, so
-      a merchant widening it later would silently not reach any product ever
-      saved. For the same reason `0` is MEANINGFUL (same-day only) and survives
-      a null check rather than `||`.
-    - **★ A FEE IS NEVER CHARGED FOR THE MERCHANT'S OWN MISTAKE**
-      (`lib/returns/reasons.ts`). `merchantFault` is the load-bearing field:
-      damaged / defective / wrong item / not as described / arrived late waive
-      fees WHOLESALE and put return postage on the store. A flat "10%
-      restocking fee on everything" bills the customer for a parcel that
-      arrived broken. Three guards fell out of it: the deduction is **capped at
-      the goods value** (a ₹50 postage fee on a ₹25 item would otherwise
-      compute a NEGATIVE refund); an **absent reason is not merchant-fault**,
-      or anyone waives fees by not answering; and a photo is only asked for
-      where one could **settle** the claim.
-    - **The reason list is CODE, not a table.** Merchant-editable reasons make
-      the data useless across two stores — "damaged" and "Damaged/Broken" can't
-      be compared — and unlike a label this vocabulary carries BEHAVIOUR.
-    - **★ ONE ELIGIBILITY ANSWER** (`lib/returns/eligibility.ts`), so the
-      storefront badge, the request form, the review queue and the till cannot
-      disagree. The window starts at POSSESSION — `delivered_at` →
-      `collected_at` → `created_at` (POS only). Two decisions: **undelivered is
-      not expired** (`not_yet_delivered` is its own answer; collapsing them
-      tells someone their day-old order is too old to return), and it **FAILS
-      OPEN** when a delivered order has no timestamp — refusing a genuine
-      return because OUR backfill couldn't date a legacy row is the store's
-      problem to absorb.
-    - **Settings**: twelve `returns.*` keys, group Returns, section `orders`,
-      at `/dashboard/orders/settings`. Almost all `dependsOn: returns.enabled`,
-      so an unenabled store sees ONE switch rather than a wall of config.
-      `returns.enabled` defaults OFF (invariant 1); `returns.allowInStore` is
-      Pro (it needs POS). **Only two are enforced today** —
-      `ownerOnlyRefunds` and `maxRefundWithoutApproval` gate `refundOrder`
-      (§26) via `isStoreSuperadmin()`, and ★ the cap is re-checked INSIDE the
-      transaction once the amount resolves, because an omitted amount means
-      "refund everything left" and checking only `input.amount` is bypassed by
-      leaving the field blank. The rest are consumed by Steps 3–5.
-    - **Final sale is said BEFORE the sale**: a badge on both PDP layouts,
-      shown regardless of whether returns are switched on, because it is a
-      statement about that product and discovering it afterwards is how a
-      return policy becomes an argument.
-    - **THE REQUEST FLOW** (`app/actions/return-actions.ts`, both ends of the
-      object in one file; `/orders/[id]` for the shopper,
-      `/dashboard/orders/returns` for the merchant). A return is
-      **requested → approved → received → completed**, or rejected/cancelled.
-      It **never moves money**: approving says what is owed and a human presses
-      Refund, the same rule cancellation follows (§27).
-      - **★ `order_returns.status` DEFAULTS TO `completed`.** Every row that
-        existed before the lifecycle is a till return that finished when it was
-        written, and `pos-return-actions.ts` still doesn't set the column.
-        Defaulting to `requested` would reopen every return the shop has ever
-        taken. The lifecycle went on the EXISTING table for the same reason a
-        sibling `return_requests` was rejected: a counter return and a posted
-        one are the same fact by different routes, and two tables means every
-        reader either joins both or silently ignores one.
-      - **★ AUTO-APPROVE NEVER COVERS A FAULT CLAIM.** A merchant-fault reason
-        waives every fee, so auto-approving it lets anyone opt out of a store's
-        return charges with a radio button. Not a setting — it is what makes
-        `returns.autoApprove` safe to offer at all.
-      - **★ A REJECTION MUST CARRY A REASON**, refused server-side. The
-        customer reads it verbatim; a silent no is the most complained-about
-        thing a returns process does.
-      - **★ ONLY `sellable` UNITS REACH THE SHELF**, and condition is decided at
-        RECEIPT with the goods in front of someone — never at request time.
-      - **★ Only OPEN statuses hold units.** A rejected or cancelled request
-        gives its quantities back, or one decline makes those items
-        unreturnable forever. `countReturnedUnits` fails toward REFUSING (a DB
-        error returns MAX_SAFE_INTEGER per line) because "we don't know" must
-        never read as "nothing returned yet".
-      - Customer RLS is `customer_id` **AND** store, the
-        `pos_08_customer_order_store_scope.sql` pairing — a Firebase uid is
-        global. Writes stay service-role.
-      - **Not built:** photo upload (column + sanitiser + dashboard rendering
-        exist; the storefront only warns one may be asked for), and per-line
-        damaged marking at receipt (books in as sellable, like the till).
-    - **★ AN EXCHANGE IS A RETURN PLUS A NEW ORDER** (`returns_03_exchanges.sql`,
-      `lib/returns/exchange.ts`). A distinct `exchanges` table would add an
-      "…or exchange" branch to every stock path, tax calculation, invoice and
-      report forever; as two existing rows and one FK, the orders list, the
-      invoice and fulfilment routing pick the replacement up unchanged. The
-      target is per LINE, so one return can mix swapped and refunded items.
-      - **★ A REPLACEMENT MAY NOT COST MORE.** Collecting a difference is a
-        payment flow that doesn't exist outside checkout; half-building it
-        leaves replacement orders `pending` forever. Refused at request time
-        with a sentence telling the shopper to place a new order. It is the
-        ARITHMETIC that decides, not a flag — `customerOwes` is still computed,
-        so a future payment-link flow already has its number. Same-price swaps
-        (the common case) settle to zero; cheaper ones refund the balance.
-      - **★ THE PRICE IS SNAPSHOTTED AT REQUEST**, because weeks pass before
-        the parcel arrives and re-reading it would bill someone for a
-        repricing they were never quoted. The variant NAME is read fresh — a
-        name change is cosmetic, which is why the asymmetry is deliberate.
-      - **★ STOCK IS HELD WHEN THEY ASK, not when the merchant approves**, or
-        the size sells out in transit and the exchange fails at the last step.
-        A hold doesn't empty the shelf, it stops units being promised twice.
-        Released on decline and withdrawal; committed against the new order at
-        receipt, so units leave exactly once. `stock_status: 'none'` on the
-        replacement — committing the hold IS the movement, and reserving again
-        would take the same units twice.
-      - **No coupon, no netted tax.** The replacement inherits the price paid,
-        not the code; it is taxed at its own class while the return's tax is
-        refunded from its snapshot. `payment_method: 'exchange'`,
-        `payment_status: 'paid'` — paid for by the goods that came back, and it
-        must never read as unpaid revenue to chase.
-      - **Not built:** shipping the replacement BEFORE the return arrives (an
-        advance exchange needs a card hold, and there is no hold primitive),
-        and cross-product swaps.
+    build order §7; what shipped: §11). - **★ "ONLY CERTAIN PRODUCTS" IS A COLUMN, NOT A SETTING.**
+    `lib/settings/registry.ts` holds one boolean or number PER STORE and
+    cannot address a single SKU, so `products.returnable` + optional
+    `products.return_window_days` sit on the row, exactly like
+    `tax_class_id`. Deliberately NOT a `return_profiles` table: tax classes
+    exist because rates vary per product BY LAW and the buckets need naming;
+    return rules rarely vary by more than "returnable or not, and for how
+    long". The upgrade path is a nullable `return_profile_id`, which is
+    additive. - **The window override is NULLABLE, never a copy of the store value.**
+    Writing the store's window into each product at save time freezes it, so
+    a merchant widening it later would silently not reach any product ever
+    saved. For the same reason `0` is MEANINGFUL (same-day only) and survives
+    a null check rather than `||`. - **★ A FEE IS NEVER CHARGED FOR THE MERCHANT'S OWN MISTAKE**
+    (`lib/returns/reasons.ts`). `merchantFault` is the load-bearing field:
+    damaged / defective / wrong item / not as described / arrived late waive
+    fees WHOLESALE and put return postage on the store. A flat "10%
+    restocking fee on everything" bills the customer for a parcel that
+    arrived broken. Three guards fell out of it: the deduction is **capped at
+    the goods value** (a ₹50 postage fee on a ₹25 item would otherwise
+    compute a NEGATIVE refund); an **absent reason is not merchant-fault**,
+    or anyone waives fees by not answering; and a photo is only asked for
+    where one could **settle** the claim. - **The reason list is CODE, not a table.** Merchant-editable reasons make
+    the data useless across two stores — "damaged" and "Damaged/Broken" can't
+    be compared — and unlike a label this vocabulary carries BEHAVIOUR. - **★ ONE ELIGIBILITY ANSWER** (`lib/returns/eligibility.ts`), so the
+    storefront badge, the request form, the review queue and the till cannot
+    disagree. The window starts at POSSESSION — `delivered_at` →
+    `collected_at` → `created_at` (POS only). Two decisions: **undelivered is
+    not expired** (`not_yet_delivered` is its own answer; collapsing them
+    tells someone their day-old order is too old to return), and it **FAILS
+    OPEN** when a delivered order has no timestamp — refusing a genuine
+    return because OUR backfill couldn't date a legacy row is the store's
+    problem to absorb. - **Settings**: twelve `returns.*` keys, group Returns, section `orders`,
+    at `/dashboard/orders/settings`. Almost all `dependsOn: returns.enabled`,
+    so an unenabled store sees ONE switch rather than a wall of config.
+    `returns.enabled` defaults OFF (invariant 1); `returns.allowInStore` is
+    Pro (it needs POS). **Only two are enforced today** —
+    `ownerOnlyRefunds` and `maxRefundWithoutApproval` gate `refundOrder`
+    (§26) via `isStoreSuperadmin()`, and ★ the cap is re-checked INSIDE the
+    transaction once the amount resolves, because an omitted amount means
+    "refund everything left" and checking only `input.amount` is bypassed by
+    leaving the field blank. The rest are consumed by Steps 3–5. - **Final sale is said BEFORE the sale**: a badge on both PDP layouts,
+    shown regardless of whether returns are switched on, because it is a
+    statement about that product and discovering it afterwards is how a
+    return policy becomes an argument. - **THE REQUEST FLOW** (`app/actions/return-actions.ts`, both ends of the
+    object in one file; `/orders/[id]` for the shopper,
+    `/dashboard/orders/returns` for the merchant). A return is
+    **requested → approved → received → completed**, or rejected/cancelled.
+    It **never moves money**: approving says what is owed and a human presses
+    Refund, the same rule cancellation follows (§27). - **★ `order_returns.status` DEFAULTS TO `completed`.** Every row that
+    existed before the lifecycle is a till return that finished when it was
+    written, and `pos-return-actions.ts` still doesn't set the column.
+    Defaulting to `requested` would reopen every return the shop has ever
+    taken. The lifecycle went on the EXISTING table for the same reason a
+    sibling `return_requests` was rejected: a counter return and a posted
+    one are the same fact by different routes, and two tables means every
+    reader either joins both or silently ignores one. - **★ AUTO-APPROVE NEVER COVERS A FAULT CLAIM.** A merchant-fault reason
+    waives every fee, so auto-approving it lets anyone opt out of a store's
+    return charges with a radio button. Not a setting — it is what makes
+    `returns.autoApprove` safe to offer at all. - **★ A REJECTION MUST CARRY A REASON**, refused server-side. The
+    customer reads it verbatim; a silent no is the most complained-about
+    thing a returns process does. - **★ ONLY `sellable` UNITS REACH THE SHELF**, and condition is decided at
+    RECEIPT with the goods in front of someone — never at request time. - **★ Only OPEN statuses hold units.** A rejected or cancelled request
+    gives its quantities back, or one decline makes those items
+    unreturnable forever. `countReturnedUnits` fails toward REFUSING (a DB
+    error returns MAX_SAFE_INTEGER per line) because "we don't know" must
+    never read as "nothing returned yet". - Customer RLS is `customer_id` **AND** store, the
+    `pos_08_customer_order_store_scope.sql` pairing — a Firebase uid is
+    global. Writes stay service-role. - **Not built:** photo upload (column + sanitiser + dashboard rendering
+    exist; the storefront only warns one may be asked for), and per-line
+    damaged marking at receipt (books in as sellable, like the till). - **★ AN EXCHANGE IS A RETURN PLUS A NEW ORDER** (`returns_03_exchanges.sql`,
+    `lib/returns/exchange.ts`). A distinct `exchanges` table would add an
+    "…or exchange" branch to every stock path, tax calculation, invoice and
+    report forever; as two existing rows and one FK, the orders list, the
+    invoice and fulfilment routing pick the replacement up unchanged. The
+    target is per LINE, so one return can mix swapped and refunded items. - **★ A REPLACEMENT MAY NOT COST MORE.** Collecting a difference is a
+    payment flow that doesn't exist outside checkout; half-building it
+    leaves replacement orders `pending` forever. Refused at request time
+    with a sentence telling the shopper to place a new order. It is the
+    ARITHMETIC that decides, not a flag — `customerOwes` is still computed,
+    so a future payment-link flow already has its number. Same-price swaps
+    (the common case) settle to zero; cheaper ones refund the balance. - **★ THE PRICE IS SNAPSHOTTED AT REQUEST**, because weeks pass before
+    the parcel arrives and re-reading it would bill someone for a
+    repricing they were never quoted. The variant NAME is read fresh — a
+    name change is cosmetic, which is why the asymmetry is deliberate. - **★ STOCK IS HELD WHEN THEY ASK, not when the merchant approves**, or
+    the size sells out in transit and the exchange fails at the last step.
+    A hold doesn't empty the shelf, it stops units being promised twice.
+    Released on decline and withdrawal; committed against the new order at
+    receipt, so units leave exactly once. `stock_status: 'none'` on the
+    replacement — committing the hold IS the movement, and reserving again
+    would take the same units twice. - **No coupon, no netted tax.** The replacement inherits the price paid,
+    not the code; it is taxed at its own class while the return's tax is
+    refunded from its snapshot. `payment_method: 'exchange'`,
+    `payment_status: 'paid'` — paid for by the goods that came back, and it
+    must never read as unpaid revenue to chase. - **Not built:** shipping the replacement BEFORE the return arrives (an
+    advance exchange needs a card hold, and there is no hold primitive),
+    and cross-product swaps. - **★ BORIS — RETURNING AN ONLINE ORDER AT A COUNTER** (`lib/returns/
+in-store.ts`, `/pos/returns`). This is what finally reads the `returns`
+    location capability, in the registry unused since Phase 0. - **The bug that made it impossible:** `getReturnableSale` filtered on
+    `orders.location_id = op.locationId`, and an online order's location is
+    its FULFILMENT one (or null), so the till could never find one. Now
+    STORE-scoped, and the location question splits into the two it always
+    was — whose shelf gains the stock (the shop they walked into) and
+    whether this counter may accept it (`canTakeReturnHere`). - **★ A SALE RUNG AT THIS COUNTER IS ALWAYS RETURNABLE HERE**, regardless
+    of the BORIS settings. Invariant 1: the till has done this since
+    pos_12, and making it conditional on a later setting would break every
+    shop doing it today. `returns.allowInStore` governs the NEW capability
+    only. - **★ THE TENDER DECIDES WHERE THE MONEY GOES.** An online order refunds
+    to the gateway and the till shows NO cash button — a control that always
+    fails server-side, in front of a customer, is worse than no control;
+    `isTenderAllowed` refuses it server-side anyway. Cash back for a card
+    sale is the card-not-present laundering path. COD is the one case where
+    cash at the counter is right. - **★ A gateway refund carries NO location_id and NO shift_id.** It never
+    touches the drawer, and stamping a shift would make the cash report
+    count money that never left the till. - **A failed gateway refund does NOT undo the return** — the customer has
+    handed the goods over and is walking away with nothing, so the return
+    stands and the till WARNS. `borisGates` fails CLOSED: refusing a return
+    the merchant can take by hand is recoverable; accepting one at a
+    counter that isn't set up puts stock on the wrong shelf. - **`lib/payments/issue-refund.ts`** is the extraction that made this
+    safe — one refund mechanism, called by `refundOrder` and
+    `processReturn` after their own authorization. A second hand-written
+    copy of the pending-row-first idempotency is how someone gets refunded
+    twice at a till where nobody is watching a log. It returns a stable
+    `code` so each caller can advise its own audience. - **Not enforced at the till:** the return window and final-sale rules.
+    Adding them would change what the counter does today (invariant 1), and
+    the merchant is standing right there.
 
 ## 6. Commands
 

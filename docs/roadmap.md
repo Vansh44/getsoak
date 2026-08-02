@@ -161,10 +161,13 @@ approve/reject with a mandatory decline reason, and receive-and-restock.
 targets, replacement stock held from the moment it's requested, and the
 replacement order raised at receipt.
 
-**Still ships:** return-in-store for ONLINE orders (BORIS) at locations
-carrying the `returns` capability — which is in the registry today and read by
-nothing. Plus photo upload, per-line damaged marking, and advance exchanges,
-all deliberately deferred.
+**✅ Also done** (returns-plan Step 5, see its §14): BORIS — a store-scoped
+lookup at `/pos/returns`, the tender-locked refund at the counter, and the
+`returns` location capability finally read.
+
+**Deliberately deferred:** photo upload, per-line damaged marking at receipt,
+advance exchanges, cross-product swaps, and enforcing the return window at the
+till (invariant 1 — the merchant is standing right there).
 
 **Three gaps in the existing code this step closes:** `getReturnableSale`
 filters on `orders.location_id = operator's location`, so it can never find an
