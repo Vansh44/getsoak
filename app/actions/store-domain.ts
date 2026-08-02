@@ -13,7 +13,14 @@ import {
 import { STORE_TAG } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { PLAN_LIMITS, effectivePlan, type Plan } from "@/lib/plans";
-import { validateDomain } from "@/lib/domains/domain";
+import { validateDomain, routingRecords } from "@/lib/domains/domain";
+import {
+  ensureProvisioned,
+  deprovision,
+  getCertConfig,
+} from "@/lib/domains/certificates";
+import { checkDomainPointsTo } from "@/lib/domains/dns";
+import { logError } from "@/lib/observability/logger";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -341,4 +348,221 @@ export async function verifyResendDomain(
     const msg = e instanceof Error ? e.message : "Failed to verify domain.";
     return { error: msg };
   }
+}
+
+// ---------------------------------------------------------------------------
+// The connect flow.
+//
+// A domain is marked verified only when ALL THREE hold:
+//   1. the certificate is ACTIVE,
+//   2. the domain resolves publicly to our load balancer,
+//   3. the certificate map entry exists.
+//
+// Each one alone is insufficient in a way that bites. Without (1) the TLS
+// handshake fails before a request ever reaches the app. Without (2) we would
+// flip storeOrigin() onto a host we don't serve and publish it in every
+// canonical, sitemap entry and og:url. Without (3) the certificate exists but
+// nothing presents it. The old flow checked none of them — it read Resend's
+// DKIM/SPF result, which proves the domain can send MAIL.
+// ---------------------------------------------------------------------------
+
+export interface DomainConnectionState {
+  domain: string | null;
+  verified: boolean;
+  /** Merchant is entitled to use this feature right now. */
+  allowed: boolean;
+  /** Custom domains are configured for this environment at all. */
+  available: boolean;
+  /** Records the merchant still needs to add. */
+  records: Array<{
+    type: string;
+    name: string;
+    value: string;
+    purpose: string;
+  }>;
+  certificateState: string | null;
+  message?: string;
+}
+
+/**
+ * Everything the settings page needs, in one call.
+ *
+ * Read-only and side-effect free apart from provisioning progress, which is
+ * idempotent — safe to hit on every page load.
+ */
+export async function getDomainConnectionState(): Promise<DomainConnectionState> {
+  const access = await getViewerAccess();
+  const cfg = getCertConfig();
+  const empty: DomainConnectionState = {
+    domain: null,
+    verified: false,
+    allowed: false,
+    available: !!cfg,
+    records: [],
+    certificateState: null,
+  };
+  if (!access?.can(DOMAIN_SECTION, "view")) return empty;
+
+  const storeId = await getActingStoreId();
+  const { allowed } = await storeAllowsCustomDomain(storeId);
+  const row = await readStoreDomainRow(storeId).catch(() => undefined);
+  const domain = row?.custom_domain ?? null;
+  const settings = (row?.settings as Record<string, unknown>) ?? {};
+  const verified = settings.custom_domain_verified === true;
+
+  if (!domain || !cfg) return { ...empty, domain, verified, allowed };
+
+  // Routing record is known without any network call; the challenge record
+  // needs the authorization, which verifyDomain() refreshes.
+  const records = routingRecords(domain, cfg.loadBalancerIp).map((r) => ({
+    type: r.type,
+    name: r.name,
+    value: r.value,
+    purpose: r.purpose as string,
+  }));
+  const challenge = settings.domain_challenge as
+    | { name: string; value: string }
+    | undefined;
+  if (challenge?.name && !verified) {
+    records.push({
+      type: "CNAME",
+      name: challenge.name,
+      value: challenge.value,
+      purpose: "certificate",
+    });
+  }
+
+  return {
+    domain,
+    verified,
+    allowed,
+    available: true,
+    records,
+    certificateState: (settings.domain_cert_state as string) ?? null,
+  };
+}
+
+/**
+ * Advance the domain toward serving, and report what is still outstanding.
+ *
+ * Idempotent end to end: provisioning adopts existing resources, the DNS check
+ * is a read, and the settings write is a no-op when nothing changed. Calling
+ * this twice concurrently costs two API round-trips and converges on the same
+ * state — which is what makes it safe for a retrying background job.
+ */
+export async function verifyDomain(): Promise<DomainResult> {
+  if (!(await getManagerUserId(DOMAIN_SECTION))) {
+    return { error: "You don't have permission to manage domain settings." };
+  }
+
+  const storeId = await getActingStoreId();
+  const { allowed } = await storeAllowsCustomDomain(storeId);
+  if (!allowed) return { error: UPGRADE_MESSAGE };
+
+  const cfg = getCertConfig();
+  if (!cfg) return { error: "Custom domains aren't configured." };
+
+  const row = await readStoreDomainRow(storeId).catch(() => undefined);
+  const domain = row?.custom_domain;
+  if (!domain) return { error: "Add a domain first." };
+
+  const settings = ((row?.settings as Record<string, unknown>) ?? {}) as Record<
+    string,
+    unknown
+  >;
+
+  // (1) + (3): certificate issued and attached. Idempotent.
+  const prov = await ensureProvisioned(domain);
+
+  // Persist the challenge record even when we're not done, so the merchant can
+  // see what to add without re-running provisioning to find out.
+  const next: Record<string, unknown> = { ...settings };
+  if (prov.challenge) next.domain_challenge = prov.challenge;
+  next.domain_cert_state = prov.certificateState;
+
+  if (!prov.ready) {
+    await saveDomainSettings(storeId, next);
+    return {
+      error:
+        prov.error ??
+        "Certificate isn't issued yet. Add the DNS records shown, then check again — this usually takes a few minutes.",
+    };
+  }
+
+  // (2): it actually points at us. Checked AFTER the certificate, because the
+  // certificate is the slow part and there is no sense reporting a routing
+  // problem the merchant would have to fix twice.
+  const dns = await checkDomainPointsTo(domain, cfg.loadBalancerIp);
+  if (!dns.pointsToUs) {
+    await saveDomainSettings(storeId, next);
+    return { error: dns.error ?? "This domain doesn't point to us yet." };
+  }
+
+  // All three hold.
+  next.custom_domain_verified = true;
+  delete next.domain_challenge;
+  await saveDomainSettings(storeId, next);
+
+  if (settings.custom_domain_verified !== true) {
+    emitEvent({
+      type: "platform.domain_verified",
+      storeId,
+      actor: { type: "system" },
+      subject: { type: "store", id: storeId, label: domain },
+      payload: { domain },
+    });
+  }
+
+  revalidateTag(STORE_TAG, "max");
+  return { success: true };
+}
+
+/** Disconnect: stop serving, then release the billable resources. */
+export async function disconnectDomain(): Promise<DomainResult> {
+  if (!(await getManagerUserId(DOMAIN_SECTION))) {
+    return { error: "You don't have permission to manage domain settings." };
+  }
+  const storeId = await getActingStoreId();
+  const row = await readStoreDomainRow(storeId).catch(() => undefined);
+  const domain = row?.custom_domain;
+  if (!domain) return { success: true };
+
+  const settings = ((row?.settings as Record<string, unknown>) ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const next = { ...settings };
+  delete next.custom_domain_verified;
+  delete next.domain_challenge;
+  delete next.domain_cert_state;
+
+  // Stop serving FIRST. If deprovisioning then fails we have a leftover
+  // certificate (visible in logs, costs cents); the other order would leave the
+  // store advertising a domain whose certificate we just deleted.
+  try {
+    await withService((db) =>
+      db
+        .update(stores)
+        .set({ customDomain: null, settings: next })
+        .where(eq(stores.id, storeId)),
+    );
+  } catch (err) {
+    logError("disconnectDomain (db)", err, { storeId });
+    return { error: "Couldn't disconnect the domain. Please try again." };
+  }
+  revalidateTag(STORE_TAG, "max");
+
+  const gone = await deprovision(domain);
+  if (gone.error)
+    logError("disconnectDomain (deprovision)", gone.error, { domain });
+  return { success: true };
+}
+
+async function saveDomainSettings(
+  storeId: string,
+  settings: Record<string, unknown>,
+): Promise<void> {
+  await withService((db) =>
+    db.update(stores).set({ settings }).where(eq(stores.id, storeId)),
+  ).catch((err) => logError("saveDomainSettings", err, { storeId }));
 }
