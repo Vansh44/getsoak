@@ -102,33 +102,6 @@ async function readStoreDomainRow(storeId: string) {
 }
 
 /**
- * Retrieves the current custom domain and its resend verification status (if available).
- */
-export async function getCustomDomainDetails(): Promise<{
-  domain: string | null;
-  resendDomainId: string | null;
-}> {
-  const access = await getViewerAccess();
-  if (!access?.can(DOMAIN_SECTION, "view")) {
-    return { domain: null, resendDomainId: null };
-  }
-
-  const storeId = await getActingStoreId();
-  let row: Awaited<ReturnType<typeof readStoreDomainRow>> | undefined;
-  try {
-    row = await readStoreDomainRow(storeId);
-  } catch (err) {
-    console.error("getCustomDomainDetails:", err);
-  }
-
-  const settings = (row?.settings as Record<string, unknown>) ?? {};
-  return {
-    domain: row?.custom_domain ?? null,
-    resendDomainId: (settings.resend_domain_id as string) ?? null,
-  };
-}
-
-/**
  * Updates the custom domain for the store. Also registers it with Resend.
  */
 export async function updateCustomDomain(
@@ -167,53 +140,30 @@ export async function updateCustomDomain(
 
   const settings = ((store?.settings as Record<string, unknown>) ??
     {}) as Record<string, unknown>;
-  const oldResendId = settings.resend_domain_id as string | undefined;
 
-  const resend = getResend();
-
-  // 2. Remove old domain from resend if one exists and we have resend enabled
-  if (oldResendId && resend) {
-    try {
-      await resend.domains.remove(oldResendId);
-    } catch (e) {
-      console.warn("Failed to remove old domain from Resend:", e);
-    }
-  }
-
-  // 3. Register new domain with Resend (if a new one is provided)
-  let newResendId: string | null = null;
-  if (cleanDomain && resend) {
-    try {
-      const { data, error } = await resend.domains.create({
-        name: cleanDomain,
-      });
-      if (error) {
-        return { error: `Resend error: ${error.message}` };
-      }
-      if (data) {
-        newResendId = data.id;
-      }
-    } catch (e: unknown) {
-      const msg =
-        e instanceof Error ? e.message : "Failed to create domain on Resend.";
-      return { error: msg };
-    }
-  } else if (cleanDomain && !resend) {
-    return { error: "Resend API key is not configured." };
-  }
-
-  // 4. Update the DB
+  // ⚠ NO RESEND CALL HERE, deliberately.
+  //
+  // This used to register the domain with Resend for email sending, and return
+  // its error — so connecting a STOREFRONT domain failed on an EMAIL provider's
+  // quota. It is not hypothetical: the platform's Resend plan allows one
+  // domain, so the second merchant to try would have been told
+  // "Your plan includes 1 domain. Upgrade to add more." and been unable to
+  // connect at all. Every merchant connect would also have consumed a paid
+  // Resend domain slot for a feature they never asked for.
+  //
+  // Serving a storefront on a domain and sending mail FROM that domain are
+  // separate features with separate DNS records and separate costs. Sending
+  // stays on the platform's from-address (lib/email/sender.ts already falls
+  // back when resend_domain_verified isn't set); branded sending can be
+  // offered later as its own opt-in with its own capacity planning.
   const newSettings = { ...settings };
-  if (newResendId) {
-    newSettings.resend_domain_id = newResendId;
-  } else {
-    delete newSettings.resend_domain_id;
-  }
-  // A freshly set/changed domain is unproven until Resend re-verifies its DNS,
-  // so clear both verification flags — they gate storefront routing (custom_domain_verified)
-  // and email sending (resend_domain_verified) and must not carry over.
+  delete newSettings.resend_domain_id;
+  // A freshly set or changed domain is unproven: it has no certificate and may
+  // not point at us. Clear both gates so nothing carries over from the old one.
   delete newSettings.custom_domain_verified;
   delete newSettings.resend_domain_verified;
+  delete newSettings.domain_challenge;
+  delete newSettings.domain_cert_state;
 
   try {
     await withService((db) =>
@@ -235,45 +185,24 @@ export async function updateCustomDomain(
 }
 
 /**
- * Gets the current status and DNS records for the domain from Resend.
+ * Record whether the store's domain is verified FOR SENDING EMAIL.
+ *
+ * ⚠ This must never touch `custom_domain_verified`. It used to set both, which
+ * meant Resend's DKIM/SPF result — proof only that a domain can send mail —
+ * decided whether we SERVE the storefront on that host. Since this runs from an
+ * exported server action, that was a live endpoint any store manager could call
+ * to mark a domain verified on any plan, with no certificate and no check that
+ * the domain points at us. Routing is flipped in exactly one place now:
+ * verifyDomain(), once all three conditions hold.
  */
-export async function getResendDomainStatus(
-  resendDomainId: string,
-): Promise<{ status?: DomainStatus; error?: string }> {
-  const access = await getViewerAccess();
-  if (!access?.can(DOMAIN_SECTION, "view")) {
-    return { error: "Unauthorized." };
-  }
-
-  const resend = getResend();
-  if (!resend) return { error: "Resend API key not configured." };
-
-  try {
-    const { data, error } = await resend.domains.get(resendDomainId);
-    if (error) return { error: error.message };
-    if (!data) return { error: "Domain not found on Resend." };
-
-    return { status: data as DomainStatus };
-  } catch (e: unknown) {
-    const msg =
-      e instanceof Error ? e.message : "Failed to fetch domain status.";
-    return { error: msg };
-  }
-}
-
-/**
- * Persist whether the current store's custom domain is verified. Flips the
- * routing gate (custom_domain_verified) and the email-sender gate
- * (resend_domain_verified) together, and only writes when the value changed.
- */
-async function syncDomainVerified(isVerified: boolean): Promise<void> {
+async function syncEmailDomainVerified(isVerified: boolean): Promise<void> {
   const storeId = await getActingStoreId();
 
   let store: Awaited<ReturnType<typeof readStoreDomainRow>> | undefined;
   try {
     store = await readStoreDomainRow(storeId);
   } catch (err) {
-    console.error("syncDomainVerified read:", err);
+    console.error("syncEmailDomainVerified read:", err);
     return;
   }
 
@@ -282,38 +211,26 @@ async function syncDomainVerified(isVerified: boolean): Promise<void> {
 
   const settings = ((store.settings as Record<string, unknown>) ??
     {}) as Record<string, unknown>;
-  if (settings.custom_domain_verified === isVerified) return;
+  if (settings.resend_domain_verified === isVerified) return;
 
   try {
     await withService((db) =>
       db
         .update(stores)
         .set({
-          settings: {
-            ...settings,
-            custom_domain_verified: isVerified,
-            resend_domain_verified: isVerified,
-          },
+          settings: { ...settings, resend_domain_verified: isVerified },
         })
         .where(eq(stores.id, storeId)),
     );
   } catch (err) {
-    console.error("syncDomainVerified:", err);
+    console.error("syncEmailDomainVerified:", err);
     return;
   }
 
-  // Only on the transition INTO verified — a re-check that comes back verified
-  // again short-circuits above, so this can't repeat.
-  if (isVerified) {
-    emitEvent({
-      type: "platform.domain_verified",
-      storeId,
-      actor: { type: "system" },
-      subject: { type: "store", id: storeId, label: store.custom_domain },
-      payload: { domain: store.custom_domain },
-    });
-  }
-
+  // No platform.domain_verified here. That event means "this store is now
+  // being served on its own domain", which is verifyDomain()'s business —
+  // emitting it for an email-sending check would announce a domain that may
+  // have no certificate and may not point at us at all.
   revalidateTag(STORE_TAG, "max");
 }
 
@@ -340,7 +257,9 @@ export async function verifyResendDomain(
     // the status stays "pending" and the routing gate correctly stays closed.
     const { data } = await resend.domains.get(resendDomainId);
     if (data) {
-      await syncDomainVerified((data as DomainStatus).status === "verified");
+      await syncEmailDomainVerified(
+        (data as DomainStatus).status === "verified",
+      );
     }
 
     return { success: true };
