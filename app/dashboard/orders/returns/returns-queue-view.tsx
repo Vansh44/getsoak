@@ -20,6 +20,7 @@ import {
   Check,
   Loader2,
   PackageCheck,
+  Repeat,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -118,9 +119,11 @@ export function ReturnsQueueView({
         if (res.error) toast.error(res.error);
         else {
           toast.success(
-            res.restocked
-              ? `Booked in. ${res.restocked} line${res.restocked === 1 ? "" : "s"} back on the shelf.`
-              : "Booked in.",
+            res.exchangeOrderId
+              ? "Booked in — the replacement order is on its way."
+              : res.restocked
+                ? `Booked in. ${res.restocked} line${res.restocked === 1 ? "" : "s"} back on the shelf.`
+                : "Booked in.",
           );
           router.refresh();
         }
@@ -197,6 +200,14 @@ export function ReturnsQueueView({
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20">
                           <AlertTriangle className="h-3 w-3" />
                           Our fault — no fees
+                        </span>
+                      )}
+                      {/* An exchange keeps the sale — it costs the store far
+                          less than a refund, so it's worth seeing at a glance. */}
+                      {r.exchangeLines > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-600/20">
+                          <Repeat className="h-3 w-3" />
+                          Exchange
                         </span>
                       )}
                       {r.channel === "pos" && (
@@ -303,7 +314,11 @@ export function ReturnsQueueView({
                           href={`/dashboard/orders?q=${encodeURIComponent(r.orderRef ?? "")}`}
                           className="dash-btn dash-btn-ghost"
                         >
-                          Refund on the order
+                          {/* An even exchange owes nothing, so sending the
+                              merchant to the refund panel would be wrong. */}
+                          {r.exchangeOrderId
+                            ? "View on the order"
+                            : "Refund on the order"}
                         </Link>
                       )}
                     </div>

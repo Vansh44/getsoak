@@ -815,3 +815,14 @@ a.card:hover {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.returnSwap {
+  margin-top: 6px;
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  background: var(--sm-surface, #fff);
+  color: inherit;
+  max-width: 100%;
+}

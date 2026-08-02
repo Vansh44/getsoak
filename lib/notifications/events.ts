@@ -109,6 +109,7 @@ export const EVENT_KEYS = [
   "order.return_requested",
   "order.return_approved",
   "order.return_rejected",
+  "order.exchange_ready",
   "order.ready_for_pickup",
   "order.collected",
   "order.pickup_expiring",
@@ -303,6 +304,15 @@ export const EVENTS: readonly EventDef[] = [
     group: "Orders",
     section: "orders",
     severity: "warning",
+    audiences: { "store-admins": IN_APP, customer: BOTH },
+  },
+  {
+    key: "order.exchange_ready",
+    label: "Exchange on its way",
+    description: "Returned goods arrived and the replacement order was raised.",
+    group: "Orders",
+    section: "orders",
+    severity: "success",
     audiences: { "store-admins": IN_APP, customer: BOTH },
   },
 

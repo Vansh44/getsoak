@@ -234,6 +234,24 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "This item is past its 7-day return window.",
     },
   ],
+  "order.exchange_ready": [
+    {
+      name: "items",
+      description: "What's being sent out in exchange.",
+      sample: "1 item · Amul Taaza Toned Milk (1 L)",
+    },
+    {
+      name: "exchange_ref",
+      description: "The replacement order's reference.",
+      sample: "ORD10011031",
+    },
+    {
+      name: "refund_amount",
+      description:
+        "Any balance owed back when the replacement cost less. Absent on an even swap.",
+      sample: "₹150.00",
+    },
+  ],
   "order.payment_received": [
     { name: "total", description: "Amount captured.", sample: "₹1,240.00" },
   ],

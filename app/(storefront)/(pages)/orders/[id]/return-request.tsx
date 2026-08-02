@@ -27,6 +27,7 @@ import {
   wantsPhoto,
   type ReturnReason,
 } from "@/lib/returns/reasons";
+import { exchangeSettlement } from "@/lib/returns/exchange";
 import styles from "../orders.module.css";
 
 function money(n: number): string {
@@ -46,6 +47,8 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [qty, setQty] = useState<Record<string, number>>({});
+  /** Per line: the variant they want instead, or "" for a refund. */
+  const [swap, setSwap] = useState<Record<string, string>>({});
   const [reason, setReason] = useState<ReturnReason | "">("");
   const [note, setNote] = useState("");
   const [pending, startTransition] = useTransition();
@@ -78,6 +81,28 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
     [reason, goodsValue, view.restockingFeePercent, view.returnShippingFee],
   );
 
+  // What the replacements cost, at the prices the server just quoted.
+  const replacementValue = useMemo(
+    () =>
+      selectable.reduce((sum, l) => {
+        const target = swap[l.orderItemId];
+        if (!target) return sum;
+        const opt = l.swapOptions.find((o) => o.variantId === target);
+        return sum + (opt?.price ?? 0) * (qty[l.orderItemId] ?? 0);
+      }, 0),
+    [selectable, swap, qty],
+  );
+
+  const swapping = Object.values(swap).some(Boolean);
+  const settlement = useMemo(
+    () =>
+      exchangeSettlement({
+        returnValue: swapping ? goodsValue : 0,
+        replacementValue,
+      }),
+    [swapping, goodsValue, replacementValue],
+  );
+
   const picked = Object.values(qty).reduce((a, b) => a + b, 0);
   const needPhoto = wantsPhoto(reason || null, view.requirePhoto);
 
@@ -98,7 +123,11 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
           orderId: view.orderId,
           lines: Object.entries(qty)
             .filter(([, q]) => q > 0)
-            .map(([orderItemId, quantity]) => ({ orderItemId, quantity })),
+            .map(([orderItemId, quantity]) => ({
+              orderItemId,
+              quantity,
+              exchangeVariantId: swap[orderItemId] || null,
+            })),
           reasonCode: reason || undefined,
           note: note.trim() || undefined,
         });
@@ -107,12 +136,15 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
           return;
         }
         toast.success(
-          res.autoApproved
-            ? "Return approved — check your email for what to do next."
-            : "We've asked the store to review your return.",
+          res.isExchange
+            ? "We've asked the store to swap this for you."
+            : res.autoApproved
+              ? "Return approved — check your email for what to do next."
+              : "We've asked the store to review your return.",
         );
         setOpen(false);
         setQty({});
+        setSwap({});
         setReason("");
         setNote("");
         router.refresh();
@@ -225,6 +257,37 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
                       Final sale — this item can&apos;t be returned.
                     </p>
                   )}
+                  {/* Swap, offered only when the store allows exchanges and
+                      this product actually has another variant. A same-price
+                      size change is what people overwhelmingly want, and it
+                      settles to zero. */}
+                  {view.allowExchanges &&
+                    l.returnable &&
+                    l.swapOptions.length > 0 &&
+                    (qty[l.orderItemId] ?? 0) > 0 && (
+                      <select
+                        value={swap[l.orderItemId] ?? ""}
+                        onChange={(e) =>
+                          setSwap((sw) => ({
+                            ...sw,
+                            [l.orderItemId]: e.target.value,
+                          }))
+                        }
+                        className={styles.returnSwap}
+                      >
+                        <option value="">Refund me instead</option>
+                        {l.swapOptions.map((o) => (
+                          <option
+                            key={o.variantId}
+                            value={o.variantId}
+                            disabled={!o.available}
+                          >
+                            Swap for {o.name}
+                            {o.available ? "" : " — out of stock"}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                 </div>
                 <select
                   disabled={!l.returnable}
@@ -303,12 +366,43 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
                   return postage.
                 </p>
               )}
-              <div className={styles.returnTotalRow}>
-                <span>You&apos;d get back</span>
-                <span>
-                  {money(Math.max(0, goodsValue - fees.totalDeduction))}
-                </span>
-              </div>
+              {swapping ? (
+                <>
+                  <div>
+                    <span>Replacement</span>
+                    <span>{money(settlement.replacementValue)}</span>
+                  </div>
+                  <div className={styles.returnTotalRow}>
+                    <span>
+                      {settlement.even ? "Nothing to pay" : "You'd get back"}
+                    </span>
+                    <span>
+                      {settlement.even
+                        ? "₹0.00"
+                        : money(
+                            Math.max(
+                              0,
+                              settlement.storeOwes - fees.totalDeduction,
+                            ),
+                          )}
+                    </span>
+                  </div>
+                  {/* ★ Refused before they submit, with what to do instead —
+                      collecting a difference isn't something this can do yet. */}
+                  {!settlement.allowed && (
+                    <p className={styles.returnNote}>
+                      {settlement.blockedCopy}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className={styles.returnTotalRow}>
+                  <span>You&apos;d get back</span>
+                  <span>
+                    {money(Math.max(0, goodsValue - fees.totalDeduction))}
+                  </span>
+                </div>
+              )}
               <p className={styles.returnNote}>
                 An estimate — the store confirms the exact amount, and tax is
                 refunded on top.
@@ -328,10 +422,14 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
             <button
               type="button"
               onClick={submit}
-              disabled={working || picked <= 0}
+              disabled={working || picked <= 0 || !settlement.allowed}
               className={styles.returnSubmit}
             >
-              {working ? "Sending…" : "Request return"}
+              {working
+                ? "Sending…"
+                : swapping
+                  ? "Request exchange"
+                  : "Request return"}
             </button>
           </div>
         </div>

@@ -849,6 +849,58 @@ After PS-13.10, open the order in the dashboard.
 **Expect:** the refund panel shows what's owed. **Nothing was refunded
 automatically** — that is the design, not a missing step.
 
+## 10e. Exchanges (CODEBASE §28)
+
+Needs a product with 2+ variants. Order Settings → Accept returns AND Offer
+exchanges both on.
+
+**PS-14.1 — The swap picker appears**
+As the customer, open a delivered order and set a quantity on a line whose
+product has other variants.
+**Expect:** a "Refund me instead / Swap for …" dropdown appears under it.
+
+**PS-14.2 ★ — An even swap settles to zero**
+Swap for a same-price variant.
+**Expect:** "Nothing to pay · ₹0.00", and the button reads "Request exchange".
+
+**PS-14.3 ★ — A dearer swap is REFUSED before submitting**
+Swap for a more expensive variant.
+**Expect:** the blocked sentence naming the difference and telling them to
+place a new order, and the submit button disabled. Calling `requestReturn`
+directly is refused too.
+
+**PS-14.4 — A cheaper swap owes the customer the balance**
+**Expect:** the balance shown as coming back, and the request accepted.
+
+**PS-14.5 — An out-of-stock variant can't be chosen**
+Zero a variant's stock.
+**Expect:** it shows "— out of stock" and is disabled. Calling with its id
+directly is refused.
+
+**PS-14.6 ★ — The replacement is HELD immediately**
+Request an exchange, then check `stock_reservations`.
+**Expect:** a `held` row with `owner_type = 'exchange'`, and the variant's
+AVAILABLE stock down by the quantity while `on_hand` is unchanged.
+
+**PS-14.7 ★ — Declining gives the units back**
+Decline the request from the queue.
+**Expect:** the reservation is released. Holding stock for an exchange that
+will never happen makes that size unsellable to everyone else.
+
+**PS-14.8 — Withdrawing does the same**
+**Expect:** released.
+
+**PS-14.9 ★ — Receiving raises the replacement ORDER**
+Approve, then "Goods received".
+**Expect:** a NEW order appears in `/dashboard/orders` with payment method
+`exchange` and status `paid`, containing the swapped-for variant. The
+returned line's stock goes UP; the replacement's `on_hand` goes DOWN exactly
+once (the hold is committed, not re-reserved). The customer is notified.
+
+**PS-14.10 — A plain refund return raises nothing**
+Receive a return with no swaps.
+**Expect:** no new order, no hold committed.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

@@ -3903,6 +3903,9 @@ export const orderReturns = pgTable("order_returns", {
     withTimezone: true,
     mode: "string",
   }),
+  /** The replacement order (returns_03_exchanges.sql). An exchange is a return
+   *  PLUS a new order, never a third entity. NULL until the goods arrive. */
+  exchangeOrderId: uuid("exchange_order_id"),
 });
 
 export const orderReturnItems = pgTable("order_return_items", {
@@ -3920,6 +3923,20 @@ export const orderReturnItems = pgTable("order_return_items", {
     withTimezone: true,
     mode: "string",
   }).defaultNow(),
+  // ── Exchange target (returns_03_exchanges.sql) ──────────────────────────
+  /** What they want instead. Per LINE, so one return can mix exchanged and
+   *  refunded items. */
+  exchangeProductId: uuid("exchange_product_id"),
+  exchangeVariantId: uuid("exchange_variant_id"),
+  /** Its price WHEN THEY ASKED — re-reading it at receipt would bill them for
+   *  a repricing they were never quoted. */
+  exchangePrice: numeric("exchange_price", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  }),
+  /** stock_reservations.id — units held so the size can't sell out in transit. */
+  exchangeHoldId: uuid("exchange_hold_id"),
 });
 
 export const orderRefunds = pgTable("order_refunds", {

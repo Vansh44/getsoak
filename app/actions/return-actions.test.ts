@@ -23,6 +23,14 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
 }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
+vi.mock("@/lib/inventory/reservations", () => ({
+  holdStock: vi.fn(async () => "hold-1"),
+  commitHold: vi.fn(async () => true),
+  releaseHold: vi.fn(async () => true),
+}));
+vi.mock("@/lib/fulfilment/resolve", () => ({
+  resolveFulfilmentLocation: vi.fn(async () => "loc-1"),
+}));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 vi.mock("@/lib/db/client", () => ({
@@ -37,6 +45,11 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
 import { rateLimit } from "@/lib/rate-limit";
 import { emitEvent } from "@/lib/notifications/record";
+import {
+  commitHold,
+  holdStock,
+  releaseHold,
+} from "@/lib/inventory/reservations";
 import {
   cancelMyReturn,
   requestReturn,
@@ -65,6 +78,7 @@ function seedOrder(
     itemOver?: Record<string, unknown>;
     returnedUnits?: number;
     existing?: any[];
+    variants?: any[];
   } = {},
 ) {
   const order = {
@@ -86,6 +100,8 @@ function seedOrder(
     total: 200,
     line_discount: 0,
     tax_amount: 10,
+    product_id: "p1",
+    variant_id: "v-m",
     product_returnable: true,
     product_window: null,
     ...opts.itemOver,
@@ -94,14 +110,19 @@ function seedOrder(
     ? [{ order_item_id: "li-a", qty: opts.returnedUnits }]
     : [];
 
+  // Other variants of the same product, offered as swap targets.
+  const variants = opts.variants ?? [];
+
   dbHolder.current = makeDbMock({
     // getReturnableOrder: order → items → countReturnedUnits → existing
+    //                     → loadSwapOptions
     // then (in requestReturn) priceReturn: items → order → countReturnedUnits
     selectQueue: [
       [order],
       [item],
       returnedRows,
       opts.existing ?? [],
+      variants,
       [item],
       [order],
       returnedRows,
@@ -456,5 +477,266 @@ describe("cancelMyReturn", () => {
   it("refuses an anonymous caller", async () => {
     (getServerUser as any).mockResolvedValue(null);
     expect((await cancelMyReturn("ret-1")).error).toContain("sign in");
+  });
+});
+
+describe("requestReturn — exchanges", () => {
+  /** A large variant of the same product, in stock, same price as the medium. */
+  const LARGE = {
+    id: "v-l",
+    product_id: "p1",
+    name: "1 L",
+    base_price: 100,
+    selling_price: 100,
+    track_inventory: true,
+    stock: 5,
+    allow_backorder: false,
+  };
+
+  function swapReq(variantId: string | null = "v-l") {
+    return {
+      orderId: "o1",
+      lines: [
+        { orderItemId: "li-a", quantity: 1, exchangeVariantId: variantId },
+      ],
+      reasonCode: "size_fit",
+    };
+  }
+
+  it("records the swap target and holds the replacement", async () => {
+    seedOrder({ variants: [LARGE] });
+    const res = await requestReturn(swapReq());
+
+    expect(res.error).toBeUndefined();
+    expect(res.isExchange).toBe(true);
+
+    const items = dbHolder.current.calls.values[1];
+    expect(items[0].exchangeVariantId).toBe("v-l");
+    expect(items[0].exchangeProductId).toBe("p1");
+    // ★ Snapshotted — re-reading it at receipt would bill them for a
+    // repricing they were never quoted.
+    expect(items[0].exchangePrice).toBe(100);
+
+    // ★ Held at REQUEST time, so the size can't sell out in transit.
+    expect(holdStock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: "p1",
+        variantId: "v-l",
+        quantity: 1,
+        owner: "exchange",
+        ownerId: "ret-1",
+      }),
+    );
+  });
+
+  it("★ REFUSES a swap for something dearer", async () => {
+    // Collecting the difference is a payment flow that doesn't exist outside
+    // checkout. Refused with a sentence saying what to do instead.
+    seedOrder({ variants: [{ ...LARGE, selling_price: 250 }] });
+    const res = await requestReturn(swapReq());
+    expect(res.error).toContain("more than what you're sending back");
+    expect(res.error).toContain("new order");
+    expect(holdStock).not.toHaveBeenCalled();
+  });
+
+  it("allows a swap for something CHEAPER — the store owes the difference", async () => {
+    seedOrder({ variants: [{ ...LARGE, selling_price: 60 }] });
+    const res = await requestReturn(swapReq());
+    expect(res.error).toBeUndefined();
+    expect(res.isExchange).toBe(true);
+  });
+
+  it("★ REFUSES a variant that isn't a real option for this product", async () => {
+    // Validated against the SERVER's option list — a client-supplied id could
+    // otherwise name another store's product entirely.
+    seedOrder({ variants: [LARGE] });
+    const res = await requestReturn(swapReq("v-someone-elses"));
+    expect(res.error).toContain("isn't available");
+    expect(holdStock).not.toHaveBeenCalled();
+  });
+
+  it("★ REFUSES a swap for something out of stock", async () => {
+    // Offering it would be a promise the store can't keep, made when the
+    // customer is already unhappy.
+    seedOrder({ variants: [{ ...LARGE, stock: 0 }] });
+    const res = await requestReturn(swapReq());
+    expect(res.error).toContain("out of stock");
+    expect(holdStock).not.toHaveBeenCalled();
+  });
+
+  it("allows an out-of-stock variant that's backorderable", async () => {
+    seedOrder({ variants: [{ ...LARGE, stock: 0, allow_backorder: true }] });
+    expect((await requestReturn(swapReq())).error).toBeUndefined();
+  });
+
+  it("★ refuses any swap when the store has exchanges off", async () => {
+    (getStoreSettings as any).mockResolvedValue(
+      settings({ "returns.allowExchanges": false }),
+    );
+    seedOrder({ variants: [LARGE] });
+    const res = await requestReturn(swapReq());
+    expect(res.error).toContain("doesn't offer exchanges");
+  });
+
+  it("holds nothing for a plain refund request", async () => {
+    seedOrder({ variants: [LARGE] });
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 1 }],
+      reasonCode: "changed_mind",
+    });
+    expect(res.isExchange).toBe(false);
+    expect(holdStock).not.toHaveBeenCalled();
+  });
+});
+
+describe("exchange holds are given back when it won't happen", () => {
+  function seedDecided() {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [{ hold: "hold-1" }],
+        [{ order_ref: "ORD1", customer_id: "cust-1" }],
+      ],
+      returning: [
+        {
+          id: "ret-1",
+          order_id: "o1",
+          total: 210,
+          restocking_fee: 0,
+          return_shipping_fee: 0,
+        },
+      ],
+    });
+  }
+
+  it("★ declining releases the replacement units", async () => {
+    // Holding stock for an exchange that will never happen makes that size
+    // unsellable to everyone else.
+    seedDecided();
+    await reviewReturn("ret-1", "reject", "Past the window.");
+    expect(releaseHold).toHaveBeenCalledWith("hold-1");
+  });
+
+  it("approving does NOT release them", async () => {
+    seedDecided();
+    await reviewReturn("ret-1", "approve");
+    expect(releaseHold).not.toHaveBeenCalled();
+  });
+
+  it("withdrawing releases them", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ hold: "hold-1" }]],
+      returning: [{ id: "ret-1", order_id: "o1" }],
+    });
+    await cancelMyReturn("ret-1");
+    expect(releaseHold).toHaveBeenCalledWith("hold-1");
+  });
+});
+
+describe("receiveReturn — the replacement order", () => {
+  function seedExchangeReceipt() {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        // receiveReturn's own items
+        [
+          {
+            id: "rri-1",
+            order_item_id: "li-a",
+            quantity: 1,
+            product_id: "p1",
+            variant_id: "v-m",
+          },
+        ],
+        // createExchangeOrder: return items → original order → variant names
+        [
+          {
+            id: "rri-1",
+            quantity: 1,
+            product_id: "p1",
+            variant_id: "v-l",
+            price: 100,
+            hold_id: "hold-1",
+            name: "Amul Taaza Toned Milk",
+          },
+        ],
+        [
+          {
+            customer_id: "cust-1",
+            shipping_address: {},
+            billing_address: {},
+            order_ref: "ORD1",
+            currency: "INR",
+          },
+        ],
+        [{ id: "v-l", name: "1 L" }],
+        [{ order_ref: "ORD-NEW" }],
+      ],
+      returning: [{ id: "ret-1", order_id: "o1", location_id: null }],
+    });
+  }
+
+  it("★ raises a replacement ORDER, not a third kind of thing", async () => {
+    seedExchangeReceipt();
+    const res = await receiveReturn("ret-1", []);
+
+    expect(res.ok).toBe(true);
+    // An ordinary orders row, so every existing reader picks it up.
+    const orderRow = dbHolder.current.calls.values.find(
+      (v: any) => v && !Array.isArray(v) && "paymentStatus" in v,
+    );
+    expect(orderRow).toMatchObject({
+      paymentMethod: "exchange",
+      paymentStatus: "paid",
+      total: 100,
+      // ★ Nothing to release on cancel: the units were HELD, and committing
+      // the hold is the stock movement.
+      stockStatus: "none",
+    });
+  });
+
+  it("★ commits the hold against the new order — units leave the shelf ONCE", async () => {
+    seedExchangeReceipt();
+    await receiveReturn("ret-1", []);
+    expect(commitHold).toHaveBeenCalledWith("hold-1", expect.any(String));
+  });
+
+  it("tells the customer their exchange is on its way", async () => {
+    seedExchangeReceipt();
+    await receiveReturn("ret-1", []);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "order.exchange_ready" }),
+    );
+  });
+
+  it("raises nothing for a plain refund return", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "rri-1",
+            order_item_id: "li-a",
+            quantity: 1,
+            product_id: "p1",
+            variant_id: null,
+          },
+        ],
+        // No swap targets on any line.
+        [
+          {
+            id: "rri-1",
+            quantity: 1,
+            product_id: null,
+            variant_id: null,
+            price: null,
+            hold_id: null,
+            name: "Milk",
+          },
+        ],
+      ],
+      returning: [{ id: "ret-1", order_id: "o1", location_id: null }],
+    });
+    const res = await receiveReturn("ret-1", []);
+    expect(res.exchangeOrderId).toBeUndefined();
+    expect(commitHold).not.toHaveBeenCalled();
   });
 });

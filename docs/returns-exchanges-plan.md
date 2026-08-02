@@ -1,7 +1,7 @@
 # Returns, exchanges & refunds — the design
 
-**Status:** design, with **Steps 1–3 built** — see §9 (refunds), §10
-(cancellation), §11 (returns config), §12 (the request flow).
+**Status:** design, with **Steps 1–4 built** — see §9 (refunds), §10
+(cancellation), §11 (returns config), §12 (the request flow), §13 (exchanges).
 **Slots into:** `docs/roadmap.md` Steps 2 (refunds), 3 (returns), 4 (store credit).
 **Depends on:** `CODEBASE.md` §12 (checkout), §17 (tax/invoices), §18 (Razorpay),
 §22 (POS), §23 (locations), §24 (notifications), §25 (policies).
@@ -755,3 +755,88 @@ destroys stock), and exchanges (Step 4).
 
 **Never run in a browser**, and no return has been taken end to end.
 New acceptance cases: PS-13.1 – PS-13.14.
+
+---
+
+## 13. Step 4 — what shipped
+
+Exchanges. A shopper can swap a line for another variant of the same product,
+the units are held from the moment they ask, and the replacement order is
+raised when the goods arrive.
+
+**Migration** `supabase/returns_03_exchanges.sql` —
+`order_returns.exchange_order_id` plus, per line,
+`exchange_product_id` / `exchange_variant_id` / `exchange_price` /
+`exchange_hold_id`.
+
+★ **An exchange is a return PLUS a new order, not a third entity.** Shopify
+models it this way and the reason is structural: a distinct `exchanges` table
+means every stock path, tax calculation, invoice, report and customer-history
+query grows an "…or exchange" branch forever. Here it is two rows that already
+exist and one foreign key between them — so the orders list, the invoice and
+fulfilment routing all pick the replacement up with no changes at all.
+
+**The target is per LINE.** "Send back the medium, I want the large" is a
+statement about one line, not the basket, so one return can mix exchanged and
+refunded items.
+
+**★ THE PRICE IS SNAPSHOTTED AT REQUEST TIME.** Weeks pass between someone
+asking and the parcel arriving. Re-reading the price at receipt would mean a
+customer quoted "no extra charge" being billed the difference because the store
+repriced in the meantime. The variant NAME is read fresh, because a name
+changing is cosmetic — that asymmetry is the point.
+
+### The v1 boundary, and why it's arithmetic rather than a flag
+
+★ **A replacement may not cost MORE than what's coming back.**
+`lib/returns/exchange.ts` (pure, 10 tests) computes the settlement and refuses
+a dearer swap with a sentence telling the shopper to place a new order instead.
+
+Collecting a difference is a payment flow that does not exist outside checkout
+— it needs a Razorpay payment link, or an order left unpaid that somebody has
+to chase. Half-building it produces replacement orders sitting in `pending`
+forever, which is worse than not offering it.
+
+It is deliberately the **arithmetic** that decides, not a feature flag:
+`customerOwes` is still computed when the swap is refused, so the day a
+payment-link flow exists the number to charge is already there. Same-price
+swaps — the 80% case — settle to zero and need none of it. Cheaper swaps are
+allowed and the balance goes back through the ordinary refund path.
+
+### Stock: held at REQUEST, committed at RECEIPT
+
+★ **Held when they ask, not when the merchant approves.** Otherwise the size
+they swapped for sells out while the parcel is in transit and the exchange
+fails at the last step — the worst possible moment to discover it. A hold
+doesn't take units off the shelf (`locations_04`); it stops them being promised
+twice. `resolveFulfilmentLocation` picks where, so an exchange can't hold stock
+at a shop that never fulfils online.
+
+Released on **decline** and on **withdrawal** — holding units for an exchange
+that will never happen makes that size unsellable to everyone else. The TTL
+sweep is the backstop. Committed against the new order at receipt, so the units
+leave the shelf exactly once.
+
+### Three things the replacement order must NOT do (§4.2, now enforced)
+
+- **No coupon.** The original order consumed that promotion; the replacement
+  inherits the price paid, not the code.
+- **No second reservation.** `stock_status: 'none'` on the new order, because
+  committing the hold IS the stock movement. Reserving again would take the
+  same units twice.
+- **No netted tax.** The replacement is taxed at its own class and today's
+  rate; the returned lines' tax is refunded from their snapshot. Different
+  transactions with the government, so the settlement compares GOODS values
+  only.
+
+`payment_method: 'exchange'`, `payment_status: 'paid'` — already paid for, by
+the goods that came back. It must never show up as unpaid revenue to chase.
+
+**Deliberately deferred:** shipping the replacement BEFORE the goods return
+(an advance exchange needs a card hold, and there's no hold primitive here —
+the merchant can always send one early by hand), and cross-product swaps, which
+are a pricing minefield when a size or colour change is what people actually
+want.
+
+**New event** `order.exchange_ready`, emitted when the replacement order is
+raised. **Never run in a browser.** New acceptance cases: PS-14.1 – PS-14.10.

@@ -342,7 +342,10 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
-│   ├── returns/               # ★ §28: reasons.ts (the eight-reason vocabulary +
+│   ├── returns/               # ★ §28: exchange.ts (settlement + the v1 boundary —
+│   │                          # a replacement may not cost MORE, because collecting a
+│   │                          # difference is a payment flow that doesn't exist yet),
+│   │                          # reasons.ts (the eight-reason vocabulary +
 │   │                          # feesFor — merchantFault WAIVES fees wholesale, and
 │   │                          # the deduction is capped at the goods value so a
 │   │                          # refund can never go negative) + eligibility.ts (the
@@ -596,6 +599,9 @@ wholesip/
 │   ├── payment_providers.sql  # ★ store_payment_providers (BYO Razorpay creds,
 │   │                          # service-role only, app-layer encrypted secret) — §18
 │   ├── payments_01_orders.sql # ★ orders.razorpay_order_id/payment_id + indexes — §18
+│   ├── returns_03_exchanges.sql # ★ §28: order_returns.exchange_order_id + per-line
+│   │                          # exchange_product/variant/price/hold. An exchange is a
+│   │                          # return PLUS a new order, never a third entity
 │   ├── returns_02_requests.sql # ★ §28: the order_returns LIFECYCLE (requested →
 │   │                          # approved → received → completed) + channel/reason_code/
 │   │                          # photos/fee snapshots/review fields, and customer SELECT
@@ -2591,9 +2597,40 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `pos_08_customer_order_store_scope.sql` pairing — a Firebase uid is
         global. Writes stay service-role.
       - **Not built:** photo upload (column + sanitiser + dashboard rendering
-        exist; the storefront only warns one may be asked for), per-line
-        damaged marking at receipt (books in as sellable, like the till), and
-        exchanges (Step 4).
+        exist; the storefront only warns one may be asked for), and per-line
+        damaged marking at receipt (books in as sellable, like the till).
+    - **★ AN EXCHANGE IS A RETURN PLUS A NEW ORDER** (`returns_03_exchanges.sql`,
+      `lib/returns/exchange.ts`). A distinct `exchanges` table would add an
+      "…or exchange" branch to every stock path, tax calculation, invoice and
+      report forever; as two existing rows and one FK, the orders list, the
+      invoice and fulfilment routing pick the replacement up unchanged. The
+      target is per LINE, so one return can mix swapped and refunded items.
+      - **★ A REPLACEMENT MAY NOT COST MORE.** Collecting a difference is a
+        payment flow that doesn't exist outside checkout; half-building it
+        leaves replacement orders `pending` forever. Refused at request time
+        with a sentence telling the shopper to place a new order. It is the
+        ARITHMETIC that decides, not a flag — `customerOwes` is still computed,
+        so a future payment-link flow already has its number. Same-price swaps
+        (the common case) settle to zero; cheaper ones refund the balance.
+      - **★ THE PRICE IS SNAPSHOTTED AT REQUEST**, because weeks pass before
+        the parcel arrives and re-reading it would bill someone for a
+        repricing they were never quoted. The variant NAME is read fresh — a
+        name change is cosmetic, which is why the asymmetry is deliberate.
+      - **★ STOCK IS HELD WHEN THEY ASK, not when the merchant approves**, or
+        the size sells out in transit and the exchange fails at the last step.
+        A hold doesn't empty the shelf, it stops units being promised twice.
+        Released on decline and withdrawal; committed against the new order at
+        receipt, so units leave exactly once. `stock_status: 'none'` on the
+        replacement — committing the hold IS the movement, and reserving again
+        would take the same units twice.
+      - **No coupon, no netted tax.** The replacement inherits the price paid,
+        not the code; it is taxed at its own class while the return's tax is
+        refunded from its snapshot. `payment_method: 'exchange'`,
+        `payment_status: 'paid'` — paid for by the goods that came back, and it
+        must never read as unpaid revenue to chase.
+      - **Not built:** shipping the replacement BEFORE the return arrives (an
+        advance exchange needs a card hold, and there is no hold primitive),
+        and cross-product swaps.
 
 ## 6. Commands
 

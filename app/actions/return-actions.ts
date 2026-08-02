@@ -53,6 +53,18 @@ import {
   type ReturnEligibility,
 } from "@/lib/returns/eligibility";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import {
+  commitHold,
+  holdStock,
+  releaseHold,
+} from "@/lib/inventory/reservations";
+import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
+import {
+  exchangeSettlement,
+  isExchange,
+  type ExchangeLineRequest,
+} from "@/lib/returns/exchange";
+import { productVariants } from "@/drizzle/schema";
 
 // ---------------------------------------------------------------------------
 // Shared shapes
@@ -69,6 +81,21 @@ export interface ReturnableLineView {
   unitPrice: number;
   /** FALSE = final sale, this line can never come back. */
   returnable: boolean;
+  /** Which variant this line was, so the picker can grey it out. */
+  variantId: string | null;
+  productId: string | null;
+  /** Other variants of the SAME product, for a size/colour swap. Empty when
+   *  the store has exchanges off or the product has no variants. */
+  swapOptions: SwapOption[];
+}
+
+export interface SwapOption {
+  variantId: string;
+  name: string;
+  price: number;
+  /** Sellable right now. A swap for something out of stock is a promise the
+   *  store can't keep, so the picker disables it. */
+  available: boolean;
 }
 
 export interface ReturnableOrderView {
@@ -83,6 +110,8 @@ export interface ReturnableOrderView {
   requirePhoto: boolean;
   restockingFeePercent: number;
   returnShippingFee: number;
+  /** `returns.allowExchanges`. Off ⇒ the form offers refunds only. */
+  allowExchanges: boolean;
   /** Returns this order already has, so the page can show their status. */
   existing: ExistingReturnView[];
 }
@@ -154,6 +183,8 @@ export async function getReturnableOrder(
           total: orderItems.total,
           line_discount: orderItems.lineDiscount,
           tax_amount: orderItems.taxAmount,
+          product_id: orderItems.productId,
+          variant_id: orderItems.variantId,
           product_returnable: products.returnable,
           product_window: products.returnWindowDays,
         })
@@ -168,6 +199,17 @@ export async function getReturnableOrder(
       items.map((i) => i.id),
     );
     const existing = await loadExistingReturns(identity, orderId);
+
+    // Swap targets — only when the store offers exchanges, and only ever
+    // OTHER variants of the SAME product. Cross-product swaps are a different
+    // feature (and a pricing minefield); a size or colour change is what
+    // people actually want.
+    const allowExchanges = settings["returns.allowExchanges"] === true;
+    const swapsByProduct = allowExchanges
+      ? await loadSwapOptions(
+          items.map((i) => i.product_id).filter((id): id is string => !!id),
+        )
+      : new Map<string, SwapOption[]>();
 
     // Order-level eligibility uses the store's window; a per-product override
     // is applied per line below, because "eligible" is not one answer for a
@@ -217,6 +259,13 @@ export async function getReturnableOrder(
             }),
             unitPrice: Number(i.price) || 0,
             returnable: lineEligible.eligible,
+            variantId: i.variant_id,
+            productId: i.product_id,
+            // The line's own variant is dropped: swapping something for
+            // itself is not an exchange.
+            swapOptions: (swapsByProduct.get(i.product_id ?? "") ?? []).filter(
+              (o: SwapOption) => o.variantId !== i.variant_id,
+            ),
           };
         }),
         requireReason: settings["returns.requireReason"] === true,
@@ -224,6 +273,7 @@ export async function getReturnableOrder(
         restockingFeePercent:
           Number(settings["returns.restockingFeePercent"]) || 0,
         returnShippingFee: Number(settings["returns.returnShippingFee"]) || 0,
+        allowExchanges,
         existing,
       },
     };
@@ -231,6 +281,58 @@ export async function getReturnableOrder(
     logError("returns: getReturnableOrder", err, { orderId });
     return { error: dbErrorMessage(err, "Couldn't load that order.") };
   }
+}
+
+/**
+ * Other variants of the given products, with whether they can actually be
+ * sent right now.
+ *
+ * ★ Availability matters more here than on a product page: offering a swap for
+ * something out of stock is a promise the store cannot keep, made at the exact
+ * moment a customer is already unhappy. `allow_backorder` still counts as
+ * available — the merchant said so.
+ */
+async function loadSwapOptions(
+  productIds: string[],
+): Promise<Map<string, SwapOption[]>> {
+  const out = new Map<string, SwapOption[]>();
+  const ids = Array.from(new Set(productIds));
+  if (ids.length === 0) return out;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: productVariants.id,
+          product_id: productVariants.productId,
+          name: productVariants.name,
+          base_price: productVariants.basePrice,
+          selling_price: productVariants.sellingPrice,
+          track_inventory: productVariants.trackInventory,
+          stock: productVariants.onlineStock,
+          allow_backorder: productVariants.allowBackorder,
+        })
+        .from(productVariants)
+        .where(inArray(productVariants.productId, ids))
+        .orderBy(asc(productVariants.sortOrder)),
+    );
+    for (const r of rows) {
+      const list = out.get(r.product_id) ?? [];
+      const selling = Number(r.selling_price) || 0;
+      list.push({
+        variantId: r.id,
+        name: r.name,
+        price: selling > 0 ? selling : Number(r.base_price) || 0,
+        available:
+          !r.track_inventory || r.allow_backorder || (Number(r.stock) || 0) > 0,
+      });
+      out.set(r.product_id, list);
+    }
+  } catch (err) {
+    // Degrade to "no swaps offered" rather than breaking the return form —
+    // a refund is still available, which is the more important path.
+    logError("returns: loadSwapOptions", err);
+  }
+  return out;
 }
 
 /**
@@ -321,6 +423,9 @@ async function loadExistingReturns(
 export interface RequestReturnLine {
   orderItemId: string;
   quantity: number;
+  /** Swap this line for another variant of the same product instead of
+   *  refunding it. Omit for a plain return. */
+  exchangeVariantId?: string | null;
 }
 
 export interface RequestReturnResult {
@@ -329,6 +434,8 @@ export interface RequestReturnResult {
   autoApproved?: boolean;
   /** What they'd get back, after fees. Display only. */
   refundAmount?: number;
+  /** TRUE when at least one line is a swap rather than a refund. */
+  isExchange?: boolean;
   error?: string;
 }
 
@@ -384,7 +491,13 @@ export async function requestReturn(input: {
   }
 
   const lineById = new Map(view.lines.map((l) => [l.orderItemId, l]));
+  const allowExchanges = view.allowExchanges;
   const requested: RequestReturnLine[] = [];
+  /** Per line: what they want instead, if anything. */
+  const swaps = new Map<
+    string,
+    { variantId: string | null; productId: string | null; price: number | null }
+  >();
   for (const l of input.lines) {
     const line = lineById.get(l.orderItemId);
     if (!line) continue;
@@ -400,7 +513,39 @@ export async function requestReturn(input: {
         error: `"${line.name}" can't be returned.`,
       };
     }
+    // ── Swap target ──────────────────────────────────────────────────────
+    // Validated against the options the SERVER computed, never against what
+    // the form claimed: a variant id from the client could otherwise name
+    // another store's product, an unpublished one, or one that's sold out.
+    let swapVariantId: string | null = null;
+    let swapPrice: number | null = null;
+    if (l.exchangeVariantId) {
+      if (!allowExchanges) {
+        return { error: "This store doesn't offer exchanges." };
+      }
+      const option = line.swapOptions.find(
+        (o) => o.variantId === l.exchangeVariantId,
+      );
+      if (!option) {
+        return {
+          error: `That swap isn't available for "${line.name}".`,
+        };
+      }
+      if (!option.available) {
+        return {
+          error: `"${option.name}" is out of stock — choose another, or ask for a refund instead.`,
+        };
+      }
+      swapVariantId = option.variantId;
+      swapPrice = option.price;
+    }
+
     requested.push({ orderItemId: l.orderItemId, quantity: qty });
+    swaps.set(l.orderItemId, {
+      variantId: swapVariantId,
+      productId: swapVariantId ? line.productId : null,
+      price: swapPrice,
+    });
   }
   if (requested.length === 0) {
     return { error: "Nothing on this order is still returnable." };
@@ -414,6 +559,33 @@ export async function requestReturn(input: {
   );
   if (!breakdown || breakdown.total <= 0) {
     return { error: "Nothing on this order is still returnable." };
+  }
+
+  // ── Exchange settlement ──────────────────────────────────────────────────
+  // ★ A replacement may not cost MORE than what's coming back (v1 boundary —
+  // see lib/returns/exchange.ts). Collecting a difference is a payment flow
+  // that doesn't exist outside checkout, and half-building it leaves
+  // replacement orders unpaid forever. Refused here with a sentence telling
+  // the shopper what to do instead.
+  const exchangeLines: ExchangeLineRequest[] = requested.map((r) => ({
+    orderItemId: r.orderItemId,
+    quantity: r.quantity,
+    exchangeVariantId: swaps.get(r.orderItemId)?.variantId ?? null,
+  }));
+  const swapping = isExchange(exchangeLines);
+  const replacementValue = requested.reduce((sum, r) => {
+    const swap = swaps.get(r.orderItemId);
+    return sum + (swap?.price ?? 0) * r.quantity;
+  }, 0);
+  const settlement = exchangeSettlement({
+    // Against the GOODS value, excluding tax: tax is recomputed on the
+    // replacement at its own rate and refunded on the return from its
+    // snapshot. The two are different transactions with the government.
+    returnValue: swapping ? breakdown.amount : 0,
+    replacementValue,
+  });
+  if (swapping && !settlement.allowed) {
+    return { error: settlement.blockedCopy ?? "That exchange isn't possible." };
   }
 
   // ★ AUTO-APPROVE NEVER COVERS A FAULT CLAIM.
@@ -457,23 +629,42 @@ export async function requestReturn(input: {
       const id = inserted[0]!.id;
 
       await db.insert(orderReturnItems).values(
-        breakdown.lines.map((l) => ({
-          returnId: id,
-          orderItemId: l.id,
-          quantity: l.quantity,
-          amount: l.amount,
-          tax: l.tax,
-          total: l.total,
-          // Decided when the goods are actually in front of someone.
-          condition: "sellable",
-          restocked: false,
-        })),
+        breakdown.lines.map((l) => {
+          const swap = swaps.get(l.id);
+          return {
+            returnId: id,
+            orderItemId: l.id,
+            quantity: l.quantity,
+            amount: l.amount,
+            tax: l.tax,
+            total: l.total,
+            // Decided when the goods are actually in front of someone.
+            condition: "sellable",
+            restocked: false,
+            exchangeProductId: swap?.productId ?? null,
+            exchangeVariantId: swap?.variantId ?? null,
+            // Snapshotted: weeks pass before the parcel arrives, and
+            // re-reading the price at receipt would bill them for a
+            // repricing they were never quoted.
+            exchangePrice: swap?.price ?? null,
+          };
+        }),
       );
       return id;
     });
   } catch (err) {
     logError("returns: requestReturn", err, { orderId });
     return { error: dbErrorMessage(err, "Couldn't start that return.") };
+  }
+
+  // ── Put the replacement aside ────────────────────────────────────────────
+  // ★ Held at REQUEST time, not at approval: otherwise the size they swapped
+  // for sells out while the parcel is in transit and the exchange fails at the
+  // last step, which is the worst possible moment to discover it. A hold does
+  // not take units off the shelf — it just stops them being promised twice
+  // (locations_04). Released on reject, withdrawal, or the TTL sweep.
+  if (swapping) {
+    await holdExchangeStock(storeId, returnId, breakdown.lines, swaps);
   }
 
   const refundAmount = Math.max(0, breakdown.total - fees.totalDeduction);
@@ -497,7 +688,264 @@ export async function requestReturn(input: {
   });
 
   revalidatePath(`/orders/${orderId}`);
-  return { returnId, autoApproved: autoApprove, refundAmount };
+  return {
+    returnId,
+    autoApproved: autoApprove,
+    refundAmount,
+    isExchange: swapping,
+  };
+}
+
+/**
+ * Reserve the swapped-for units, and record which reservation belongs to which
+ * line so receiving can commit exactly those and rejecting can release them.
+ *
+ * Best-effort per line: a hold that can't be placed (the location genuinely
+ * hasn't got it) must not fail the whole request — the merchant sees the
+ * exchange in the queue and can sort it out, which beats refusing a customer
+ * who has already decided what they want.
+ */
+async function holdExchangeStock(
+  storeId: string,
+  returnId: string,
+  lines: { id: string; quantity: number }[],
+  swaps: Map<
+    string,
+    { variantId: string | null; productId: string | null; price: number | null }
+  >,
+): Promise<void> {
+  for (const line of lines) {
+    const swap = swaps.get(line.id);
+    if (!swap?.variantId || !swap.productId) continue;
+
+    // Where the replacement would ship FROM — the same routing checkout uses,
+    // so an exchange can't hold stock at a shop that never fulfils online.
+    const locationId = await resolveFulfilmentLocation(storeId, [
+      {
+        productId: swap.productId,
+        variantId: swap.variantId,
+        quantity: line.quantity,
+        needsStock: true,
+      },
+    ]);
+    if (!locationId) continue;
+
+    const holdId = await holdStock({
+      storeId,
+      locationId,
+      productId: swap.productId,
+      variantId: swap.variantId,
+      quantity: line.quantity,
+      owner: "exchange",
+      ownerId: returnId,
+    });
+    if (!holdId) continue;
+
+    await withService((db) =>
+      db
+        .update(orderReturnItems)
+        .set({ exchangeHoldId: holdId })
+        .where(
+          and(
+            eq(orderReturnItems.returnId, returnId),
+            eq(orderReturnItems.orderItemId, line.id),
+          ),
+        ),
+    ).catch((err) =>
+      logError("returns: exchange hold write", err, { returnId }),
+    );
+  }
+}
+
+/**
+ * Raise the replacement order for an exchange, and commit the holds it has
+ * been sitting on.
+ *
+ * ★ AN EXCHANGE IS A RETURN PLUS A NEW ORDER. This is the "new order" half —
+ * an ordinary `orders` row, so every existing reader (the orders list, the
+ * invoice, the customer's history, fulfilment routing) picks it up with no
+ * "…or exchange" branch anywhere.
+ *
+ * Three things it deliberately does NOT do (§4.2):
+ *   • **No coupon.** The original order consumed that promotion; the
+ *     replacement inherits the PRICE PAID, not the code.
+ *   • **No second reservation.** The units have been held since the request —
+ *     committing the hold IS the stock movement. Reserving again would take
+ *     the same units off the shelf twice.
+ *   • **No netting of tax.** The replacement is taxed at its own class and
+ *     today's rate; the returned lines' tax is refunded from their snapshot.
+ *     Different transactions with the government.
+ *
+ * Returns the new order id, or null when this return wasn't an exchange.
+ */
+async function createExchangeOrder(
+  storeId: string,
+  returnId: string,
+  originalOrderId: string,
+  admin: { uid: string; email: string | null },
+): Promise<string | null> {
+  try {
+    const lines = await withService((db) =>
+      db
+        .select({
+          id: orderReturnItems.id,
+          quantity: orderReturnItems.quantity,
+          product_id: orderReturnItems.exchangeProductId,
+          variant_id: orderReturnItems.exchangeVariantId,
+          price: orderReturnItems.exchangePrice,
+          hold_id: orderReturnItems.exchangeHoldId,
+          name: orderItems.name,
+        })
+        .from(orderReturnItems)
+        .innerJoin(orderItems, eq(orderItems.id, orderReturnItems.orderItemId))
+        .where(eq(orderReturnItems.returnId, returnId)),
+    );
+    const swaps = lines.filter((l) => l.variant_id && l.product_id);
+    if (swaps.length === 0) return null;
+
+    const original = await withService((db) =>
+      db
+        .select({
+          customer_id: orders.customerId,
+          shipping_address: orders.shippingAddress,
+          billing_address: orders.billingAddress,
+          order_ref: orders.orderRef,
+          currency: orders.currency,
+        })
+        .from(orders)
+        .where(eq(orders.id, originalOrderId))
+        .limit(1),
+    );
+    const src = original[0];
+    if (!src) return null;
+
+    // Variant names for the new lines. Read now rather than snapshotted at
+    // request time because a NAME changing is cosmetic — unlike the price,
+    // which is why that one is frozen.
+    const variantRows = await withService((db) =>
+      db
+        .select({ id: productVariants.id, name: productVariants.name })
+        .from(productVariants)
+        .where(
+          inArray(
+            productVariants.id,
+            swaps.map((s) => s.variant_id!),
+          ),
+        ),
+    );
+    const variantName = new Map(variantRows.map((v) => [v.id, v.name]));
+
+    const subtotal = swaps.reduce(
+      (sum, l) => sum + (Number(l.price) || 0) * l.quantity,
+      0,
+    );
+
+    const newOrderId = await withService(async (db) => {
+      const inserted = await db
+        .insert(orders)
+        .values({
+          storeId,
+          customerId: src.customer_id,
+          status: "processing",
+          // Already paid for — by the goods that came back. Not a sale, and
+          // must never appear as unpaid revenue to chase.
+          paymentMethod: "exchange",
+          paymentStatus: "paid",
+          shippingAddress: src.shipping_address,
+          billingAddress: src.billing_address,
+          subtotal,
+          tax: 0,
+          shipping: 0,
+          discount: 0,
+          total: subtotal,
+          currency: src.currency ?? "INR",
+          notes: `Exchange for ${src.order_ref ?? originalOrderId}`,
+          // The units were HELD, not reserved — committing the hold below is
+          // the stock movement, so there is nothing for a cancel to release.
+          stockStatus: "none",
+        } as typeof orders.$inferInsert)
+        .returning({ id: orders.id });
+      const id = inserted[0]!.id;
+
+      await db.insert(orderItems).values(
+        swaps.map((l) => ({
+          orderId: id,
+          productId: l.product_id!,
+          variantId: l.variant_id,
+          name: l.name,
+          variantName: variantName.get(l.variant_id!) ?? null,
+          quantity: l.quantity,
+          price: Number(l.price) || 0,
+          total: (Number(l.price) || 0) * l.quantity,
+        })),
+      );
+      return id;
+    });
+
+    // Commit the holds against the new order — this is where the units
+    // actually leave the shelf, exactly once.
+    for (const l of swaps) {
+      if (l.hold_id) await commitHold(l.hold_id, newOrderId);
+    }
+
+    await withService((db) =>
+      db
+        .update(orderReturns)
+        .set({ exchangeOrderId: newOrderId })
+        .where(eq(orderReturns.id, returnId)),
+    );
+
+    const newRef = await withService((db) =>
+      db
+        .select({ order_ref: orders.orderRef })
+        .from(orders)
+        .where(eq(orders.id, newOrderId))
+        .limit(1),
+    );
+
+    emitEvent({
+      type: "order.exchange_ready",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: {
+        type: "order",
+        id: newOrderId,
+        label: newRef[0]?.order_ref ?? null,
+      },
+      customerId: src.customer_id,
+      payload: {
+        orderRef: src.order_ref ?? "",
+        exchange_ref: newRef[0]?.order_ref ?? "",
+        currency: "INR",
+        items: swaps.reduce((n, l) => n + l.quantity, 0),
+      },
+    });
+
+    return newOrderId;
+  } catch (err) {
+    // The goods are already booked in and the return is marked received. A
+    // failed replacement order is recoverable by hand; unwinding the receipt
+    // would be worse, and would lose the restock that already happened.
+    logError("returns: createExchangeOrder", err, { returnId });
+    return null;
+  }
+}
+
+/** Give back every hold an exchange was carrying. Idempotent — releasing an
+ *  already-released reservation is a no-op, so a double reject is harmless. */
+async function releaseExchangeHolds(returnId: string): Promise<void> {
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ hold: orderReturnItems.exchangeHoldId })
+        .from(orderReturnItems)
+        .where(eq(orderReturnItems.returnId, returnId)),
+    );
+    for (const r of rows) if (r.hold) await releaseHold(r.hold);
+  } catch (err) {
+    // The TTL sweep is the backstop, so this can never block a decision.
+    logError("returns: releaseExchangeHolds", err, { returnId });
+  }
 }
 
 /** Price a set of lines and work out the deduction, from stored data only. */
@@ -613,6 +1061,7 @@ export async function cancelMyReturn(
     if (!claimed.length) {
       return { error: "That request can no longer be withdrawn." };
     }
+    await releaseExchangeHolds(returnId);
     revalidatePath(`/orders/${claimed[0]!.order_id}`);
     return { ok: true };
   } catch (err) {
@@ -644,6 +1093,11 @@ export interface ReturnQueueRow {
   itemCount: number;
   createdAt: string | null;
   reviewNote: string | null;
+  /** How many lines are swaps rather than refunds. An exchange costs the
+   *  store far less than a refund, so it's worth seeing at a glance. */
+  exchangeLines: number;
+  /** The replacement order, once the goods have arrived and it's been raised. */
+  exchangeOrderId: string | null;
 }
 
 export async function getReturnQueue(
@@ -675,6 +1129,13 @@ export async function getReturnQueue(
           return_shipping_fee: orderReturns.returnShippingFee,
           created_at: orderReturns.createdAt,
           review_note: orderReturns.reviewNote,
+          exchange_order_id: orderReturns.exchangeOrderId,
+          exchange_lines: sql<number>`(
+            select count(*)::int
+              from order_return_items ri
+             where ri.return_id = ${orderReturns.id}
+               and ri.exchange_variant_id is not null
+          )`,
           items: sql<number>`(
             select coalesce(sum(ri.quantity), 0)::int
               from order_return_items ri
@@ -710,6 +1171,8 @@ export async function getReturnQueue(
           itemCount: Number(r.items) || 0,
           createdAt: r.created_at,
           reviewNote: r.review_note,
+          exchangeLines: Number(r.exchange_lines) || 0,
+          exchangeOrderId: r.exchange_order_id,
         };
       }),
     };
@@ -774,6 +1237,10 @@ export async function reviewReturn(
       return { error: "That return has already been decided." };
     }
     const row = claimed[0]!;
+
+    // Declining frees the replacement units. Holding them for an exchange
+    // that will never happen makes the size unsellable to everyone else.
+    if (decision === "reject") await releaseExchangeHolds(returnId);
 
     const order = await withService((db) =>
       db
@@ -845,7 +1312,13 @@ export interface ReceiveLineInput {
 export async function receiveReturn(
   returnId: string,
   lines: ReceiveLineInput[],
-): Promise<{ ok?: boolean; restocked?: number; error?: string }> {
+): Promise<{
+  ok?: boolean;
+  restocked?: number;
+  /** Set when this return was an exchange and a replacement order was raised. */
+  exchangeOrderId?: string;
+  error?: string;
+}> {
   const admin = await getManagerIdentity("orders");
   if (!admin) return { error: "Not authenticated" };
   const storeId = await getActingStoreId();
@@ -952,8 +1425,23 @@ export async function receiveReturn(
       reportStockChanges(storeId, deltas);
     }
 
+    // ── The replacement order ────────────────────────────────────────────
+    // Raised HERE, not at approval: v1 does not ship before the goods arrive
+    // (there is no card-hold primitive, so an advance exchange has nothing
+    // protecting it). The merchant can always send one early by hand.
+    const exchangeOrderId = await createExchangeOrder(
+      storeId,
+      returnId,
+      ret.order_id,
+      admin,
+    );
+
     revalidatePath("/dashboard/orders/returns");
-    return { ok: true, restocked: restocked.length };
+    return {
+      ok: true,
+      restocked: restocked.length,
+      exchangeOrderId: exchangeOrderId ?? undefined,
+    };
   } catch (err) {
     logError("returns: receiveReturn", err, { returnId });
     return { error: dbErrorMessage(err, "Couldn't book that return in.") };

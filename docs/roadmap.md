@@ -157,10 +157,14 @@ card, and Final-sale badges on both PDP layouts.
 on `/orders/[id]`, the dashboard review queue at `/dashboard/orders/returns`,
 approve/reject with a mandatory decline reason, and receive-and-restock.
 
-**Still ships:** **exchanges**, and return-in-store for ONLINE orders (BORIS) at
-locations carrying the `returns` capability — which is in the registry today and
-read by nothing. Plus photo upload and per-line damaged marking, both
-deliberately deferred.
+**✅ Also done** (returns-plan Step 4, see its §13): exchanges — per-line swap
+targets, replacement stock held from the moment it's requested, and the
+replacement order raised at receipt.
+
+**Still ships:** return-in-store for ONLINE orders (BORIS) at locations
+carrying the `returns` capability — which is in the registry today and read by
+nothing. Plus photo upload, per-line damaged marking, and advance exchanges,
+all deliberately deferred.
 
 **Three gaps in the existing code this step closes:** `getReturnableSale`
 filters on `orders.location_id = operator's location`, so it can never find an
