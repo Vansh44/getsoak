@@ -618,6 +618,62 @@ on the capability change.
 
 ---
 
+## 10b. Returns at the till
+
+**PS-11.1 ★ — A cashier can't take a return**
+Sign in as a cashier → Sales.
+**Expect:** no "Return items" link, and `/pos/returns/<id>` refuses. Handing
+money back is a manager capability, like every other way to give money away.
+
+**PS-11.2 — Return part of a sale**
+Sales → a sale → Return items → "All 2" on one line → Cash → Refund.
+**Expect:** the refund equals that line's value plus its tax. Stock goes back at
+this shop, the sale stays "completed" — the customer kept the rest.
+
+**PS-11.3 ★ — The amount is recomputed server-side**
+Post a quantity larger than was sold.
+**Expect:** clamped to what remains; the refund is what those units were worth,
+never a figure from the client.
+
+**PS-11.4 ★ — A discounted sale doesn't over-refund**
+Sell with an order-level discount, then return a whole line.
+**Expect:** the refund is the line's value MINUS its share of that discount.
+`order_items.total` is gross of the order discount while `tax_amount` is net of
+it — refunding `total + tax` hands the discount back as well, on every
+discounted sale.
+
+**PS-11.5 ★ — A full return equals what was charged**
+Return every line of a discounted sale.
+**Expect:** exactly `orders.total`, to the paise. The discount is re-allocated
+the way the sale allocated it, with the remainder given to the largest lines.
+
+**PS-11.6 — Damaged units don't go back on the shelf**
+Tick "Damaged — don't restock" on a line.
+**Expect:** refunded, recorded as `damaged`, and stock is NOT increased.
+
+**PS-11.7 ★ — You can't return the same unit twice**
+Return 1 of 2, then reopen the sale.
+**Expect:** "1 returned · 1 can come back", and a second return is capped at the
+remaining unit.
+
+**PS-11.8 ★ — Cash refunds leave the drawer**
+Refund in cash, then open the shift.
+**Expect:** a "Cash refunds" row, and expected cash reduced by it. Without this
+the count comes up SHORT by the day's refunds — and a short drawer gets blamed
+on a cashier.
+
+**PS-11.9 — A card/UPI refund doesn't touch the drawer**
+Refund the same amount as Card.
+**Expect:** expected cash unchanged. The money went back through the shop's own
+card machine.
+
+**PS-11.10 — Returning everything marks the sale refunded**
+Return every remaining unit.
+**Expect:** the sale shows "Cancelled/Refunded" in the list and offers no
+further return.
+
+---
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

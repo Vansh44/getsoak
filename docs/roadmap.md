@@ -32,7 +32,7 @@ sequence; those are the specifications.**
 | —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done        |
 | **1**  | **Finish pickup + close the gaps**                                  | ⏭ next        |
 | **2**  | **Refunds & cancellation** — the money-out path                     | ⏭ blocks 3, 4 |
-| **3**  | Returns (POS 5 = LOC G)                                             | ⏳             |
+| **3**  | Returns — in-store ✅ done; BORIS waits on refunds                  | ◐ part         |
 | **4**  | Store credit & gift cards                                           | ⏳             |
 | **5**  | Metered extra-location billing (POS 7)                              | ⏳             |
 | **6**  | Channel stock policy (LOC H)                                        | ⏳             |

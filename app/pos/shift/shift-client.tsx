@@ -199,6 +199,9 @@ export function ShiftClient({
           <dl className="mt-4 space-y-1.5 text-sm">
             <Row label="Opening float" value={s.openingFloat} />
             <Row label="Cash sales" value={s.cashSales} sign="+" />
+            {s.cashRefunds > 0 && (
+              <Row label="Cash refunds" value={s.cashRefunds} sign="−" />
+            )}
             {s.paidIn > 0 && <Row label="Paid in" value={s.paidIn} sign="+" />}
             {s.payouts > 0 && (
               <Row label="Payouts" value={s.payouts} sign="−" />

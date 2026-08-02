@@ -28,8 +28,6 @@ import { EVENT_KEYS } from "./events";
 const PENDING: Record<string, string> = {
   "order.cancellation_requested":
     "Order cancellation isn't built yet (see docs/ — cancellation phase).",
-  "order.refund_issued":
-    "Refunds are out of scope until the cancellation phase (CODEBASE.md §18).",
 };
 
 /**

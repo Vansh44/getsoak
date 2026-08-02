@@ -70,7 +70,7 @@ steps:
       - --min-instances=${_MIN_INSTANCES}
       - --max-instances=4
       - --add-cloudsql-instances=${_DB_CONN}
-      - --set-env-vars=GCP_PROJECT_ID=${_GCP_PROJECT_ID},GCP_LOCATION=global,GCS_BUCKET=${_GCS_BUCKET},DB_HOST=/cloudsql/${_DB_CONN},DB_USER=app,DB_NAME=${_DB_NAME},FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID},FIREBASE_SERVICE_ACCOUNT_ID=${_FIREBASE_SA_ID},FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY},GOOGLE_SEARCH_CONSOLE_PROPERTY=${_GOOGLE_SEARCH_CONSOLE_PROPERTY},NEXT_PUBLIC_ROOT_DOMAIN=${_NEXT_PUBLIC_ROOT_DOMAIN},NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}
+      - --set-env-vars=DOMAIN_ENV=${_DOMAIN_ENV},DOMAIN_CERT_MAP=${_DOMAIN_CERT_MAP},DOMAIN_LB_IP=${_DOMAIN_LB_IP},GCP_PROJECT_ID=${_GCP_PROJECT_ID},GCP_LOCATION=global,GCS_BUCKET=${_GCS_BUCKET},DB_HOST=/cloudsql/${_DB_CONN},DB_USER=app,DB_NAME=${_DB_NAME},FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID},FIREBASE_SERVICE_ACCOUNT_ID=${_FIREBASE_SA_ID},FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY},GOOGLE_SEARCH_CONSOLE_PROPERTY=${_GOOGLE_SEARCH_CONSOLE_PROPERTY},NEXT_PUBLIC_ROOT_DOMAIN=${_NEXT_PUBLIC_ROOT_DOMAIN},NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}
       # ⚠ EVERY secret named here must EXIST in Secret Manager before the next
       # deploy — Cloud Run fails the revision outright on a missing one, so
       # adding a line here without creating the secret takes the service down.
@@ -161,6 +161,16 @@ substitutions:
   _NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: "68037646295"
   _NEXT_PUBLIC_FIREBASE_APP_ID: "1:68037646295:web:388ef47d32e39c822b1d92"
   _NEXT_PUBLIC_ROOT_DOMAIN: staging.storemink.com
+  # Custom domains (§ store-domain). DOMAIN_ENV segments the Certificate
+  # Manager resource names: staging and prod share ONE certificate map (an
+  # HTTPS proxy holds only one, and a single load balancer fronts both), so the
+  # environment lives in the NAME, and the delete guard keeps staging from ever
+  # removing a prod merchant's entry. DOMAIN_LB_IP is the reserved global
+  # address merchants point their A record at — change it here and in the
+  # forwarding rule together, or every new connection will be told a stale IP.
+  _DOMAIN_ENV: stg
+  _DOMAIN_CERT_MAP: prod-cert-map
+  _DOMAIN_LB_IP: 136.69.75.127
   _NEXT_PUBLIC_APP_URL: https://staging.storemink.com
   # Google Search Console property for the sitemap auto-submit (lib/seo). Empty
   # on staging (never indexed → the submitter is a no-op anyway). The PROD

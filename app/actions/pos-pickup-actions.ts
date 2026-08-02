@@ -10,7 +10,7 @@
 // Delhi's orders; naming another shop is not possible because the location is
 // never taken from the client.
 
-import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -56,7 +56,6 @@ export async function getPickupQueue(
           created_at: orders.createdAt,
           expires_at: orders.pickupExpiresAt,
           status: orders.pickupStatus,
-          items: sql<number>`(select count(*) from ${orderItems} where ${orderItems.orderId} = ${orders.id})`,
         })
         .from(orders)
         .where(
@@ -79,6 +78,26 @@ export async function getPickupQueue(
         .limit(100),
     );
 
+    // Counted separately, not as a correlated subquery: interpolating columns
+    // into sql`` drops their table qualification, so `where "order_id" = "id"`
+    // resolves both names inside order_items and silently counts zero.
+    const counts = new Map<string, number>();
+    if (rows.length > 0) {
+      const countRows = await withService((db) =>
+        db
+          .select({ order_id: orderItems.orderId, n: count() })
+          .from(orderItems)
+          .where(
+            inArray(
+              orderItems.orderId,
+              rows.map((r) => r.id),
+            ),
+          )
+          .groupBy(orderItems.orderId),
+      );
+      for (const c of countRows) counts.set(c.order_id, Number(c.n) || 0);
+    }
+
     return {
       orders: rows.map((r) => {
         const addr = (r.shipping_address ?? {}) as Record<string, unknown>;
@@ -89,7 +108,7 @@ export async function getPickupQueue(
           id: r.id,
           orderRef: r.order_ref ?? "",
           customerName: name,
-          itemCount: Number(r.items) || 0,
+          itemCount: counts.get(r.id) ?? 0,
           total: Number(r.total) || 0,
           placedAt: r.created_at,
           expiresAt: r.expires_at,

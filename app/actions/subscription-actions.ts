@@ -40,6 +40,8 @@ import {
 import {
   canUpdateSubscription,
   decidePlanChange,
+  hasLiveMandate,
+  cancelsAtCycleEnd,
 } from "@/lib/payments/plan-change";
 import {
   resolveBillingEmail,
@@ -101,22 +103,91 @@ export async function getSubscriptionState(): Promise<SubscriptionState> {
         cancel_at_period_end: storeSubscriptions.cancelAtPeriodEnd,
         scheduled_plan: storeSubscriptions.scheduledPlan,
         rzp_subscription_id: storeSubscriptions.rzpSubscriptionId,
+        updated_at: storeSubscriptions.updatedAt,
       })
       .from(storeSubscriptions)
       .where(eq(storeSubscriptions.storeId, storeId))
       .limit(1),
   ).catch(() => []);
   const data = rows[0];
-  const status = data?.status ?? null;
+
+  const healed = await reconcileStaleSubscription(storeId, data);
+  const status = healed?.status ?? data?.status ?? null;
+  const currentEnd = healed?.currentEnd ?? data?.current_end ?? null;
+
   return {
     plan: data?.plan ?? null,
     period: (data?.period as BillingPeriod) ?? null,
     status,
-    currentEnd: data?.current_end ?? null,
+    currentEnd,
     cancelAtPeriodEnd: !!data?.cancel_at_period_end,
     scheduledPlan: data?.scheduled_plan ?? null,
-    active: !!data?.rzp_subscription_id && !TERMINAL.has(status ?? ""),
+    active: !!data?.rzp_subscription_id && hasLiveMandate(status),
   };
+}
+
+/** How long a `created` row is trusted before we ask the gateway again. */
+const RECONCILE_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * Heal a subscription row whose status never moved off `created`.
+ *
+ * `created` is written when we build the subscription object, BEFORE the
+ * merchant sees the mandate screen. Two things normally move it on:
+ * confirmSubscription (the client callback) and the Razorpay webhook. Both can
+ * be missed — a closed tab or dropped connection loses the callback, and the
+ * webhook only heals where it is actually registered and reaching us.
+ *
+ * When that happens the row says `created` while the mandate is live and
+ * charging. That matters because `active` gates the Cancel control: without
+ * this, a paying merchant is shown no way to stop autopay, which is a worse
+ * failure than the phantom cancel button the allowlist exists to prevent.
+ *
+ * Deliberately narrow. Only a `created` row with a subscription id is worth
+ * asking about — a live or terminal status is already the answer — and the
+ * result is throttled, because an abandoned checkout stays `created` for good
+ * and would otherwise cost a gateway round-trip on every page view. Best
+ * effort throughout: a gateway hiccup returns null and the caller falls back to
+ * the stored row.
+ */
+async function reconcileStaleSubscription(
+  storeId: string,
+  row:
+    | {
+        status: string | null;
+        current_end: string | null;
+        rzp_subscription_id: string | null;
+        updated_at: string | null;
+      }
+    | undefined,
+): Promise<{ status: string; currentEnd: string | null } | null> {
+  if (!row?.rzp_subscription_id || row.status !== "created") return null;
+
+  const checkedAt = row.updated_at ? Date.parse(row.updated_at) : 0;
+  if (checkedAt && Date.now() - checkedAt < RECONCILE_AFTER_MS) return null;
+
+  const creds = getPlatformRazorpayCreds();
+  if (!creds) return null;
+
+  const fetched = await rzpFetchSubscription(creds, row.rzp_subscription_id);
+  if (!fetched.ok || !fetched.data.status) return null;
+
+  const status = fetched.data.status;
+  const currentEnd = fetched.data.current_end
+    ? new Date(fetched.data.current_end * 1000).toISOString()
+    : row.current_end;
+
+  // Written even when the status is unchanged: updated_at is what throttles the
+  // next check, so an abandoned checkout settles into one call per window
+  // instead of one per page view.
+  await withService((db) =>
+    db
+      .update(storeSubscriptions)
+      .set({ status, currentEnd, updatedAt: new Date().toISOString() })
+      .where(eq(storeSubscriptions.storeId, storeId)),
+  ).catch((err) => logError("reconcileStaleSubscription", err, { storeId }));
+
+  return { status, currentEnd };
 }
 
 export type StartSubscriptionResult =
@@ -435,6 +506,7 @@ export async function cancelSubscription(): Promise<SubscriptionActionResult> {
       .select({
         rzp_subscription_id: storeSubscriptions.rzpSubscriptionId,
         status: storeSubscriptions.status,
+        current_end: storeSubscriptions.currentEnd,
       })
       .from(storeSubscriptions)
       .where(eq(storeSubscriptions.storeId, storeId))
@@ -449,30 +521,67 @@ export async function cancelSubscription(): Promise<SubscriptionActionResult> {
     return { error: "This subscription is already cancelled." };
   }
 
-  // cancel_at_cycle_end = true → stop future charges, keep access to cycle end.
-  const res = await rzpCancelSubscription(creds, row.rzp_subscription_id, true);
+  // ── Cancel at cycle end, or now? The subscription's own state decides. ────
+  //
+  // `cancel_at_cycle_end = 1` means "stop future charges, keep what they paid
+  // for" — and Razorpay REFUSES it when no cycle is running:
+  //     "Subscription cannot be cancelled since no billing cycle is going on"
+  // which surfaced to the merchant as "Couldn't cancel the subscription."
+  // with no way forward. A cycle only exists once a charge has been made, so
+  // this hits any subscription cancelled between authorising the mandate and
+  // the first payment — not just abandoned ones.
+  //
+  // With nothing paid for, an immediate cancel takes nothing away, so the two
+  // branches mean the same thing to the merchant: no more money leaves.
+  const cycleRunning = cancelsAtCycleEnd(row.status, row.current_end);
+
+  let res = await rzpCancelSubscription(
+    creds,
+    row.rzp_subscription_id,
+    cycleRunning,
+  );
+
+  // Our status can lag the gateway (it moves on webhooks), so believe Razorpay
+  // over the local row rather than dead-ending the merchant on stale data.
+  if (!res.ok && cycleRunning && /billing cycle/i.test(res.error ?? "")) {
+    res = await rzpCancelSubscription(creds, row.rzp_subscription_id, false);
+  }
+
   if (!res.ok) {
-    console.error("cancelSubscription:", res.error);
+    logError("cancelSubscription", res.error, {
+      storeId,
+      status: row.status,
+      cycleRunning,
+    });
     return { error: "Couldn't cancel the subscription. Please try again." };
   }
 
+  // Record what actually happened. Writing cancelAtPeriodEnd on an immediate
+  // cancel would have the card promise access until a cycle end that isn't
+  // coming.
+  const endedNow = !cycleRunning;
   await withService((db) =>
     db
       .update(storeSubscriptions)
       .set({
-        cancelAtPeriodEnd: true,
-        status: res.data.status || "active",
+        cancelAtPeriodEnd: !endedNow,
+        status: res.data.status || (endedNow ? "cancelled" : "active"),
         scheduledPlan: null,
+        scheduledPeriod: null,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(storeSubscriptions.storeId, storeId)),
-  ).catch((err) => console.error("cancelSubscription (persist):", err));
+  ).catch((err) => logError("cancelSubscription (persist)", err, { storeId }));
 
-  // Access + plan_expires_at are left as-is: the store keeps its plan until the
-  // paid cycle ends, then the cron downgrades to free.
+  // Access + plan_expires_at are left as-is either way: on a cycle-end cancel
+  // the store keeps its plan until the cycle runs out and the cron downgrades
+  // it; on an immediate cancel there was no subscription-granted access to
+  // remove (an operator comp, if any, is not ours to revoke here).
   return {
     success: true,
-    message: "Autopay cancelled. You keep your plan until the cycle ends.",
+    message: endedNow
+      ? "Autopay cancelled. No payments will be taken."
+      : "Autopay cancelled. You keep your plan until the cycle ends.",
   };
 }
 

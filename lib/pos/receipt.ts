@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { gstBreakdown, type GstRateBucket } from "@/lib/billing/gst";
+import { personLabel } from "./person";
 
 export interface ReceiptLine {
   name: string;
@@ -159,7 +160,7 @@ export function buildReceiptModel(src: ReceiptSource): ReceiptModel {
     receiptNo: src.order.receipt_no || src.order.order_ref,
     orderRef: src.order.order_ref,
     soldAt: src.order.created_at,
-    cashierName: src.order.cashier_name,
+    cashierName: personLabel(src.order.cashier_name),
     lines: src.items.map((i) => ({
       name: i.name,
       variantName: i.variant_name,

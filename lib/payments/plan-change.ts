@@ -84,6 +84,44 @@ export function canUpdateSubscription(status: string | null | undefined): {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Does an authorised mandate exist?
+//
+// An ALLOWLIST, not "everything that isn't terminal". `created` is the state
+// that matters: the subscription object is made at Razorpay BEFORE the merchant
+// is shown the mandate screen, so anyone who opens the upgrade modal and closes
+// it leaves a `created` row behind permanently. Counting that as live made the
+// billing card claim a store had autopay it had never authorised, offer to
+// cancel it (which the gateway refused), and — because the same flag routes the
+// upgrade modal through changePlan, which Razorpay only allows on
+// authenticated/active — quietly disable every later upgrade attempt.
+//
+// As an allowlist, an unknown or newly-added gateway state reads as "no
+// mandate", which shows a Subscribe button rather than controls that error.
+// ---------------------------------------------------------------------------
+const LIVE_MANDATE = new Set(["authenticated", "active", "pending", "halted"]);
+
+export function hasLiveMandate(status: string | null | undefined): boolean {
+  return LIVE_MANDATE.has((status ?? "").toLowerCase());
+}
+
+/**
+ * Whether a cancellation should take effect at the end of the paid cycle
+ * (`cancel_at_cycle_end`) rather than immediately.
+ *
+ * Razorpay REFUSES a cycle-end cancel when no cycle is running —
+ * "Subscription cannot be cancelled since no billing cycle is going on" — and a
+ * cycle only starts at the first successful charge. So this is false between
+ * authorising a mandate and being billed on it, where cancelling immediately
+ * takes nothing away: nothing has been paid for yet.
+ */
+export function cancelsAtCycleEnd(
+  status: string | null | undefined,
+  currentEnd: string | null | undefined,
+): boolean {
+  return (status ?? "").toLowerCase() === "active" && !!currentEnd;
+}
+
 export function decidePlanChange(req: PlanChangeRequest): PlanChangeDecision {
   const planChanged = req.currentPlan !== req.targetPlan;
   const periodChanged = req.currentPeriod !== req.targetPeriod;

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { PLAN_LIMITS, effectivePlan } from "@/lib/plans";
 import { parseHost } from "./resolve";
 
 // parseHost() is the pure core of tenant resolution: it maps a raw Host header
@@ -61,5 +62,39 @@ describe("parseHost", () => {
     expect(parseHost(undefined).type).toBe("platform");
     expect(parseHost("").type).toBe("platform");
     expect(parseHost("   ").type).toBe("platform");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two gates a custom domain must clear before we serve on it.
+//
+// Tested through PLAN_LIMITS/effectivePlan rather than lookupStoreByHost
+// itself, which is wrapped in unstable_cache and needs a database. The rule is
+// the part worth pinning: a custom domain is Pro-only, and entitlement is read
+// from the EFFECTIVE plan so an expired grant stops serving.
+// ---------------------------------------------------------------------------
+describe("custom domain entitlement", () => {
+  const serves = (store: { plan: string; plan_expires_at: string | null }) =>
+    PLAN_LIMITS[effectivePlan(store)].customDomain;
+
+  it("serves for Pro", () => {
+    expect(serves({ plan: "pro", plan_expires_at: null })).toBe(true);
+  });
+
+  it("does NOT serve for free or basic", () => {
+    // Basic previously had this flag on while nothing enforced it.
+    expect(serves({ plan: "free", plan_expires_at: null })).toBe(false);
+    expect(serves({ plan: "basic", plan_expires_at: null })).toBe(false);
+  });
+
+  it("stops serving once a timed Pro plan has lapsed", () => {
+    // The row still says "pro" — effectivePlan is what notices the expiry, and
+    // reading raw `plan` here would keep a lapsed store on its domain forever.
+    expect(
+      serves({ plan: "pro", plan_expires_at: "2020-01-01T00:00:00Z" }),
+    ).toBe(false);
+    expect(
+      serves({ plan: "pro", plan_expires_at: "2999-01-01T00:00:00Z" }),
+    ).toBe(true);
   });
 });
