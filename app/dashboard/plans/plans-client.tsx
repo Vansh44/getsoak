@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { renewalTerm, renewalLabel } from "@/lib/plans/renewal";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -167,6 +168,14 @@ export function PlansBillingClient({
   const expiresAt = data.planExpiresAt;
   const expired =
     plan === "free" && !!expiresAt && new Date(expiresAt).getTime() < now;
+  // Whether that date is the next charge or the last day of service.
+  const term = renewalTerm({
+    expiresAt,
+    expired,
+    hasMandate: subscription.active,
+    cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+    status: subscription.status,
+  });
   const status = expired
     ? { label: "Expired", tone: "amber" as const }
     : plan === "free"
@@ -269,7 +278,7 @@ export function PlansBillingClient({
               : `₹${pricing[plan].monthlyInr.toLocaleString("en-IN")}/mo`}
           </Detail>
           <Detail label="Status">{status.label}</Detail>
-          <Detail label={expired ? "Expired on" : "Renews / expires"}>
+          <Detail label={renewalLabel(term)}>
             {expiresAt ? formatDate(expiresAt) : "No expiry"}
           </Detail>
           <Detail label="Billing">
