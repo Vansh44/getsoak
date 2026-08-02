@@ -114,9 +114,17 @@ export function PlansBillingClient({
   const refresh = () => startRefresh(() => router.refresh());
 
   async function handleCancel() {
+    // The promise has to match what the server will actually do. Access runs to
+    // the end of a cycle only if a cycle is running — between authorising the
+    // mandate and the first charge there isn't one, and telling someone they
+    // keep a plan they were never charged for sets up the wrong expectation.
+    const keepsCycle =
+      subscription.status === "active" && !!subscription.currentEnd;
     if (
       !window.confirm(
-        "Cancel autopay? You keep your plan until the current cycle ends, then you'll move to Free. No further payments will be taken.",
+        keepsCycle
+          ? "Cancel autopay? You keep your plan until the current cycle ends, then you'll move to Free. No further payments will be taken."
+          : "Cancel autopay? No payments will be taken.",
       )
     ) {
       return;

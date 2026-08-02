@@ -40,6 +40,8 @@ import {
 import {
   canUpdateSubscription,
   decidePlanChange,
+  hasLiveMandate,
+  cancelsAtCycleEnd,
 } from "@/lib/payments/plan-change";
 import {
   resolveBillingEmail,
@@ -115,7 +117,7 @@ export async function getSubscriptionState(): Promise<SubscriptionState> {
     currentEnd: data?.current_end ?? null,
     cancelAtPeriodEnd: !!data?.cancel_at_period_end,
     scheduledPlan: data?.scheduled_plan ?? null,
-    active: !!data?.rzp_subscription_id && !TERMINAL.has(status ?? ""),
+    active: !!data?.rzp_subscription_id && hasLiveMandate(status),
   };
 }
 
@@ -435,6 +437,7 @@ export async function cancelSubscription(): Promise<SubscriptionActionResult> {
       .select({
         rzp_subscription_id: storeSubscriptions.rzpSubscriptionId,
         status: storeSubscriptions.status,
+        current_end: storeSubscriptions.currentEnd,
       })
       .from(storeSubscriptions)
       .where(eq(storeSubscriptions.storeId, storeId))
@@ -449,30 +452,67 @@ export async function cancelSubscription(): Promise<SubscriptionActionResult> {
     return { error: "This subscription is already cancelled." };
   }
 
-  // cancel_at_cycle_end = true → stop future charges, keep access to cycle end.
-  const res = await rzpCancelSubscription(creds, row.rzp_subscription_id, true);
+  // ── Cancel at cycle end, or now? The subscription's own state decides. ────
+  //
+  // `cancel_at_cycle_end = 1` means "stop future charges, keep what they paid
+  // for" — and Razorpay REFUSES it when no cycle is running:
+  //     "Subscription cannot be cancelled since no billing cycle is going on"
+  // which surfaced to the merchant as "Couldn't cancel the subscription."
+  // with no way forward. A cycle only exists once a charge has been made, so
+  // this hits any subscription cancelled between authorising the mandate and
+  // the first payment — not just abandoned ones.
+  //
+  // With nothing paid for, an immediate cancel takes nothing away, so the two
+  // branches mean the same thing to the merchant: no more money leaves.
+  const cycleRunning = cancelsAtCycleEnd(row.status, row.current_end);
+
+  let res = await rzpCancelSubscription(
+    creds,
+    row.rzp_subscription_id,
+    cycleRunning,
+  );
+
+  // Our status can lag the gateway (it moves on webhooks), so believe Razorpay
+  // over the local row rather than dead-ending the merchant on stale data.
+  if (!res.ok && cycleRunning && /billing cycle/i.test(res.error ?? "")) {
+    res = await rzpCancelSubscription(creds, row.rzp_subscription_id, false);
+  }
+
   if (!res.ok) {
-    console.error("cancelSubscription:", res.error);
+    logError("cancelSubscription", res.error, {
+      storeId,
+      status: row.status,
+      cycleRunning,
+    });
     return { error: "Couldn't cancel the subscription. Please try again." };
   }
 
+  // Record what actually happened. Writing cancelAtPeriodEnd on an immediate
+  // cancel would have the card promise access until a cycle end that isn't
+  // coming.
+  const endedNow = !cycleRunning;
   await withService((db) =>
     db
       .update(storeSubscriptions)
       .set({
-        cancelAtPeriodEnd: true,
-        status: res.data.status || "active",
+        cancelAtPeriodEnd: !endedNow,
+        status: res.data.status || (endedNow ? "cancelled" : "active"),
         scheduledPlan: null,
+        scheduledPeriod: null,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(storeSubscriptions.storeId, storeId)),
-  ).catch((err) => console.error("cancelSubscription (persist):", err));
+  ).catch((err) => logError("cancelSubscription (persist)", err, { storeId }));
 
-  // Access + plan_expires_at are left as-is: the store keeps its plan until the
-  // paid cycle ends, then the cron downgrades to free.
+  // Access + plan_expires_at are left as-is either way: on a cycle-end cancel
+  // the store keeps its plan until the cycle runs out and the cron downgrades
+  // it; on an immediate cancel there was no subscription-granted access to
+  // remove (an operator comp, if any, is not ours to revoke here).
   return {
     success: true,
-    message: "Autopay cancelled. You keep your plan until the cycle ends.",
+    message: endedNow
+      ? "Autopay cancelled. No payments will be taken."
+      : "Autopay cancelled. You keep your plan until the cycle ends.",
   };
 }
 
