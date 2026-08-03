@@ -61,6 +61,9 @@ export interface RefundRow {
   gatewayRefundId: string | null;
   createdAt: string | null;
   actor: string | null;
+  /** GST credit note serial, once the refund has settled on a taxed order.
+   *  Allocated by a trigger — see returns_04_credit_notes.sql. */
+  creditNoteRef: string | null;
 }
 
 export interface OrderRefundState {
@@ -139,6 +142,7 @@ async function loadRefunds(orderId: string): Promise<RefundRow[]> {
         gatewayRefundId: orderRefunds.gatewayRefundId,
         createdAt: orderRefunds.createdAt,
         actor: orderRefunds.actor,
+        creditNoteRef: orderRefunds.creditNoteRef,
       })
       .from(orderRefunds)
       .where(eq(orderRefunds.orderId, orderId))

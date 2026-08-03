@@ -953,6 +953,58 @@ Disconnect Razorpay in Channels, then return a card order.
 owner refund from the dashboard. The customer handed the goods over — undoing
 that would be worse.
 
+## 10g. GST credit notes (CODEBASE §28)
+
+Needs tax enabled (Invoices & Billing) with a tax class on the product.
+
+**PS-16.1 — A settled refund raises a credit note**
+Refund a taxed order from the order drawer.
+**Expect:** a `CRN…` link appears on the refund row; opening it prints a
+Credit Note naming the invoice it reverses.
+
+**PS-16.2 ★ — A PENDING refund has no serial**
+Force a gateway refund to stay pending (block Razorpay), then open the credit
+note page for it.
+**Expect:** an explanation, not a blank document and not a number. A serial
+issued for a refund that then fails would leave a gap — which is exactly what
+an audit flags.
+
+**PS-16.3 ★ — …and gets one when it settles**
+Restore connectivity and reopen the order so reconcile runs.
+**Expect:** the refund settles and NOW has a serial.
+
+**PS-16.4 ★ — Serials are consecutive per store**
+Refund three taxed orders.
+**Expect:** CRN…0001, 0002, 0003 for that store, with no gaps — and a second
+store's series starts at its own 0001.
+
+**PS-16.5 ★ — Exactly once, even if the status moves around**
+Take a refund from completed → failed → completed (via the DB).
+**Expect:** it keeps its ORIGINAL serial. A second one would leave the first
+as a gap.
+
+**PS-16.6 — No tax, no note**
+Refund an order placed while tax was disabled.
+**Expect:** the page explains there's no output tax to reverse. No serial is
+consumed.
+
+**PS-16.7 ★ — The tax splits the way it was charged**
+Refund an intra-state order, then an inter-state one.
+**Expect:** CGST+SGST columns on the first, IGST on the second, and the halves
+re-summing exactly to the tax credited.
+
+**PS-16.8 — A partial return credits only those lines**
+Return 1 of a 2-unit line and refund it.
+**Expect:** the note credits one unit, not the whole order.
+
+**PS-16.9 — Fees retained show as their own line**
+With a restocking fee configured, refund a change-of-mind return.
+**Expect:** "Less fees retained" and a Refunded total below the credited value.
+
+**PS-16.10 — Nobody else's note**
+Open another store's refund id in the URL.
+**Expect:** 404.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

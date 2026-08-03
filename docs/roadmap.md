@@ -165,6 +165,11 @@ replacement order raised at receipt.
 lookup at `/pos/returns`, the tender-locked refund at the counter, and the
 `returns` location capability finally read.
 
+**✅ Also done** (returns-plan Step 6, see its §15): GST credit notes — a
+trigger-allocated per-store serial issued on settlement, and a printable
+document that names the invoice it reverses and splits the tax the way it was
+charged.
+
 **Deliberately deferred:** photo upload, per-line damaged marking at receipt,
 advance exchanges, cross-product swaps, and enforcing the return window at the
 till (invariant 1 — the merchant is standing right there).

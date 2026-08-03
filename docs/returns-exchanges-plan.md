@@ -1,8 +1,8 @@
 # Returns, exchanges & refunds — the design
 
-**Status:** design, with **Steps 1–5 built** — see §9 (refunds), §10
+**Status:** design, with **Steps 1–6 built** — see §9 (refunds), §10
 (cancellation), §11 (returns config), §12 (the request flow), §13 (exchanges),
-§14 (BORIS).
+§14 (BORIS), §15 (credit notes). Only Step 7 (store credit) is left.
 **Slots into:** `docs/roadmap.md` Steps 2 (refunds), 3 (returns), 4 (store credit).
 **Depends on:** `CODEBASE.md` §12 (checkout), §17 (tax/invoices), §18 (Razorpay),
 §22 (POS), §23 (locations), §24 (notifications), §25 (policies).
@@ -918,3 +918,76 @@ the merchant is standing right there and can refuse. Wire them in behind an
 explicit setting if a merchant asks.
 
 **Never run in a browser.** New acceptance cases: PS-15.1 – PS-15.10.
+
+---
+
+## 15. Step 6 — what shipped
+
+GST credit notes. Under Indian GST, refunding against a tax invoice requires
+one, and it is a **legal document, not a receipt**: it is what reverses the
+output tax the store has already declared, and a merchant's CA will ask for it.
+
+### ★ The serial must have no gaps, and that decides the whole design
+
+A missing number in a GST document series is precisely what an audit flags. So
+the serial is allocated when a refund **SETTLES**, never when it is raised —
+§9's design writes the row as `pending` BEFORE calling Razorpay, and a pending
+refund that then fails would burn a serial and leave a hole.
+
+That ruled out doing it in application code: `completed` is reached from FOUR
+places (the till's direct insert, `issueRefund`'s non-gateway insert, its
+gateway claim, and the reconcile sweep). Four call sites is four chances to
+forget one. So it is a **trigger**
+(`trg_order_refunds_credit_note`, `returns_04_credit_notes.sql`) — the same
+reasoning convention #14 gives for `order_ref` and SKUs being trigger-owned: no
+insert path can produce a settled refund without a number.
+
+`credit_note_no IS NULL` makes it exactly-once, so a row that flips
+completed → failed → completed keeps its ORIGINAL serial rather than taking a
+second and leaving the first as a gap.
+
+**No credit note on an untaxed order.** There is no output tax to reverse, so
+issuing one would put a number in the series that reverses nothing.
+
+**★ No backfill, deliberately.** Historical refunds were made without a credit
+note, and inventing serials for them now would fabricate documents dated to
+periods already filed — the opposite of what this is for. The series starts
+from the next settled refund; past refunds go through the merchant's
+accountant, which is the correct process.
+
+### The document
+
+`lib/billing/credit-note-data.ts` + `components/invoice/credit-note-document.tsx`,
+reusing the invoice's stylesheet on purpose: the two get filed together, and a
+merchant printing one after the other shouldn't be able to tell they were built
+by different people. What differs is what it SAYS.
+
+Three things make it a credit note rather than a refund receipt:
+
+1. **Its own serial** — `CRN100100015`, the §14 identifier grammar with a Luhn
+   check, mirrored in SQL by `sm_credit_note_ref` and cross-checked by
+   `lib/identifiers.test.ts` against `formatCreditNoteRef`.
+2. **The invoice it reverses**, named explicitly. One that doesn't name an
+   invoice reverses nothing.
+3. **The tax split the way it was charged** — CGST+SGST intra-state, IGST
+   inter-state, via `splitGst`. Getting this wrong doesn't just look wrong; it
+   files the reversal against the wrong head.
+
+Everything comes from the ORDER's snapshot, never live settings: the rate on
+the invoice is the rate that was charged, possibly months ago, and a store that
+has since changed its rates must not reverse at the new one.
+
+**Fees retained are shown as their own line.** Otherwise a refund that doesn't
+match the credited value is an unexplained discrepancy on a legal document.
+
+**A refund with no serial renders an EXPLANATION, not a blank page** — "hasn't
+settled yet" or "no tax was charged". Both are correct behaviour, and a blank
+document looks like a bug and gets printed anyway.
+
+Keyed by REFUND at `/dashboard/orders/credit-notes/[refundId]`, not by order:
+one order can be refunded more than once and each settled refund is its own
+note. Linked from the refund panel.
+
+**⚠ NOT reviewed by a CA or a lawyer**, the same posture §25 takes on the
+platform's own policies. It covers the fields the format needs; get a
+professional to check it before a merchant files against it.

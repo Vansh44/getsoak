@@ -2565,6 +2565,8 @@ export const storeCounters = pgTable(
     storeId: uuid("store_id").primaryKey().notNull(),
     orderSeq: integer("order_seq").default(999).notNull(),
     productSeq: integer("product_seq").default(0).notNull(),
+    /** GST credit note serial (returns_04_credit_notes.sql). */
+    creditNoteSeq: integer("credit_note_seq").default(0).notNull(),
   },
   (table) => [
     foreignKey({
@@ -3957,6 +3959,15 @@ export const orderRefunds = pgTable("order_refunds", {
   reason: text(),
   /** Proof for money moved outside a gateway — a typed UPI transaction id. */
   reference: text(),
+  // ── GST credit note (returns_04_credit_notes.sql) ───────────────────────
+  /** Per-store serial, allocated by a TRIGGER on settlement — never by app
+   *  code, because a gap in a GST series is what an audit flags. */
+  creditNoteNo: integer("credit_note_no"),
+  creditNoteRef: text("credit_note_ref"),
+  creditNoteAt: timestamp("credit_note_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
   status: text().notNull(),
   actor: text(),
   createdAt: timestamp("created_at", {

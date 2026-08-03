@@ -15,6 +15,7 @@
 //    the merchant clicking Refund again.
 
 import { useCallback, useEffect, useState, useTransition } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { AlertCircle, Clock, Loader2, RotateCcw } from "lucide-react";
 import { formatPrice } from "@/lib/pricing";
@@ -191,11 +192,24 @@ export function RefundPanel({
                   </div>
                 )}
               </div>
-              {r.gatewayRefundId && (
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                  {r.gatewayRefundId}
-                </span>
-              )}
+              <div className="flex shrink-0 flex-col items-end gap-0.5">
+                {r.gatewayRefundId && (
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {r.gatewayRefundId}
+                  </span>
+                )}
+                {/* The GST document. Only settled refunds on taxed orders have
+                    one — the serial can't be issued earlier without risking a
+                    gap in the series. */}
+                {r.creditNoteRef && (
+                  <Link
+                    href={`/dashboard/orders/credit-notes/${r.id}`}
+                    className="font-mono text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  >
+                    {r.creditNoteRef}
+                  </Link>
+                )}
+              </div>
             </li>
           ))}
         </ul>

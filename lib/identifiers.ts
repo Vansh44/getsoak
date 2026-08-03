@@ -26,6 +26,8 @@
 
 export const SKU_PREFIX = "SKU";
 export const ORDER_PREFIX = "ORD";
+/** Credit note — a GST document, not a receipt. See formatCreditNoteRef. */
+export const CREDIT_NOTE_PREFIX = "CRN";
 
 // Minimum zero-pad widths (codes grow past these; they never truncate).
 export const STORE_WIDTH = 4;
@@ -120,11 +122,29 @@ export function formatOrderRef(storeNo: number, orderNo: number): string {
   return ORDER_PREFIX + appendLuhn(payload);
 }
 
+/**
+ * Credit note: CRN + store + per-store sequence + check. e.g. CRN100100013.
+ *
+ * ★ Under Indian GST this is a LEGAL DOCUMENT, not a receipt — a refund
+ * against a tax invoice needs one, and its serial must be **consecutive with
+ * no gaps**. That is why the number is allocated when a refund SETTLES rather
+ * than when it is raised: a pending refund that later fails would otherwise
+ * burn a serial and leave a hole, which is exactly what an audit looks for.
+ */
+export function formatCreditNoteRef(
+  storeNo: number,
+  creditNoteNo: number,
+): string {
+  const payload = pad(storeNo, STORE_WIDTH) + pad(creditNoteNo, SEQ_WIDTH);
+  return CREDIT_NOTE_PREFIX + appendLuhn(payload);
+}
+
 // Which kind of code this is (by prefix), or null if unrecognised. Cheap enough
 // for the dashboard search box to route a typed code to the right column.
-export function refKind(code: string): "sku" | "order" | null {
+export function refKind(code: string): "sku" | "order" | "credit_note" | null {
   const c = code.trim().toUpperCase();
   if (c.startsWith(SKU_PREFIX)) return "sku";
   if (c.startsWith(ORDER_PREFIX)) return "order";
+  if (c.startsWith(CREDIT_NOTE_PREFIX)) return "credit_note";
   return null;
 }
