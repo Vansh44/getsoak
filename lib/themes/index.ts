@@ -3,10 +3,16 @@
 // import the lightweight lib/themes/meta.ts catalog instead.
 import { DEFAULT_THEME_ID, THEME_META } from "./meta";
 import { basket } from "./definitions/basket";
+import { ritual } from "./definitions/ritual";
+import { studio } from "./definitions/studio";
 import type { ThemeDefinition } from "./types";
 
 /** Keep older immutable releases here when a preset version advances. */
-export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [basket];
+export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [
+  basket,
+  studio,
+  ritual,
+];
 
 const BY_RELEASE = new Map(
   THEME_DEFINITIONS.map((theme) => [

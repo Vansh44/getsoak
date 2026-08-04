@@ -12,6 +12,10 @@ describe("public theme catalog", () => {
       }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Studio" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Ritual" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Home & Decor" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Beauty" })).toBeNull();
     expect(screen.getByText("Live preview being restored")).toBeVisible();
     expect(screen.queryByRole("link", { name: /view live store/i })).toBeNull();
     expect(

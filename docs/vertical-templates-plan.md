@@ -15,9 +15,14 @@
 > `themes.storemink.com`: reserved host routing, a responsive metadata-driven
 > gallery, truthful release/demo/plan states, independent SEO metadata, and a
 > discoverable link from the platform site.
-> Basket is the only/default implementation, but it is **blocked from approval**
-> under the new bar until its missing live demo is repaired and the browser,
-> accessibility, performance, and two-reviewer gates are recorded.
+> Studio and Ritual `0.1.0` are implemented as deliberately hidden drafts:
+> distinct editorial home-design and botanical-wellness art direction, complete
+> three-page presets, eight credible sample products each, twenty optimized
+> generated assets, and automated package coverage. They remain absent from
+> signup/catalog until their live demos and review evidence pass.
+> Basket remains the default implementation, but it is **blocked from approval**
+> until its missing live demo is repaired and the browser, accessibility,
+> performance, and two-reviewer gates are recorded.
 >
 > **Earlier implementation status:** P1 (F&B slice) + P2 DONE (2026-07-04): hero /
 > usp_bar / tile_grid blocks, market header + quick-add card layout variants,
@@ -325,10 +330,12 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
 - **Phase 4 — in progress:** the public `themes.storemink.com` catalog
   foundation is built from `THEME_META`, with reserved host routing, industry
   filters, canonical/robots/sitemap/OG metadata, and demo links gated by live
-  health. Next repair Basket's demo/release evidence, then author Studio, Ritual,
-  and subsequent vertical presets against the completed shared capability
-  contract. A preset is not done until every applicable acceptance story and
-  two-reviewer gate is recorded.
+  health. Studio and Ritual `0.1.0` now pass the automated package gate as hidden
+  drafts and have their asset provenance recorded. Next provision and review
+  both demos, restore Basket's demo/release evidence, then author subsequent
+  vertical presets against the completed shared capability contract. A preset is
+  not done until every applicable acceptance story and two-reviewer gate is
+  recorded.
 - **Basket repair — parallel prerequisite:** restore/reseed `demo-basket` and
   run the new acceptance stories. This can return Basket to Candidate, but does
   not block designing the Phase 2 contract.

@@ -8,6 +8,7 @@ human-review gates below all pass for the release being published.
 - **Theme implementation plan:** `docs/vertical-templates-plan.md`
 - **Theme packages:** `lib/themes/`
 - **Automated package checks:** `lib/themes/themes.test.ts`
+- **Asset provenance:** `docs/theme-assets.md`
 - **★ marks a non-obvious invariant** that deserves explicit regression
   coverage.
 
@@ -297,11 +298,15 @@ accessibility violations, or a non-working demo.
 
 ## 7. Current baseline — 2026-08-05
 
-| Theme  | Package gate                                                                                  | Demo gate                                                                                                                                                                         | A11y/performance               | Human gate                                                               | Release state |
-| ------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ | ------------- |
-| Basket | Passes the package gate; registered as preset `basket@1.0.0` on engine `storefront-grocery@1` | **Blocked:** `https://demo-basket.storemink.com/` currently renders the StoreMink "storefront doesn't exist" 404; manifest health is `unavailable` and signup preview is disabled | Not recorded against this gate | Prior visual review is historical and does not satisfy this release gate | Blocked       |
+| Theme  | Package gate                                                                                                                | Demo gate                                                                                                                                                                         | A11y/performance               | Human gate                                                                 | Release state |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------- | ------------- |
+| Basket | Passes the package gate; registered as preset `basket@1.0.0` on engine `storefront-grocery@1`                               | **Blocked:** `https://demo-basket.storemink.com/` currently renders the StoreMink "storefront doesn't exist" 404; manifest health is `unavailable` and signup preview is disabled | Not recorded against this gate | Prior visual review is historical and does not satisfy this release gate   | Blocked       |
+| Studio | Passes the automated package gate as hidden preset `studio@0.1.0` on `storefront-editorial@1`; asset provenance is recorded | Not provisioned; manifest health is `provisioning`, and no public demo or preview link is exposed                                                                                 | Not recorded                   | Not reviewed; authoring review does not count toward the two-reviewer gate | Draft         |
+| Ritual | Passes the automated package gate as hidden preset `ritual@0.1.0` on `storefront-editorial@1`; asset provenance is recorded | Not provisioned; manifest health is `provisioning`, and no public demo or preview link is exposed                                                                                 | Not recorded                   | Not reviewed; authoring review does not count toward the two-reviewer gate | Draft         |
 
 The baseline is intentionally strict. Basket remains the default theme in code,
 but it is not evidence that the new professional-theme acceptance bar has been
-met. Reseed or repair the demo, rerun this document, and record the evidence
-before presenting Basket as an approved catalog theme.
+met. Studio and Ritual are implemented but hidden, so package completion cannot
+accidentally be represented as release approval. Reseed or provision the
+relevant demo, rerun this document, and record the evidence before presenting
+any theme as an approved catalog release.

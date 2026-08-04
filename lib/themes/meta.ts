@@ -163,6 +163,103 @@ export const THEME_META: readonly ThemeMeta[] = [
         "The demo host currently resolves to StoreMink's storefront-not-found page.",
     },
   },
+  {
+    id: "studio",
+    name: "Studio",
+    description:
+      "An editorial home-design theme with gallery-like space, image-led storytelling and refined product discovery.",
+    engine: { id: "storefront-editorial", version: 1 },
+    release: {
+      version: "0.1.0",
+      status: "draft",
+      notes: [
+        "Initial hidden Studio package for Phase 4 implementation and review.",
+        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+      ],
+    },
+    catalog: {
+      visibility: "hidden",
+      industries: ["home", "art"],
+      catalogSizes: ["small", "medium"],
+      features: [
+        "advanced-search",
+        "blogs",
+        "cart-drawer",
+        "category-navigation",
+        "faq",
+        "product-filtering",
+        "product-recommendations",
+        "promo-tiles",
+        "variant-picker",
+      ],
+      keywords: [
+        "furniture",
+        "home decor",
+        "design studio",
+        "objects",
+        "editorial",
+      ],
+      previewImage: "/themes/studio/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/studio/preview.webp",
+          viewport: "desktop",
+          alt: "Studio editorial home-design storefront preview",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-studio",
+      status: "provisioning",
+      unavailableReason:
+        "Studio is a hidden draft and does not have a public demo yet.",
+    },
+  },
+  {
+    id: "ritual",
+    name: "Ritual",
+    description:
+      "A sensorial beauty and wellness theme built around product routines, botanical storytelling and intimate editorial imagery.",
+    engine: { id: "storefront-editorial", version: 1 },
+    release: {
+      version: "0.1.0",
+      status: "draft",
+      notes: [
+        "Initial hidden Ritual package for Phase 4 implementation and review.",
+        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+      ],
+    },
+    catalog: {
+      visibility: "hidden",
+      industries: ["beauty", "wellness"],
+      catalogSizes: ["small", "medium"],
+      features: [
+        "advanced-search",
+        "blogs",
+        "cart-drawer",
+        "category-navigation",
+        "faq",
+        "product-filtering",
+        "product-recommendations",
+        "variant-picker",
+      ],
+      keywords: ["skincare", "beauty", "wellness", "botanical", "body care"],
+      previewImage: "/themes/ritual/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/ritual/preview.webp",
+          viewport: "desktop",
+          alt: "Ritual botanical beauty storefront preview",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-ritual",
+      status: "provisioning",
+      unavailableReason:
+        "Ritual is a hidden draft and does not have a public demo yet.",
+    },
+  },
 ] as const;
 
 export const DEFAULT_THEME_ID = "basket";

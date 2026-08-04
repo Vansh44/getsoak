@@ -973,13 +973,17 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     release state/version/notes, industries, catalog-size fit, feature claims,
     keywords, plan gate, preview/screenshots, demo health and catalog
     visibility; client surfaces must NEVER import definitions),
-    `definitions/basket.ts` (one immutable `preset`: brand accents,
+    `definitions/basket.ts`, `definitions/studio.ts`, and
+    `definitions/ritual.ts` (immutable `preset` releases: brand accents,
     **`design` skin**, pages incl. the homepage sentinel, menus, sample
     categories/products+variants — imagery
     bundled under `public/themes/{id}/`; **basket** is the grocery/F&B
     reference template with real Unsplash photography, per
-    docs/vertical-templates-plan.md §9.1, and currently the only/default
-    theme — the Arcade/Fresko placeholders were retired 2026-07-04),
+    docs/vertical-templates-plan.md §9.1, and the default theme; **studio** and
+    **ritual** are hidden `0.1.0` editorial home-design and botanical-wellness
+    drafts with generated, provenance-logged imagery and cannot appear in signup
+    or the public catalog until approved — the Arcade/Fresko placeholders were
+    retired 2026-07-04),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
@@ -998,7 +1002,8 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     publishable, seeded pages/homepages/catalogs meet minimum content floors,
     and referenced imagery is optimized + catalog-sized. The full release gate
     is **`docs/theme-acceptance.md`**: CI package integrity + live storefront
-    stories + accessibility/performance + a scored two-reviewer design pass.
+    stories + accessibility/performance + a scored two-reviewer design pass;
+    generated/licensed asset provenance lives in **`docs/theme-assets.md`**.
     A valid definition is deliberately NOT the same as an approved theme.
     **Demo stores**: one per theme
     (`demo-{id}` — the namespace is blocked at signup), seeded/reseeded via

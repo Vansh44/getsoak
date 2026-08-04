@@ -187,6 +187,16 @@ describe("theme registry", () => {
     const basketMeta = THEME_META.find((theme) => theme.id === "basket")!;
     expect(isThemeSelectable(basketMeta)).toBe(true);
     expect(canPreviewTheme(basketMeta)).toBe(false);
+    const studioMeta = THEME_META.find((theme) => theme.id === "studio")!;
+    expect(studioMeta.release.status).toBe("draft");
+    expect(studioMeta.catalog.visibility).toBe("hidden");
+    expect(isThemeSelectable(studioMeta)).toBe(false);
+    expect(canPreviewTheme(studioMeta)).toBe(false);
+    const ritualMeta = THEME_META.find((theme) => theme.id === "ritual")!;
+    expect(ritualMeta.release.status).toBe("draft");
+    expect(ritualMeta.catalog.visibility).toBe("hidden");
+    expect(isThemeSelectable(ritualMeta)).toBe(false);
+    expect(canPreviewTheme(ritualMeta)).toBe(false);
   });
 
   it("reads pinned installations and legacy template ids", () => {
