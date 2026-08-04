@@ -53,11 +53,23 @@ export interface RefundBreakdown {
 const toPaise = (n: number) => Math.round((Number(n) || 0) * 100);
 const toRupees = (p: number) => Math.round(p) / 100;
 
+/**
+ * Units originally sold on a line, floored at zero.
+ *
+ * One definition, used by both `remainingQty` and the per-unit maths below.
+ * It was written out twice, and the second copy's `|| 0` was provably dead:
+ * reaching it requires `remainingQty(line) > 0`, which already proves the
+ * quantity is a truthy integer ≥ 1. Dead code that LOOKS defensive is worse
+ * than none — it invites the reader to assume a case is handled.
+ */
+function soldQty(line: ReturnableLine): number {
+  return Math.max(0, Math.trunc(line.quantity || 0));
+}
+
 /** Units still returnable on a line. Never negative, never above what sold. */
 export function remainingQty(line: ReturnableLine): number {
-  const sold = Math.max(0, Math.trunc(line.quantity || 0));
   const done = Math.max(0, Math.trunc(line.alreadyReturned || 0));
-  return Math.max(0, sold - done);
+  return Math.max(0, soldQty(line) - done);
 }
 
 /**
@@ -139,7 +151,9 @@ export function refundBreakdown(input: {
     const qty = Math.min(asked, max);
     if (qty <= 0) continue;
 
-    const sold = Math.max(1, Math.trunc(line.quantity || 0));
+    // At least 1 as a divisor guard; remainingQty above has already proved
+    // it is, so this can only ever be the sold quantity itself.
+    const sold = Math.max(1, soldQty(line));
     // Net of this line's share of the order discount — the number the customer
     // actually paid for these goods.
     const netP = grossPaise[i] - share[i];
