@@ -69,16 +69,28 @@ export function creditToApply(input: {
   let heldBack = false;
 
   if (remainingP > 0 && remainingP < minP) {
-    // Leave exactly the minimum to charge, if the total is big enough for
-    // that to make sense. When it isn't (a total below the minimum itself),
-    // credit simply covers the whole thing.
     if (totalP >= minP) {
+      // Leave exactly the minimum to charge. Holding back a few paise of
+      // credit is strictly better than a checkout that can't complete.
       appliedP = totalP - minP;
       remainingP = minP;
       heldBack = true;
     } else {
-      appliedP = totalP;
-      remainingP = 0;
+      // ★ The total is BELOW the gateway minimum, so no online payment is
+      // possible for this order at all — there is nothing to leave chargeable
+      // and nothing this function can do to rescue it. Credit covers as much
+      // as it can and any remainder stays unpayable.
+      //
+      // ⚠ This used to read `appliedP = totalP`, which reports applying MORE
+      // credit than the customer holds whenever the balance is the smaller of
+      // the two: a ₹0.30 balance against a ₹0.50 order quoted "₹0.50 applied".
+      // The database was never at risk — try_spend_customer_credit's
+      // conditional UPDATE refuses to overdraw — but the checkout summary
+      // calls this same function, so the shopper was shown a total the server
+      // would then decline to charge. Screen and server disagreeing about
+      // money is the §22 posTotals failure, and the clamp is the whole fix.
+      appliedP = Math.min(balanceP, totalP);
+      remainingP = totalP - appliedP;
     }
   }
 

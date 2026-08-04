@@ -106,3 +106,90 @@ describe("creditToApply", () => {
     expect(r.remaining).toBe(0);
   });
 });
+
+describe("★ a total below the gateway minimum", () => {
+  // Nothing can be charged online for these at all — Razorpay refuses under
+  // ₹1 — so the only useful thing credit can do is cover the whole order and
+  // remove the gateway from the picture entirely.
+
+  it("covers the order outright when the balance can", () => {
+    const r = creditToApply({ orderTotal: 0.5, balance: 5, gatewayMinimum: 1 });
+    expect(r.applied).toBe(0.5);
+    expect(r.remaining).toBe(0);
+    expect(r.coversAll).toBe(true);
+    // Nothing was held back — there was no chargeable remainder to protect.
+    expect(r.heldBackForMinimum).toBe(false);
+  });
+
+  it("★ NEVER applies more credit than the customer holds", () => {
+    // This branch used to read `applied = total`, so a ₹0.30 balance against
+    // a ₹0.50 order quoted "₹0.50 applied". try_spend_customer_credit would
+    // have refused to overdraw, so no balance was ever at risk — but the
+    // checkout summary calls this same function, so the shopper was shown a
+    // total the server would then decline to charge.
+    const r = creditToApply({
+      orderTotal: 0.5,
+      balance: 0.3,
+      gatewayMinimum: 1,
+    });
+    expect(r.applied).toBe(0.3);
+    expect(r.remaining).toBe(0.2);
+    // Honest: ₹0.20 is unpayable by any means, and saying so beats pretending
+    // the order is settled.
+    expect(r.coversAll).toBe(false);
+  });
+
+  it("applies the exact balance when it matches the total", () => {
+    const r = creditToApply({
+      orderTotal: 0.75,
+      balance: 0.75,
+      gatewayMinimum: 1,
+    });
+    expect(r.applied).toBe(0.75);
+    expect(r.coversAll).toBe(true);
+  });
+
+  it("has no such problem when there is no gateway floor (COD)", () => {
+    const r = creditToApply({
+      orderTotal: 0.5,
+      balance: 0.3,
+      gatewayMinimum: 0,
+    });
+    expect(r.applied).toBe(0.3);
+    expect(r.remaining).toBe(0.2);
+  });
+});
+
+describe("the boundary around the minimum itself", () => {
+  it("★ holds back only when a remainder would be UNPAYABLE", () => {
+    // ₹1.50 order, ₹1.20 balance: the naive split leaves ₹0.30, which
+    // Razorpay refuses. So less credit is applied to leave exactly ₹1.
+    const r = creditToApply({
+      orderTotal: 1.5,
+      balance: 1.2,
+      gatewayMinimum: 1,
+    });
+    expect(r.applied).toBe(0.5);
+    expect(r.remaining).toBe(1);
+    expect(r.heldBackForMinimum).toBe(true);
+    expect(r.coversAll).toBe(false);
+  });
+
+  it("a total of exactly ₹1 covered in full needs no hold-back", () => {
+    // No remainder means the gateway is never called, so its floor is
+    // irrelevant — the order settles on credit alone.
+    const r = creditToApply({ orderTotal: 1, balance: 5, gatewayMinimum: 1 });
+    expect(r.applied).toBe(1);
+    expect(r.remaining).toBe(0);
+    expect(r.coversAll).toBe(true);
+    expect(r.heldBackForMinimum).toBe(false);
+  });
+
+  it("★ a balance that exactly covers a ₹1+ order still covers it", () => {
+    // No remainder means the hold-back rule never engages — the gateway isn't
+    // called at all, so its floor is irrelevant.
+    const r = creditToApply({ orderTotal: 200, balance: 200 });
+    expect(r.coversAll).toBe(true);
+    expect(r.heldBackForMinimum).toBe(false);
+  });
+});
