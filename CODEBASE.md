@@ -278,7 +278,11 @@ wholesip/
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
 │   │   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
 │   │   │                      # invoice settings. Gated on `billing`, revalidates TAGS.billing.
-│   │   ├── store-domain.ts    # Custom domain connect + DNS verification (Resend)
+│   │   ├── store-domain.ts    # Custom domain connect + Google Certificate Manager
+│   │                          # provisioning; shows zone-relative DNS names (so
+│   │                          # registrar UIs do not duplicate the domain), checks
+│   │                          # the challenge CNAME, and requires the LB to be the
+│   │                          # domain's only A-record destination before serving
 │   │   ├── page-actions.ts    # ★ Custom-page CRUD + draft/publish (see §11): createPage/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role

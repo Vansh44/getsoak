@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeDomain, validateDomain, routingRecords } from "./domain";
+import {
+  dnsRecordName,
+  normalizeDomain,
+  validateDomain,
+  routingRecords,
+} from "./domain";
 
 describe("normalizeDomain", () => {
   it("reduces everything a merchant might paste to one comparable form", () => {
@@ -94,8 +99,20 @@ describe("validateDomain", () => {
 describe("routingRecords", () => {
   it("uses @ for a two-label domain", () => {
     expect(routingRecords("acme.com", "203.0.113.10")).toEqual([
-      { type: "A", name: "@", value: "203.0.113.10", purpose: "routing" },
+      {
+        type: "A",
+        name: "@",
+        fqdn: "acme.com",
+        value: "203.0.113.10",
+        purpose: "routing",
+      },
     ]);
+  });
+
+  it("uses @ for multi-label public suffixes", () => {
+    expect(routingRecords("acme.co.uk", "203.0.113.10")[0]).toMatchObject({
+      name: "@",
+    });
   });
 
   it("uses the leading label for a subdomain", () => {
@@ -112,5 +129,19 @@ describe("routingRecords", () => {
     for (const d of ["acme.com", "shop.acme.com", "acme.co.uk"]) {
       expect(routingRecords(d, "203.0.113.10")[0]!.type, d).toBe("A");
     }
+  });
+});
+
+describe("dnsRecordName", () => {
+  it("turns Google's full challenge name into a registrar-relative host", () => {
+    expect(dnsRecordName("_acme-challenge.storiq.in", "storiq.in")).toBe(
+      "_acme-challenge",
+    );
+  });
+
+  it("keeps the connected subdomain in the host field", () => {
+    expect(
+      dnsRecordName("_acme-challenge.shop.acme.co.uk", "shop.acme.co.uk"),
+    ).toBe("_acme-challenge.shop");
   });
 });
