@@ -241,6 +241,15 @@ export function OrdersManagementView({
                     <option value="paid">Paid</option>
                     <option value="pending">Payment pending</option>
                     <option value="failed">Payment failed</option>
+                    {/* Derived by the refund machinery (order-actions'
+                        PAYMENT_STATUSES). They are FILTERABLE but not
+                        settable — and without them here a merchant cannot
+                        find their own refunded orders, which is the whole
+                        reason that list was split. */}
+                    <option value="refunded">Refunded</option>
+                    <option value="partially_refunded">
+                      Partially refunded
+                    </option>
                   </select>
                   <select
                     value={paymentMethod}
