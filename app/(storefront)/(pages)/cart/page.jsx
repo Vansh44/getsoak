@@ -17,5 +17,5 @@ export default async function Cart() {
   // concurrently-rendering child, so each page guards its own host.
   await requireStorefrontStoreId();
   const layout = await getStorefrontLayout();
-  return <CartClient grocery={layout.storefront === "grocery"} />;
+  return <CartClient grocery={layout.cart === "grocery"} />;
 }

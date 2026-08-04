@@ -62,7 +62,7 @@ export default async function ShopPage({
       categories={shopCategories}
       initialCategorySlug={initialCategorySlug}
       initialQuery={initialQuery}
-      grocery={layout.storefront === "grocery"}
+      grocery={layout.card === "grocery"}
       storeLowStockThreshold={lowStockThreshold as number}
     />
   );

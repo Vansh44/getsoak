@@ -42,6 +42,37 @@ export interface NewsletterConfig extends FooterBlockToggle {
   heading: string;
   subtext: string;
   buttonLabel: string;
+  consentText: string;
+}
+
+export type HeaderVariant = "classic" | "market" | "centered" | "minimal";
+export type CardVariant =
+  | "classic"
+  | "quick_add"
+  | "overlay"
+  | "framed"
+  | "grocery";
+export type ProductDetailVariant = "classic" | "grocery" | "editorial";
+export type CartVariant = "classic" | "grocery" | "compact";
+export type FooterVariant = "rich" | "minimal" | "editorial";
+
+/** `theme` means inherit the pinned preset; every explicit value is a
+ * merchant-owned, published override edited in the visual builder. */
+export interface StorefrontAppearance {
+  header: "theme" | HeaderVariant;
+  card: "theme" | CardVariant;
+  productDetail: "theme" | ProductDetailVariant;
+  cart: "theme" | CartVariant;
+  footer: "theme" | FooterVariant;
+}
+
+export interface ResolvedStorefrontAppearance {
+  header: HeaderVariant;
+  card: Exclude<CardVariant, "quick_add">;
+  cardQuickAdd: boolean;
+  productDetail: ProductDetailVariant;
+  cart: CartVariant;
+  footer: FooterVariant;
 }
 
 export interface FooterConfig {
@@ -60,6 +91,7 @@ export interface FooterConfig {
 }
 
 export interface StoreChrome {
+  appearance: StorefrontAppearance;
   header: HeaderConfig;
   footer: FooterConfig;
 }
@@ -80,6 +112,13 @@ const MAX_TEXT = 160;
  * that changes a live storefront is a migration bug wearing a config hat.
  */
 export const DEFAULT_CHROME: StoreChrome = {
+  appearance: {
+    header: "theme",
+    card: "theme",
+    productDetail: "theme",
+    cart: "theme",
+    footer: "theme",
+  },
   header: {
     links: [
       { label: "Shop", href: "/shop" },
@@ -122,6 +161,7 @@ export const DEFAULT_CHROME: StoreChrome = {
       heading: "Stay in the loop",
       subtext: "New arrivals, offers and stories — no spam.",
       buttonLabel: "Subscribe",
+      consentText: "I agree to receive store news and offers by email.",
     },
     contact: { enabled: true },
     social: { enabled: true },
@@ -195,6 +235,7 @@ function cleanFooter(raw: unknown, d: FooterConfig): FooterConfig {
       heading: str(n.heading, MAX_TEXT) || d.newsletter.heading,
       subtext: str(n.subtext, MAX_TEXT) || d.newsletter.subtext,
       buttonLabel: str(n.buttonLabel, MAX_LABEL) || d.newsletter.buttonLabel,
+      consentText: str(n.consentText, MAX_TEXT) || d.newsletter.consentText,
     },
     contact: {
       enabled: bool(
@@ -218,6 +259,47 @@ function cleanFooter(raw: unknown, d: FooterConfig): FooterConfig {
   };
 }
 
+const HEADER_VARIANTS: HeaderVariant[] = [
+  "classic",
+  "market",
+  "centered",
+  "minimal",
+];
+const CARD_VARIANTS: CardVariant[] = [
+  "classic",
+  "quick_add",
+  "overlay",
+  "framed",
+  "grocery",
+];
+const PRODUCT_VARIANTS: ProductDetailVariant[] = [
+  "classic",
+  "grocery",
+  "editorial",
+];
+const CART_VARIANTS: CartVariant[] = ["classic", "grocery", "compact"];
+const FOOTER_VARIANTS: FooterVariant[] = ["rich", "minimal", "editorial"];
+
+function appearanceValue<T extends string>(
+  value: unknown,
+  variants: readonly T[],
+): "theme" | T {
+  return value === "theme" || variants.includes(value as T)
+    ? (value as "theme" | T)
+    : "theme";
+}
+
+function cleanAppearance(raw: unknown): StorefrontAppearance {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    header: appearanceValue(r.header, HEADER_VARIANTS),
+    card: appearanceValue(r.card, CARD_VARIANTS),
+    productDetail: appearanceValue(r.productDetail, PRODUCT_VARIANTS),
+    cart: appearanceValue(r.cart, CART_VARIANTS),
+    footer: appearanceValue(r.footer, FOOTER_VARIANTS),
+  };
+}
+
 /**
  * Coerce arbitrary jsonb (a store_chrome row, or a draft mid-edit) into usable
  * chrome, falling back to DEFAULT_CHROME per field.
@@ -232,6 +314,7 @@ export function normalizeChrome(raw: unknown): StoreChrome {
   const header = cleanHeader(r.header, DEFAULT_CHROME.header);
   const footer = cleanFooter(r.footer, DEFAULT_CHROME.footer);
   return {
+    appearance: cleanAppearance(r.appearance),
     header: {
       ...header,
       links: header.links.length ? header.links : DEFAULT_CHROME.header.links,
@@ -254,7 +337,53 @@ export function normalizeChrome(raw: unknown): StoreChrome {
 export function sanitizeChromeForSave(raw: unknown): StoreChrome {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
+    appearance: cleanAppearance(r.appearance),
     header: cleanHeader(r.header, DEFAULT_CHROME.header),
     footer: cleanFooter(r.footer, DEFAULT_CHROME.footer),
+  };
+}
+
+/** Resolve a preset's layout with published merchant overrides. Legacy
+ * `storefront:grocery` remains a fallback so pinned Basket 1.0 stores do not
+ * change merely because the richer Phase 3 contract shipped. */
+export function resolveStorefrontAppearance(
+  theme: import("@/lib/themes/types").ThemeLayout | undefined,
+  overrides: StorefrontAppearance = DEFAULT_CHROME.appearance,
+): ResolvedStorefrontAppearance {
+  const legacyGrocery = theme?.storefront === "grocery";
+  const themeCard = legacyGrocery ? "grocery" : (theme?.card ?? "classic");
+  const overrideCard = overrides.card;
+  const cardQuickAdd =
+    overrideCard === "theme"
+      ? theme?.card === "quick_add"
+      : overrideCard === "quick_add";
+  const card =
+    overrideCard === "theme"
+      ? themeCard === "quick_add"
+        ? "classic"
+        : themeCard
+      : overrideCard === "quick_add"
+        ? "classic"
+        : overrideCard;
+
+  return {
+    header:
+      overrides.header === "theme"
+        ? (theme?.header ?? "classic")
+        : overrides.header,
+    card,
+    cardQuickAdd,
+    productDetail:
+      overrides.productDetail === "theme"
+        ? (theme?.productDetail ?? (legacyGrocery ? "grocery" : "classic"))
+        : overrides.productDetail,
+    cart:
+      overrides.cart === "theme"
+        ? (theme?.cart ?? (legacyGrocery ? "grocery" : "classic"))
+        : overrides.cart,
+    footer:
+      overrides.footer === "theme"
+        ? (theme?.footer ?? "rich")
+        : overrides.footer,
   };
 }

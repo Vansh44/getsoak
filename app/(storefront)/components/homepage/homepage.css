@@ -1503,6 +1503,155 @@ a.home-gallery-card:hover .home-gallery-image {
   font-weight: 700;
 }
 
+.home-video-full {
+  padding-inline: 0;
+}
+.home-video-player {
+  position: relative;
+  width: 100%;
+  max-width: 1320px;
+  margin-inline: auto;
+  overflow: hidden;
+  border-radius: var(--sm-radius-card, 18px);
+  background: var(--sm-ink);
+  box-shadow: 0 28px 70px rgba(var(--sm-shadow-rgb), 0.16);
+}
+.home-video-full .home-video-player {
+  max-width: none;
+  border-radius: 0;
+}
+.home-video-player.ratio-landscape {
+  aspect-ratio: 16 / 9;
+}
+.home-video-player.ratio-square {
+  aspect-ratio: 1;
+  max-width: 860px;
+}
+.home-video-player.ratio-portrait {
+  aspect-ratio: 4 / 5;
+  max-width: 760px;
+}
+.home-video-frame,
+.home-video-element {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: cover;
+}
+
+.home-newsletter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
+  align-items: center;
+  gap: clamp(30px, 6vw, 90px);
+  max-width: 1320px;
+  margin-inline: auto;
+  padding: clamp(34px, 6vw, 84px);
+  border-radius: var(--sm-radius-card, 20px);
+  background: var(--sm-cream-deep);
+  color: var(--sm-ink);
+}
+.home-newsletter.theme-light {
+  background: var(--sm-ink);
+  color: var(--sm-on-ink);
+}
+.home-newsletter.align-center {
+  grid-template-columns: minmax(0, 760px);
+  justify-content: center;
+  text-align: center;
+}
+.home-newsletter-heading {
+  margin: 0;
+  font-family: var(--font-outfit), sans-serif;
+  font-size: clamp(2rem, 4.5vw, 4rem);
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  line-height: 1.03;
+}
+.home-newsletter-sub {
+  max-width: 640px;
+  margin: 14px 0 0;
+  color: var(--sm-ink-soft);
+  line-height: 1.65;
+}
+.home-newsletter.align-center .home-newsletter-sub {
+  margin-inline: auto;
+}
+.home-newsletter.theme-light .home-section-eyebrow,
+.home-newsletter.theme-light .home-newsletter-sub {
+  color: color-mix(in srgb, var(--sm-on-ink) 72%, transparent);
+}
+.home-newsletter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.home-newsletter-fields {
+  display: flex;
+  min-width: 0;
+}
+.home-newsletter-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 14px 18px;
+  border: 1px solid var(--sm-border);
+  border-right: 0;
+  border-radius: var(--sm-radius-control, 10px) 0 0
+    var(--sm-radius-control, 10px);
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  outline: none;
+}
+.home-newsletter-input:focus {
+  border-color: var(--sm-accent);
+  box-shadow: inset 0 0 0 1px var(--sm-accent);
+}
+.home-newsletter-button {
+  padding: 14px 24px;
+  border: 0;
+  border-radius: 0 var(--sm-radius-control, 10px) var(--sm-radius-control, 10px)
+    0;
+  background: var(--sm-accent);
+  color: var(--sm-on-accent);
+  font-family: var(--font-outfit), sans-serif;
+  font-weight: 700;
+  cursor: pointer;
+}
+.home-newsletter-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.home-newsletter-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--sm-ink-soft);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  text-align: left;
+}
+.home-newsletter.theme-light .home-newsletter-consent {
+  color: color-mix(in srgb, var(--sm-on-ink) 68%, transparent);
+}
+.home-newsletter-consent input {
+  margin-top: 2px;
+}
+.home-newsletter-message {
+  min-height: 18px;
+  margin: 0;
+  color: var(--sm-ink-soft);
+  font-size: 0.78rem;
+  text-align: left;
+}
+.home-newsletter-message[data-status="success"] {
+  color: var(--sm-success);
+}
+.home-newsletter-message[data-status="error"] {
+  color: var(--sm-error);
+}
+
 @media (max-width: 820px) {
   .home-media-text {
     grid-template-columns: 1fr;
@@ -1517,6 +1666,9 @@ a.home-gallery-card:hover .home-gallery-image {
   .home-gallery.cols-4,
   .home-testimonials.cols-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-newsletter {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1540,6 +1692,19 @@ a.home-gallery-card:hover .home-gallery-image {
   }
   .home-testimonial {
     min-height: 220px;
+  }
+  .home-newsletter {
+    padding: 28px 20px;
+  }
+  .home-newsletter-fields {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .home-newsletter-input,
+  .home-newsletter-button {
+    width: 100%;
+    border: 1px solid var(--sm-border);
+    border-radius: var(--sm-radius-control, 10px);
   }
 }
 

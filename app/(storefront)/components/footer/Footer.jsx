@@ -6,6 +6,7 @@ import styles from "./Footer.module.css";
 import { useBrand } from "@/app/(storefront)/components/brand-provider";
 import { useChrome } from "@/app/(storefront)/components/chrome-provider";
 import { useRouter, usePathname } from "next/navigation";
+import { NewsletterForm } from "@/app/(storefront)/components/newsletter-form";
 
 // All icons are local inline SVG (mail/phone/clock + the social brand marks
 // below) — no external image host. Only the social LINK URLs are per-store
@@ -102,20 +103,19 @@ export default function Footer() {
                 {footerCfg.newsletter.subtext}
               </p>
             </div>
-            <form
-              className={styles.newsletterForm}
-              onSubmit={(e) => e.preventDefault()}
-            >
-              <input
-                type="email"
-                placeholder="your@email.com"
-                className={styles.newsletterInput}
-                aria-label="Email address"
-              />
-              <button type="submit" className={styles.newsletterBtn}>
-                {footerCfg.newsletter.buttonLabel}
-              </button>
-            </form>
+            <NewsletterForm
+              source="footer"
+              buttonLabel={footerCfg.newsletter.buttonLabel}
+              consentText={footerCfg.newsletter.consentText}
+              classes={{
+                form: styles.newsletterForm,
+                fields: styles.newsletterFields,
+                input: styles.newsletterInput,
+                button: styles.newsletterBtn,
+                consent: styles.newsletterConsent,
+                message: styles.newsletterMessage,
+              }}
+            />
           </div>
         </div>
       )}

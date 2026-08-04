@@ -1,22 +1,28 @@
 import { getCurrentStoreOrNull } from "./resolve";
 import { getThemeDefinition } from "@/lib/themes";
 import { readThemeSelection } from "@/lib/themes/meta";
-import type { ThemeLayout } from "@/lib/themes/types";
+import { getStoreChrome } from "@/lib/chrome/queries";
+import {
+  resolveStorefrontAppearance,
+  type ResolvedStorefrontAppearance,
+} from "@/lib/chrome/types";
 
-// Resolve the current host store's theme layout flags for server components
-// that need to branch MARKUP (not just CSS) — the product-detail page and the
-// cart, which pass `grocery` down to their client components. CSS-only
-// switches use the `sm-*` root classes the (storefront) layout already emits.
+// Resolve the current host store's pinned theme defaults plus its published
+// builder overrides. Server components use this when a variant changes markup
+// (grocery cards/PDP/cart); CSS-only variants use the same resolved values via
+// the `sm-*` root classes emitted by the storefront layout.
 //
 // getCurrentStoreOrNull is unstable_cache-backed, so this dedupes with the
-// layout's own store resolution within a request. Absent/unknown theme = {}
-// (classic layout), so a store with no real theme is untouched.
-export async function getStorefrontLayout(): Promise<ThemeLayout> {
+// layout's own store resolution within a request. An absent theme resolves to
+// the classic appearance, so a store with no real theme is untouched.
+export async function getStorefrontLayout(): Promise<ResolvedStorefrontAppearance> {
   const store = await getCurrentStoreOrNull();
   const selection = readThemeSelection(store?.settings);
-  if (!selection) return {};
-  return (
-    getThemeDefinition(selection.id, selection.version).preset.design.layout ??
-    {}
-  );
+  const themeLayout = selection
+    ? getThemeDefinition(selection.id, selection.version).preset.design.layout
+    : undefined;
+  const appearance = store
+    ? (await getStoreChrome(store.id)).appearance
+    : undefined;
+  return resolveStorefrontAppearance(themeLayout, appearance);
 }

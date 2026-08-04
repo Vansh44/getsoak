@@ -2619,6 +2619,61 @@ export const storeChrome = pgTable(
   ],
 );
 
+// Store-scoped mailing-list consent captured by the footer and newsletter
+// page section (supabase/themes_01_newsletter_subscribers.sql). Public forms
+// write through a validated, rate-limited server action using service scope;
+// RLS exposes rows only to the owning store's admins.
+export const newsletterSubscribers = pgTable(
+  "newsletter_subscribers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    email: text().notNull(),
+    status: text().default("active").notNull(),
+    source: text().default("section").notNull(),
+    consentText: text("consent_text").notNull(),
+    consentedAt: timestamp("consented_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("newsletter_subscribers_store_email_key").on(
+      table.storeId,
+      table.email,
+    ),
+    index("idx_newsletter_subscribers_store_status").on(
+      table.storeId,
+      table.status,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "newsletter_subscribers_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "newsletter_subscribers_status_check",
+      sql`status = ANY (ARRAY['active'::text, 'unsubscribed'::text])`,
+    ),
+    check(
+      "newsletter_subscribers_source_check",
+      sql`source = ANY (ARRAY['footer'::text, 'section'::text])`,
+    ),
+    check(
+      "newsletter_subscribers_email_normalized_check",
+      sql`email = lower(btrim(email))`,
+    ),
+  ],
+);
+
 export const storeMenus = pgTable(
   "store_menus",
   {

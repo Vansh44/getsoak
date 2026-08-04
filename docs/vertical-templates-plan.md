@@ -1,15 +1,16 @@
 # Vertical Store Templates — Implementation Plan
 
-> **Current expansion phase:** **Quality Phases 1–2 DONE; Capability Phase 3
-> IN PROGRESS (2026-08-05)** — the
+> **Current expansion phase:** **Quality Phases 1–2 and Capability Phase 3
+> DONE (2026-08-05)** — the
 > catalog release bar lives in `docs/theme-acceptance.md`; objective package
 > requirements are enforced in `lib/themes/themes.test.ts`; and the versioned
 > engine → immutable preset → merchant-owned content contract now lives in
 > `lib/themes/meta.ts`, `types.ts`, `index.ts`, and `apply.ts`.
-> Phase 3's first builder-to-storefront capability pack is complete:
-> theme-agnostic `media_text`, editorial `gallery`, and `testimonials` sections
-> now include typed defaults, publish/draft validation, builder controls,
-> library previews, responsive storefront renderers, and tests.
+> Phase 3 now supplies the shared professional-theme capability layer:
+> `media_text`, editorial `gallery`, `testimonials`, dedicated `video`, and a
+> persistent consent-aware `newsletter`; plus header, card, PDP, cart, and
+> footer variants that can inherit immutable theme defaults or take
+> draft/published merchant overrides in the visual builder.
 > Basket is the only/default implementation, but it is **blocked from approval**
 > under the new bar until its missing live demo is repaired and the browser,
 > accessibility, performance, and two-reviewer gates are recorded.
@@ -18,9 +19,9 @@
 > usp_bar / tile_grid blocks, market header + quick-add card layout variants,
 > functional header search (`/shop?q=`), real-photo imagery pipeline, and the
 > **Basket** grocery template (`lib/themes/definitions/basket.ts`) verified
-> live on desktop + mobile with a seeded `demo-basket` store. Remaining P1
-> blocks (newsletter and logo_marquee) land with the verticals that need them
-> (P3); media_text, gallery, and testimonials are now built.
+> live on desktop + mobile with a seeded `demo-basket` store. Newsletter and
+> the Phase 3 editorial/video capability set are now built; `logo_marquee`
+> remains vertical-specific work, not a Phase 3 platform blocker.
 > **Branch:** `feature` · **Strategy:** single big merge into `main`.
 > **Decisions locked:** imagery = curated free stock (Unsplash/Pexels, commercial-use); layout fidelity = data-driven block library (not bespoke per-template code).
 
@@ -45,10 +46,11 @@ grocery treatments for cards, product detail, and cart, but there is no breadth
 of visual direction and no release evidence under the new acceptance gate. A
 single good vertical is a reference implementation, not a theme catalog.
 
-The versioned catalog seam is now built, and Phase 3 has started with the first
-three editorial blocks. The remaining work is the reusable video/newsletter,
-chrome, product-card, product-detail, cart, footer, and motion capability needed
-for several original art directions without adding another storefront fork.
+The versioned catalog seam and Phase 3 shared capability layer are now built.
+The next work is to author and release distinct vertical presets on those
+primitives, starting only after Basket's demo and acceptance evidence are
+repaired. Theme-specific additions such as `logo_marquee` can land with the
+first vertical that genuinely needs them.
 
 ---
 
@@ -310,12 +312,16 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
   nest immutable authored content under `preset`; `applyTheme` pins engine and
   preset versions in `stores.settings.theme`; rendering honors that pin and
   falls back to legacy `settings.template` without a migration.
-- **Capability Phase 3 — in progress:** the first end-to-end pack—media with
-  text, editorial gallery/lookbook, and testimonials/press—is built and
-  builder-editable. Next add dedicated video and newsletter blocks, followed by
-  storefront variants required by Studio, Ritual, and the Basket/Market
-  refresh: header/card/PDP/cart/footer variants. Each capability must remain
-  builder-editable and theme-agnostic.
+- **Capability Phase 3 — done:** media with text, editorial gallery/lookbook,
+  testimonials/press, dedicated video, and persistent consent-aware newsletter
+  are typed, validated, builder-editable, rendered responsively, and tested.
+  Shared header/card/PDP/cart/footer variants resolve from the pinned theme plus
+  draft/published merchant overrides without forking the storefront or mutating
+  the immutable preset. Legacy Basket grocery pins remain compatible.
+- **Phase 4 — next:** repair Basket's demo/release evidence, then author the
+  Studio, Ritual, and subsequent vertical presets against the completed shared
+  capability contract. A preset is not done until every applicable acceptance
+  story and two-reviewer gate is recorded.
 - **Basket repair — parallel prerequisite:** restore/reseed `demo-basket` and
   run the new acceptance stories. This can return Basket to Candidate, but does
   not block designing the Phase 2 contract.

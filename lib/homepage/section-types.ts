@@ -24,6 +24,8 @@ export type HomepageSectionType =
   | "media_text"
   | "gallery"
   | "testimonials"
+  | "video"
+  | "newsletter"
   | "usp_bar"
   | "ticker"
   | "faq_accordion"
@@ -41,6 +43,8 @@ export const HOMEPAGE_SECTION_TYPES: HomepageSectionType[] = [
   "media_text",
   "gallery",
   "testimonials",
+  "video",
+  "newsletter",
   "usp_bar",
   "ticker",
   "faq_accordion",
@@ -278,6 +282,31 @@ export interface TestimonialsConfig {
   columns: 2 | 3;
 }
 
+export interface VideoConfig {
+  eyebrow: string;
+  heading: string;
+  subheading: string;
+  video_url: string;
+  poster_url: string;
+  poster_alt: string;
+  aspect_ratio: "landscape" | "square" | "portrait";
+  width: "contained" | "full";
+  autoplay: boolean;
+  loop: boolean;
+  controls: boolean;
+}
+
+export interface NewsletterSectionConfig {
+  eyebrow: string;
+  heading: string;
+  subheading: string;
+  button_label: string;
+  success_message: string;
+  consent_text: string;
+  theme: BannerTheme;
+  alignment: "left" | "center";
+}
+
 /**
  * FAQ accordion — question/answer pairs with optional category filter pills.
  * Answers are plain text (rendered as text, never HTML) so there's no sanitize
@@ -351,6 +380,8 @@ export type AnySectionConfig =
   | MediaTextConfig
   | GalleryConfig
   | TestimonialsConfig
+  | VideoConfig
+  | NewsletterSectionConfig
   | UspBarConfig
   | TickerConfig
   | FaqAccordionConfig
@@ -370,6 +401,8 @@ export type HomepageSectionConfig =
   | { type: "media_text"; config: MediaTextConfig }
   | { type: "gallery"; config: GalleryConfig }
   | { type: "testimonials"; config: TestimonialsConfig }
+  | { type: "video"; config: VideoConfig }
+  | { type: "newsletter"; config: NewsletterSectionConfig }
   | { type: "usp_bar"; config: UspBarConfig }
   | { type: "ticker"; config: TickerConfig }
   | { type: "faq_accordion"; config: FaqAccordionConfig }
@@ -400,6 +433,8 @@ export const EMPTY_CONFIG: {
   media_text: MediaTextConfig;
   gallery: GalleryConfig;
   testimonials: TestimonialsConfig;
+  video: VideoConfig;
+  newsletter: NewsletterSectionConfig;
   usp_bar: UspBarConfig;
   ticker: TickerConfig;
   faq_accordion: FaqAccordionConfig;
@@ -495,6 +530,29 @@ export const EMPTY_CONFIG: {
     items: [],
     layout: "cards",
     columns: 3,
+  },
+  video: {
+    eyebrow: "Watch",
+    heading: "See the story unfold",
+    subheading: "",
+    video_url: "",
+    poster_url: "",
+    poster_alt: "",
+    aspect_ratio: "landscape",
+    width: "contained",
+    autoplay: false,
+    loop: false,
+    controls: true,
+  },
+  newsletter: {
+    eyebrow: "Stay close",
+    heading: "Notes worth opening",
+    subheading: "New releases, useful stories and occasional offers.",
+    button_label: "Subscribe",
+    success_message: "You're on the list — thank you.",
+    consent_text: "I agree to receive store news and offers by email.",
+    theme: "dark",
+    alignment: "center",
   },
   usp_bar: {
     items: [
@@ -644,6 +702,22 @@ export const SECTION_TYPE_META: Record<HomepageSectionType, SectionTypeMeta> = {
     icon: "testimonials",
     category: "content",
     keywords: ["reviews", "quotes", "social proof", "logos", "press"],
+  },
+  video: {
+    label: "Video",
+    description:
+      "A dedicated film block with poster, playback and sizing controls.",
+    icon: "video",
+    category: "content",
+    keywords: ["film", "youtube", "vimeo", "mp4", "story", "reel"],
+  },
+  newsletter: {
+    label: "Newsletter",
+    description:
+      "A real email sign-up block with consent and success feedback.",
+    icon: "newsletter",
+    category: "content",
+    keywords: ["email", "subscribe", "mailing list", "signup", "updates"],
   },
   usp_bar: {
     label: "USP Bar",
@@ -1082,6 +1156,55 @@ export function validateConfig(
     return { config };
   }
 
+  if (type === "video") {
+    const video_url = safeHref(input.video_url);
+    if (strict && !video_url) {
+      return { error: "Add a video before publishing." };
+    }
+    const config: VideoConfig = {
+      eyebrow: str(input.eyebrow).slice(0, 80),
+      heading: str(input.heading).slice(0, 160),
+      subheading: str(input.subheading).slice(0, 300),
+      video_url,
+      poster_url: safeHref(input.poster_url),
+      poster_alt: str(input.poster_alt).slice(0, 180),
+      aspect_ratio:
+        input.aspect_ratio === "square" || input.aspect_ratio === "portrait"
+          ? input.aspect_ratio
+          : "landscape",
+      width: input.width === "full" ? "full" : "contained",
+      autoplay: input.autoplay === true,
+      loop: input.loop === true,
+      controls: input.controls !== false,
+    };
+    return { config };
+  }
+
+  if (type === "newsletter") {
+    const heading = str(input.heading).slice(0, 160);
+    const subheading = str(input.subheading).slice(0, 300);
+    const consent_text = str(input.consent_text).slice(0, 240);
+    if (strict && !heading && !subheading) {
+      return { error: "Add a newsletter heading or description." };
+    }
+    if (strict && !consent_text) {
+      return { error: "Add consent text before publishing." };
+    }
+    const config: NewsletterSectionConfig = {
+      eyebrow: str(input.eyebrow).slice(0, 80),
+      heading,
+      subheading,
+      button_label: str(input.button_label).slice(0, 60) || "Subscribe",
+      success_message:
+        str(input.success_message).slice(0, 180) ||
+        "You're on the list — thank you.",
+      consent_text,
+      theme: textTheme(input.theme, "dark"),
+      alignment: input.alignment === "left" ? "left" : "center",
+    };
+    return { config };
+  }
+
   if (type === "faq_accordion") {
     const rawItems = Array.isArray(input.items) ? input.items : [];
     if (rawItems.length > MAX_FAQ_ITEMS) {
@@ -1288,6 +1411,14 @@ export function summarizeSection(section: {
     case "testimonials": {
       const t = c as TestimonialsConfig;
       return `Testimonials · ${t.items.length} item${t.items.length === 1 ? "" : "s"} · ${t.layout}`;
+    }
+    case "video": {
+      const v = c as VideoConfig;
+      return `Video · ${v.heading?.trim() || "(no heading)"} · ${v.aspect_ratio}`;
+    }
+    case "newsletter": {
+      const n = c as NewsletterSectionConfig;
+      return `Newsletter · ${n.heading?.trim() || "(no heading)"} · ${n.alignment}`;
     }
     case "faq_accordion": {
       const f = c as FaqAccordionConfig;

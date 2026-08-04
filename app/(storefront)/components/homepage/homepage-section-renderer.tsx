@@ -16,6 +16,8 @@ import { TileGridSection } from "../sections/tile-grid-section";
 import { MediaTextSection } from "../sections/media-text-section";
 import { GallerySection } from "../sections/gallery-section";
 import { TestimonialsSection } from "../sections/testimonials-section";
+import { VideoSection } from "../sections/video-section";
+import { NewsletterSection } from "../sections/newsletter-section";
 import { FaqAccordionSection } from "../sections/faq-accordion-section";
 import type {
   AnySectionConfig,
@@ -28,6 +30,7 @@ import type {
   HomepageSectionType,
   LatestBlogsConfig,
   MediaTextConfig,
+  NewsletterSectionConfig,
   PromoBannerConfig,
   RichTextConfig,
   SectionStyle,
@@ -35,6 +38,7 @@ import type {
   TickerConfig,
   TileGridConfig,
   TestimonialsConfig,
+  VideoConfig,
   UspBarConfig,
 } from "@/lib/homepage/section-types";
 
@@ -106,6 +110,15 @@ export function HomepageSectionRenderer({
         <TestimonialsSection
           {...shell}
           config={section.config as TestimonialsConfig}
+        />
+      );
+    case "video":
+      return <VideoSection {...shell} config={section.config as VideoConfig} />;
+    case "newsletter":
+      return (
+        <NewsletterSection
+          {...shell}
+          config={section.config as NewsletterSectionConfig}
         />
       );
     case "faq_accordion":

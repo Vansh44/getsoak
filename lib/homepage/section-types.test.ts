@@ -22,9 +22,11 @@ import {
   type PromoBannerConfig,
   type LatestBlogsConfig,
   type MediaTextConfig,
+  type NewsletterSectionConfig,
   type TickerConfig,
   type TileGridConfig,
   type TestimonialsConfig,
+  type VideoConfig,
   type UspBarConfig,
 } from "./section-types";
 
@@ -760,6 +762,76 @@ describe("validateConfig", () => {
       expect(config.heading).toBe("Sale");
       expect(config.subtext).toBe("Up to 50% off");
       expect(config.cta_label).toBe("Shop now");
+    });
+  });
+});
+
+describe("phase 3 video and newsletter sections", () => {
+  it("requires a safe video URL on publish and keeps incomplete drafts", () => {
+    expect(validateConfig("video", { video_url: "" })).toEqual({
+      error: "Add a video before publishing.",
+    });
+    expect("config" in validateConfig("video", {}, "draft")).toBe(true);
+    expect(
+      validateConfig("video", { video_url: "javascript:alert(1)" }),
+    ).toEqual({
+      error: "Add a video before publishing.",
+    });
+  });
+
+  it("normalises video playback and layout options", () => {
+    const out = validateConfig("video", {
+      eyebrow: " Watch ",
+      heading: " Studio film ",
+      video_url: "https://vimeo.com/123456789",
+      poster_url: "javascript:alert(1)",
+      aspect_ratio: "portrait",
+      width: "full",
+      autoplay: true,
+      loop: true,
+      controls: false,
+    });
+    const config = (out as { config: VideoConfig }).config;
+    expect(config).toMatchObject({
+      eyebrow: "Watch",
+      heading: "Studio film",
+      video_url: "https://vimeo.com/123456789",
+      poster_url: "",
+      aspect_ratio: "portrait",
+      width: "full",
+      autoplay: true,
+      loop: true,
+      controls: false,
+    });
+  });
+
+  it("requires newsletter copy and explicit consent text on publish", () => {
+    expect(validateConfig("newsletter", {})).toEqual({
+      error: "Add a newsletter heading or description.",
+    });
+    expect(validateConfig("newsletter", { heading: "Join us" })).toEqual({
+      error: "Add consent text before publishing.",
+    });
+    expect("config" in validateConfig("newsletter", {}, "draft")).toBe(true);
+  });
+
+  it("normalises newsletter copy, theme and alignment", () => {
+    const out = validateConfig("newsletter", {
+      heading: "  Notes worth opening ",
+      consent_text: " I agree to receive updates. ",
+      button_label: "",
+      success_message: "",
+      theme: "light",
+      alignment: "left",
+    });
+    const config = (out as { config: NewsletterSectionConfig }).config;
+    expect(config).toMatchObject({
+      heading: "Notes worth opening",
+      consent_text: "I agree to receive updates.",
+      button_label: "Subscribe",
+      success_message: "You're on the list — thank you.",
+      theme: "light",
+      alignment: "left",
     });
   });
 });

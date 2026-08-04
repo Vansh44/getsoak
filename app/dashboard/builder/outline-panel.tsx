@@ -240,7 +240,9 @@ export function OutlinePanel({
           <Palette className="h-4 w-4 opacity-50" />
           <span>
             <span className="sm-builder-themerow-title">Brand</span>
-            <span className="sm-builder-themerow-sub">Colour &amp; logo</span>
+            <span className="sm-builder-themerow-sub">
+              Colour, logo &amp; layouts
+            </span>
           </span>
         </button>
 

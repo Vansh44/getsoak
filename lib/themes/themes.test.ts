@@ -385,6 +385,31 @@ describe("theme registry", () => {
         if (layout?.headerForeground) {
           expect(COLOR_RE.test(layout.headerForeground)).toBe(true);
         }
+        if (layout?.header) {
+          expect(["classic", "market", "centered", "minimal"]).toContain(
+            layout.header,
+          );
+        }
+        if (layout?.card) {
+          expect([
+            "classic",
+            "quick_add",
+            "overlay",
+            "framed",
+            "grocery",
+          ]).toContain(layout.card);
+        }
+        if (layout?.productDetail) {
+          expect(["classic", "grocery", "editorial"]).toContain(
+            layout.productDetail,
+          );
+        }
+        if (layout?.cart) {
+          expect(["classic", "grocery", "compact"]).toContain(layout.cart);
+        }
+        if (layout?.footer) {
+          expect(["rich", "minimal", "editorial"]).toContain(layout.footer);
+        }
       });
 
       it("flattens into the full --sm-* token override set", () => {

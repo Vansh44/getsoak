@@ -12,6 +12,7 @@ import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
+import { resolveStorefrontAppearance } from "@/lib/chrome/types";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
@@ -98,13 +99,26 @@ export default async function StorefrontLayout({
     ? designToCssVars(design, brand.primaryColor)
     : { "--brand-primary": brand.primaryColor };
 
-  // Chrome layout variants (theme-driven; absent = classic WholeSip chrome).
-  // Rendered as root classes so plain CSS can switch header/card treatments.
+  // Theme defaults + the merchant's published builder overrides resolve into
+  // one appearance. Root classes let CSS switch treatments without forking
+  // components; the same resolver runs client-side for instant builder preview.
+  const appearance = resolveStorefrontAppearance(
+    design?.layout,
+    chrome.appearance,
+  );
   const rootClass = [
     "storefront-root",
-    design?.layout?.header === "market" ? "sm-header-market" : "",
-    design?.layout?.card === "quick_add" ? "sm-card-quickadd" : "",
-    design?.layout?.storefront === "grocery" ? "sm-storefront-grocery" : "",
+    `sm-header-${appearance.header}`,
+    `sm-card-${appearance.card}`,
+    appearance.cardQuickAdd ? "sm-card-quickadd" : "",
+    `sm-pdp-${appearance.productDetail}`,
+    `sm-cart-${appearance.cart}`,
+    `sm-footer-${appearance.footer}`,
+    appearance.card === "grocery" ||
+    appearance.productDetail === "grocery" ||
+    appearance.cart === "grocery"
+      ? "sm-storefront-grocery"
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -113,7 +127,11 @@ export default async function StorefrontLayout({
     <AuthProvider>
       <CartProvider>
         <BrandProvider brand={brand}>
-          <ChromeProvider chrome={chrome} live={previewing}>
+          <ChromeProvider
+            chrome={chrome}
+            themeLayout={design?.layout}
+            live={previewing}
+          >
             <div className={rootClass} style={themeVars as CSSProperties}>
               <Header />
               {children}

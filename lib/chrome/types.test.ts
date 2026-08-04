@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_CHROME,
   normalizeChrome,
+  resolveStorefrontAppearance,
   sanitizeChromeForSave,
 } from "./types";
 
@@ -114,6 +115,63 @@ describe("normalizeChrome", () => {
       },
     });
     expect(c.footer.groups.map((g) => g.title)).toEqual(["Real"]);
+  });
+});
+
+describe("resolveStorefrontAppearance", () => {
+  it("uses modern theme defaults while separating quick-add from card shape", () => {
+    expect(
+      resolveStorefrontAppearance({
+        header: "centered",
+        card: "quick_add",
+        productDetail: "editorial",
+        cart: "compact",
+        footer: "minimal",
+      }),
+    ).toEqual({
+      header: "centered",
+      card: "classic",
+      cardQuickAdd: true,
+      productDetail: "editorial",
+      cart: "compact",
+      footer: "minimal",
+    });
+  });
+
+  it("preserves pinned legacy grocery storefronts", () => {
+    expect(
+      resolveStorefrontAppearance({ storefront: "grocery" }),
+    ).toMatchObject({
+      card: "grocery",
+      productDetail: "grocery",
+      cart: "grocery",
+    });
+  });
+
+  it("applies merchant overrides without changing inherited surfaces", () => {
+    expect(
+      resolveStorefrontAppearance(
+        { header: "market", card: "grocery", footer: "rich" },
+        {
+          ...DEFAULT_CHROME.appearance,
+          header: "minimal",
+          card: "overlay",
+          footer: "editorial",
+        },
+      ),
+    ).toEqual({
+      header: "minimal",
+      card: "overlay",
+      cardQuickAdd: false,
+      productDetail: "classic",
+      cart: "classic",
+      footer: "editorial",
+    });
+  });
+
+  it("normalises invalid stored appearance values back to theme inheritance", () => {
+    const chrome = normalizeChrome({ appearance: { header: "impossible" } });
+    expect(chrome.appearance).toEqual(DEFAULT_CHROME.appearance);
   });
 });
 

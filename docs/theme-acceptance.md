@@ -79,6 +79,15 @@ preview is at least 800 × 600, uses a 4:3 aspect ratio, and is no larger than
 Every palette, typography, shape, and selected layout value is valid and can be
 flattened into the storefront CSS-variable contract.
 
+**TA-2.8 ★ — Shared capability contracts are enforceable**
+
+Every seeded video/newsletter/editorial section passes strict publish
+validation. Header, card, product-detail, cart, and footer defaults use the
+allowed variant registry; the pure resolver preserves pinned legacy grocery
+stores and applies merchant overrides per surface. Newsletter action tests must
+prove host-derived tenancy, normalized email, explicit consent, rate limiting,
+source allowlisting, idempotent upsert, and a safe persistence-failure response.
+
 ---
 
 ## 3. Storefront behavior gate
@@ -151,6 +160,33 @@ Repeat the main journey with `prefers-reduced-motion: reduce`.
 
 **Expect:** meaning and controls do not depend on animation; autoplay pauses or
 becomes non-disruptive; focus is never stolen.
+
+**TA-3.9 ★ — Layout variants stay editable and coherent**
+
+For every surface variant claimed by the theme, switch the Brand inspector
+between Theme default and an explicit alternative, then preview, reload the
+draft, publish, and revert.
+
+**Expect:** header, product cards, PDP, cart, and footer each change only their
+owned surface; preview matches the published storefront; theme inheritance
+returns exactly to the pinned preset; search, variant selection, quick-add,
+quantity controls, checkout links, footer navigation, focus states, and mobile
+controls remain functional in every treatment.
+
+**TA-3.10 ★ — Video and newsletter are real storefront capabilities**
+
+Test direct MP4/WebM, YouTube and Vimeo video with autoplay on/off, loop on/off,
+controls on/off, missing poster, and reduced motion. Submit both footer and
+section newsletter forms with invalid email, missing consent, a new email, a
+repeat email, and a simulated persistence failure; inspect the owning store's
+saved subscriber row.
+
+**Expect:** video keeps its configured aspect and accessible label, embeds use
+constructed privacy-safe URLs, and reduced-motion behavior satisfies TA-3.8.
+Newsletter feedback is announced, a consent checkbox is required, the displayed
+consent copy and source are recorded under the request-host store, repeat
+submissions reactivate one store/email row, and no address crosses tenants or is
+revealed through response wording.
 
 ---
 

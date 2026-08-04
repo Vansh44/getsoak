@@ -130,10 +130,13 @@ wholesip/
 │   │       │                  # page-section-renderer, custom-code-frame (sandboxed iframe),
 │   │       │                  # custom-code-section, rich-text-section, hero-section,
 │   │       │                  # usp-bar-section, ticker-section, tile-grid-section,
-│   │       │                  # faq-accordion-section,
+│   │       │                  # faq-accordion-section, media-text-section,
+│   │       │                  # gallery-section, testimonials-section, video-section/player,
+│   │       │                  # newsletter-section,
 │   │       │                  # preview-bridge, draft-canvas (client-side instant
 │   │       │                  # builder preview, §11), builder-overlay
 │   │       ├── brand-provider.tsx   # Injects per-store branding CSS vars
+│   │       ├── newsletter-form.tsx  # Consent-aware footer/section signup form
 │   │       ├── menu-provider.tsx    # Supplies per-store header/footer nav (store_menus)
 │   │       ├── shop-card.tsx / share-buttons.tsx
 │   │       ├── structured-data.tsx  # homepage Organization + WebSite JSON-LD
@@ -289,6 +292,7 @@ wholesip/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role
 │   │   ├── menu-actions.ts    # ★ Per-store nav read/save (see §11 menu builder, store_menus)
+│   │   ├── newsletter-actions.ts # ★ Host-scoped, rate-limited mailing-list upsert (§11)
 │   │   ├── checkout-actions.ts # ★ placeOrder (COD + razorpay — §12/§18): re-prices from
 │   │   │                      # DB, store-scoped by host, re-validates coupon, rate-limited,
 │   │   │                      # SERVICE-ROLE writes (no customer INSERT policy — convention
@@ -514,8 +518,8 @@ wholesip/
 │   │                          # mailers.ts — the mail-type catalog + which types
 │   │                          # are redacted because they carry a credential
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
-│   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
-│   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
+│   │                          # custom pages; 17 types incl. editorial media/gallery/
+│   │                          # testimonials, video, newsletter, rich_text + custom_code (§11)
 │   ├── menus.ts               # ★ Per-store nav (§11): StoreMenus types, DEFAULT_MENUS,
 │   │                          # normalize/sanitize. Read cached via getStoreMenus.
 │   ├── ai/gemini.ts           # Gemini/Vertex AI client for AI copy (dual backend, §7);
@@ -590,6 +594,8 @@ wholesip/
 │   │                          # reserve/release (enforces max_uses under concurrency)
 │   ├── blog_taxonomy.sql      # per-store blog_categories + blog_tags (+ RLS + seed)
 │   ├── store_menus.sql        # ★ per-store header/footer nav (+ RLS + WholeSip seed) — §11
+│   ├── themes_01_newsletter_subscribers.sql # ★ host-scoped email consent rows for
+│   │                          # footer/section newsletter forms; admin-read RLS (§11)
 │   ├── notifications_01_schema.sql  # ★ the event spine (§22): activity_events
 │   │                          # (append-only audit) + notifications (per-recipient
 │   │                          # inbox, UNIQUE on event+recipient) + notification_
@@ -783,7 +789,7 @@ wholesip/
 11. **Website Builder — pages & custom code are per-store, dashboard-editable.**
     The storefront itself is a per-store artifact, not hardcoded: - **Section registry**: `lib/homepage/section-types.ts` is the single typed
     section schema (config types, `EMPTY_CONFIG`, `META`, `validateConfig`),
-    shared by the homepage AND custom pages. Fifteen block types: `hero`
+    shared by the homepage AND custom pages. Seventeen block types: `hero`
     (banner/split/minimal variants — first-class hero, replaces the old
     custom_code hero hack; optional `video_url` plays muted/looping in place
     of the image with the image as poster), `hero_carousel` (auto-playing
@@ -796,6 +802,9 @@ wholesip/
     aspect-ratio, alignment and CTA controls), `gallery` (even grid or
     asymmetric editorial lookbook with linked/captioned images), `testimonials`
     (customer quotes and optional press logos in cards or editorial rows),
+    `video` (YouTube/Vimeo privacy embeds or direct video with poster, aspect,
+    width and playback controls), `newsletter` (consent-aware email signup with
+    merchant copy, theme and alignment controls),
     `usp_bar` (fixed icon catalog `USP_ICONS` + label strip), `ticker`
     (scrolling marquee — `messages[]` + speed + text theme; CSS-animated
     `ticker-section.tsx`, pauses on hover, static under reduced-motion),
@@ -805,9 +814,10 @@ wholesip/
     `custom_code` (merchant HTML/CSS/JS). Hero/tile/slide `background` fields
     are strict colours (`safeColor`) because they render into inline style
     attrs; media, logo, CTA and `video_url` fields are `safeHref`-validated.
-    All fifteen types have builder forms and section-library thumbnails;
-    Phase 3's editorial renderers live in `media-text-section.tsx`,
-    `gallery-section.tsx`, and `testimonials-section.tsx`.
+    All seventeen types have builder forms and section-library thumbnails;
+    Phase 3's renderers live in `media-text-section.tsx`, `gallery-section.tsx`,
+    `testimonials-section.tsx`, `video-section.tsx`, and
+    `newsletter-section.tsx`.
     `lib/sections/registry.ts` re-exports it and adds page-level helpers:
     `PageSectionItem`, `validateSections`, `RESERVED_PAGE_SLUGS`,
     `validatePageSlug`. - **Custom pages** live in `store_pages` (draft `sections` jsonb +
@@ -945,7 +955,12 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     from a two-field panel would blank the merchant's email, social links and
     legal name. Contact/social/legal stay in `/dashboard/branding` because they
     are store IDENTITY (they print on invoices and go out in email), not a
-    website decision. Pages list in an always-visible **rail** rather than a
+    website decision. The Brand inspector also owns **Storefront layout**:
+    header, product-card, PDP, cart and footer can each inherit the pinned theme
+    or take a merchant override. These values live in the same draft/published
+    `store_chrome` payload, update the iframe through `ChromeProvider`, and do
+    not mutate the immutable theme preset. Pages list in an always-visible
+    **rail** rather than a
     dropdown that overlaid the section outline you were about to edit, and
     `loadingDraft` starts TRUE when there is a page to auto-open so the first,
     pre-hydration paint says "Opening…" instead of "Select a page" — React
@@ -1012,13 +1027,19 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     profile/enquiry forms, blog + write-blog editor). CI-guards in
     `themes.test.ts` assert each theme ships a complete, injectable design.
     **Layout variants** (`ThemeDesign.layout`, all optional — absent = classic
-    WholeSip chrome): `header: "market"` renders a solid brand-coloured header
-    bar with a prominent search box (colours via `--sm-header-bg`/`--sm-header-fg`
-    from `designToCssVars`; activated by the `sm-header-market` class the
-    storefront layout puts on `.storefront-root`); `card: "quick_add"` shows an
-    inline "+ Add" to-cart button on product cards (`quick-add-button.tsx`,
-    class `sm-card-quickadd`; multi-variant products fall through to the detail
-    page). The header search is FUNCTIONAL on all variants — it submits to
+    WholeSip chrome): header supports `classic`, `market`, `centered`, and
+    `minimal`; cards support `classic`, `quick_add`, `overlay`, `framed`, and
+    `grocery`; product detail supports `classic`, `grocery`, and `editorial`;
+    cart supports `classic`, `grocery`, and `compact`; footer supports `rich`,
+    `minimal`, and `editorial`. `resolveStorefrontAppearance` in
+    `lib/chrome/types.ts` is the single pure resolver for theme defaults plus
+    published merchant overrides; it also preserves the pinned legacy
+    `storefront:"grocery"` shorthand. Root `sm-*` classes drive CSS variants,
+    while `lib/store/storefront-layout.ts` supplies resolved values where
+    grocery markup branches are required. `header:"market"` retains its
+    theme-controlled colours and `card:"quick_add"` retains safe inline add
+    behavior (multi-variant products fall through to detail). Header search is
+    FUNCTIONAL on all variants — it submits to
     `/shop?q=`, and the shop grid filters by name/description/category
     (`shop-client.tsx`, synced to the deep link).
     `storefront: "grocery"` is the deepest variant: it swaps the shared
@@ -1039,7 +1060,14 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     today's shared layout untouched. (Basket is the first grocery theme.)
     Design derives from the installed preset release at RENDER time. New
     installs are version-pinned in store settings; legacy stores without the
-    pin resolve the catalog's current release. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
+    pin resolve the catalog's current release. - **Newsletter capture**:
+    `newsletter-form.tsx` is shared by the footer and the builder newsletter
+    section. `subscribeNewsletter` derives tenancy from the request host,
+    validates email plus explicit consent, honeypots bots, rate-limits per
+    store/IP, and service-upserts one active row per store/email while recording
+    the displayed consent copy and source. Storage is
+    `newsletter_subscribers` (`themes_01_newsletter_subscribers.sql`): anon has
+    no direct write grant and authenticated store admins have read-only RLS. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
     pages, and menus are all migrated. config/site.ts, brand.md and the
     file-based AI skills are deleted, and the shop hero is brand-aware. The
     `--wholesip-*` CSS token namespace (→ `--sm-*`) and `WHOLESIP_STORE_ID` (→

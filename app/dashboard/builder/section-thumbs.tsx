@@ -139,6 +139,21 @@ const THUMBS: Record<HomepageSectionType, React.ReactNode> = {
       ))}
     </Svg>
   ),
+  video: (
+    <Svg>
+      <rect x="8" y="10" width="104" height="60" rx="6" fill={M} />
+      <circle cx="60" cy="40" r="13" fill={A} />
+      <path d="M 57 33 l 11 7 l -11 7 z" fill="#fff" />
+    </Svg>
+  ),
+  newsletter: (
+    <Svg>
+      <rect x="8" y="14" width="104" height="52" rx="6" fill={S} />
+      <rect x="30" y="25" width="60" height="7" rx="3.5" fill={M} />
+      <rect x="20" y="42" width="54" height="11" rx="4" fill="#fff" />
+      <rect x="78" y="42" width="22" height="11" rx="5.5" fill={A} />
+    </Svg>
+  ),
   usp_bar: (
     <Svg>
       <rect x="6" y="28" width="108" height="24" rx="6" fill={S} />

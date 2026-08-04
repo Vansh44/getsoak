@@ -123,13 +123,20 @@ export interface ThemeShape {
 export interface ThemeLayout {
   /** "market": solid coloured header bar with a prominent, functional search
    *  box (grocery style). "classic" (default): transparent-to-cream bar. */
-  header?: "classic" | "market";
+  header?: "classic" | "market" | "centered" | "minimal";
   /** Market header colours (strict colours; defaults: ink / on-ink). */
   headerBackground?: string;
   headerForeground?: string;
   /** "quick_add": product cards get an inline "+ Add" to-cart button.
    *  "classic" (default): the whole card is a click-through link only. */
-  card?: "classic" | "quick_add";
+  card?: "classic" | "quick_add" | "overlay" | "framed" | "grocery";
+  /** Product-detail composition. `storefront:grocery` remains the legacy
+   *  shorthand and is used when this field is absent. */
+  productDetail?: "classic" | "grocery" | "editorial";
+  /** Cart composition. `storefront:grocery` remains the legacy fallback. */
+  cart?: "classic" | "grocery" | "compact";
+  /** Footer composition; current multi-column footer is `rich`. */
+  footer?: "rich" | "minimal" | "editorial";
   /** The overall storefront treatment. "grocery" switches product cards, the
    *  product-detail page and the cart to a distinct premium grocery layout
    *  (new markup + new classes, gated by the `sm-storefront-grocery` root

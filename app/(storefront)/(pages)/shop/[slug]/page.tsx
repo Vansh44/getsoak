@@ -354,7 +354,7 @@ export default async function ProductDetailPage({ params }: PageProps) {
         product={product}
         related={related}
         reviews={reviews}
-        grocery={layout.storefront === "grocery"}
+        grocery={layout.productDetail === "grocery"}
         storeLowStockThreshold={lowStockThreshold as number}
       />
     </>

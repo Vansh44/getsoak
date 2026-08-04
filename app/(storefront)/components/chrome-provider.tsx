@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { DEFAULT_CHROME, type StoreChrome } from "@/lib/chrome/types";
+import { resolveStorefrontAppearance } from "@/lib/chrome/types";
+import type { ThemeLayout } from "@/lib/themes/types";
 
 const ChromeContext = createContext<StoreChrome | null>(null);
 
@@ -21,15 +23,54 @@ const ChromeContext = createContext<StoreChrome | null>(null);
  */
 export function ChromeProvider({
   chrome,
+  themeLayout,
   live = false,
   children,
 }: {
   chrome: StoreChrome;
+  themeLayout?: ThemeLayout;
   /** Preview mode: accept live updates from the builder. */
   live?: boolean;
   children: React.ReactNode;
 }) {
   const [value, setValue] = useState<StoreChrome>(chrome);
+
+  useEffect(() => {
+    if (!live) return;
+    const appearance = resolveStorefrontAppearance(
+      themeLayout,
+      value.appearance,
+    );
+    const root = document.querySelector<HTMLElement>(".storefront-root");
+    if (!root) return;
+    for (const prefix of [
+      "sm-header-",
+      "sm-card-",
+      "sm-pdp-",
+      "sm-cart-",
+      "sm-footer-",
+    ]) {
+      for (const cls of Array.from(root.classList)) {
+        if (cls.startsWith(prefix)) root.classList.remove(cls);
+      }
+    }
+    root.classList.remove("sm-card-quickadd", "sm-storefront-grocery");
+    root.classList.add(
+      `sm-header-${appearance.header}`,
+      `sm-card-${appearance.card}`,
+      `sm-pdp-${appearance.productDetail}`,
+      `sm-cart-${appearance.cart}`,
+      `sm-footer-${appearance.footer}`,
+    );
+    if (appearance.cardQuickAdd) root.classList.add("sm-card-quickadd");
+    if (
+      appearance.card === "grocery" ||
+      appearance.productDetail === "grocery" ||
+      appearance.cart === "grocery"
+    ) {
+      root.classList.add("sm-storefront-grocery");
+    }
+  }, [live, themeLayout, value.appearance]);
 
   // Adopt server-rendered chrome when it changes (navigation, or a
   // router.refresh after publish) — otherwise the preview keeps rendering a

@@ -29,6 +29,7 @@ import {
   type HomepageSectionType,
   type LatestBlogsConfig,
   type MediaTextConfig,
+  type NewsletterSectionConfig,
   type PromoBannerConfig,
   type RichTextConfig,
   type ShopByCategoryConfig,
@@ -39,6 +40,7 @@ import {
   type TestimonialsConfig,
   type UspBarConfig,
   type UspItem,
+  type VideoConfig,
 } from "@/lib/homepage/section-types";
 
 // ---------------------------------------------------------------------------
@@ -129,6 +131,17 @@ export function SectionForm({
       return (
         <TestimonialsFields
           config={config as TestimonialsConfig}
+          setConfig={setConfig}
+        />
+      );
+    case "video":
+      return (
+        <VideoFields config={config as VideoConfig} setConfig={setConfig} />
+      );
+    case "newsletter":
+      return (
+        <NewsletterFields
+          config={config as NewsletterSectionConfig}
           setConfig={setConfig}
         />
       );
@@ -1804,6 +1817,249 @@ function TestimonialsFields({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+function VideoFields({
+  config,
+  setConfig,
+}: {
+  config: VideoConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof VideoConfig>(key: K, value: VideoConfig[K]) =>
+    setConfig({ ...config, [key]: value });
+
+  return (
+    <>
+      <FieldGroup title="Header">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Watch"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Heading</label>
+            <input
+              className={fieldClass}
+              value={config.heading}
+              onChange={(e) => set("heading", e.target.value)}
+              placeholder="See the story unfold"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Subheading</label>
+            <input
+              className={fieldClass}
+              value={config.subheading}
+              onChange={(e) => set("subheading", e.target.value)}
+              placeholder="(optional)"
+            />
+          </div>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Video">
+        <VideoField
+          value={config.video_url}
+          onChange={(url) => set("video_url", url)}
+        />
+        <div>
+          <label className={labelClass}>Poster image</label>
+          <ImageUpload
+            folder="homepage"
+            defaultImage={config.poster_url || undefined}
+            onUploadSuccess={(url) => set("poster_url", url)}
+          />
+          <input
+            className={`${fieldClass} mt-2`}
+            value={config.poster_alt}
+            onChange={(e) => set("poster_alt", e.target.value)}
+            placeholder="Describe the poster image"
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Playback and layout">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Aspect ratio</label>
+            <select
+              className={fieldClass}
+              value={config.aspect_ratio}
+              onChange={(e) =>
+                set(
+                  "aspect_ratio",
+                  e.target.value as VideoConfig["aspect_ratio"],
+                )
+              }
+            >
+              <option value="landscape">Landscape (16:9)</option>
+              <option value="square">Square</option>
+              <option value="portrait">Portrait</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Width</label>
+            <select
+              className={fieldClass}
+              value={config.width}
+              onChange={(e) =>
+                set("width", e.target.value as VideoConfig["width"])
+              }
+            >
+              <option value="contained">Contained</option>
+              <option value="full">Full width</option>
+            </select>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.autoplay}
+            onChange={(e) => set("autoplay", e.target.checked)}
+          />
+          Auto-play muted
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.loop}
+            onChange={(e) => set("loop", e.target.checked)}
+          />
+          Loop playback
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.controls}
+            onChange={(e) => set("controls", e.target.checked)}
+          />
+          Show player controls
+        </label>
+      </FieldGroup>
+    </>
+  );
+}
+
+function NewsletterFields({
+  config,
+  setConfig,
+}: {
+  config: NewsletterSectionConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof NewsletterSectionConfig>(
+    key: K,
+    value: NewsletterSectionConfig[K],
+  ) => setConfig({ ...config, [key]: value });
+
+  return (
+    <>
+      <FieldGroup title="Message">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Stay close"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Heading</label>
+          <input
+            className={fieldClass}
+            value={config.heading}
+            onChange={(e) => set("heading", e.target.value)}
+            placeholder="Notes worth opening"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Subheading</label>
+          <textarea
+            className={`${fieldClass} min-h-[72px] resize-y`}
+            value={config.subheading}
+            onChange={(e) => set("subheading", e.target.value)}
+            placeholder="New releases, useful stories and occasional offers."
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Form copy">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Button label</label>
+            <input
+              className={fieldClass}
+              value={config.button_label}
+              onChange={(e) => set("button_label", e.target.value)}
+              placeholder="Subscribe"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Success message</label>
+            <input
+              className={fieldClass}
+              value={config.success_message}
+              onChange={(e) => set("success_message", e.target.value)}
+              placeholder="You're on the list — thank you."
+            />
+          </div>
+        </div>
+        <div>
+          <label className={labelClass}>Consent text</label>
+          <textarea
+            className={`${fieldClass} min-h-[72px] resize-y`}
+            value={config.consent_text}
+            onChange={(e) => set("consent_text", e.target.value)}
+            placeholder="I agree to receive store news and offers by email."
+          />
+          <p className="text-muted-foreground mt-1 text-[11px]">
+            Visitors must tick this before subscribing.
+          </p>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Layout">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Alignment</label>
+            <select
+              className={fieldClass}
+              value={config.alignment}
+              onChange={(e) =>
+                set(
+                  "alignment",
+                  e.target.value as NewsletterSectionConfig["alignment"],
+                )
+              }
+            >
+              <option value="center">Centered</option>
+              <option value="left">Split / left</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Text theme</label>
+            <select
+              className={fieldClass}
+              value={config.theme}
+              onChange={(e) =>
+                set("theme", e.target.value as NewsletterSectionConfig["theme"])
+              }
+            >
+              <option value="dark">Dark text / light field</option>
+              <option value="light">Light text / dark field</option>
+            </select>
+          </div>
+        </div>
+      </FieldGroup>
     </>
   );
 }

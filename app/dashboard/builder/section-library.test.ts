@@ -19,6 +19,8 @@ describe("filterSectionTypes", () => {
     expect(filterSectionTypes("bestsellers")).toEqual(["featured_products"]);
     expect(filterSectionTypes("lookbook")).toEqual(["gallery"]);
     expect(filterSectionTypes("social proof")).toEqual(["testimonials"]);
+    expect(filterSectionTypes("vimeo")).toEqual(["video"]);
+    expect(filterSectionTypes("mailing list")).toEqual(["newsletter"]);
   });
 
   it("matches by description", () => {
