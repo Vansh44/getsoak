@@ -110,6 +110,35 @@ const THUMBS: Record<HomepageSectionType, React.ReactNode> = {
       <rect x="62" y="42" width="50" height="28" rx="5" fill={M} />
     </Svg>
   ),
+  media_text: (
+    <Svg>
+      <rect x="8" y="10" width="50" height="60" rx="5" fill={M} />
+      <rect x="68" y="20" width="34" height="6" rx="3" fill={A} />
+      <rect x="68" y="32" width="42" height="4" rx="2" fill={M} />
+      <rect x="68" y="41" width="36" height="4" rx="2" fill={S} />
+      <rect x="68" y="54" width="24" height="8" rx="4" fill={M} />
+    </Svg>
+  ),
+  gallery: (
+    <Svg>
+      <rect x="8" y="10" width="58" height="60" rx="5" fill={A} opacity="0.8" />
+      <rect x="72" y="10" width="40" height="27" rx="5" fill={M} />
+      <rect x="72" y="43" width="40" height="27" rx="5" fill={S} />
+    </Svg>
+  ),
+  testimonials: (
+    <Svg>
+      {[8, 46, 84].map((x, index) => (
+        <g key={x}>
+          <rect x={x} y="14" width="28" height="50" rx="5" fill={S} />
+          <circle cx={x + 8} cy="25" r="4" fill={index === 1 ? A : M} />
+          <rect x={x + 5} y="35" width="18" height="3" rx="1.5" fill={M} />
+          <rect x={x + 5} y="42" width="15" height="3" rx="1.5" fill={M} />
+          <rect x={x + 5} y="54" width="11" height="3" rx="1.5" fill={A} />
+        </g>
+      ))}
+    </Svg>
+  ),
   usp_bar: (
     <Svg>
       <rect x="6" y="28" width="108" height="24" rx="6" fill={S} />

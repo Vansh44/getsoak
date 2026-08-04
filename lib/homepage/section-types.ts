@@ -9,7 +9,7 @@
 //   1. add it to HomepageSectionType
 //   2. add its *Config interface + a branch to HomepageSectionConfig
 //   3. add an EMPTY_CONFIG default + a SECTION_TYPE_META entry
-//   4. add a validate branch in app/actions/homepage-actions.ts
+//   4. add a validate branch in this module's validateConfig()
 //   5. add an editor sub-form + a storefront renderer
 // No DB migration needed — config lives in a JSONB column.
 // ---------------------------------------------------------------------------
@@ -21,6 +21,9 @@ export type HomepageSectionType =
   | "shop_by_category"
   | "promo_banner"
   | "tile_grid"
+  | "media_text"
+  | "gallery"
+  | "testimonials"
   | "usp_bar"
   | "ticker"
   | "faq_accordion"
@@ -35,6 +38,9 @@ export const HOMEPAGE_SECTION_TYPES: HomepageSectionType[] = [
   "shop_by_category",
   "promo_banner",
   "tile_grid",
+  "media_text",
+  "gallery",
+  "testimonials",
   "usp_bar",
   "ticker",
   "faq_accordion",
@@ -220,6 +226,59 @@ export interface TileGridConfig {
 }
 
 /**
+ * Editorial image + copy composition for ingredient stories, craft/process
+ * explanations and brand narratives. The media order and aspect ratio are
+ * data so themes can create different rhythms without bespoke components.
+ */
+export interface MediaTextConfig {
+  eyebrow: string;
+  heading: string;
+  body: string;
+  cta_label: string;
+  cta_href: string;
+  image_url: string;
+  image_alt: string;
+  media_position: "left" | "right";
+  media_ratio: "portrait" | "square" | "landscape";
+  alignment: "left" | "center";
+}
+
+export interface GalleryItem {
+  image_url: string;
+  image_alt: string;
+  caption: string;
+  href: string;
+}
+
+/** Editorial lookbook: an even product grid or an asymmetric lead image. */
+export interface GalleryConfig {
+  heading: string;
+  subheading: string;
+  items: GalleryItem[];
+  layout: "grid" | "editorial";
+  columns: 2 | 3 | 4;
+  image_ratio: "portrait" | "square" | "landscape";
+}
+
+export interface TestimonialItem {
+  quote: string;
+  author: string;
+  detail: string;
+  logo_url: string;
+  logo_alt: string;
+}
+
+/** Customer quotes and press mentions; logo fields are optional. */
+export interface TestimonialsConfig {
+  eyebrow: string;
+  heading: string;
+  subheading: string;
+  items: TestimonialItem[];
+  layout: "cards" | "editorial";
+  columns: 2 | 3;
+}
+
+/**
  * FAQ accordion — question/answer pairs with optional category filter pills.
  * Answers are plain text (rendered as text, never HTML) so there's no sanitize
  * concern. `category` groups items under the filter pills; empty = no filter.
@@ -289,6 +348,9 @@ export type AnySectionConfig =
   | ShopByCategoryConfig
   | PromoBannerConfig
   | TileGridConfig
+  | MediaTextConfig
+  | GalleryConfig
+  | TestimonialsConfig
   | UspBarConfig
   | TickerConfig
   | FaqAccordionConfig
@@ -305,6 +367,9 @@ export type HomepageSectionConfig =
   | { type: "shop_by_category"; config: ShopByCategoryConfig }
   | { type: "promo_banner"; config: PromoBannerConfig }
   | { type: "tile_grid"; config: TileGridConfig }
+  | { type: "media_text"; config: MediaTextConfig }
+  | { type: "gallery"; config: GalleryConfig }
+  | { type: "testimonials"; config: TestimonialsConfig }
   | { type: "usp_bar"; config: UspBarConfig }
   | { type: "ticker"; config: TickerConfig }
   | { type: "faq_accordion"; config: FaqAccordionConfig }
@@ -332,6 +397,9 @@ export const EMPTY_CONFIG: {
   shop_by_category: ShopByCategoryConfig;
   promo_banner: PromoBannerConfig;
   tile_grid: TileGridConfig;
+  media_text: MediaTextConfig;
+  gallery: GalleryConfig;
+  testimonials: TestimonialsConfig;
   usp_bar: UspBarConfig;
   ticker: TickerConfig;
   faq_accordion: FaqAccordionConfig;
@@ -399,6 +467,34 @@ export const EMPTY_CONFIG: {
     tiles: [],
     columns: 4,
     height: "sm",
+  },
+  media_text: {
+    eyebrow: "Our story",
+    heading: "Made with intention",
+    body: "Share the materials, people or process that make your products worth choosing.",
+    cta_label: "Discover more",
+    cta_href: "/our-story",
+    image_url: "",
+    image_alt: "",
+    media_position: "left",
+    media_ratio: "portrait",
+    alignment: "left",
+  },
+  gallery: {
+    heading: "The edit",
+    subheading: "A closer look at the collection",
+    items: [],
+    layout: "editorial",
+    columns: 3,
+    image_ratio: "portrait",
+  },
+  testimonials: {
+    eyebrow: "Loved by customers",
+    heading: "What people are saying",
+    subheading: "",
+    items: [],
+    layout: "cards",
+    columns: 3,
   },
   usp_bar: {
     items: [
@@ -527,6 +623,28 @@ export const SECTION_TYPE_META: Record<HomepageSectionType, SectionTypeMeta> = {
     category: "essentials",
     keywords: ["cards", "links", "grid", "offers", "collage"],
   },
+  media_text: {
+    label: "Media with Text",
+    description: "Editorial image and copy for stories, craft and process.",
+    icon: "media_text",
+    category: "content",
+    keywords: ["image", "story", "about", "split", "editorial", "process"],
+  },
+  gallery: {
+    label: "Gallery / Lookbook",
+    description: "A polished image grid or asymmetric editorial lookbook.",
+    icon: "gallery",
+    category: "content",
+    keywords: ["photos", "images", "masonry", "editorial", "collection"],
+  },
+  testimonials: {
+    label: "Testimonials / Press",
+    description:
+      "Customer quotes and press mentions in cards or a feature row.",
+    icon: "testimonials",
+    category: "content",
+    keywords: ["reviews", "quotes", "social proof", "logos", "press"],
+  },
   usp_bar: {
     label: "USP Bar",
     description:
@@ -590,6 +708,8 @@ export const MAX_USP_ITEMS = 6;
 export const MAX_TICKER_MESSAGES = 12;
 export const TICKER_MESSAGE_MAX_CHARS = 120;
 export const MAX_TILES = 8;
+export const MAX_GALLERY_ITEMS = 12;
+export const MAX_TESTIMONIAL_ITEMS = 8;
 export const MAX_HERO_SLIDES = 8;
 export const MAX_FAQ_ITEMS = 30;
 export const FAQ_ANSWER_MAX_CHARS = 2000;
@@ -869,6 +989,99 @@ export function validateConfig(
     return { config };
   }
 
+  if (type === "media_text") {
+    const heading = str(input.heading).slice(0, 160);
+    const body = str(input.body).slice(0, 2400);
+    const image_url = safeHref(input.image_url);
+    if (strict && !heading && !body && !image_url) {
+      return { error: "Add a heading, story or image." };
+    }
+    const config: MediaTextConfig = {
+      eyebrow: str(input.eyebrow).slice(0, 80),
+      heading,
+      body,
+      cta_label: str(input.cta_label).slice(0, 60),
+      cta_href: safeHref(input.cta_href),
+      image_url,
+      image_alt: str(input.image_alt).slice(0, 180),
+      media_position: input.media_position === "right" ? "right" : "left",
+      media_ratio:
+        input.media_ratio === "square" || input.media_ratio === "landscape"
+          ? input.media_ratio
+          : "portrait",
+      alignment: input.alignment === "center" ? "center" : "left",
+    };
+    return { config };
+  }
+
+  if (type === "gallery") {
+    const rawItems = Array.isArray(input.items) ? input.items : [];
+    if (rawItems.length > MAX_GALLERY_ITEMS) {
+      return { error: `At most ${MAX_GALLERY_ITEMS} gallery images.` };
+    }
+    const items: GalleryItem[] = [];
+    for (const rawItem of rawItems) {
+      const it = (rawItem ?? {}) as Record<string, unknown>;
+      const image_url = safeHref(it.image_url);
+      if (!image_url && strict) continue;
+      items.push({
+        image_url,
+        image_alt: str(it.image_alt).slice(0, 180),
+        caption: str(it.caption).slice(0, 180),
+        href: safeHref(it.href),
+      });
+    }
+    if (strict && items.length < 2) {
+      return { error: "Add at least two gallery images." };
+    }
+    const columns = Number(input.columns);
+    const config: GalleryConfig = {
+      heading: str(input.heading).slice(0, 160),
+      subheading: str(input.subheading).slice(0, 300),
+      items,
+      layout: input.layout === "grid" ? "grid" : "editorial",
+      columns: columns === 2 || columns === 4 ? columns : 3,
+      image_ratio:
+        input.image_ratio === "square" || input.image_ratio === "landscape"
+          ? input.image_ratio
+          : "portrait",
+    };
+    return { config };
+  }
+
+  if (type === "testimonials") {
+    const rawItems = Array.isArray(input.items) ? input.items : [];
+    if (rawItems.length > MAX_TESTIMONIAL_ITEMS) {
+      return { error: `At most ${MAX_TESTIMONIAL_ITEMS} testimonials.` };
+    }
+    const items: TestimonialItem[] = [];
+    for (const rawItem of rawItems) {
+      const it = (rawItem ?? {}) as Record<string, unknown>;
+      const quote = str(it.quote).slice(0, 800);
+      const logo_url = safeHref(it.logo_url);
+      if (!quote && !logo_url) continue;
+      items.push({
+        quote,
+        author: str(it.author).slice(0, 100),
+        detail: str(it.detail).slice(0, 140),
+        logo_url,
+        logo_alt: str(it.logo_alt).slice(0, 180),
+      });
+    }
+    if (strict && items.length === 0) {
+      return { error: "Add at least one testimonial or press mention." };
+    }
+    const config: TestimonialsConfig = {
+      eyebrow: str(input.eyebrow).slice(0, 80),
+      heading: str(input.heading).slice(0, 160),
+      subheading: str(input.subheading).slice(0, 300),
+      items,
+      layout: input.layout === "editorial" ? "editorial" : "cards",
+      columns: Number(input.columns) === 2 ? 2 : 3,
+    };
+    return { config };
+  }
+
   if (type === "faq_accordion") {
     const rawItems = Array.isArray(input.items) ? input.items : [];
     if (rawItems.length > MAX_FAQ_ITEMS) {
@@ -1063,6 +1276,18 @@ export function summarizeSection(section: {
       const t = c as TileGridConfig;
       const head = t.heading?.trim();
       return `Tiles · ${t.tiles.length} tile${t.tiles.length === 1 ? "" : "s"}${head ? ` · ${head}` : ""}`;
+    }
+    case "media_text": {
+      const m = c as MediaTextConfig;
+      return `Media + text · ${m.heading?.trim() || "(no heading)"} · image ${m.media_position}`;
+    }
+    case "gallery": {
+      const g = c as GalleryConfig;
+      return `Gallery · ${g.items.length} image${g.items.length === 1 ? "" : "s"} · ${g.layout}`;
+    }
+    case "testimonials": {
+      const t = c as TestimonialsConfig;
+      return `Testimonials · ${t.items.length} item${t.items.length === 1 ? "" : "s"} · ${t.layout}`;
     }
     case "faq_accordion": {
       const f = c as FaqAccordionConfig;

@@ -783,7 +783,7 @@ wholesip/
 11. **Website Builder — pages & custom code are per-store, dashboard-editable.**
     The storefront itself is a per-store artifact, not hardcoded: - **Section registry**: `lib/homepage/section-types.ts` is the single typed
     section schema (config types, `EMPTY_CONFIG`, `META`, `validateConfig`),
-    shared by the homepage AND custom pages. Twelve block types: `hero`
+    shared by the homepage AND custom pages. Fifteen block types: `hero`
     (banner/split/minimal variants — first-class hero, replaces the old
     custom_code hero hack; optional `video_url` plays muted/looping in place
     of the image with the image as poster), `hero_carousel` (auto-playing
@@ -792,6 +792,10 @@ wholesip/
     `shop_by_category` (with a
     `display: circles|cards` tile-shape variant), `promo_banner`, `tile_grid`
     (linked colour/image tiles — offers, collections, 2-up mini banners),
+    `media_text` (theme-agnostic editorial image/copy split with media position,
+    aspect-ratio, alignment and CTA controls), `gallery` (even grid or
+    asymmetric editorial lookbook with linked/captioned images), `testimonials`
+    (customer quotes and optional press logos in cards or editorial rows),
     `usp_bar` (fixed icon catalog `USP_ICONS` + label strip), `ticker`
     (scrolling marquee — `messages[]` + speed + text theme; CSS-animated
     `ticker-section.tsx`, pauses on hover, static under reduced-motion),
@@ -800,7 +804,10 @@ wholesip/
     `latest_blogs`, `rich_text` (inline sanitized HTML, SEO-friendly) and
     `custom_code` (merchant HTML/CSS/JS). Hero/tile/slide `background` fields
     are strict colours (`safeColor`) because they render into inline style
-    attrs; `video_url` fields are `safeHref`-validated.
+    attrs; media, logo, CTA and `video_url` fields are `safeHref`-validated.
+    All fifteen types have builder forms and section-library thumbnails;
+    Phase 3's editorial renderers live in `media-text-section.tsx`,
+    `gallery-section.tsx`, and `testimonials-section.tsx`.
     `lib/sections/registry.ts` re-exports it and adds page-level helpers:
     `PageSectionItem`, `validateSections`, `RESERVED_PAGE_SLUGS`,
     `validatePageSlug`. - **Custom pages** live in `store_pages` (draft `sections` jsonb +

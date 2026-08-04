@@ -13,22 +13,28 @@ import { HeroCarouselSection } from "../sections/hero-carousel-section";
 import { UspBarSection } from "../sections/usp-bar-section";
 import { TickerSection } from "../sections/ticker-section";
 import { TileGridSection } from "../sections/tile-grid-section";
+import { MediaTextSection } from "../sections/media-text-section";
+import { GallerySection } from "../sections/gallery-section";
+import { TestimonialsSection } from "../sections/testimonials-section";
 import { FaqAccordionSection } from "../sections/faq-accordion-section";
 import type {
   AnySectionConfig,
   CustomCodeConfig,
   FaqAccordionConfig,
   FeaturedProductsConfig,
+  GalleryConfig,
   HeroCarouselConfig,
   HeroConfig,
   HomepageSectionType,
   LatestBlogsConfig,
+  MediaTextConfig,
   PromoBannerConfig,
   RichTextConfig,
   SectionStyle,
   ShopByCategoryConfig,
   TickerConfig,
   TileGridConfig,
+  TestimonialsConfig,
   UspBarConfig,
 } from "@/lib/homepage/section-types";
 
@@ -83,6 +89,24 @@ export function HomepageSectionRenderer({
     case "tile_grid":
       return (
         <TileGridSection {...shell} config={section.config as TileGridConfig} />
+      );
+    case "media_text":
+      return (
+        <MediaTextSection
+          {...shell}
+          config={section.config as MediaTextConfig}
+        />
+      );
+    case "gallery":
+      return (
+        <GallerySection {...shell} config={section.config as GalleryConfig} />
+      );
+    case "testimonials":
+      return (
+        <TestimonialsSection
+          {...shell}
+          config={section.config as TestimonialsConfig}
+        />
       );
     case "faq_accordion":
       return (
