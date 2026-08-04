@@ -2479,6 +2479,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
       inside ONE `withService` transaction behind `SELECT … FOR UPDATE` on the
       order — two admins clicking Refund would otherwise both read the same
       headroom and both pass.
+    - **★ A MONEY REFUND CANNOT EXCEED WHAT MONEY PAID.** `orders.total` is the
+      full value of the GOODS and stays that way when part of it was settled
+      with store credit (§29 — credit is a payment, not a discount), so `total`
+      is NOT what any instrument received: a ₹500 order paid with ₹200 credit
+      and ₹300 on a card only ever charged ₹300. Capping every method at
+      `total` hands back ₹200 the store never took. Razorpay refuses a refund
+      above its payment, but `cash` and `manual` have no backstop — the
+      merchant simply counts out too much. So `refundableAmount` takes
+      `storeCreditUsed` + `method` and applies a second cap to money methods,
+      less what money has already gone back. Refunding AS CREDIT stays uncapped
+      by this rule: a balance for a balance costs nothing that wasn't owed.
+      Both arguments are optional and default to the old behaviour.
     - **MATCHED BY KEY, NEVER BY AMOUNT.** Two legitimate ₹500 refunds on one
       order are indistinguishable by amount, and settling the wrong row is
       unrecoverable. An unknown gateway status maps to `pending`, never to
@@ -2638,11 +2650,54 @@ group, span}` (span = columns of the 4-wide desktop grid),
         thing a returns process does.
       - **★ ONLY `sellable` UNITS REACH THE SHELF**, and condition is decided at
         RECEIPT with the goods in front of someone — never at request time.
-      - **★ Only OPEN statuses hold units.** A rejected or cancelled request
-        gives its quantities back, or one decline makes those items
-        unreturnable forever. `countReturnedUnits` fails toward REFUSING (a DB
-        error returns MAX_SAFE_INTEGER per line) because "we don't know" must
-        never read as "nothing returned yet".
+      - **★ Only OPEN statuses hold units** — `OPEN_RETURN_STATUSES` in
+        `lib/returns/lifecycle.ts`, its own module because THREE layers have to
+        agree. A rejected or cancelled request gives its quantities back, or
+        one decline makes those items unreturnable forever.
+        `countReturnedUnits` fails toward REFUSING (a DB error returns
+        MAX_SAFE_INTEGER per line) because "we don't know" must never read as
+        "nothing returned yet". ⚠ The till did NOT have this filter: it was
+        written when every `order_returns` row was a finished counter return,
+        so once the lifecycle landed, a customer whose online return had been
+        REJECTED could not bring the goods in either — the dead request still
+        counted against them.
+      - **★★ THE QUANTITY CLAMP WAS PER-ENTRY, NOT PER-LINE** (found
+        2026-08-04). `refundBreakdown` iterated the client's `request` array
+        and clamped EACH entry against `remainingQty` independently, so
+        `[{A,1},{A,1},{A,1}]` on a one-unit line passed three times and priced
+        3× the money — in a SINGLE call, no race, from both the till and the
+        storefront. It now coalesces by line id before clamping. This is the
+        second time the same shape of bug has appeared here: like the `lpad()`
+        truncation (§14), the cap READ as if it bounded the total while
+        actually bounding each part.
+      - **★★ NEITHER RETURN PATH TOOK A ROW LOCK.** `getReturnableSale` /
+        `getReturnableOrder` answered "what may come back" outside any
+        transaction, and the write trusted that answer. Two tabs, or one
+        double-tapped Confirm, both read "1 unit left" and both booked it —
+        reproduced on staging as **₹158 refunded against a ₹79 sale, 2 units
+        returned on 1 sold**. Both now `SELECT … FOR UPDATE` the order and
+        RE-PRICE inside the lock, which is what `issueRefund` has always done
+        (and why the gateway path was never exposed).
+      - **★★ THE TILL'S CASH REFUND HAD NO MONEY CAP AT ALL.** `processReturn`
+        inserted its `order_refunds` row directly with `breakdown.total` and
+        never consulted `refundableAmount` — that check lived only in
+        `issueRefund`, which the counter tenders bypass by design (the money is
+        already across the counter, so it is recorded in the same transaction
+        as the goods). The quantity clamp bounded the GOODS; nothing bounded
+        the DRAWER. It now checks the cap inside the lock.
+      - **★ AN EXCHANGE OWES THE DIFFERENCE, NOT THE WHOLE LINE.**
+        `order_returns.total` is what the merchant's queue prints and what the
+        approval email quotes, and `requestReturn` stored the full goods value
+        even on a swap — so a like-for-like exchange told the merchant to
+        refund ₹1,050 while the customer's own screen, which calls
+        `exchangeSettlement`, correctly quoted ₹0. Two ends of one object
+        disagreeing about money is §22's `posTotals` failure again. The server
+        now stores `settlement.storeOwes` less fees.
+      - **★ PHOTOS ARE PINNED TO OUR BUCKET.** `sanitizePhotos` accepted any
+        `https://storage.googleapis.com/` URL — a host shared by every GCS
+        customer on earth, so an attacker's bucket rendered inside a merchant's
+        dashboard next to a money decision. It now requires the `GCS_BUCKET`
+        prefix (degrading to the host check when unset) and rejects `..`/`@`.
       - Customer RLS is `customer_id` **AND** store, the
         `pos_08_customer_order_store_scope.sql` pairing — a Firebase uid is
         global. Writes stay service-role.
@@ -2783,6 +2838,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
       reinstates nothing rather than minting money. `reinstate` is its own
       ledger kind, not a second `grant`: a report that can't tell a returned
       spend from a goodwill gesture overstates what the store gave away.
+    - **★ BUT A CREDIT REFUND HAS ALREADY GIVEN IT BACK** (found 2026-08-04).
+      Refund-then-cancel is an ordinary sequence — settle with the customer,
+      then mark the order dead — and the two halves knew nothing about each
+      other, so a ₹500 order paid entirely with credit, refunded AS credit and
+      then cancelled, left the customer holding ₹1,000. The idempotency keys
+      cannot catch it: they are per (kind, ref), and these are a `refund` keyed
+      on the refund and a `reinstate` keyed on the order. `reinstateCreditForOrder`
+      now offsets by completed `store_credit` refunds on that order. **Only
+      credit refunds count** — a cash or gateway refund returned the MONEY half
+      and says nothing about the credit half, so netting those off would
+      swallow a balance still owed. It fails toward reinstating: a customer
+      silently losing their balance is worse than a visible over-credit.
     - **Spending never refuses a sale** (invariant 6) — a balance that moved
       means they pay the full amount, not that checkout fails.
     - **Offered, never forced** (§28's §3.3 rule): the refund panel shows it

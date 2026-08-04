@@ -56,6 +56,8 @@ export const toRupees = (p: number) => Math.round(p) / 100;
 export interface ExistingRefund {
   amount: number;
   status: string;
+  /** Absent on older callers; only the money-cap below reads it. */
+  method?: string | null;
 }
 
 /**
@@ -65,16 +67,57 @@ export interface ExistingRefund {
  * might — excluding it lets a second refund be raised for the same money
  * while the first is still in flight, and the two together over-refund the
  * order. Only a `failed` refund frees its amount again.
+ *
+ * ★ A MONEY REFUND CANNOT EXCEED WHAT MONEY PAID.
+ *
+ * `orders.total` is the full value of the GOODS and stays that way even when
+ * part of it was settled with store credit — credit is a payment, not a
+ * discount (§29), so netting it off would understate the sale on the invoice
+ * and compute GST on the wrong base. The consequence is that `total` is NOT
+ * what any real instrument received: a ₹500 order paid with ₹200 credit and
+ * ₹300 on a card only ever charged ₹300.
+ *
+ * Capping every method at `total` therefore hands ₹200 of the store's own
+ * money back on a refund it never took. Razorpay would refuse it (a refund
+ * above the payment), but `cash` and `manual` have no such backstop — the
+ * merchant simply counts out too much. So a money refund is additionally
+ * capped at what money paid, less what money has already gone back.
+ *
+ * Refunding AS CREDIT is uncapped by this rule: giving back a balance for a
+ * balance costs the store nothing it didn't already owe.
+ *
+ * Both new inputs are optional and default to the old behaviour, so a caller
+ * that doesn't know about store credit is unaffected.
  */
 export function refundableAmount(input: {
   orderTotal: number;
   refunds: ExistingRefund[];
+  /** `orders.store_credit_used` — the part of the total no instrument paid. */
+  storeCreditUsed?: number;
+  /** Where this refund would go. Omit for the overall cap. */
+  method?: RefundMethod | null;
 }): number {
   const totalP = Math.max(0, toPaise(input.orderTotal));
-  const spentP = input.refunds
-    .filter((r) => r.status !== "failed")
+  const live = input.refunds.filter((r) => r.status !== "failed");
+  const spentP = live.reduce(
+    (sum, r) => sum + Math.max(0, toPaise(r.amount)),
+    0,
+  );
+  const overallP = Math.max(0, totalP - spentP);
+
+  if (!input.method || input.method === "store_credit") {
+    return toRupees(overallP);
+  }
+
+  const creditP = Math.max(0, toPaise(input.storeCreditUsed ?? 0));
+  if (creditP <= 0) return toRupees(overallP);
+
+  const moneyPaidP = Math.max(0, totalP - creditP);
+  const moneyBackP = live
+    .filter((r) => r.method !== "store_credit")
     .reduce((sum, r) => sum + Math.max(0, toPaise(r.amount)), 0);
-  return toRupees(Math.max(0, totalP - spentP));
+
+  return toRupees(Math.max(0, Math.min(overallP, moneyPaidP - moneyBackP)));
 }
 
 export type AmountCheck = { amount: number } | { error: string };

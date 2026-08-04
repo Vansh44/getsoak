@@ -106,6 +106,8 @@ interface LockedOrder {
   order_ref: string | null;
   customer_id: string | null;
   total: number;
+  /** The part of `total` settled with store credit, so no instrument saw it. */
+  store_credit_used: number;
   payment_method: string | null;
   payment_status: string | null;
   razorpay_payment_id: string | null;
@@ -141,6 +143,7 @@ export async function issueRefund(
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
           total: orders.total,
+          store_credit_used: orders.storeCreditUsed,
           payment_method: orders.paymentMethod,
           payment_status: orders.paymentStatus,
           razorpay_payment_id: orders.razorpayPaymentId,
@@ -152,7 +155,11 @@ export async function issueRefund(
         .for("update");
       const found = rows[0];
       if (!found) return { error: "Order not found." };
-      const order: LockedOrder = { ...found, total: Number(found.total ?? 0) };
+      const order: LockedOrder = {
+        ...found,
+        total: Number(found.total ?? 0),
+        store_credit_used: Number(found.store_credit_used ?? 0),
+      };
 
       if (input.method === "razorpay") {
         if (order.payment_method !== "razorpay") {
@@ -169,7 +176,11 @@ export async function issueRefund(
       }
 
       const existing = await db
-        .select({ amount: orderRefunds.amount, status: orderRefunds.status })
+        .select({
+          amount: orderRefunds.amount,
+          status: orderRefunds.status,
+          method: orderRefunds.method,
+        })
         .from(orderRefunds)
         .where(eq(orderRefunds.orderId, orderId));
 
@@ -178,7 +189,12 @@ export async function issueRefund(
         refunds: existing.map((r) => ({
           amount: Number(r.amount ?? 0),
           status: r.status,
+          method: r.method,
         })),
+        // A money refund can't exceed what money paid — the rest of the total
+        // was settled with credit, which no instrument ever received.
+        storeCreditUsed: order.store_credit_used,
+        method: input.method,
       });
       const checked = checkRefundAmount(input.amount, refundable);
       if ("error" in checked) return { error: checked.error };

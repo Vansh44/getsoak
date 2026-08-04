@@ -53,6 +53,8 @@ import {
   type RefundRoute,
 } from "@/lib/returns/in-store";
 import { issueRefund } from "@/lib/payments/issue-refund";
+import { refundableAmount } from "@/lib/payments/refunds";
+import { OPEN_RETURN_STATUSES } from "@/lib/returns/lifecycle";
 
 /** Tenders a shop can hand money back through at the counter. */
 // What a counter can hand money back through, PLUS the gateway — which the
@@ -455,24 +457,6 @@ export async function processReturn(
     };
   }
 
-  const returnable: ReturnableLine[] = sale.lines.map((l) => ({
-    id: l.id,
-    quantity: l.quantity,
-    lineTotal: l.lineTotal,
-    taxAmount: l.taxAmount,
-    alreadyReturned: l.returned,
-  }));
-
-  const breakdown = refundBreakdown({
-    lines: returnable,
-    orderDiscount: sale.orderDiscount,
-    request: lines.map((l) => ({ id: l.orderItemId, quantity: l.quantity })),
-  });
-
-  if (breakdown.lines.length === 0 || breakdown.total <= 0) {
-    return { error: "Nothing on this sale is still returnable." };
-  }
-
   const conditionOf = new Map(
     lines.map((l) => [
       l.orderItemId,
@@ -483,8 +467,131 @@ export async function processReturn(
   const shiftId = await currentShiftIdFor(op.locationId);
 
   let returnId: string;
+  let breakdown: ReturnType<typeof refundBreakdown>;
   try {
-    returnId = await withService(async (db) => {
+    const written = await withService(async (db) => {
+      // ★ LOCK THE ORDER, THEN RE-READ WHAT IS LEFT.
+      //
+      // `getReturnableSale` above answered "what may come back" a moment ago,
+      // outside any transaction. Two counters serving the same customer — or
+      // one cashier double-tapping Confirm — both read that answer before
+      // either wrote, and both then handed over the full value: proven on
+      // staging as ₹158 refunded against a ₹79 sale. The gateway path was
+      // safe because issueRefund takes this same lock; the CASH path wrote
+      // its refund row directly and was not protected by anything.
+      const locked = await db
+        .select({
+          id: orders.id,
+          total: orders.total,
+          discount: orders.discount,
+          store_credit_used: orders.storeCreditUsed,
+        })
+        .from(orders)
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId)))
+        .limit(1)
+        .for("update");
+      if (!locked.length) return { error: "That sale isn't from this shop." };
+
+      const items = await db
+        .select({
+          id: orderItems.id,
+          quantity: orderItems.quantity,
+          total: orderItems.total,
+          line_discount: orderItems.lineDiscount,
+          tax_amount: orderItems.taxAmount,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId));
+
+      // Only OPEN returns hold units. Without the status filter a REJECTED
+      // online request would keep blocking the counter, so a customer turned
+      // down online could not bring the goods in either.
+      const prior = items.length
+        ? await db
+            .select({
+              order_item_id: orderReturnItems.orderItemId,
+              qty: sql<number>`sum(${orderReturnItems.quantity})::int`,
+            })
+            .from(orderReturnItems)
+            .innerJoin(
+              orderReturns,
+              eq(orderReturns.id, orderReturnItems.returnId),
+            )
+            .where(
+              and(
+                inArray(
+                  orderReturnItems.orderItemId,
+                  items.map((i) => i.id),
+                ),
+                inArray(orderReturns.status, OPEN_RETURN_STATUSES),
+              ),
+            )
+            .groupBy(orderReturnItems.orderItemId)
+        : [];
+      const returnedBy = new Map(
+        prior.map((p) => [p.order_item_id, Number(p.qty) || 0]),
+      );
+
+      const lineDiscounts = items.reduce(
+        (a, i) => a + (Number(i.line_discount) || 0),
+        0,
+      );
+      const returnable: ReturnableLine[] = items.map((i) => ({
+        id: i.id,
+        quantity: Number(i.quantity) || 0,
+        lineTotal: Number(i.total) || 0,
+        taxAmount: Number(i.tax_amount) || 0,
+        alreadyReturned: returnedBy.get(i.id) ?? 0,
+      }));
+
+      const priced = refundBreakdown({
+        lines: returnable,
+        orderDiscount: Math.max(
+          0,
+          (Number(locked[0]!.discount) || 0) - lineDiscounts,
+        ),
+        request: lines.map((l) => ({
+          id: l.orderItemId,
+          quantity: l.quantity,
+        })),
+      });
+      if (priced.lines.length === 0 || priced.total <= 0) {
+        return { error: "Nothing on this sale is still returnable." };
+      }
+
+      // ★ AND CAP IT AGAINST WHAT THE ORDER CAN STILL GIVE BACK. The quantity
+      // clamp above bounds the GOODS; this bounds the MONEY, which is the
+      // thing leaving the drawer. issueRefund does exactly this for the
+      // gateway; the counter tenders had no equivalent at all.
+      if (method !== "razorpay") {
+        const existing = await db
+          .select({
+            amount: orderRefunds.amount,
+            status: orderRefunds.status,
+            method: orderRefunds.method,
+          })
+          .from(orderRefunds)
+          .where(eq(orderRefunds.orderId, orderId));
+        const cap = refundableAmount({
+          orderTotal: Number(locked[0]!.total ?? 0),
+          refunds: existing.map((r) => ({
+            amount: Number(r.amount ?? 0),
+            status: r.status,
+            method: r.method,
+          })),
+          storeCreditUsed: Number(locked[0]!.store_credit_used ?? 0),
+          method,
+        });
+        if (priced.total > cap) {
+          return {
+            error:
+              cap > 0
+                ? `You can refund at most ₹${cap.toFixed(2)} on this sale.`
+                : "This sale has already been fully refunded.",
+          };
+        }
+      }
+
       const inserted = await db
         .insert(orderReturns)
         .values({
@@ -492,9 +599,9 @@ export async function processReturn(
           orderId,
           locationId: op.locationId,
           shiftId: shiftId ?? null,
-          amount: breakdown.amount,
-          tax: breakdown.tax,
-          total: breakdown.total,
+          amount: priced.amount,
+          tax: priced.tax,
+          total: priced.total,
           reason: reason?.trim().slice(0, 200) || null,
           actor: op.staffId ?? op.name,
         })
@@ -502,7 +609,7 @@ export async function processReturn(
       const id = inserted[0]!.id;
 
       await db.insert(orderReturnItems).values(
-        breakdown.lines.map((l) => ({
+        priced.lines.map((l) => ({
           returnId: id,
           orderItemId: l.id,
           quantity: l.quantity,
@@ -531,14 +638,17 @@ export async function processReturn(
           locationId: op.locationId,
           shiftId: shiftId ?? null,
           method,
-          amount: breakdown.total,
+          amount: priced.total,
           status: "completed",
           actor: op.staffId ?? op.name,
         });
       }
 
-      return id;
+      return { id, priced };
     });
+    if ("error" in written) return { error: written.error };
+    returnId = written.id;
+    breakdown = written.priced;
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't record the return.") };
   }

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { makeDbMock } from "./_test-helpers";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 
@@ -116,13 +116,15 @@ function seedOrder(
   dbHolder.current = makeDbMock({
     // getReturnableOrder: order → items → countReturnedUnits → existing
     //                     → loadSwapOptions
-    // then (in requestReturn) priceReturn: items → order → countReturnedUnits
+    // then (in requestReturn, inside the write txn): the FOR UPDATE lock on the
+    // order, then priceReturn: items → order → countReturnedUnits
     selectQueue: [
       [order],
       [item],
       returnedRows,
       opts.existing ?? [],
       variants,
+      [order],
       [item],
       [order],
       returnedRows,
@@ -546,6 +548,48 @@ describe("requestReturn — exchanges", () => {
     expect(res.isExchange).toBe(true);
   });
 
+  it("★ an EVEN swap owes nothing — the stored total says so", async () => {
+    // The customer's own screen calls exchangeSettlement and quotes ₹0. The
+    // server used to store the whole goods value, so the merchant's queue
+    // printed "₹105 refund" and the approval email promised it — on a
+    // like-for-like replacement. Two ends of one object disagreeing about
+    // money is exactly what §22's posTotals note is about.
+    seedOrder({ variants: [LARGE] });
+    const res = await requestReturn(swapReq());
+
+    expect(res.error).toBeUndefined();
+    expect(res.refundAmount).toBe(0);
+    const stored = dbHolder.current.calls.values[0];
+    expect(Number(stored.total)).toBe(0);
+    // The goods and tax are still recorded — only what is OWED is zero.
+    expect(Number(stored.amount)).toBe(100);
+    expect(Number(stored.tax)).toBe(5);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ refund_amount: 0 }),
+      }),
+    );
+  });
+
+  it("★ a CHEAPER swap owes only the difference, not the whole line", async () => {
+    seedOrder({ variants: [{ ...LARGE, selling_price: 60 }] });
+    const res = await requestReturn(swapReq());
+    // ₹100 back, ₹60 replacement ⇒ ₹40 owed, NOT ₹105.
+    expect(res.refundAmount).toBe(40);
+    expect(Number(dbHolder.current.calls.values[0].total)).toBe(40);
+  });
+
+  it("a plain refund is unaffected — the whole line is still owed", async () => {
+    seedOrder();
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 1 }],
+      reasonCode: "changed_mind",
+    });
+    expect(res.refundAmount).toBe(105);
+    expect(Number(dbHolder.current.calls.values[0].total)).toBe(105);
+  });
+
   it("★ REFUSES a variant that isn't a real option for this product", async () => {
     // Validated against the SERVER's option list — a client-supplied id could
     // otherwise name another store's product entirely.
@@ -738,5 +782,103 @@ describe("receiveReturn — the replacement order", () => {
     const res = await receiveReturn("ret-1", []);
     expect(res.exchangeOrderId).toBeUndefined();
     expect(commitHold).not.toHaveBeenCalled();
+  });
+});
+
+describe("★ requestReturn — the write is protected", () => {
+  it("locks the order row before pricing", async () => {
+    // Everything before the transaction ran outside one, so two tabs both read
+    // "1 unit still returnable" and both booked it — proven on staging as two
+    // returns and two refunds against a one-unit sale. Re-pricing under the
+    // lock makes the second request find nothing left.
+    seedOrder();
+    await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 1 }],
+      reasonCode: "changed_mind",
+    });
+    expect(dbHolder.current.calls.forUpdate).toContain("update");
+  });
+
+  it("★ can't be multiplied by naming the same line twice", async () => {
+    // The lines array is client-controlled and nothing dedupes it. Each entry
+    // used to be clamped against `remaining` on its own, so three entries each
+    // passed on a two-unit line and priced six units.
+    seedOrder();
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [
+        { orderItemId: "li-a", quantity: 2 },
+        { orderItemId: "li-a", quantity: 2 },
+        { orderItemId: "li-a", quantity: 2 },
+      ],
+      reasonCode: "changed_mind",
+    });
+    expect(res.error).toBeUndefined();
+    // The whole line is ₹200 + ₹10 tax. Not ₹630.
+    expect(res.refundAmount).toBe(210);
+    const items = dbHolder.current.calls.values[1];
+    expect(items).toHaveLength(1);
+    expect(items[0].quantity).toBe(2);
+  });
+});
+
+describe("★ return photos must be files this platform stored", () => {
+  const original = process.env.GCS_BUCKET;
+  afterEach(() => {
+    if (original === undefined) delete process.env.GCS_BUCKET;
+    else process.env.GCS_BUCKET = original;
+  });
+
+  async function submit(photos: string[]) {
+    seedOrder();
+    await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 1 }],
+      reasonCode: "damaged",
+      photos,
+    });
+    return dbHolder.current.calls.values[0].photos as string[];
+  }
+
+  it("rejects another customer's GCS bucket", async () => {
+    // storage.googleapis.com is shared by every GCS customer on earth, so a
+    // bare host prefix accepts an arbitrary remote object — rendered inside a
+    // merchant's dashboard, next to a money decision.
+    process.env.GCS_BUCKET = "storemink-media";
+    const kept = await submit([
+      "https://storage.googleapis.com/storemink-media/returns/ok.jpg",
+      "https://storage.googleapis.com/attacker-bucket/evil.svg",
+    ]);
+    expect(kept).toEqual([
+      "https://storage.googleapis.com/storemink-media/returns/ok.jpg",
+    ]);
+  });
+
+  it("rejects traversal and credential smuggling", async () => {
+    process.env.GCS_BUCKET = "storemink-media";
+    const kept = await submit([
+      "https://storage.googleapis.com/storemink-media/../attacker/x.svg",
+      "https://storage.googleapis.com/storemink-media/@evil.example/x.svg",
+    ]);
+    expect(kept).toEqual([]);
+  });
+
+  it("rejects a non-GCS URL outright", async () => {
+    process.env.GCS_BUCKET = "storemink-media";
+    const kept = await submit([
+      "javascript:alert(1)",
+      "https://evil.example/x.svg",
+      "http://storage.googleapis.com/storemink-media/x.jpg",
+    ]);
+    expect(kept).toEqual([]);
+  });
+
+  it("degrades to the host check when the bucket isn't configured", async () => {
+    delete process.env.GCS_BUCKET;
+    const kept = await submit([
+      "https://storage.googleapis.com/whatever/x.jpg",
+    ]);
+    expect(kept).toHaveLength(1);
   });
 });

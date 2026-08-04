@@ -36,53 +36,67 @@ const CASHIER = { ...MANAGER, role: "cashier" as const };
 
 /** A sale of 2 × ₹100 (tax ₹10) and 1 × ₹50 (tax ₹2.50), no order discount. */
 function seedSale(
-  opts: { prior?: { order_item_id: string; qty: number }[] } = {},
+  opts: {
+    prior?: { order_item_id: string; qty: number }[];
+    /** Refunds already recorded, which the in-transaction cap reads. */
+    existingRefunds?: { amount: number; status: string; method: string }[];
+    storeCreditUsed?: number;
+  } = {},
 ) {
+  const order = {
+    id: "o1",
+    receipt_no: "POS-000007",
+    order_ref: "ORD1",
+    created_at: "2026-07-30T10:00:00Z",
+    total: 262.5,
+    discount: 0,
+    store_credit_used: opts.storeCreditUsed ?? 0,
+    payment_method: "cash",
+    payment_status: "paid",
+    // Rung at THIS register — the ordinary till case, which stays
+    // returnable here regardless of the BORIS settings.
+    location_id: "loc-1",
+    sales_channel: "pos",
+  };
+  const items = [
+    {
+      id: "li-a",
+      product_id: "p1",
+      variant_id: null,
+      name: "Milk",
+      variant_name: null,
+      quantity: 2,
+      price: 100,
+      total: 200,
+      line_discount: 0,
+      tax_amount: 10,
+    },
+    {
+      id: "li-b",
+      product_id: "p2",
+      variant_id: null,
+      name: "Salt",
+      variant_name: null,
+      quantity: 1,
+      price: 50,
+      total: 50,
+      line_discount: 0,
+      tax_amount: 2.5,
+    },
+  ];
+  const prior = opts.prior ?? [];
   dbHolder.current = makeDbMock({
     selectQueue: [
-      [
-        {
-          id: "o1",
-          receipt_no: "POS-000007",
-          order_ref: "ORD1",
-          created_at: "2026-07-30T10:00:00Z",
-          total: 262.5,
-          discount: 0,
-          payment_method: "cash",
-          payment_status: "paid",
-          // Rung at THIS register — the ordinary till case, which stays
-          // returnable here regardless of the BORIS settings.
-          location_id: "loc-1",
-          sales_channel: "pos",
-        },
-      ],
-      [
-        {
-          id: "li-a",
-          product_id: "p1",
-          variant_id: null,
-          name: "Milk",
-          variant_name: null,
-          quantity: 2,
-          price: 100,
-          total: 200,
-          line_discount: 0,
-          tax_amount: 10,
-        },
-        {
-          id: "li-b",
-          product_id: "p2",
-          variant_id: null,
-          name: "Salt",
-          variant_name: null,
-          quantity: 1,
-          price: 50,
-          total: 50,
-          line_discount: 0,
-          tax_amount: 2.5,
-        },
-      ],
-      opts.prior ?? [],
+      // getReturnableSale
+      [order],
+      items,
+      prior,
+      // processReturn's write transaction: FOR UPDATE lock → items → prior
+      // → refunds already recorded (the money cap).
+      [order],
+      items,
+      prior,
+      opts.existingRefunds ?? [],
     ],
   });
 }
@@ -205,37 +219,38 @@ function seedBroughtIn(opts: {
     storeAllows = true,
     locationAccepts = true,
   } = opts;
+  const order = {
+    id: "o1",
+    receipt_no: null,
+    order_ref: "ORD10011027",
+    created_at: "2026-07-30T10:00:00Z",
+    total: 210,
+    discount: 0,
+    store_credit_used: 0,
+    payment_method: paymentMethod,
+    payment_status: "paid",
+    // Fulfilled elsewhere — or online, where it's null.
+    location_id: null,
+    sales_channel: "online",
+  };
+  const items = [
+    {
+      id: "li-a",
+      product_id: "p1",
+      variant_id: null,
+      name: "Milk",
+      variant_name: null,
+      quantity: 2,
+      price: 100,
+      total: 200,
+      line_discount: 0,
+      tax_amount: 10,
+    },
+  ];
   dbHolder.current = makeDbMock({
     selectQueue: [
-      [
-        {
-          id: "o1",
-          receipt_no: null,
-          order_ref: "ORD10011027",
-          created_at: "2026-07-30T10:00:00Z",
-          total: 210,
-          discount: 0,
-          payment_method: paymentMethod,
-          payment_status: "paid",
-          // Fulfilled elsewhere — or online, where it's null.
-          location_id: null,
-          sales_channel: "online",
-        },
-      ],
-      [
-        {
-          id: "li-a",
-          product_id: "p1",
-          variant_id: null,
-          name: "Milk",
-          variant_name: null,
-          quantity: 2,
-          price: 100,
-          total: 200,
-          line_discount: 0,
-          tax_amount: 10,
-        },
-      ],
+      [order],
+      items,
       [], // prior returns
       // borisGates: store, then location
       [
@@ -258,6 +273,36 @@ function seedBroughtIn(opts: {
           type: "shop",
         },
       ],
+      // processReturn re-runs getReturnableSale (order → items → prior →
+      // boris store → boris location) and then, inside the write txn, takes
+      // the FOR UPDATE lock and re-reads: order → items → prior → refunds.
+      [order],
+      items,
+      [],
+      [
+        {
+          settings: {
+            features: {
+              "returns.enabled": storeAllows,
+              "returns.allowInStore": storeAllows,
+            },
+          },
+          plan: "pro",
+          plan_expires_at: null,
+        },
+      ],
+      [
+        {
+          capabilities: locationAccepts
+            ? { pos: true, returns: true }
+            : { pos: true, returns: false },
+          type: "shop",
+        },
+      ],
+      [order],
+      items,
+      [],
+      [],
     ],
     returning: [{ id: "ret-1" }],
   });
@@ -366,5 +411,85 @@ describe("BORIS — an order this counter didn't sell", () => {
       "razorpay",
     );
     expect(res.note).toContain("don't send it again");
+  });
+});
+
+describe("★ the drawer is capped, not just the goods", () => {
+  it("takes a row lock before pricing", async () => {
+    // getReturnableSale answered "what may come back" outside any
+    // transaction. Two counters — or one double-tapped Confirm — both read it
+    // before either wrote: proven on staging as ₹158 refunded against a ₹79
+    // sale. The gateway path was safe because issueRefund takes this lock;
+    // the cash path wrote its refund row directly and had nothing.
+    seedSale();
+    await processReturn("o1", [{ orderItemId: "li-a", quantity: 1 }], "cash");
+    expect(dbHolder.current.calls.forUpdate).toContain("update");
+  });
+
+  it("★ refuses a cash refund beyond what the sale can still give back", async () => {
+    // ₹262.50 sale with ₹250 already refunded. The quantity clamp is happy —
+    // the goods are still on the order — but the money is not there.
+    seedSale({
+      existingRefunds: [{ amount: 250, status: "completed", method: "cash" }],
+    });
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 2 }],
+      "cash",
+    );
+    expect(r.error).toMatch(/at most ₹12\.50/);
+    expect(r.returnId).toBeUndefined();
+  });
+
+  it("says so plainly when nothing is left", async () => {
+    seedSale({
+      existingRefunds: [{ amount: 262.5, status: "completed", method: "cash" }],
+    });
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-b", quantity: 1 }],
+      "cash",
+    );
+    expect(r.error).toMatch(/already been fully refunded/i);
+  });
+
+  it("a FAILED refund frees its amount again", async () => {
+    seedSale({
+      existingRefunds: [{ amount: 250, status: "failed", method: "cash" }],
+    });
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 2 }],
+      "cash",
+    );
+    expect(r.error).toBeUndefined();
+  });
+
+  it("★ won't hand back cash for the part settled with store credit", async () => {
+    // ₹262.50 of goods, ₹200 of it paid with credit ⇒ only ₹62.50 of money
+    // ever arrived, and that is all the drawer may return.
+    seedSale({ storeCreditUsed: 200 });
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 2 }],
+      "cash",
+    );
+    expect(r.error).toMatch(/at most ₹62\.50/);
+  });
+
+  it("★ can't be multiplied by naming the same line twice", async () => {
+    seedSale();
+    const r = await processReturn(
+      "o1",
+      [
+        { orderItemId: "li-b", quantity: 1 },
+        { orderItemId: "li-b", quantity: 1 },
+        { orderItemId: "li-b", quantity: 1 },
+      ],
+      "cash",
+    );
+    expect(r.error).toBeUndefined();
+    // ₹50 + ₹2.50 tax, once — not three times.
+    expect(r.refunded).toBe(52.5);
   });
 });

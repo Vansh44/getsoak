@@ -21,7 +21,7 @@
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { withService, withUser } from "@/lib/db/client";
+import { withService, withUser, type Db } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
   orderItems,
@@ -53,6 +53,10 @@ import {
   type ReturnEligibility,
 } from "@/lib/returns/eligibility";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import {
+  FILTERABLE_RETURN_STATUSES,
+  OPEN_RETURN_STATUSES,
+} from "@/lib/returns/lifecycle";
 import {
   commitHold,
   holdStock,
@@ -127,8 +131,9 @@ export interface ExistingReturnView {
 }
 
 /** Statuses that still hold units — a line already inside one of these can't
- *  be requested again. A rejected or cancelled return frees them. */
-const OPEN_STATUSES = ["requested", "approved", "received", "completed"];
+ *  be requested again. A rejected or cancelled return frees them. Shared with
+ *  the till, which counted every row regardless of status until it was. */
+const OPEN_STATUSES = OPEN_RETURN_STATUSES;
 
 // ---------------------------------------------------------------------------
 // Customer — what can I send back?
@@ -345,11 +350,15 @@ async function loadSwapOptions(
 async function countReturnedUnits(
   orderId: string,
   orderItemIds: string[],
+  /** Pass the transaction handle to count INSIDE a lock; omit for a plain read. */
+  tx?: Db,
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (orderItemIds.length === 0) return out;
+  const run = <T>(fn: (db: Db) => Promise<T>) =>
+    tx ? fn(tx) : withService(fn);
   try {
-    const rows = await withService((db) =>
+    const rows = await run((db) =>
       db
         .select({
           order_item_id: orderReturnItems.orderItemId,
@@ -361,7 +370,7 @@ async function countReturnedUnits(
           and(
             eq(orderReturns.orderId, orderId),
             inArray(orderReturnItems.orderItemId, orderItemIds),
-            inArray(orderReturns.status, OPEN_STATUSES),
+            inArray(orderReturns.status, OPEN_RETURN_STATUSES),
           ),
         )
         .groupBy(orderReturnItems.orderItemId),
@@ -551,43 +560,6 @@ export async function requestReturn(input: {
     return { error: "Nothing on this order is still returnable." };
   }
 
-  const { breakdown, fees } = await priceReturn(
-    orderId,
-    requested,
-    reasonCode,
-    settings,
-  );
-  if (!breakdown || breakdown.total <= 0) {
-    return { error: "Nothing on this order is still returnable." };
-  }
-
-  // ── Exchange settlement ──────────────────────────────────────────────────
-  // ★ A replacement may not cost MORE than what's coming back (v1 boundary —
-  // see lib/returns/exchange.ts). Collecting a difference is a payment flow
-  // that doesn't exist outside checkout, and half-building it leaves
-  // replacement orders unpaid forever. Refused here with a sentence telling
-  // the shopper what to do instead.
-  const exchangeLines: ExchangeLineRequest[] = requested.map((r) => ({
-    orderItemId: r.orderItemId,
-    quantity: r.quantity,
-    exchangeVariantId: swaps.get(r.orderItemId)?.variantId ?? null,
-  }));
-  const swapping = isExchange(exchangeLines);
-  const replacementValue = requested.reduce((sum, r) => {
-    const swap = swaps.get(r.orderItemId);
-    return sum + (swap?.price ?? 0) * r.quantity;
-  }, 0);
-  const settlement = exchangeSettlement({
-    // Against the GOODS value, excluding tax: tax is recomputed on the
-    // replacement at its own rate and refunded on the return from its
-    // snapshot. The two are different transactions with the government.
-    returnValue: swapping ? breakdown.amount : 0,
-    replacementValue,
-  });
-  if (swapping && !settlement.allowed) {
-    return { error: settlement.blockedCopy ?? "That exchange isn't possible." };
-  }
-
   // ★ AUTO-APPROVE NEVER COVERS A FAULT CLAIM.
   // "Arrived damaged" waives every fee, so auto-approving it lets anyone opt
   // out of a store's return charges by picking the right radio button. Those
@@ -600,9 +572,79 @@ export async function requestReturn(input: {
   const photos = sanitizePhotos(input.photos);
   const note = input.note?.trim().slice(0, 500) || null;
 
+  const exchangeLines: ExchangeLineRequest[] = requested.map((r) => ({
+    orderItemId: r.orderItemId,
+    quantity: r.quantity,
+    exchangeVariantId: swaps.get(r.orderItemId)?.variantId ?? null,
+  }));
+  const swapping = isExchange(exchangeLines);
+  const replacementValue = requested.reduce((sum, r) => {
+    const swap = swaps.get(r.orderItemId);
+    return sum + (swap?.price ?? 0) * r.quantity;
+  }, 0);
+
   let returnId: string;
+  let breakdown: Awaited<ReturnType<typeof priceReturn>>["breakdown"];
+  let fees: Awaited<ReturnType<typeof priceReturn>>["fees"];
+  let refundOwed = 0;
   try {
-    returnId = await withService(async (db) => {
+    const written = await withService(async (db) => {
+      // ★ LOCK THE ORDER BEFORE PRICING.
+      //
+      // Everything above ran outside a transaction, so two tabs (or a
+      // double-tapped button) both read "1 unit still returnable" and both
+      // booked it: proven on staging as two returns and two refunds against a
+      // one-unit sale. Re-pricing under the lock means the second request sees
+      // the first one's units and finds nothing left.
+      const locked = await db
+        .select({ id: orders.id })
+        .from(orders)
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        .limit(1)
+        .for("update");
+      if (!locked.length) return { error: "Not found." };
+
+      const priced = await priceReturn(
+        db,
+        orderId,
+        requested,
+        reasonCode,
+        settings,
+      );
+      if (!priced.breakdown || priced.breakdown.total <= 0) {
+        return { error: "Nothing on this order is still returnable." };
+      }
+
+      // ── Exchange settlement ────────────────────────────────────────────
+      // ★ A replacement may not cost MORE than what's coming back (v1
+      // boundary — see lib/returns/exchange.ts). Collecting a difference is a
+      // payment flow that doesn't exist outside checkout, and half-building it
+      // leaves replacement orders unpaid forever.
+      const settlement = exchangeSettlement({
+        // Against the GOODS value, excluding tax: tax is recomputed on the
+        // replacement at its own rate and refunded on the return from its
+        // snapshot. The two are different transactions with the government.
+        returnValue: swapping ? priced.breakdown.amount : 0,
+        replacementValue,
+      });
+      if (swapping && !settlement.allowed) {
+        return {
+          error: settlement.blockedCopy ?? "That exchange isn't possible.",
+        };
+      }
+
+      // ★ AN EXCHANGE OWES THE DIFFERENCE, NOT THE WHOLE LINE.
+      //
+      // `total` is what the merchant's queue prints and what the approval
+      // email quotes, so storing the full goods value on a swap told a
+      // merchant to refund ₹1,050 for a customer who was getting a
+      // like-for-like replacement — while the customer's own screen, which
+      // calls exchangeSettlement, correctly quoted ₹0. Two ends of one object
+      // disagreeing about money is the §22 posTotals failure again.
+      const owed = swapping
+        ? Math.max(0, settlement.storeOwes - priced.fees.totalDeduction)
+        : Math.max(0, priced.breakdown.total - priced.fees.totalDeduction);
+
       const inserted = await db
         .insert(orderReturns)
         .values({
@@ -614,12 +656,13 @@ export async function requestReturn(input: {
           reasonCode,
           reason: note,
           photos,
-          amount: breakdown.amount,
-          tax: breakdown.tax,
-          // Net of fees — what the customer would actually receive.
-          total: Math.max(0, breakdown.total - fees.totalDeduction),
-          restockingFee: fees.restockingFee,
-          returnShippingFee: fees.returnShippingFee,
+          amount: priced.breakdown.amount,
+          tax: priced.breakdown.tax,
+          // Net of fees, and net of a replacement — what the customer would
+          // actually receive.
+          total: owed,
+          restockingFee: priced.fees.restockingFee,
+          returnShippingFee: priced.fees.returnShippingFee,
           actor: user.email ?? user.id,
           ...(autoApprove
             ? { reviewedAt: new Date().toISOString(), reviewedBy: "system" }
@@ -629,7 +672,7 @@ export async function requestReturn(input: {
       const id = inserted[0]!.id;
 
       await db.insert(orderReturnItems).values(
-        breakdown.lines.map((l) => {
+        priced.breakdown.lines.map((l) => {
           const swap = swaps.get(l.id);
           return {
             returnId: id,
@@ -650,8 +693,13 @@ export async function requestReturn(input: {
           };
         }),
       );
-      return id;
+      return { id, priced, owed };
     });
+    if ("error" in written) return { error: written.error };
+    returnId = written.id;
+    breakdown = written.priced.breakdown;
+    fees = written.priced.fees;
+    refundOwed = written.owed;
   } catch (err) {
     logError("returns: requestReturn", err, { orderId });
     return { error: dbErrorMessage(err, "Couldn't start that return.") };
@@ -667,7 +715,9 @@ export async function requestReturn(input: {
     await holdExchangeStock(storeId, returnId, breakdown.lines, swaps);
   }
 
-  const refundAmount = Math.max(0, breakdown.total - fees.totalDeduction);
+  // What the customer actually gets back — zero on a like-for-like swap. The
+  // stored total and the email must say the same thing.
+  const refundAmount = refundOwed;
 
   emitEvent({
     type: autoApprove ? "order.return_approved" : "order.return_requested",
@@ -948,36 +998,40 @@ async function releaseExchangeHolds(returnId: string): Promise<void> {
   }
 }
 
-/** Price a set of lines and work out the deduction, from stored data only. */
+/**
+ * Price a set of lines and work out the deduction, from stored data only.
+ *
+ * ★ Takes the transaction handle rather than opening its own, so the caller can
+ * run it INSIDE the row lock. Pricing outside the lock means the units it read
+ * as available may already be spoken for by the time the row is written.
+ */
 async function priceReturn(
+  db: Db,
   orderId: string,
   lines: RequestReturnLine[],
   reasonCode: ReturnReason | null,
   settings: Record<string, boolean | number>,
 ) {
-  const rows = await withService((db) =>
-    db
-      .select({
-        id: orderItems.id,
-        quantity: orderItems.quantity,
-        total: orderItems.total,
-        line_discount: orderItems.lineDiscount,
-        tax_amount: orderItems.taxAmount,
-      })
-      .from(orderItems)
-      .where(eq(orderItems.orderId, orderId)),
-  );
-  const orderRow = await withService((db) =>
-    db
-      .select({ discount: orders.discount })
-      .from(orders)
-      .where(eq(orders.id, orderId))
-      .limit(1),
-  );
+  const rows = await db
+    .select({
+      id: orderItems.id,
+      quantity: orderItems.quantity,
+      total: orderItems.total,
+      line_discount: orderItems.lineDiscount,
+      tax_amount: orderItems.taxAmount,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, orderId));
+  const orderRow = await db
+    .select({ discount: orders.discount })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
 
   const returned = await countReturnedUnits(
     orderId,
     rows.map((r) => r.id),
+    db,
   );
 
   // The ORDER-level discount only: line markdowns are already inside each
@@ -1019,15 +1073,35 @@ async function priceReturn(
   return { breakdown, fees };
 }
 
-/** GCS URLs only, capped. Photos ride into a jsonb column that the dashboard
- *  renders — an arbitrary string here would be an image-tag injection. */
+/**
+ * Photos ride into a jsonb column the dashboard renders, so the value has to be
+ * a URL we put there — not merely one that looks like it.
+ *
+ * ★ THE BUCKET IS PART OF THE CHECK. `storage.googleapis.com` is shared by
+ * every GCS customer on earth: a bare host prefix accepts
+ * `https://storage.googleapis.com/some-attacker-bucket/x.svg`, which is an
+ * arbitrary remote object rendered inside a merchant's dashboard, attributed to
+ * a return they are about to make a money decision on. Pinning to OUR bucket
+ * turns "a public host" into "a file this platform stored".
+ *
+ * Falls back to the host-only rule when `GCS_BUCKET` is unset, so a
+ * misconfigured environment loses the extra check rather than every photo.
+ */
 function sanitizePhotos(photos: unknown): string[] {
   if (!Array.isArray(photos)) return [];
-  return photos
-    .filter((p): p is string => typeof p === "string")
-    .map((p) => p.trim())
-    .filter((p) => p.startsWith("https://storage.googleapis.com/"))
-    .slice(0, 6);
+  const bucket = process.env.GCS_BUCKET;
+  const prefix = bucket
+    ? `https://storage.googleapis.com/${bucket}/`
+    : "https://storage.googleapis.com/";
+  return (
+    photos
+      .filter((p): p is string => typeof p === "string")
+      .map((p) => p.trim())
+      .filter((p) => p.startsWith(prefix))
+      // No traversal or credential smuggling in the path portion.
+      .filter((p) => !p.includes("..") && !p.includes("@"))
+      .slice(0, 6)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,7 +1182,7 @@ export async function getReturnQueue(
   const storeId = await getActingStoreId();
 
   const filter =
-    status && OPEN_STATUSES.concat("rejected", "cancelled").includes(status)
+    status && FILTERABLE_RETURN_STATUSES.includes(status)
       ? [eq(orderReturns.status, status)]
       : [inArray(orderReturns.status, OPEN_STATUSES)];
 

@@ -1064,6 +1064,57 @@ Trigger the refund confirmation twice (reconcile plus the callback).
 Check the balance while browsing a DIFFERENT store's subdomain.
 **Expect:** zero. Credit is the issuing merchant's money.
 
+## 10i. Abuse cases — money must not multiply (CODEBASE §26, §28, §29)
+
+These are the ones that were found broken on 2026-08-04 and fixed. Each is
+pinned by a regression test, but re-run them by hand after any change to
+`refundBreakdown`, `issueRefund` or either return action.
+
+**PS-18.1 — The same line, named twice, in one request**
+Post a return with `lines: [{A,1},{A,1},{A,1}]` on a one-unit line — from the
+storefront form's action AND from `/pos/returns`.
+**Expect:** one return item, quantity 1, one line's money.
+**Was:** three items and 3× the money, in a single call. No race needed.
+
+**PS-18.2 — Two tills, one sale**
+Open the same sale on two registers, confirm the full return on both.
+**Expect:** the first succeeds; the second says nothing is left.
+**Was:** ₹158 refunded against a ₹79 sale, 2 units returned on 1 sold —
+reproduced on staging.
+
+**PS-18.3 — Cash beyond the sale**
+On a sale with most of its value already refunded, take a counter return worth
+more than the remainder.
+**Expect:** "You can refund at most ₹X on this sale."
+**Was:** the till's cash path never consulted the refund cap at all.
+
+**PS-18.4 — Cash on an order paid partly with credit**
+₹500 order settled with ₹200 credit + ₹300 cash. Refund it at the counter.
+**Expect:** at most ₹300 in cash; the rest only as credit.
+**Was:** ₹500, because the cap read `orders.total`.
+
+**PS-18.5 — An even exchange owes nothing**
+Swap a size for the same-priced one. Compare the customer's quote, the
+merchant's queue row, and the approval email.
+**Expect:** ₹0 in all three.
+**Was:** ₹0 on the customer's screen, the full goods value in the other two.
+
+**PS-18.6 — Refund as credit, then cancel**
+Order paid entirely with store credit. Refund it as store credit, then cancel
+the order.
+**Expect:** the balance goes back ONCE.
+**Was:** twice — a ₹500 order left the customer holding ₹1,000.
+
+**PS-18.7 — A rejected return doesn't lock the goods out**
+Reject an online return, then bring the same goods to a counter.
+**Expect:** the counter can take them.
+**Was:** the till counted every return row regardless of status.
+
+**PS-18.8 — Someone else's bucket**
+Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
+**Expect:** dropped.
+**Was:** stored and rendered in the merchant's dashboard.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

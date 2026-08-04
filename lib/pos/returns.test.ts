@@ -143,3 +143,70 @@ describe("refundBreakdown — guards", () => {
     expect(fullReturnRequest(done)).toEqual([]);
   });
 });
+
+describe("★ duplicate request entries can't multiply a refund", () => {
+  const oneUnit = [
+    { id: "a", quantity: 1, lineTotal: 500, taxAmount: 0, alreadyReturned: 0 },
+  ];
+
+  it("sums duplicates for the SAME line before clamping, not after", () => {
+    // The request array is client-controlled. Clamping each entry against
+    // `remainingQty` independently let three entries each pass the cap on a
+    // one-unit line and return 3× the money in a single call — no race, no
+    // second request. Both the till's cash refund and the shopper's request
+    // form funnel through here, so this is the one place it can be stopped.
+    const attack = refundBreakdown({
+      lines: oneUnit,
+      request: [
+        { id: "a", quantity: 1 },
+        { id: "a", quantity: 1 },
+        { id: "a", quantity: 1 },
+      ],
+    });
+    expect(attack.total).toBe(500);
+    expect(attack.lines).toHaveLength(1);
+    expect(attack.lines[0]!.quantity).toBe(1);
+  });
+
+  it("still honours a legitimate split request up to what remains", () => {
+    const three = [
+      {
+        id: "a",
+        quantity: 3,
+        lineTotal: 300,
+        taxAmount: 0,
+        alreadyReturned: 0,
+      },
+    ];
+    const r = refundBreakdown({
+      lines: three,
+      request: [
+        { id: "a", quantity: 1 },
+        { id: "a", quantity: 1 },
+      ],
+    });
+    expect(r.lines[0]!.quantity).toBe(2);
+    expect(r.total).toBe(200);
+  });
+
+  it("clamps the SUM against what is left, not each entry", () => {
+    const partly = [
+      {
+        id: "a",
+        quantity: 3,
+        lineTotal: 300,
+        taxAmount: 0,
+        alreadyReturned: 2,
+      },
+    ];
+    const r = refundBreakdown({
+      lines: partly,
+      request: [
+        { id: "a", quantity: 1 },
+        { id: "a", quantity: 5 },
+      ],
+    });
+    expect(r.lines[0]!.quantity).toBe(1); // one unit left, not six
+    expect(r.total).toBe(100);
+  });
+});

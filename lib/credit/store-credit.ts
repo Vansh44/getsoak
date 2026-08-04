@@ -14,7 +14,11 @@ import "server-only";
 
 import { and, desc, eq, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import { customerCreditBalances, customerCreditLedger } from "@/drizzle/schema";
+import {
+  customerCreditBalances,
+  customerCreditLedger,
+  orderRefunds,
+} from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
 import { toPaise, toRupees } from "@/lib/payments/refunds";
 
@@ -168,9 +172,49 @@ export async function reinstateCreditForOrder(
     );
     if (!spent.length) return 0;
 
+    // ★ A REFUND ALREADY PAID AS CREDIT HAS ALREADY GIVEN IT BACK.
+    //
+    // Refund-then-cancel is an ordinary sequence — you settle with the
+    // customer, then mark the order dead — and the two halves knew nothing
+    // about each other. On an order paid entirely with credit that meant the
+    // refund credited the balance once and this credited it AGAIN, so a ₹500
+    // order settled with ₹500 of credit left the customer holding ₹1,000. The
+    // idempotency keys can't catch it: they are per (kind, ref), and these are
+    // a `refund` keyed on the refund and a `reinstate` keyed on the order.
+    //
+    // Only CREDIT refunds offset this. A cash or gateway refund returned the
+    // money half of the order and says nothing about the credit half — netting
+    // those off would swallow a balance the customer is still owed.
+    const creditedBack = await withService((db) =>
+      db
+        .select({
+          total: sql<string>`coalesce(sum(${orderRefunds.amount}), 0)`,
+        })
+        .from(orderRefunds)
+        .where(
+          and(
+            eq(orderRefunds.orderId, orderId),
+            eq(orderRefunds.method, "store_credit"),
+            eq(orderRefunds.status, "completed"),
+          ),
+        ),
+    ).catch((err) => {
+      // Fail toward reinstating: a customer silently losing a balance they
+      // paid with is worse than a store occasionally over-crediting, and the
+      // ledger makes the latter visible.
+      logError("credit.reinstate_offset", err, { storeId, orderId });
+      return [{ total: "0" }];
+    });
+    let offset = Math.max(0, Number(creditedBack[0]?.total ?? 0));
+
     let returned = 0;
     for (const row of spent) {
-      const amount = Math.abs(Number(row.delta) || 0);
+      let amount = Math.abs(Number(row.delta) || 0);
+      if (offset > 0) {
+        const used = Math.min(offset, amount);
+        amount -= used;
+        offset -= used;
+      }
       if (amount <= 0) continue;
       const res = await issueCredit({
         storeId,

@@ -144,3 +144,67 @@ describe("matchGatewayRefund", () => {
     expect(matchGatewayRefund([{ id: "r", notes: null }], "key-a")).toBeNull();
   });
 });
+
+describe("★ a money refund can't exceed what money actually paid", () => {
+  // ₹500 of goods, ₹200 settled with store credit, ₹300 charged to a card.
+  // `orders.total` stays 500 by design (credit is a payment, not a discount —
+  // §29), so a cap of `total` hands back ₹200 the store never took. Razorpay
+  // would refuse it; cash and manual have no such backstop.
+  const order = { orderTotal: 500, storeCreditUsed: 200 };
+
+  it("caps a cash refund at the ₹300 that was charged", () => {
+    expect(refundableAmount({ ...order, refunds: [], method: "cash" })).toBe(
+      300,
+    );
+    expect(refundableAmount({ ...order, refunds: [], method: "manual" })).toBe(
+      300,
+    );
+    expect(
+      refundableAmount({ ...order, refunds: [], method: "razorpay" }),
+    ).toBe(300);
+  });
+
+  it("does NOT cap a refund made as store credit", () => {
+    // Giving a balance back for a balance costs the store nothing it didn't
+    // already owe, so the whole goods value is available that way.
+    expect(
+      refundableAmount({ ...order, refunds: [], method: "store_credit" }),
+    ).toBe(500);
+  });
+
+  it("a credit refund doesn't eat the money headroom", () => {
+    const after = refundableAmount({
+      ...order,
+      refunds: [{ amount: 200, status: "completed", method: "store_credit" }],
+      method: "cash",
+    });
+    expect(after).toBe(300);
+  });
+
+  it("a money refund does eat it", () => {
+    const after = refundableAmount({
+      ...order,
+      refunds: [{ amount: 100, status: "completed", method: "manual" }],
+      method: "cash",
+    });
+    expect(after).toBe(200);
+  });
+
+  it("never exceeds the overall cap either", () => {
+    // ₹450 already back as credit leaves ₹50 overall, even though ₹300 of
+    // money was charged.
+    const after = refundableAmount({
+      ...order,
+      refunds: [{ amount: 450, status: "completed", method: "store_credit" }],
+      method: "cash",
+    });
+    expect(after).toBe(50);
+  });
+
+  it("behaves exactly as before when no credit was used", () => {
+    expect(
+      refundableAmount({ orderTotal: 500, refunds: [], method: "cash" }),
+    ).toBe(500);
+    expect(refundableAmount({ orderTotal: 500, refunds: [] })).toBe(500);
+  });
+});
