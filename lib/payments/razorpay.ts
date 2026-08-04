@@ -35,7 +35,18 @@ export interface RzpPayment {
   status: string; // created | authorized | captured | refunded | failed
 }
 
-export type RzpResult<T> = { ok: true; data: T } | { ok: false; error: string };
+/**
+ * `outcome` separates "Razorpay said no" from "we never found out".
+ *
+ * It matters for exactly one caller — refunds. A 4xx is a verdict: the request
+ * was rejected and nothing happened, so the refund row can be failed and its
+ * amount freed. A 5xx or a network throw is NOT a verdict: the refund may well
+ * have been created, and treating it as a failure is how a customer gets paid
+ * twice. Every other caller can ignore this field.
+ */
+export type RzpResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; outcome: "rejected" | "unknown" };
 
 async function rzpFetch<T>(
   creds: RazorpayCreds,
@@ -63,13 +74,21 @@ async function rzpFetch<T>(
       } catch {
         // non-JSON error body — keep the status message
       }
-      return { ok: false, error: description };
+      return {
+        ok: false,
+        error: description,
+        // A 5xx means their side broke partway; the write may still have
+        // landed. Only a 4xx is a decision.
+        outcome: res.status >= 500 ? "unknown" : "rejected",
+      };
     }
     return { ok: true, data: (await res.json()) as T };
   } catch (e) {
     return {
       ok: false,
       error: e instanceof Error ? e.message : "Razorpay request failed",
+      // A timeout is indistinguishable from a success we never read.
+      outcome: "unknown",
     };
   }
 }
@@ -85,7 +104,11 @@ export async function rzpCreateOrder(
 ): Promise<RzpResult<RzpOrder>> {
   if (!Number.isInteger(params.amountPaise) || params.amountPaise < 100) {
     // Razorpay's own minimum is ₹1 (100 paise).
-    return { ok: false, error: "Amount too small for an online payment." };
+    return {
+      ok: false,
+      error: "Amount too small for an online payment.",
+      outcome: "rejected",
+    };
   }
   return rzpFetch<RzpOrder>(creds, "/orders", {
     method: "POST",
@@ -115,6 +138,91 @@ export async function rzpFetchOrderPayments(
 /** The captured payment on an order, if any. */
 export function capturedPayment(payments: RzpPayment[]): RzpPayment | null {
   return payments.find((p) => p.status === "captured") ?? null;
+}
+
+// ───────────────────────────────── Refunds ─────────────────────────────────
+// Money going back out (roadmap Step 2, docs/returns-exchanges-plan.md §3.2).
+//
+// Refunds are the one call here where a retry is DANGEROUS: a timeout is
+// indistinguishable from a failure, and retrying blind pays the customer
+// twice. So every create carries an idempotency key the CALLER generated and
+// persisted first — see refundOrder in app/actions/refund-actions.ts.
+
+export interface RzpRefund {
+  id: string;
+  payment_id: string;
+  amount: number; // paise
+  /** pending | processed | failed */
+  status: string;
+  notes?: Record<string, string> | null;
+  speed_processed?: string | null;
+}
+
+/**
+ * Refund (part of) a captured payment.
+ *
+ * `idempotencyKey` is sent BOTH as Razorpay's idempotency header — so a repeat
+ * with the same key returns the original refund instead of making a second one
+ * — and inside `notes`, so the reconcile sweep can match a refund back to the
+ * row that asked for it EXACTLY, rather than guessing from the amount (two
+ * legitimate ₹500 refunds on one order are indistinguishable by amount).
+ *
+ * The notes copy is the load-bearing half: it is the one that still works if
+ * the header is ever unsupported, renamed, or silently ignored.
+ */
+export async function rzpRefund(
+  creds: RazorpayCreds,
+  params: {
+    paymentId: string;
+    amountPaise: number;
+    idempotencyKey: string;
+    notes?: Record<string, string>;
+  },
+): Promise<RzpResult<RzpRefund>> {
+  // Both are our own preconditions, so nothing was sent and nothing happened —
+  // "rejected", which lets the caller free the amount rather than leaving a
+  // refund pending against a call that was never made.
+  if (!params.paymentId) {
+    return {
+      ok: false,
+      error: "No payment to refund.",
+      outcome: "rejected",
+    };
+  }
+  if (!Number.isInteger(params.amountPaise) || params.amountPaise < 100) {
+    // Razorpay's floor is ₹1, same as a payment.
+    return {
+      ok: false,
+      error: "Amount too small to refund online.",
+      outcome: "rejected",
+    };
+  }
+  return rzpFetch<RzpRefund>(
+    creds,
+    `/payments/${encodeURIComponent(params.paymentId)}/refund`,
+    {
+      method: "POST",
+      headers: { "X-Razorpay-Idempotency-Key": params.idempotencyKey },
+      body: JSON.stringify({
+        amount: params.amountPaise,
+        notes: { ...params.notes, sm_refund_key: params.idempotencyKey },
+      }),
+    },
+  );
+}
+
+/** Every refund recorded against a payment — the reconciliation source of
+ *  truth when a create call's outcome was never learned. */
+export async function rzpFetchPaymentRefunds(
+  creds: RazorpayCreds,
+  paymentId: string,
+): Promise<RzpResult<RzpRefund[]>> {
+  const res = await rzpFetch<{ items: RzpRefund[] }>(
+    creds,
+    `/payments/${encodeURIComponent(paymentId)}/refunds`,
+  );
+  if (!res.ok) return res;
+  return { ok: true, data: res.data.items ?? [] };
 }
 
 /** Cheap authenticated call to prove a key pair works ("Verify & save"). */

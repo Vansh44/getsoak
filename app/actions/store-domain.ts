@@ -13,13 +13,17 @@ import {
 import { STORE_TAG } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { PLAN_LIMITS, effectivePlan, type Plan } from "@/lib/plans";
-import { validateDomain, routingRecords } from "@/lib/domains/domain";
+import {
+  validateDomain,
+  routingRecords,
+  dnsRecordName,
+} from "@/lib/domains/domain";
 import {
   ensureProvisioned,
   deprovision,
   getCertConfig,
 } from "@/lib/domains/certificates";
-import { checkDomainPointsTo } from "@/lib/domains/dns";
+import { checkCnameTarget, checkDomainPointsTo } from "@/lib/domains/dns";
 import { logError } from "@/lib/observability/logger";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
@@ -296,6 +300,7 @@ export interface DomainConnectionState {
   records: Array<{
     type: string;
     name: string;
+    fqdn: string;
     value: string;
     purpose: string;
   }>;
@@ -336,6 +341,7 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
   const records = routingRecords(domain, cfg.loadBalancerIp).map((r) => ({
     type: r.type,
     name: r.name,
+    fqdn: r.fqdn,
     value: r.value,
     purpose: r.purpose as string,
   }));
@@ -345,7 +351,8 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
   if (challenge?.name && !verified) {
     records.push({
       type: "CNAME",
-      name: challenge.name,
+      name: dnsRecordName(challenge.name, domain),
+      fqdn: challenge.name,
       value: challenge.value,
       purpose: "certificate",
     });
@@ -401,6 +408,26 @@ export async function verifyDomain(): Promise<DomainResult> {
 
   if (!prov.ready) {
     await saveDomainSettings(storeId, next);
+
+    // Certificate Manager's PROVISIONING state does not explain a misplaced
+    // record. Check the exact name so registrar UIs that append the zone (for
+    // example GoDaddy) get an immediately actionable correction.
+    if (!prov.error && prov.challenge) {
+      const cname = await checkCnameTarget(
+        prov.challenge.name,
+        prov.challenge.value,
+      );
+      if (!cname.matches) {
+        const relativeName = dnsRecordName(prov.challenge.name, domain);
+        return {
+          error:
+            cname.found.length > 0
+              ? `${cname.error} Update it to ${prov.challenge.value}.`
+              : `We couldn't find the certificate CNAME at ${prov.challenge.name}. In your DNS provider, enter ${relativeName} as the Name (not the full domain) and ${prov.challenge.value} as the Value.`,
+        };
+      }
+    }
+
     return {
       error:
         prov.error ??

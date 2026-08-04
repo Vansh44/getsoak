@@ -32,6 +32,70 @@ export interface DnsCheck {
   error?: string;
 }
 
+export interface CnameCheck {
+  matches: boolean;
+  found: string[];
+  error?: string;
+}
+
+/** Pure result classification, split out so the safety rule is testable. */
+export function assessDomainAddresses(
+  addresses: string[],
+  expectedIp: string,
+): DnsCheck {
+  const found = [...new Set(addresses)];
+  if (found.length === 0) {
+    return {
+      pointsToUs: false,
+      found,
+      error:
+        "We couldn't find a DNS record for this domain yet. New records can take a few minutes to appear.",
+    };
+  }
+
+  const unexpected = found.filter((ip) => ip !== expectedIp);
+  if (unexpected.length > 0 && found.includes(expectedIp)) {
+    return {
+      pointsToUs: false,
+      found,
+      error: `Remove the other A records (${unexpected.join(", ")}) so this domain points only to ${expectedIp}. Multiple A records send some visitors to the wrong server.`,
+    };
+  }
+
+  if (!found.includes(expectedIp)) {
+    return {
+      pointsToUs: false,
+      found,
+      error: `This domain currently points to ${found.join(", ")}. Update its A record to ${expectedIp}.`,
+    };
+  }
+
+  return { pointsToUs: true, found };
+}
+
+export function assessCnameTargets(
+  targets: string[],
+  expectedTarget: string,
+): CnameCheck {
+  const normalize = (value: string) => value.toLowerCase().replace(/\.+$/, "");
+  const expected = normalize(expectedTarget);
+  const found = [...new Set(targets.map(normalize))];
+
+  if (found.includes(expected)) return { matches: true, found };
+  if (found.length === 0) {
+    return {
+      matches: false,
+      found,
+      error: "We couldn't find the certificate CNAME yet.",
+    };
+  }
+  return {
+    matches: false,
+    found,
+    error: `The certificate CNAME currently points to ${found.join(", ")}.`,
+  };
+}
+
 /**
  * Check that `domain` resolves to `expectedIp` on the public internet.
  *
@@ -45,7 +109,6 @@ export async function checkDomainPointsTo(
   expectedIp: string,
 ): Promise<DnsCheck> {
   const found = new Set<string>();
-  let sawAnswer = false;
 
   for (const server of PUBLIC_RESOLVERS) {
     try {
@@ -72,7 +135,6 @@ export async function checkDomainPointsTo(
       }
 
       if (found.size > 0) {
-        sawAnswer = true;
         break;
       }
     } catch (err) {
@@ -81,23 +143,28 @@ export async function checkDomainPointsTo(
     }
   }
 
-  const list = [...found];
-  if (!sawAnswer && list.length === 0) {
-    return {
-      pointsToUs: false,
-      found: [],
-      error:
-        "We couldn't find a DNS record for this domain yet. New records can take a few minutes to appear.",
-    };
+  return assessDomainAddresses([...found], expectedIp);
+}
+
+/** Check the exact ownership CNAME instead of making Certificate Manager's
+ * eventual "PROVISIONING" state the merchant's only diagnostic. */
+export async function checkCnameTarget(
+  name: string,
+  expectedTarget: string,
+): Promise<CnameCheck> {
+  const found = new Set<string>();
+
+  for (const server of PUBLIC_RESOLVERS) {
+    try {
+      const resolver = new Resolver({ timeout: 5000, tries: 2 });
+      resolver.setServers([server]);
+      const targets = await resolver.resolveCname(name).catch(() => []);
+      targets.forEach((target) => found.add(target));
+      if (targets.length > 0) break;
+    } catch (err) {
+      logError("checkCnameTarget", err, { name, server });
+    }
   }
 
-  if (!list.includes(expectedIp)) {
-    return {
-      pointsToUs: false,
-      found: list,
-      error: `This domain currently points to ${list.join(", ")}. Update its A record to ${expectedIp}.`,
-    };
-  }
-
-  return { pointsToUs: true, found: list };
+  return assessCnameTargets([...found], expectedTarget);
 }

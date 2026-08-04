@@ -39,7 +39,24 @@ export default defineConfig({
         "lib/homepage/section-types.ts",
         "lib/ai/gemini.ts",
         "lib/use-otp-throttle.ts",
-        "lib/supabase/storage-cleanup.ts",
+        // ★ MONEY. Returns, refunds and store credit — the modules where a bug
+        // means the wrong amount leaves. These were absent until 2026-08-04,
+        // which meant the coverage report said nothing at all about them while
+        // six ways for money to escape sat in code it never looked at. An
+        // allowlist silently omitting the highest-stakes directory in the
+        // codebase is worse than no allowlist: the number stays reassuring.
+        //
+        // Whole directories, not named files, so a module added next to these
+        // is measured by default rather than by remembering to come here.
+        "lib/returns/**/*.ts",
+        "lib/credit/**/*.ts",
+        "lib/payments/**/*.ts",
+        "lib/pos/returns.ts",
+        "lib/pos/totals.ts",
+        "lib/pos/shifts.ts",
+        "lib/orders/**/*.ts",
+        "lib/billing/tax.ts",
+        "lib/billing/gst.ts",
         // Server actions + permission logic
         "app/actions/**/*.ts",
         "app/dashboard/lib/permissions.ts",

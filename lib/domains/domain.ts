@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 import { ROOT_DOMAIN } from "@/lib/store/host";
+import { getDomain } from "tldts";
 
 /** Longest legal hostname, and longest legal label, per RFC 1035. */
 const MAX_HOSTNAME = 253;
@@ -156,15 +157,39 @@ export interface DnsRecord {
   type: "A" | "CNAME" | "TXT";
   /** Host portion as most DNS UIs want it (@ for the domain itself). */
   name: string;
+  /** Fully-qualified result, useful for checking what the DNS UI will create. */
+  fqdn: string;
   value: string;
   purpose: "routing" | "certificate";
 }
 
+/**
+ * Convert an FQDN to the zone-relative host field expected by GoDaddy and most
+ * registrar DNS editors. Those editors append the zone automatically; pasting
+ * `_acme-challenge.example.com` there creates the broken
+ * `_acme-challenge.example.com.example.com` record.
+ *
+ * The Public Suffix List is required here: label-counting mistakes an apex such
+ * as `example.co.uk` for the `example` subdomain of `co.uk`.
+ */
+export function dnsRecordName(fqdn: string, connectedDomain: string): string {
+  const name = fqdn.toLowerCase().replace(/\.+$/, "");
+  const domain = connectedDomain.toLowerCase().replace(/\.+$/, "");
+  const zone = getDomain(domain) ?? domain;
+
+  if (name === zone) return "@";
+  const suffix = `.${zone}`;
+  return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+}
+
 export function routingRecords(domain: string, lbIp: string): DnsRecord[] {
-  const labels = domain.split(".");
-  // Best-effort host portion for the merchant's DNS UI. Two labels is always
-  // the domain itself; more MAY be a subdomain, and showing the leading label
-  // is right far more often than showing "@".
-  const name = labels.length <= 2 ? "@" : labels.slice(0, -2).join(".");
-  return [{ type: "A", name, value: lbIp, purpose: "routing" }];
+  return [
+    {
+      type: "A",
+      name: dnsRecordName(domain, domain),
+      fqdn: domain,
+      value: lbIp,
+      purpose: "routing",
+    },
+  ];
 }

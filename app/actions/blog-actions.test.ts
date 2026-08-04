@@ -74,6 +74,24 @@ import { getManagerIdentity } from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
 import { fetchBlogTaxonomy } from "@/lib/blog-taxonomy";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import {
+  resolveStoreSettings,
+  type StoreSettingValues,
+} from "@/lib/settings/registry";
+
+/**
+ * Registry defaults, with only the keys a test actually cares about overridden.
+ *
+ * `StoreSettingValues` is exhaustive over SETTING_KEYS, so a hand-written
+ * literal here breaks every time ANY new setting is added anywhere in the
+ * platform — which says nothing about blogs. Deriving the base from the
+ * registry keeps these tests about the two flags they're testing.
+ */
+function settingsWith(
+  overrides: Partial<StoreSettingValues>,
+): StoreSettingValues {
+  return { ...resolveStoreSettings(null, "pro"), ...overrides };
+}
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { emitEvent } from "@/lib/notifications/record";
 
@@ -467,25 +485,12 @@ describe("blog-actions", () => {
 
     // Store setting: submissions switched off → the action refuses outright.
     it("rejects when the store has customer submissions disabled", async () => {
-      vi.mocked(getStoreSettings).mockResolvedValueOnce({
-        "blogs.customerSubmissions": false,
-        "blogs.requireApproval": true,
-        "pages.customCode": true,
-        "marketing.showAllCoupons": false,
-        "inventory.simpleTrackDefault": false,
-        "inventory.lowStockThreshold": 5,
-        "pos.enabled": false,
-        "pos.idleLockMinutes": 10,
-        "pos.allowPriceOverride": true,
-        "pos.ownerOnlyDiscounts": true,
-        "pos.requireManagerForDiscount": true,
-        "pos.maxDiscountPercent": 10,
-        "pos.requireOpenShift": false,
-        "pos.cashVarianceTolerance": 0,
-        "fulfilment.offerPickup": false,
-        "fulfilment.pickupReadyDays": 0,
-        "fulfilment.pickupHoldDays": 5,
-      });
+      vi.mocked(getStoreSettings).mockResolvedValueOnce(
+        settingsWith({
+          "blogs.customerSubmissions": false,
+          "blogs.requireApproval": true,
+        }),
+      );
       const result = await submitCustomerBlog(customerForm);
       expect(result.error).toMatch(/disabled/i);
       expect(dbHolder.current.calls.insert).toHaveLength(0);
@@ -495,25 +500,12 @@ describe("blog-actions", () => {
     // published via the service scope (RLS blocks customers from inserting
     // published rows directly).
     it("publishes immediately when the store does not require approval", async () => {
-      vi.mocked(getStoreSettings).mockResolvedValueOnce({
-        "blogs.customerSubmissions": true,
-        "blogs.requireApproval": false,
-        "pages.customCode": true,
-        "marketing.showAllCoupons": false,
-        "inventory.simpleTrackDefault": false,
-        "inventory.lowStockThreshold": 5,
-        "pos.enabled": false,
-        "pos.idleLockMinutes": 10,
-        "pos.allowPriceOverride": true,
-        "pos.ownerOnlyDiscounts": true,
-        "pos.requireManagerForDiscount": true,
-        "pos.maxDiscountPercent": 10,
-        "pos.requireOpenShift": false,
-        "pos.cashVarianceTolerance": 0,
-        "fulfilment.offerPickup": false,
-        "fulfilment.pickupReadyDays": 0,
-        "fulfilment.pickupHoldDays": 5,
-      });
+      vi.mocked(getStoreSettings).mockResolvedValueOnce(
+        settingsWith({
+          "blogs.customerSubmissions": true,
+          "blogs.requireApproval": false,
+        }),
+      );
       const result = await submitCustomerBlog(customerForm);
       expect(result.success).toBe(true);
 

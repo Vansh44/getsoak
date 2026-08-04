@@ -14,13 +14,18 @@ import {
   Boxes,
   PackageCheck,
   Receipt,
+  RotateCcw,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
 import { authorizeThisDevice } from "@/app/actions/pos-auth-actions";
 import { toast } from "sonner";
 import { IdleLock } from "./idle-lock";
-import { isIdleLockExempt, type PosActorRole } from "@/lib/pos/permissions";
+import {
+  isIdleLockExempt,
+  posCan,
+  type PosActorRole,
+} from "@/lib/pos/permissions";
 
 const ROLE_LABEL: Record<string, string> = {
   // "superadmin" is the person whose shop it is; "owner" is the pseudo-role for
@@ -54,6 +59,8 @@ export function RegisterHome({
   pickupWaiting: number;
 }) {
   const router = useRouter();
+  // A cashier sells; taking money back is a manager's job (posCan).
+  const canRefund = posCan(role, "refund");
   const [pending, start] = useTransition();
   const [authLocation, setAuthLocation] = useState(locations[0]?.id ?? "");
 
@@ -217,9 +224,22 @@ export function RegisterHome({
             Sales
           </Link>
 
+          {/* Returns has its own front door now: a customer bringing an ONLINE
+              order back has an order number, not a receipt from this shop, so
+              they can't be found by browsing this till's sales. */}
+          {canRefund && (
+            <Link
+              href="/pos/returns"
+              className="mt-3 ml-2 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+            >
+              <RotateCcw className="h-4 w-4" strokeWidth={2} />
+              Returns
+            </Link>
+          )}
+
           <Link
             href="/pos/shift"
-            className="mt-3 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+            className="mt-3 ml-2 inline-flex items-center gap-2 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
           >
             <Banknote className="h-4 w-4" strokeWidth={2} />
             Cash drawer

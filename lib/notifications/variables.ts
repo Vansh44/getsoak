@@ -151,6 +151,12 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "The shop it was waiting at.",
       sample: "Connaught Place",
     },
+    {
+      name: "refund_due",
+      description:
+        "Money owed back on a prepaid order nobody collected. Present only when there is any — nothing pays it automatically, by design.",
+      sample: "₹1,240.00",
+    },
   ],
   "order.status_changed": [
     { name: "status", description: "The new order status.", sample: "shipped" },
@@ -171,12 +177,79 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "Cancellation reason, when one was given.",
       sample: "Ordered by mistake",
     },
+    {
+      name: "refund_due",
+      description:
+        "Money still owed to the customer. Present only when the order was paid and nothing has been refunded yet — nothing pays it automatically, by design.",
+      sample: "₹1,240.00",
+    },
   ],
   "order.cancellation_requested": [
     {
       name: "reason",
       description: "Why the customer wants to cancel.",
       sample: "Ordered by mistake",
+    },
+  ],
+  "order.return_requested": [
+    {
+      name: "items",
+      description: "What's coming back.",
+      sample: "2 items · Amul Taaza Toned Milk (1 L)",
+    },
+    {
+      name: "reason",
+      description: "Why, in the customer's words.",
+      sample: "Arrived damaged",
+    },
+    {
+      name: "refund_amount",
+      description: "What they'd get back if this is approved, after any fees.",
+      sample: "₹840.00",
+    },
+  ],
+  "order.return_approved": [
+    {
+      name: "refund_amount",
+      description: "What the customer gets back, after any fees.",
+      sample: "₹840.00",
+    },
+    {
+      name: "fees",
+      description:
+        "Total deducted. Always ₹0.00 when the return was the store's fault.",
+      sample: "₹50.00",
+    },
+    {
+      name: "note",
+      description: "Anything the store added for the customer.",
+      sample: "Post it back to the address on the invoice.",
+    },
+  ],
+  "order.return_rejected": [
+    {
+      name: "note",
+      description:
+        "Why it was declined. The one variable here that really matters — a rejection without it is a silent no.",
+      sample: "This item is past its 7-day return window.",
+    },
+  ],
+  "order.exchange_ready": [
+    {
+      name: "items",
+      description: "What's being sent out in exchange.",
+      sample: "1 item · Amul Taaza Toned Milk (1 L)",
+    },
+    {
+      name: "exchange_ref",
+      description: "The replacement order's reference.",
+      sample: "ORD10011031",
+    },
+    {
+      name: "refund_amount",
+      description:
+        "Any balance owed back when the replacement cost less. Absent on an even swap.",
+      sample: "₹150.00",
     },
   ],
   "order.payment_received": [

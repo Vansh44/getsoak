@@ -57,6 +57,7 @@ const getProduct = cache(
             stock: products.onlineStock,
             low_stock_threshold: products.lowStockThreshold,
             allow_backorder: products.allowBackorder,
+            returnable: products.returnable,
             cat_id: categories.id,
             cat_name: categories.name,
             cat_slug: categories.slug,

@@ -6,6 +6,7 @@ import {
   formatSku,
   formatVariantSku,
   formatOrderRef,
+  formatCreditNoteRef,
   refKind,
 } from "./identifiers";
 
@@ -50,6 +51,51 @@ describe("format generators (exact strings from the spec)", () => {
 
   it("order reference", () => {
     expect(formatOrderRef(1001, 1000)).toBe("ORD100110006");
+  });
+
+  it("credit note reference", () => {
+    // Same grammar as an order ref, different prefix — so the SQL mirror
+    // sm_credit_note_ref() in returns_04_credit_notes.sql produces this too.
+    // 1001 + 0001 has Luhn check 5 (the vector above).
+    expect(formatCreditNoteRef(1001, 1)).toBe("CRN100100015");
+    expect(formatCreditNoteRef(1001, 1000)).toBe("CRN100110006");
+  });
+
+  // ★ THE SQL MIRROR TRUNCATED PAST 9999, AND THESE ARE THE VECTORS THAT
+  // CAUGHT IT (verified against staging 2026-08-03).
+  //
+  // Postgres `lpad('12345', 4, '0')` returns '1234' — it truncates as well as
+  // pads. Every formatter in identifiers_04_triggers.sql padded to exactly 4,
+  // so a store's 10,000th order/product silently lost a digit:
+  //     sm_order_ref(1001,  1000) = ORD100110006
+  //     sm_order_ref(1001, 10000) = ORD100110006   ← the same string
+  // `(store_id, sku)` is UNIQUE, so the 10,000th product FAILED TO INSERT;
+  // order_ref isn't, so orders quietly shared a customer-visible reference.
+  // Fixed by supabase/identifiers_05_no_truncate.sql. These assertions are
+  // what its migration-time guard checks itself against.
+  it("★ codes GROW past their pad width — they never truncate", () => {
+    expect(formatOrderRef(1001, 12345)).toBe("ORD1001123452");
+    expect(formatSku(1001, 12345)).toBe("SKU1001123452");
+    expect(formatCreditNoteRef(1001, 12345)).toBe("CRN1001123452");
+    // 5-digit sequence stays 5 digits — "12345", not "1234".
+    expect(formatOrderRef(1001, 12345)).toContain("100112345");
+  });
+
+  it("★ …and a 5-digit sequence never collides with a 4-digit one", () => {
+    // The actual production symptom: these MUST differ.
+    expect(formatOrderRef(1001, 10000)).not.toBe(formatOrderRef(1001, 1000));
+    expect(formatSku(1001, 10000)).not.toBe(formatSku(1001, 1000));
+    expect(formatCreditNoteRef(1001, 10000)).not.toBe(
+      formatCreditNoteRef(1001, 1000),
+    );
+  });
+
+  it("leaves already-issued codes untouched below the wall", () => {
+    // Why identifiers_05 is safe to run: at ≤ 9999 the fixed and broken forms
+    // are byte-identical, so no code that has ever been issued changes.
+    expect(formatOrderRef(1001, 1000)).toBe("ORD100110006");
+    expect(formatSku(1001, 1)).toBe("SKU100100015");
+    expect(formatCreditNoteRef(1001, 1)).toBe("CRN100100015");
   });
 });
 

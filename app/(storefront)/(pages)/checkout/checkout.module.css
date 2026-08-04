@@ -1067,3 +1067,13 @@
   color: var(--sm-success, #1e7a5a);
   font-weight: 600;
 }
+
+/* Store credit held back so the remainder clears the gateway minimum
+   (lib/credit/apply.ts). Rare, but silently charging ₹1 more than expected
+   without saying why is worse than a line of text. */
+.creditHeldBack {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--sm-ink-faint, #777);
+}

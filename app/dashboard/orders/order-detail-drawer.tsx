@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  useTransition,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { toast } from "sonner";
@@ -24,6 +30,7 @@ import {
   updateOrderStatus,
   type OrderDetail,
 } from "@/app/actions/order-actions";
+import { RefundPanel } from "./refund-panel";
 
 const ORDER_STATUSES = [
   "pending",
@@ -32,7 +39,10 @@ const ORDER_STATUSES = [
   "delivered",
   "cancelled",
 ];
+/** What a human may choose. Mirrors SETTABLE_PAYMENT_STATUSES in order-actions. */
 const PAYMENT_STATUSES = ["pending", "paid", "failed"];
+/** Derived by the refund machinery — displayed, never offered. */
+const DERIVED_PAYMENT_STATUSES = ["refunded", "partially_refunded"];
 
 const STATUS_TONE: Record<string, string> = {
   pending: "bg-amber-50 text-amber-700 ring-amber-600/20",
@@ -130,6 +140,12 @@ export function OrderDetailDrawer({
     };
   }, [orderId]);
 
+  const reload = useCallback(async () => {
+    if (!orderId) return;
+    const fresh = await getOrderDetail(orderId);
+    if (fresh.order) setDetail(fresh.order);
+  }, [orderId]);
+
   function updateField(next: { status?: string; paymentStatus?: string }) {
     if (!detail) return;
     const id = detail.id;
@@ -137,15 +153,19 @@ export function OrderDetailDrawer({
       const res = await updateOrderStatus(
         id,
         next.status ?? detail.status,
-        next.paymentStatus ?? detail.payment_status,
+        // ONLY when the payment status is what's being changed. Echoing the
+        // current one back used to be harmless; it isn't now that `refunded` /
+        // `partially_refunded` exist — they're derived from order_refunds and
+        // rejected as input, so re-sending one would make every fulfilment
+        // change on a refunded order fail.
+        next.paymentStatus,
       );
       if (res.error) {
         toast.error(res.error);
         return;
       }
       toast.success("Order updated");
-      const fresh = await getOrderDetail(id);
-      if (fresh.order) setDetail(fresh.order);
+      await reload();
       onChanged();
     });
   }
@@ -331,6 +351,10 @@ export function OrderDetailDrawer({
                   </div>
                 )}
               </dl>
+              {/* Money out. Its own component because it reconciles pending
+                  gateway refunds on mount and owns a form — the drawer stays
+                  a read-and-set-status view. */}
+              <RefundPanel orderId={detail.id} onRefunded={reload} />
             </section>
 
             {/* Delivery */}
@@ -408,18 +432,30 @@ export function OrderDetailDrawer({
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
               Payment
-              <select
-                value={detail.payment_status}
-                disabled={saving}
-                onChange={(e) => updateField({ paymentStatus: e.target.value })}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm capitalize text-foreground disabled:opacity-60"
-              >
-                {PAYMENT_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+              {DERIVED_PAYMENT_STATUSES.includes(detail.payment_status) ? (
+                // Derived from the refunds that actually settled, so it is
+                // shown and not offered — picking it would assert money went
+                // back with no order_refunds row saying so. Refunding (or a
+                // refund failing) is what moves it.
+                <span className="flex h-9 items-center rounded-md border border-input bg-muted/50 px-2 text-sm capitalize text-muted-foreground">
+                  {detail.payment_status.replace("_", " ")}
+                </span>
+              ) : (
+                <select
+                  value={detail.payment_status}
+                  disabled={saving}
+                  onChange={(e) =>
+                    updateField({ paymentStatus: e.target.value })
+                  }
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm capitalize text-foreground disabled:opacity-60"
+                >
+                  {PAYMENT_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              )}
             </label>
           </div>
           <Link

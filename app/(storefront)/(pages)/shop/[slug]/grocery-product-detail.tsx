@@ -128,6 +128,14 @@ export function GroceryProductDetail({
           )}
           <h1 className="gpdp-name">{product.name}</h1>
 
+          {/* Same statement as the classic PDP — a shopper is entitled to it
+              before they pay, whichever storefront layout they're on. */}
+          {product.returnable === false && (
+            <div className="mb-2 inline-block rounded-sm bg-zinc-100 px-2 py-1 text-xs font-bold uppercase tracking-wider text-zinc-600">
+              Final sale · no returns
+            </div>
+          )}
+
           <a href="#reviews" className="gpdp-rating">
             <RatingStars value={averageRating} size={18} />
             {reviewCount > 0 ? (

@@ -551,8 +551,9 @@ and when it'll be ready. Neither carries the other's rows.
 **PS-8.11 — Expiry**
 Let a pickup pass `pickup_expires_at`, then run
 `/api/cron/expire-pending-payments`.
-**Expect:** cancelled, holds released, customer told. **No refund** — that's
-deliberate until returns lands.
+**Expect:** cancelled, holds released, customer told. **Still no refund** — the
+capability now exists (§10c), but wiring it into expiry is deliberately a
+prompt, not an automatic payout on a schedule.
 
 **PS-8.12 ★ — The nudge fires once**
 Run the cron twice with an order 20 hours from expiry.
@@ -674,18 +675,458 @@ further return.
 
 ---
 
+## 10c. Refunds from the dashboard (CODEBASE §26)
+
+Money out. Run these in the order drawer on `/dashboard/orders`.
+A Razorpay **test-mode** gateway is enough for all of them.
+
+**PS-12.1 — A COD order offers no gateway button**
+Open a `cash_on_delivery` order.
+**Expect:** an explanation that there is no online payment to reverse, and only
+"I paid them by hand". No dead Refund-online button.
+
+**PS-12.2 — A manual refund demands a reference**
+Choose "I paid them by hand", leave the reference blank, submit.
+**Expect:** refused. The reference is the only evidence that row will ever
+carry — the money moved somewhere this system cannot see.
+
+**PS-12.3 — A full online refund**
+Refund a paid Razorpay order, amount left blank.
+**Expect:** the whole total goes back, the row shows `completed` with a
+Razorpay refund id, and the order's payment status becomes `refunded`.
+
+**PS-12.4 — A partial refund**
+Refund ₹200 of an ₹840 order.
+**Expect:** payment status `partially_refunded`, and ₹640 still refundable.
+
+**PS-12.5 ★ — The cap holds**
+After PS-12.4, try to refund ₹700.
+**Expect:** refused, naming ₹640. The amount is recomputed server-side; the
+client never says what is allowed.
+
+**PS-12.6 ★ — A pending refund still counts**
+With a refund sitting `pending`, try to refund the same money again.
+**Expect:** refused. It has not settled but it might, and letting a second one
+through is how the customer is paid twice.
+
+**PS-12.7 ★★ — A timeout is not a failure**
+Point the app at an unreachable Razorpay (block the host) and refund.
+**Expect:** **no error toast.** The row stays `pending`, the panel says we're
+checking, and the button is gone. This is the single most important behaviour
+here: reporting a timeout as a failure is what produces a double refund.
+
+**PS-12.8 — Reconciliation settles it**
+Restore connectivity and reopen the order.
+**Expect:** the pending row resolves against the gateway (matched by the key in
+its `notes`, never by amount) with no further action.
+
+**PS-12.9 — A rejection frees the money again**
+Force a 4xx (refund more than Razorpay allows via a stale amount).
+**Expect:** the row is marked `failed` and the amount becomes refundable again
+— a verdict, unlike PS-12.7.
+
+**PS-12.10 — A refunded order is still editable**
+On a fully refunded order, change fulfilment status to `shipped`.
+**Expect:** it saves. Payment status shows as a read-only pill, not a dropdown:
+it is derived from the refunds that settled, never typed in.
+
+**PS-12.11 — `delivered_at` doesn't restart**
+Mark an order delivered, then move it to `processing` and back to `delivered`.
+**Expect:** `orders.delivered_at` keeps its FIRST value. A return window must
+not restart because someone corrected a status.
+
+**PS-12.13 — Cancelling a paid order prompts for the refund**
+Cancel a paid order from the dashboard.
+**Expect:** the refund panel turns amber and names the amount owed. **No money
+moves on its own** — that is the decision, not an omission.
+
+**PS-12.14 — The prompt clears itself**
+Refund that order.
+**Expect:** the amber prompt is gone. It is derived from the order, not a
+stored flag.
+
+**PS-12.15 — An expired pickup says what's owed**
+Let a PAID pickup order lapse, run `/api/cron/expire-pending-payments`.
+**Expect:** the `order.pickup_expired` notification carries "Refund due
+₹1,240.00" — formatted as money, not a bare number. A cron cannot prompt, so
+it has to tell.
+
+**PS-12.16 — Self-cancellation is off by default**
+On a store that has never touched the setting, open `/orders/<id>`.
+**Expect:** no cancel button. New behaviour never switches itself on.
+
+**PS-12.17 — A shopper cancels in time**
+Switch on Order Settings → customer cancellations. As the customer, cancel a
+`pending` order placed an hour ago.
+**Expect:** cancelled immediately, stock back on the shelf, the store notified.
+
+**PS-12.18 ★ — A shipped order becomes a REQUEST**
+Cancel an order already marked `shipped`.
+**Expect:** "We've asked the store to cancel this order." The order is NOT
+touched and no stock moves. The button must still be there — someone who wants
+out after dispatch needs somewhere to say so.
+
+**PS-12.19 — Past the window behaves the same**
+With a 24-hour window, cancel a `pending` order placed 48 hours ago.
+**Expect:** a request, not a cancellation.
+
+**PS-12.20 ★ — The setting is enforced server-side**
+Switch customer cancellations OFF, then call `cancelMyOrder` directly.
+**Expect:** refused. A hidden button is not a permission.
+
+**PS-12.12 — The team hears about it**
+**Expect:** an `order.refund_issued` entry in `/dashboard/activity` and the
+customer notified — the same event the till emits.
+
+## 10d. Returns requested online (CODEBASE §28)
+
+Switch on Order Settings → Accept returns first. Customer steps are on
+`{slug}.storemink.com/orders/<id>`; merchant steps on
+`/dashboard/orders/returns`.
+
+**PS-13.1 — Nothing shows until the store opts in**
+With Accept returns OFF, open a delivered order as the customer.
+**Expect:** no Returns card at all.
+
+**PS-13.2 — Request a return**
+Switch it on, pick 1 of a 2-unit line, reason "Changed my mind", submit.
+**Expect:** "We've asked the store to review", and the request appears in the
+dashboard queue as Waiting.
+
+**PS-13.3 ★ — The fee preview reacts to the reason**
+Set a 10% restocking fee and ₹50 return postage. Toggle the reason between
+"Changed my mind" and "Arrived damaged".
+**Expect:** the deduction goes to ₹0 for damaged, with "this one's on us".
+The customer must be able to SEE they aren't charged for the store's mistake.
+
+**PS-13.4 ★ — Auto-approve does NOT cover a fault claim**
+Switch on auto-approve. Request with "Changed my mind" ⇒ approved instantly.
+Request with "Arrived damaged" ⇒ **still Waiting**.
+**Expect:** exactly that. Otherwise anyone waives your fees with a radio button.
+
+**PS-13.5 — A final-sale item can't be sent back**
+Mark a product final sale in the product editor, then open an order containing it.
+**Expect:** the line is shown, disabled, with "Final sale". Calling
+`requestReturn` for it directly is refused.
+
+**PS-13.6 — Past the window**
+Set the window to 1 day and open an order delivered a week ago.
+**Expect:** "The return window for this order has closed", no form.
+
+**PS-13.7 — Not yet delivered**
+Open a `shipped` order.
+**Expect:** "You can return this once it arrives" — NOT "window closed".
+
+**PS-13.8 ★ — Declining demands a reason**
+In the queue, click Decline and try to submit an empty note.
+**Expect:** refused, both in the form and by the server.
+
+**PS-13.9 — The customer sees the decline reason**
+Decline with "Past the 7-day window." and reload the customer's order page.
+**Expect:** the note is shown verbatim under the request.
+
+**PS-13.10 — Approve, then receive**
+Approve a request, then click "Goods received".
+**Expect:** status Received, and the product's stock goes UP by the returned
+quantity. Check `/dashboard/inventory`.
+
+**PS-13.11 ★ — A declined return frees its units**
+Request 2 of a 2-unit line, get it declined, then request again.
+**Expect:** both units are available again. A declined return that permanently
+consumed the line would be the opposite of declining.
+
+**PS-13.12 — Withdraw**
+Request a return, then click Withdraw as the customer.
+**Expect:** withdrawn. Do the same on an APPROVED one — refused.
+
+**PS-13.13 — Receiving needs an approval first**
+Call `receiveReturn` on a request still Waiting.
+**Expect:** refused. Goods arriving for something nobody agreed to is a
+conversation, not a stock movement.
+
+**PS-13.14 — The refund is still a human decision**
+After PS-13.10, open the order in the dashboard.
+**Expect:** the refund panel shows what's owed. **Nothing was refunded
+automatically** — that is the design, not a missing step.
+
+## 10e. Exchanges (CODEBASE §28)
+
+Needs a product with 2+ variants. Order Settings → Accept returns AND Offer
+exchanges both on.
+
+**PS-14.1 — The swap picker appears**
+As the customer, open a delivered order and set a quantity on a line whose
+product has other variants.
+**Expect:** a "Refund me instead / Swap for …" dropdown appears under it.
+
+**PS-14.2 ★ — An even swap settles to zero**
+Swap for a same-price variant.
+**Expect:** "Nothing to pay · ₹0.00", and the button reads "Request exchange".
+
+**PS-14.3 ★ — A dearer swap is REFUSED before submitting**
+Swap for a more expensive variant.
+**Expect:** the blocked sentence naming the difference and telling them to
+place a new order, and the submit button disabled. Calling `requestReturn`
+directly is refused too.
+
+**PS-14.4 — A cheaper swap owes the customer the balance**
+**Expect:** the balance shown as coming back, and the request accepted.
+
+**PS-14.5 — An out-of-stock variant can't be chosen**
+Zero a variant's stock.
+**Expect:** it shows "— out of stock" and is disabled. Calling with its id
+directly is refused.
+
+**PS-14.6 ★ — The replacement is HELD immediately**
+Request an exchange, then check `stock_reservations`.
+**Expect:** a `held` row with `owner_type = 'exchange'`, and the variant's
+AVAILABLE stock down by the quantity while `on_hand` is unchanged.
+
+**PS-14.7 ★ — Declining gives the units back**
+Decline the request from the queue.
+**Expect:** the reservation is released. Holding stock for an exchange that
+will never happen makes that size unsellable to everyone else.
+
+**PS-14.8 — Withdrawing does the same**
+**Expect:** released.
+
+**PS-14.9 ★ — Receiving raises the replacement ORDER**
+Approve, then "Goods received".
+**Expect:** a NEW order appears in `/dashboard/orders` with payment method
+`exchange` and status `paid`, containing the swapped-for variant. The
+returned line's stock goes UP; the replacement's `on_hand` goes DOWN exactly
+once (the hold is committed, not re-reserved). The customer is notified.
+
+**PS-14.10 — A plain refund return raises nothing**
+Receive a return with no swaps.
+**Expect:** no new order, no hold committed.
+
+## 10f. BORIS — returning an online order at a counter (CODEBASE §28)
+
+Needs: Order Settings → Accept returns AND "Accept online returns in your
+shops" on, plus the location's **Accept returns** capability (Locations). Sign
+in at `/pos` as a manager.
+
+**PS-15.1 ★ — An online order is FOUND at all**
+`/pos/returns`, search the online order's reference.
+**Expect:** it appears, tagged "Bought elsewhere". Before this step the till
+filtered by its own location and could never see one.
+
+**PS-15.2 — Search by phone**
+Search the customer's phone number instead.
+**Expect:** the same order.
+
+**PS-15.3 ★ — A card order shows NO cash button**
+Open an online (Razorpay-paid) order.
+**Expect:** no tender buttons at all — just "Refunded to the card or account
+they paid with… 5–7 working days".
+
+**PS-15.4 ★ — And the server refuses cash anyway**
+Call `processReturn(orderId, lines, "cash")` directly.
+**Expect:** refused. Cash back for a card sale is the card-not-present
+laundering path.
+
+**PS-15.5 — A COD order DOES offer the counter tenders**
+**Expect:** Cash / Card / UPI, and cash reduces the drawer.
+
+**PS-15.6 ★ — A gateway refund never touches the drawer**
+Take a card-order return, then open `/pos/shift`.
+**Expect:** expected cash is UNCHANGED. The `order_refunds` row has no
+`shift_id` and no `location_id`.
+
+**PS-15.7 — Stock lands at THIS shop**
+**Expect:** the returning location's `inventory_levels.on_hand` goes up — not
+the shop that sold it, and not the store default.
+
+**PS-15.8 ★ — Turn the location capability off**
+Untick "Accept returns" for this location and retry.
+**Expect:** refused, naming Locations. Same when `returns.allowInStore` is off.
+
+**PS-15.9 ★ — But this till's OWN sales still work**
+With both BORIS switches OFF, return a sale rung at this register.
+**Expect:** works exactly as before. Invariant 1 — the till has done this since
+pos_12 and a later setting must not break it.
+
+**PS-15.10 ★ — A failed gateway refund keeps the return**
+Disconnect Razorpay in Channels, then return a card order.
+**Expect:** the return SUCCEEDS with a warning telling the cashier to have the
+owner refund from the dashboard. The customer handed the goods over — undoing
+that would be worse.
+
+## 10g. GST credit notes (CODEBASE §28)
+
+Needs tax enabled (Invoices & Billing) with a tax class on the product.
+
+**PS-16.1 — A settled refund raises a credit note**
+Refund a taxed order from the order drawer.
+**Expect:** a `CRN…` link appears on the refund row; opening it prints a
+Credit Note naming the invoice it reverses.
+
+**PS-16.2 ★ — A PENDING refund has no serial**
+Force a gateway refund to stay pending (block Razorpay), then open the credit
+note page for it.
+**Expect:** an explanation, not a blank document and not a number. A serial
+issued for a refund that then fails would leave a gap — which is exactly what
+an audit flags.
+
+**PS-16.3 ★ — …and gets one when it settles**
+Restore connectivity and reopen the order so reconcile runs.
+**Expect:** the refund settles and NOW has a serial.
+
+**PS-16.4 ★ — Serials are consecutive per store**
+Refund three taxed orders.
+**Expect:** CRN…0001, 0002, 0003 for that store, with no gaps — and a second
+store's series starts at its own 0001.
+
+**PS-16.5 ★ — Exactly once, even if the status moves around**
+Take a refund from completed → failed → completed (via the DB).
+**Expect:** it keeps its ORIGINAL serial. A second one would leave the first
+as a gap.
+
+**PS-16.6 — No tax, no note**
+Refund an order placed while tax was disabled.
+**Expect:** the page explains there's no output tax to reverse. No serial is
+consumed.
+
+**PS-16.7 ★ — The tax splits the way it was charged**
+Refund an intra-state order, then an inter-state one.
+**Expect:** CGST+SGST columns on the first, IGST on the second, and the halves
+re-summing exactly to the tax credited.
+
+**PS-16.8 — A partial return credits only those lines**
+Return 1 of a 2-unit line and refund it.
+**Expect:** the note credits one unit, not the whole order.
+
+**PS-16.9 — Fees retained show as their own line**
+With a restocking fee configured, refund a change-of-mind return.
+**Expect:** "Less fees retained" and a Refunded total below the credited value.
+
+**PS-16.10 — Nobody else's note**
+Open another store's refund id in the URL.
+**Expect:** 404.
+
+## 10h. Store credit (CODEBASE §29)
+
+**PS-17.1 — Refund as store credit**
+Refund a COD order, method "Store credit".
+**Expect:** the refund row shows `Store credit`, no money moves, and the
+customer's balance goes up by that amount.
+
+**PS-17.2 — A walk-in can't be credited**
+Open a POS sale with no customer attached.
+**Expect:** no "Store credit" option. There is nobody to give a balance to.
+
+**PS-17.3 — The balance shows at checkout**
+Sign in as that customer and open `/checkout`.
+**Expect:** a "Store credit" line under the total and a reduced "To pay now".
+
+**PS-17.4 ★ — The order total is NOT reduced**
+Place that order, then open its invoice.
+**Expect:** the invoice shows the FULL goods value and the full tax. Credit is
+a payment, not a discount — netting it off would understate the sale and
+compute GST on the wrong base.
+
+**PS-17.5 — `store_credit_used` records the split**
+**Expect:** `orders.store_credit_used` = the amount applied, `orders.total`
+unchanged, and the gateway charged only the remainder.
+
+**PS-17.6 ★ — The unpayable-remainder gap**
+Get a balance to within under ₹1 of an order total (e.g. ₹200 against ₹200.50)
+and pay online.
+**Expect:** checkout SUCCEEDS, charging ₹1, with a note that some credit was
+held back. Razorpay refuses under ₹1, so applying the full ₹200 would fail.
+
+**PS-17.7 — A fully-covered order collects nothing**
+Have more credit than the order total.
+**Expect:** payment method `store_credit`, status `paid`, no gateway call, and
+COD does not tell the courier to collect anything.
+
+**PS-17.8 ★ — Cancelling gives the credit back**
+Cancel an order that used credit.
+**Expect:** the balance is restored and the ledger shows a `reinstate` row —
+distinct from `grant`, so reports can tell them apart.
+
+**PS-17.9 ★ — …exactly once**
+Cancel the same order twice.
+**Expect:** the credit comes back ONCE. A second reinstate would mint money.
+
+**PS-17.10 ★ — The balance can never go negative**
+Spend the balance in one tab, then complete a second checkout that also
+wanted it.
+**Expect:** the second order charges the full amount. Checkout must NOT fail —
+a race on an optional feature never refuses a sale (invariant 6).
+
+**PS-17.11 ★ — Crediting the same refund twice credits once**
+Trigger the refund confirmation twice (reconcile plus the callback).
+**Expect:** one ledger row, one balance increase.
+
+**PS-17.12 — Credit is per store**
+Check the balance while browsing a DIFFERENT store's subdomain.
+**Expect:** zero. Credit is the issuing merchant's money.
+
+## 10i. Abuse cases — money must not multiply (CODEBASE §26, §28, §29)
+
+These are the ones that were found broken on 2026-08-04 and fixed. Each is
+pinned by a regression test, but re-run them by hand after any change to
+`refundBreakdown`, `issueRefund` or either return action.
+
+**PS-18.1 — The same line, named twice, in one request**
+Post a return with `lines: [{A,1},{A,1},{A,1}]` on a one-unit line — from the
+storefront form's action AND from `/pos/returns`.
+**Expect:** one return item, quantity 1, one line's money.
+**Was:** three items and 3× the money, in a single call. No race needed.
+
+**PS-18.2 — Two tills, one sale**
+Open the same sale on two registers, confirm the full return on both.
+**Expect:** the first succeeds; the second says nothing is left.
+**Was:** ₹158 refunded against a ₹79 sale, 2 units returned on 1 sold —
+reproduced on staging.
+
+**PS-18.3 — Cash beyond the sale**
+On a sale with most of its value already refunded, take a counter return worth
+more than the remainder.
+**Expect:** "You can refund at most ₹X on this sale."
+**Was:** the till's cash path never consulted the refund cap at all.
+
+**PS-18.4 — Cash on an order paid partly with credit**
+₹500 order settled with ₹200 credit + ₹300 cash. Refund it at the counter.
+**Expect:** at most ₹300 in cash; the rest only as credit.
+**Was:** ₹500, because the cap read `orders.total`.
+
+**PS-18.5 — An even exchange owes nothing**
+Swap a size for the same-priced one. Compare the customer's quote, the
+merchant's queue row, and the approval email.
+**Expect:** ₹0 in all three.
+**Was:** ₹0 on the customer's screen, the full goods value in the other two.
+
+**PS-18.6 — Refund as credit, then cancel**
+Order paid entirely with store credit. Refund it as store credit, then cancel
+the order.
+**Expect:** the balance goes back ONCE.
+**Was:** twice — a ₹500 order left the customer holding ₹1,000.
+
+**PS-18.7 — A rejected return doesn't lock the goods out**
+Reject an online return, then bring the same goods to a counter.
+**Expect:** the counter can take them.
+**Was:** the till counted every return row regardless of status.
+
+**PS-18.8 — Someone else's bucket**
+Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
+**Expect:** dropped.
+**Was:** stored and rendered in the merchant's dashboard.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                            | Status                                                                                                                                                    |
-| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **No refunds anywhere**                                        | Cancel returns stock and notifies; the money must be refunded by hand in Razorpay. Blocks returns and pickup-expiry refunds — first item on the roadmap   |
-| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                 |
-| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can |
-| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                      |
-| **Pickup has never been run end to end**                       | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                             |
-| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                            |
-| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                   |
-| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                               |
-| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                               |
+| Gap                                                            | Status                                                                                                                                                                                             |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel doesn't offer a refund**                              | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
+| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                                                          |
+| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can                                          |
+| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                                                               |
+| **Pickup has never been run end to end**                       | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                                                                      |
+| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                                                                     |
+| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                                                            |
+| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                                                                        |
+| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                                                                        |

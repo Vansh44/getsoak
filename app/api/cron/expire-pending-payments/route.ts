@@ -13,6 +13,7 @@ import {
   capturedPayment,
   rzpFetchOrderPayments,
 } from "@/lib/payments/razorpay";
+import { sweepPendingRefunds } from "@/lib/payments/refund-reconcile";
 
 // Reaper for online-payment orders stuck in `payment_status: 'pending'` —
 // v1 has no merchant webhooks (reconcile-on-read instead), so this scheduled
@@ -109,10 +110,14 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "read failed" }, { status: 500 });
   }
   if (!pending.length) {
+    // The refund sweep runs even with no pending payments — money going OUT
+    // is a different queue from money coming in, and a store can easily have
+    // a refund in limbo and not one unpaid order.
     return NextResponse.json({
       ok: true,
       paid: 0,
       expired: 0,
+      refundsSettled: await sweepPendingRefunds(),
       holdsFreed: await sweepExpiredHolds(),
     });
   }
@@ -285,6 +290,10 @@ async function handle(request: Request) {
     expired,
     pickupsExpired,
     pickupsWarned,
+    // Refunds whose gateway call we never got an answer for. The order page
+    // reconciles instantly when anyone looks; this is the backstop for the
+    // ones nobody opens.
+    refundsSettled: await sweepPendingRefunds(),
     holdsFreed: await sweepExpiredHolds(),
   });
 }

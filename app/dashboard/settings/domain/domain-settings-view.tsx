@@ -241,6 +241,11 @@ export function DomainSettingsView({
             <p className="mt-1 text-sm text-[#5b6472]">
               Add them wherever you bought your domain. We check automatically.
             </p>
+            <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Enter each Name exactly as shown. GoDaddy and most DNS providers
+              add <strong>{state.domain}</strong> automatically—don&apos;t type
+              the domain again.
+            </p>
           </div>
           <div className="divide-y divide-[rgba(17,24,39,0.08)]">
             {state.records.map((r) => (
@@ -309,7 +314,13 @@ function Shell({ children }: { children: React.ReactNode }) {
 function RecordRow({
   record,
 }: {
-  record: { type: string; name: string; value: string; purpose: string };
+  record: {
+    type: string;
+    name: string;
+    fqdn: string;
+    value: string;
+    purpose: string;
+  };
 }) {
   return (
     <div className="flex flex-wrap items-center gap-4 p-6">
@@ -319,6 +330,9 @@ function RecordRow({
       <div className="min-w-0 flex-1">
         <p className="text-xs uppercase tracking-wide text-[#5b6472]">Name</p>
         <CopyLine text={record.name} />
+        <p className="mt-1 truncate text-xs text-[#6b7280]" title={record.fqdn}>
+          Creates {record.fqdn}
+        </p>
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-xs uppercase tracking-wide text-[#5b6472]">Value</p>

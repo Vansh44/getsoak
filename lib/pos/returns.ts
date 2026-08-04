@@ -115,12 +115,28 @@ export function refundBreakdown(input: {
   let amountP = 0;
   let taxP = 0;
 
+  // ★ COALESCE BEFORE CLAMPING, or the cap is per-ENTRY instead of per-LINE.
+  //
+  // The request array comes from a client. Clamping each entry against
+  // `remainingQty` independently means [{A,1},{A,1},{A,1}] on a one-unit line
+  // passes three times — each entry is individually "within what remains" — and
+  // returns 3× the money for one unit, in a single call, with no race needed.
+  // Both callers are exposed: the till's cash refund (pos-return-actions) and
+  // the shopper's request (return-actions). Summing first makes the clamp mean
+  // what it reads as.
+  const wanted = new Map<string, number>();
   for (const req of request) {
-    const i = byId.get(req.id);
-    if (i === undefined) continue;
+    if (!byId.has(req.id)) continue;
+    const q = Math.max(0, Math.trunc(Number(req.quantity) || 0));
+    if (q <= 0) continue;
+    wanted.set(req.id, (wanted.get(req.id) ?? 0) + q);
+  }
+
+  for (const [id, asked] of wanted) {
+    const i = byId.get(id)!;
     const line = lines[i];
     const max = remainingQty(line);
-    const qty = Math.min(Math.max(0, Math.trunc(req.quantity || 0)), max);
+    const qty = Math.min(asked, max);
     if (qty <= 0) continue;
 
     const sold = Math.max(1, Math.trunc(line.quantity || 0));

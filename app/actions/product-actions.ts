@@ -75,6 +75,8 @@ export interface ProductFormData {
   // Optional per-product tax class (public.tax_classes). Products without one
   // fall back to the store default at checkout. Empty string / null = none.
   tax_class_id?: string | null;
+  returnable?: boolean;
+  return_window_days?: number | null;
 }
 
 export interface ActionResult {
@@ -376,6 +378,21 @@ async function fetchProductImageUrls(
 // Create
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-product return window override.
+ *
+ * NULL means "use the store's `returns.windowDays`" — deliberately not a copy
+ * of the store value, so a merchant changing their store-wide window later
+ * still reaches products saved before the change. 0 is MEANINGFUL (same-day
+ * only), so it must survive rather than being coerced to null.
+ */
+function normalizeReturnWindow(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(365, Math.max(0, Math.trunc(n)));
+}
+
 export async function createProduct(
   formData: ProductFormData,
 ): Promise<ActionResult> {
@@ -418,6 +435,8 @@ export async function createProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    returnable: formData.returnable !== false,
+    returnWindowDays: normalizeReturnWindow(formData.return_window_days),
     // The merchant's own scannable supplier code (NOT the system sku below).
     barcode:
       typeof formData.barcode === "string"
@@ -537,6 +556,8 @@ export async function updateProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    returnable: formData.returnable !== false,
+    returnWindowDays: normalizeReturnWindow(formData.return_window_days),
     barcode:
       typeof formData.barcode === "string"
         ? formData.barcode.trim() || null

@@ -4,6 +4,10 @@ import { ChevronLeft, Package } from "lucide-react";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getMyOrder } from "@/app/actions/customer-order-actions";
+import { getStoreSetting } from "@/lib/settings/resolve";
+import { getReturnableOrder } from "@/app/actions/return-actions";
+import { CancelOrderButton } from "./cancel-order";
+import { ReturnRequest } from "./return-request";
 import styles from "../orders.module.css";
 import {
   CUSTOMER_STATUS_LABEL,
@@ -57,6 +61,21 @@ export default async function MyOrderDetailPage({
   }
 
   const cancelled = order.status === "cancelled";
+  // Server-side, so the button simply isn't there for a store that doesn't
+  // offer this. The action re-checks the same setting — a rendered control is
+  // not a permission (roadmap invariant 5).
+  const selfCancel = Boolean(
+    await getStoreSetting("orders.allowCustomerCancellation"),
+  );
+  // Returns. Only fetched when the store both accepts them AND lets shoppers
+  // start one — otherwise the card would be an invitation to a form that the
+  // server refuses (`returns.selfServe` is re-checked in requestReturn).
+  const returnsOn =
+    Boolean(await getStoreSetting("returns.enabled")) &&
+    Boolean(await getStoreSetting("returns.selfServe"));
+  const returnView = returnsOn
+    ? (await getReturnableOrder(order.id)).view
+    : undefined;
   const reachedIndex = ORDER_FLOW.indexOf(
     order.status as (typeof ORDER_FLOW)[number],
   );
@@ -114,6 +133,11 @@ export default async function MyOrderDetailPage({
                   })}
                 </ol>
               )}
+              {/* Not for an order already handed over: there is nothing left
+                  to stop, and at that point it's a return. */}
+              {selfCancel && !cancelled && order.status !== "delivered" && (
+                <CancelOrderButton orderId={order.id} />
+              )}
             </div>
 
             <div className={styles.card}>
@@ -150,6 +174,10 @@ export default async function MyOrderDetailPage({
                 ))}
               </ul>
             </div>
+
+            {/* Returns sit under the items, because that's what they're about
+                — and only when the store actually offers them. */}
+            {returnView && <ReturnRequest view={returnView} />}
           </div>
 
           <aside className={styles.side}>
