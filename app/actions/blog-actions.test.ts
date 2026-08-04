@@ -7,6 +7,10 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
 }));
+vi.mock("next/server", () => ({ after: vi.fn() }));
+vi.mock("@/lib/seo/store-indexing", () => ({
+  notifyStoreContentPublished: vi.fn(),
+}));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),
   getManagerIdentity: vi.fn(),

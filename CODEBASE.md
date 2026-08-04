@@ -79,9 +79,9 @@ wholesip/
 │                              # see docs/gcp-migration-phase4-cloud-run.md). Multi-stage
 │                              # standalone build; NEXT_PUBLIC_* are build args, secrets
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
-├── vercel.json                # Crons: send-emails + plan-expiry (daily),
-│                              # expire-pending-payments (daily on Hobby) — moving to
-│                              # Cloud Scheduler at Cloud Run cutover (Phase 4)
+├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
+│                              # send-emails, plan-expiry, expire-pending-payments,
+│                              # and daily seo-refresh (docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -282,7 +282,9 @@ wholesip/
 │   │                          # provisioning; shows zone-relative DNS names (so
 │   │                          # registrar UIs do not duplicate the domain), checks
 │   │                          # the challenge CNAME, and requires the LB to be the
-│   │                          # domain's only A-record destination before serving
+│   │                          # domain's only A-record destination before serving;
+│   │                          # then starts automatic Google META verification /
+│   │                          # Search Console sitemap registration (retry by cron)
 │   │   ├── page-actions.ts    # ★ Custom-page CRUD + draft/publish (see §11): createPage/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role
@@ -334,6 +336,9 @@ wholesip/
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
+│       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help
+│       │                      # sitemaps + every launched store; custom-domain META
+│       │                      # verification/property creation; 503 triggers retries
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -477,11 +482,13 @@ wholesip/
 │   │                          # resolve to the site's own #organization node.
 │   │                          # og-card.ts — brandOgImageUrl() builds the /api/og URL
 │   │                          # (single `d` param) for the branded default share card.
-│   │                          # search-engines.ts — pingIndexNow() (Bing/Yandex —
-│   │                          # NOT Google) + submitSitemapToGoogle() (Search
-│   │                          # Console; the ONLY caller is store-signup). Both
-│   │                          # best-effort; the Google path now logs via
-│   │                          # observability instead of returning silently.
+│   │                          # search-engines.ts — grouped-per-host pingIndexNow()
+│   │                          # (Bing/Yandex — NOT Google) + typed Google Search
+│   │                          # Console / Site Verification API primitives.
+│   │                          # ★ store-indexing.ts — ONE post-publish discovery
+│   │                          # hook + idempotent per-store Google reconciliation;
+│   │                          # keeps public token/status/error timestamps in
+│   │                          # stores.settings and retries via seo-refresh cron.
 │   │                          # IndexNow key: public/<key>.txt.
 │   │                          # ★ disallow.ts — the ONE list of non-indexable
 │   │                          # storefront/platform paths, read by BOTH app/robots.ts
@@ -3025,7 +3032,7 @@ npm run format      # prettier --write
 NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   `Disallow: /`), `sitemap.ts` (non-prod → empty), AND both notify channels, so
   staging/previews are auto-`noindex`d and never ping (no per-deploy flag; staging
-  runs as `NODE_ENV=production` on Cloud Run, so the old NODE*ENV guard was
+  runs as `NODE_ENV=production` on Cloud Run, so the old `NODE_ENV` guard was
   insufficient). IndexNow needs no account (public key file `public/<key>.txt`;
   `INDEXNOW_KEY` overrides it, `INDEXNOW_FORCE=1` pings off-prod). Google Search
   Console submission is DORMANT until `GOOGLE_SEARCH_CONSOLE_PROPERTY` (e.g.
@@ -3033,35 +3040,43 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   via ADC** (nothing to store; `cloudbuild.yaml` passes the property, prod trigger
   = `sc-domain:storemink.com`), or an explicit `GOOGLE_SEARCH_CONSOLE_CREDENTIALS`
   key JSON for non-GCP hosts. One-time human setup: verify `storemink.com` as a
-  Search Console \_Domain property* (covers all `*.storemink.com`) and add the
-  `storemink-run@…` SA as a property user. Custom-domain stores fall outside the
-  property, so their Google submit no-ops (IndexNow + on-page canonicals cover them).
-  **⚠ A STORE'S PUBLIC ORIGIN IS `storeOrigin(store)` (`lib/site.ts`) — NEVER
-  `custom_domain ?? subdomain`.** The custom domain counts only once
-  `settings.custom_domain_verified === true`, which is the same rule
-  `lookupStoreByHost` (`lib/store/resolve.ts`) applies when deciding whether to
-  SERVE on that domain — and the two silently disagreed. `saveCustomDomain`
-  writes `custom_domain` while CLEARING the verified flag, so every merchant
-  passes through a state where the store is served on its subdomain while every
-  canonical, `og:url`, robots `Host:`, sitemap `<loc>` and IndexNow ping pointed
-  at a domain we don't serve. Google follows the canonical, fails to fetch it,
-  and drops the working subdomain URLs as "Alternate page with proper canonical
-  tag" — total silent deindexing of a tenant. `getStoreUrl()` (and therefore the
-  storefront `metadataBase`) routes through it; regression-tested in
-  `lib/site.test.ts`. Related: a store-SHAPED host that resolves to NO store
-  (unclaimed subdomain, suspended store, unseeded demo) now returns
-  `Disallow: /` + an empty sitemap instead of falling through to the platform's,
-  which had every parked subdomain advertising storemink.com's URLs as its own.
-  **`app/sitemap.ts` emits NO fabricated `lastmod`** — a request-time value makes
-  Google discard lastmod site-wide, including the values that are accurate — so
-  each URL derives it from a real content timestamp or omits it, guarded by
-  `app/sitemap.test.ts`. Products use **`products.content_updated_at`**
+  Search Console Domain property (covers all `*.storemink.com`), add the
+  `storemink-run@…` SA as a property user, enable the Search Console and Site
+  Verification APIs, and create the `storemink-seo-refresh` Cloud Scheduler job.
+  `lib/seo/store-indexing.ts` is the single store discovery pipeline: publish
+  paths call it after commit, and `/api/cron/seo-refresh` reconciles every
+  active/launched/non-demo store daily. StoreMink subdomains submit under the
+  Domain property. A verified custom domain gets a Google META token in public
+  `stores.settings`, an automatically verified URL-prefix property, and its own
+  sitemap submission. Attempt/success/error timestamps are persisted;
+  successful stores are refreshed at most weekly, failures retry daily and make
+  the cron return 503 so Cloud Scheduler's three retries engage. Full setup and
+  Google-controlled limitations: `docs/seo-indexing.md`.
+  **A store's public origin is always selected by `storeOrigin(store)`.** Never
+  use `custom_domain ?? subdomain`. The custom domain counts only once
+  `settings.custom_domain_verified === true` and the effective plan is still
+  entitled to custom domains, the same two gates `lookupStoreByHost`
+  (`lib/store/resolve.ts`) applies when deciding whether to serve that domain. A
+  lapsed timed plan therefore falls back to the working StoreMink subdomain in
+  routing, canonical, robots, sitemap and notifications together.
+  `saveCustomDomain` writes `custom_domain` while clearing the verified flag, so
+  every merchant passes through a state where the store is served on its
+  subdomain. Pointing canonical, `og:url`, robots `Host:`, sitemap `<loc>` or an
+  IndexNow ping at that unverified domain makes Google follow an unreachable
+  canonical and can drop the working URL as "Alternate page with proper
+  canonical tag". `getStoreUrl()` and `getStoreOriginById()` both route through
+  `storeOrigin()`; regression-tested in `lib/site.test.ts`. Related: a
+  store-shaped host that resolves to no store (unclaimed subdomain, suspended
+  store, unseeded demo) returns `Disallow: /` plus an empty sitemap instead of
+  advertising StoreMink's platform URLs.
+  **`app/sitemap.ts` emits no fabricated `lastmod`.** Each URL derives it from a
+  real content timestamp or omits it, guarded by `app/sitemap.test.ts`. Products
+  use `products.content_updated_at`
   (`supabase/seo_01_product_content_timestamp.sql`), a trigger-maintained column
-  that moves only when a visitor-visible field changes: `updated_at` is bumped by
-  `_recompute_stock_aggregate` on every sale, so it would claim a content change
-  per purchase. Pages use `published_at`, not `updated_at`, which a BEFORE-UPDATE
-  trigger + `savePageDraft`'s autosave advance while an UNPUBLISHED draft is
-  edited.
+  that moves only when a visitor-visible field changes. `updated_at` is bumped
+  by `_recompute_stock_aggregate` on every sale and would claim a content change
+  per purchase. Pages use `published_at`, not `updated_at`, because draft
+  autosave advances `updated_at` while public HTML remains unchanged.
 - **A NEW STORE IS NOT INDEXABLE UNTIL ITS OWNER PUBLISHES SOMETHING**
   (`lib/store/launch.ts`). At creation a store is pure theme seed — the same
   homepage, ~17 content pages and sample catalogue as every other store on that
@@ -3069,9 +3084,11 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   the moment it existed. Mass-submitting near-duplicate placeholder stores spends
   the whole `*.storemink.com` domain's reputation, and `robots.txt` cannot undo
   it (Disallow stops crawling, not indexing). `stores.settings.launched` gates
-  `robots.ts` + `sitemap.ts`; `markStoreLaunched()` fires from `publishPage` and
-  the product publish path, which is now also where the one-time
-  `submitSitemapToGoogle` happens. **Absence of the flag means LAUNCHED** —
+  `robots.ts` + `sitemap.ts`; `notifyStoreContentPublished()` launches from all
+  page/product/blog publication paths (including bulk products, bulk blogs,
+  customer direct-publish and approval), not just the single-row editors, then
+  performs IndexNow + Google coverage out of band. **Absence of the flag means
+  LAUNCHED** —
   pre-existing stores have no key and treating them as unlaunched would deindex
   live shops; `createStore` writes `launched: false` explicitly. Demo stores
   (`settings.demo`) stay permanently out. Theme SAMPLE products now seed as
@@ -3086,6 +3103,12 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   visible footer links. Two hand-written copies would drift, and a contradictory
   entity is worse than an absent one. **Only public profile URLs belong in
   `sameAs`** — never a `/admin/` dashboard URL.
+- **Each merchant has a separate Organization entity** at its canonical
+  `${origin}/#organization` (`(storefront)/components/structured-data.tsx`). It
+  emits the configured brand name/legal name/logo/blurb, public email/phone and
+  valid Instagram/YouTube URLs; the store WebSite, Product and BlogPosting nodes
+  reference that same `@id`. Missing merchant data is omitted rather than
+  replaced with StoreMink/WholeSip identity.
 
 ## 8. Multi-tenant rollout status (as of 2026-07)
 

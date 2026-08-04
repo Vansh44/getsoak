@@ -5,6 +5,18 @@ import { getStoreUrl } from "@/lib/site";
 // resolved from that store's brand + canonical origin (not a hardcoded brand).
 export default async function StructuredData() {
   const [brand, siteUrl] = await Promise.all([getStoreBrand(), getStoreUrl()]);
+  const sameAs = [brand.social.instagram, brand.social.youtube].filter(
+    (value): value is string => {
+      if (!value) return false;
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" || url.protocol === "http:";
+      } catch {
+        return false;
+      }
+    },
+  );
+  const description = brand.blurb ?? brand.tagline;
   const graph = {
     "@context": "https://schema.org",
     "@graph": [
@@ -12,6 +24,7 @@ export default async function StructuredData() {
         "@type": "Organization",
         "@id": `${siteUrl}/#organization`,
         name: brand.name,
+        ...(brand.legalName ? { legalName: brand.legalName } : {}),
         url: siteUrl,
         // Only claim a logo the merchant actually supplied. The old
         // `?? ${siteUrl}/icon.svg` fallback resolved to StoreMink's own icon —
@@ -20,7 +33,20 @@ export default async function StructuredData() {
         // official logo. Omitting the property is what lib/seo/schema.ts already
         // does; an absent logo is honest, a wrong one is a false entity claim.
         ...(brand.logoUrl ? { logo: brand.logoUrl } : {}),
-        ...(brand.tagline ? { description: brand.tagline } : {}),
+        ...(description ? { description } : {}),
+        ...(brand.email ? { email: brand.email } : {}),
+        ...(brand.phone ? { telephone: brand.phone } : {}),
+        ...(sameAs.length ? { sameAs } : {}),
+        ...(brand.email || brand.phone
+          ? {
+              contactPoint: {
+                "@type": "ContactPoint",
+                contactType: "customer service",
+                ...(brand.email ? { email: brand.email } : {}),
+                ...(brand.phone ? { telephone: brand.phone } : {}),
+              },
+            }
+          : {}),
       },
       {
         "@type": "WebSite",

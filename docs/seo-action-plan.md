@@ -6,6 +6,18 @@
 > `docs/seo-indexing.md`, which describes the intended design — this document
 > records where reality diverges from it.
 
+> **Implementation update — 2026-08-04.** The automatic discovery gap described
+> below is now closed in code: `lib/seo/store-indexing.ts` unifies all
+> product/blog/page publish paths, automatically verifies custom-domain
+> URL-prefix properties, and persists Google attempt/success/error state;
+> `/api/cron/seo-refresh` retries the platform/help sitemaps and every launched
+> store daily. Bulk product publish and customer direct-publish now participate,
+> merchant Organization schema uses configured identity/contact/social data, and
+> custom-domain canonical selection includes the live plan-entitlement gate.
+> `docs/seo-indexing.md` is the current runbook. Historical “today/not built”
+> statements below describe the 2026-07-29 audit baseline and are retained as
+> evidence, not current architecture.
+
 **Goals this plan is graded against:**
 
 1. `storemink.com` ranks #1 for the brand query "storemink".

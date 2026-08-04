@@ -2,6 +2,7 @@
 
 import { eq } from "drizzle-orm";
 import { revalidateTag } from "next/cache";
+import { after } from "next/server";
 import { Resend } from "resend";
 import { withService } from "@/lib/db/client";
 import { stores } from "@/drizzle/schema";
@@ -25,6 +26,10 @@ import {
 } from "@/lib/domains/certificates";
 import { checkCnameTarget, checkDomainPointsTo } from "@/lib/domains/dns";
 import { logError } from "@/lib/observability/logger";
+import {
+  ensureGoogleCoverageForStore,
+  GOOGLE_INDEXING_SETTINGS_KEYS,
+} from "@/lib/seo/store-indexing";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -168,6 +173,7 @@ export async function updateCustomDomain(
   delete newSettings.resend_domain_verified;
   delete newSettings.domain_challenge;
   delete newSettings.domain_cert_state;
+  for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete newSettings[key];
 
   try {
     await withService((db) =>
@@ -459,6 +465,11 @@ export async function verifyDomain(): Promise<DomainResult> {
     });
   }
 
+  // Ownership verification and sitemap registration are slower, independent
+  // Google API calls. Start them now without holding the merchant's DNS check
+  // open; the daily seo-refresh job retries every incomplete attempt.
+  after(() => ensureGoogleCoverageForStore(storeId));
+
   revalidateTag(STORE_TAG, "max");
   return { success: true };
 }
@@ -481,6 +492,7 @@ export async function disconnectDomain(): Promise<DomainResult> {
   delete next.custom_domain_verified;
   delete next.domain_challenge;
   delete next.domain_cert_state;
+  for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete next[key];
 
   // Stop serving FIRST. If deprovisioning then fails we have a leftover
   // certificate (visible in logs, costs cents); the other order would leave the

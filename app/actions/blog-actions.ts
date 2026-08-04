@@ -3,8 +3,7 @@
 import { and, desc, eq, inArray, like, ne, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
-import { getStoreUrl } from "@/lib/site";
-import { pingIndexNow } from "@/lib/seo/search-engines";
+import { notifyStoreContentPublished } from "@/lib/seo/store-indexing";
 import { TAGS } from "@/lib/storefront/tags";
 import { emitEvent } from "@/lib/notifications/record";
 import { sanitizeBlogContent } from "@/lib/sanitize";
@@ -221,15 +220,15 @@ function revalidateBlogs() {
 /**
  * Nudge search engines to (re)crawl newly published post(s).
  *
- * Mirrors notifyProductPublished in product-actions.ts. It exists because only
+ * Mirrors notifyProductsPublished in product-actions.ts. It exists because only
  * ONE of the many paths that can publish a blog — the list-row toggle
  * (publishBlog) — ever pinged. Writing a post in the editor, approving a
  * customer submission, or bulk-publishing all went out silently, so the most
  * common way to publish was also the one search engines were never told about.
  *
- * Best-effort and off the response path. getStoreUrl() reads the request host,
- * so it must be resolved BEFORE after() — inside the callback there is no
- * request to read.
+ * Best-effort and off the response path. The background helper resolves the
+ * canonical origin from the durable store id, so custom domains and platform
+ * operator actions cannot announce the wrong host.
  */
 async function notifyBlogPublished(
   slugs: (string | null | undefined)[],
@@ -244,8 +243,16 @@ async function notifyBlogPublished(
   // sees, and they would (reasonably) try again. Telling a search engine is
   // strictly less important than the write that already succeeded.
   try {
-    const base = await getStoreUrl();
-    after(() => pingIndexNow(live.map((s) => `${base}/blogs/${s}`)));
+    // Blog publication also happens from the shopper-facing customer workflow,
+    // where there is no dashboard acting-store context. Host resolution gives
+    // us the durable store id; the background helper resolves its origin.
+    const storeId = await getCurrentStoreId();
+    after(() =>
+      notifyStoreContentPublished({
+        storeId,
+        paths: [...live.map((s) => `/blogs/${s}`), "/blogs", "/"],
+      }),
+    );
   } catch (err) {
     console.error("notifyBlogPublished failed:", (err as Error).message);
   }
@@ -1097,8 +1104,9 @@ export async function updateCustomerBlog(
   // Direct publish (store setting): same service-scope promotion as
   // submitCustomerBlog — RLS caps a customer's own writes at pending_review.
   if (!requireApproval) {
+    let promoted: { slug: string } | undefined;
     try {
-      await withService((db) =>
+      [promoted] = await withService((db) =>
         db
           .update(blogs)
           .set({
@@ -1111,10 +1119,14 @@ export async function updateCustomerBlog(
               eq(blogs.submittedBy, user.id),
               eq(blogs.status, "pending_review"),
             ),
-          ),
+          )
+          .returning({ slug: blogs.slug }),
       );
       revalidatePath("/blogs");
       revalidateTag(TAGS.blogs, "max");
+      if (promoted?.slug) {
+        await notifyBlogPublished([promoted.slug], true);
+      }
     } catch (promoteError) {
       console.error("updateCustomerBlog promote error:", promoteError);
     }

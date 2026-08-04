@@ -18,6 +18,7 @@ import { getThemeDefinition } from "@/lib/themes";
 import { isThemeId } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
+import { GOOGLE_VERIFICATION_TOKEN_KEY } from "@/lib/seo/store-indexing";
 import "./storefront-theme.css";
 
 // Per-store default title/template + canonical origin. Individual pages may set
@@ -39,6 +40,7 @@ export async function generateMetadata(): Promise<Metadata> {
   }
 
   const [brand, siteUrl] = await Promise.all([getStoreBrand(), getStoreUrl()]);
+  const googleVerification = store.settings?.[GOOGLE_VERIFICATION_TOKEN_KEY];
   return {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
@@ -46,6 +48,9 @@ export async function generateMetadata(): Promise<Metadata> {
     icons: brand.logoUrl
       ? { icon: brand.logoUrl }
       : { icon: "/brand/storemink-mark.png" },
+    ...(typeof googleVerification === "string" && googleVerification
+      ? { verification: { google: googleVerification } }
+      : {}),
   };
 }
 

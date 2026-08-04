@@ -7,9 +7,8 @@ import { withService } from "@/lib/db/client";
 import { storePages } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { emitEvent } from "@/lib/notifications/record";
-import { getStoreUrl } from "@/lib/site";
-import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
-import { markStoreLaunched } from "@/lib/store/launch";
+import { getStoreOriginById } from "@/lib/site";
+import { notifyStoreContentPublished } from "@/lib/seo/store-indexing";
 import { TAGS } from "@/lib/storefront/tags";
 import { getStoreSetting } from "@/lib/settings/resolve";
 import { sanitizeBlogContent } from "@/lib/sanitize";
@@ -453,23 +452,28 @@ export async function publishPage(
   revalidatePage(page.slug);
 
   // Nudge search engines to re-crawl the just-published page (best-effort, off
-  // the response path). getStoreUrl reads the request host, so resolve it now
-  // rather than inside after().
-  const base = await getStoreUrl();
-  const pageUrl = page.slug ? `${base}/${page.slug}` : `${base}/`;
+  // the response path). Resolve by the durable acting store id, not request
+  // Host: platform operators can publish while standing on the apex.
+  const base = await getStoreOriginById(storeId).catch(() => null);
+  const pageUrl = base
+    ? page.slug
+      ? `${base}/${page.slug}`
+      : `${base}/`
+    : page.slug
+      ? `/${page.slug}`
+      : "/";
 
   // The merchant has now published a page THEY edited, so the store is no
   // longer indistinguishable from the theme seed. Open it to search engines
   // and announce it — including its sitemap, which nothing else submits (the
   // one-time registration that used to happen at signup, now deferred to the
   // moment there is something worth registering). See lib/store/launch.ts.
-  after(async () => {
-    await markStoreLaunched(storeId);
-    await Promise.allSettled([
-      pingIndexNow([pageUrl, `${base}/`]),
-      submitSitemapToGoogle(`${base}/sitemap.xml`),
-    ]);
-  });
+  after(() =>
+    notifyStoreContentPublished({
+      storeId,
+      paths: [page.slug ? `/${page.slug}` : "/", "/"],
+    }),
+  );
 
   emitEvent({
     type: "page.published",
