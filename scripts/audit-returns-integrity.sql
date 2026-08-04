@@ -3,15 +3,28 @@
 --
 -- READ ONLY. Run it against any environment; it writes nothing.
 --
---   psql "$DATABASE_URL" -c 'set role app_service' \
---                        -f scripts/audit-returns-integrity.sql
+-- ★ ONE STATEMENT, NO psql META-COMMANDS, so it pastes straight into Cloud
+--   SQL Studio, any GUI client, or psql. It began life with `\echo` headers
+--   and Studio rejected the whole thing with `syntax error at or near "\"` —
+--   a script only some clients can run is a script that doesn't get run.
+--   The scope row rides in the same result set for the same reason.
+--
+--   Cloud SQL Studio:  paste and Run.
+--   psql:              psql "$DATABASE_URL" -f scripts/audit-returns-integrity.sql
 --
 -- ⚠ THE ROLE MATTERS. `app` is RLS-bound and, with no request GUCs set,
 -- reads back ZERO rows from every one of these tables — so the audit would
 -- print a clean bill of health for a database it cannot see. Run it as
--- `app_service` (BYPASSRLS, what withService uses) or as `postgres`. The
--- scope block at the end is there to make that mistake obvious: if it says
--- 0 orders on a live database, the role is wrong, not the data.
+-- `app_service` (BYPASSRLS, what withService uses) or as `postgres`; Cloud
+-- SQL Studio connects as whatever user you picked, so run
+-- `SET ROLE app_service;` first if that user isn't already one of them. The
+-- `scope` row exists to make the mistake obvious: if it reports 0 orders on
+-- a live database, the role is wrong, not the data.
+--
+-- ⚠ ON A DATABASE WITHOUT THE RETURNS MIGRATIONS it fails with
+-- `relation "public.order_returns" does not exist`. That error IS an answer,
+-- and a good one — returns have never run there, so nothing can be wrong
+-- with them. (Production was exactly this on 2026-08-04.)
 --
 -- ── Why this exists ────────────────────────────────────────────────────────
 -- The returns surfaces shipped with six ways for money to leave that
@@ -20,9 +33,10 @@
 -- fixing the code answers "can it happen again" but not "did it already".
 -- Only the data can answer that.
 --
--- Each check is written so a HEALTHY database returns NOTHING. The summary at
--- the end always prints, so an empty result set is never ambiguous: it either
--- says there is nothing to check, or it says the checks ran and found nothing.
+-- Each check is written so a HEALTHY database returns NOTHING — which is why
+-- the `scope` row is always returned alongside them. A grid holding only that
+-- row means the checks ran and found nothing; an EMPTY grid means something
+-- went wrong with the query itself.
 --
 -- ── The one that leaves no trace ───────────────────────────────────────────
 -- `refunds_over_total` and `units_over_returned` catch the damage. But a
@@ -30,12 +44,7 @@
 -- the totals and only shows up as `duplicate_return_line` — two rows in
 -- order_return_items naming the same order item. The application never had a
 -- legitimate reason to write that, so any hit is the multiplication bug.
---
--- Run as a role that can read the tables (app_service, or postgres).
 -- =============================================================
-
-\echo ''
-\echo '=== Returns integrity audit ==================================='
 
 WITH
 -- Statuses that still hold units. A rejected or cancelled return gave its
@@ -50,7 +59,7 @@ open_returns AS (
 -- The headline symptom of the per-entry quantity clamp, and of the two-till
 -- race. Physically impossible, so any row here is real.
 units_over_returned AS (
-  SELECT 'units_over_returned' AS check,
+  SELECT 'units_over_returned' AS finding,
          o.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -70,7 +79,7 @@ units_over_returned AS (
 -- A pending refund counts: it hasn't settled but might (§26). Only `failed`
 -- frees its amount. The 0.01 slack keeps rounding out of it.
 refunds_over_total AS (
-  SELECT 'refunds_over_total' AS check,
+  SELECT 'refunds_over_total' AS finding,
          o.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -90,7 +99,7 @@ refunds_over_total AS (
 -- credit, so a cash or gateway refund of `total` hands back an amount no
 -- instrument received. Only orders that actually used credit can be affected.
 money_over_paid AS (
-  SELECT 'money_refund_over_paid' AS check,
+  SELECT 'money_refund_over_paid' AS finding,
          o.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -113,7 +122,7 @@ money_over_paid AS (
 -- an exploit which stayed inside the order total. Nothing in the application
 -- has ever had a reason to write two rows for one order item in one return.
 duplicate_return_line AS (
-  SELECT 'duplicate_return_line' AS check,
+  SELECT 'duplicate_return_line' AS finding,
          r.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -134,7 +143,7 @@ duplicate_return_line AS (
 -- per-(kind, ref) idempotency can't see this: one row is a `refund` keyed on
 -- the refund, the other a `reinstate` keyed on the order.
 double_credit AS (
-  SELECT 'credit_returned_twice' AS check,
+  SELECT 'credit_returned_twice' AS finding,
          o.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -162,7 +171,7 @@ double_credit AS (
 -- something wrote it outside the two RPCs, which is the one thing §29 says
 -- must never happen.
 credit_drift AS (
-  SELECT 'credit_balance_drift' AS check,
+  SELECT 'credit_balance_drift' AS finding,
          b.store_id,
          b.customer_id AS ref,
          jsonb_build_object(
@@ -181,7 +190,7 @@ credit_drift AS (
 -- swap lines is either a genuinely cheaper replacement (fine — check the
 -- amount) or the over-quoting bug. Advisory, so review rather than assume.
 exchange_with_refund AS (
-  SELECT 'exchange_quotes_refund' AS check,
+  SELECT 'exchange_quotes_refund' AS finding,
          r.store_id,
          o.order_ref AS ref,
          jsonb_build_object(
@@ -200,26 +209,44 @@ exchange_with_refund AS (
            SELECT 1 FROM public.order_return_items ri
             WHERE ri.return_id = r.id AND ri.exchange_variant_id IS NOT NULL
          )
+),
+
+-- ── The scope row — ALWAYS returned ─────────────────────────────────────
+-- So an empty grid is never ambiguous. It answers "did this look at
+-- anything?" before you read the absence of findings as good news.
+scope AS (
+  SELECT 'scope' AS finding,
+         NULL::uuid AS store_id,
+         NULL::text AS ref,
+         jsonb_build_object(
+           'database', current_database(),
+           'role', current_user,
+           'orders', (SELECT COUNT(*) FROM public.orders),
+           'returns', (SELECT COUNT(*) FROM public.order_returns),
+           'return_lines', (SELECT COUNT(*) FROM public.order_return_items),
+           'refunds', (SELECT COUNT(*) FROM public.order_refunds),
+           'refunded_value', (SELECT COALESCE(SUM(amount), 0)
+                                FROM public.order_refunds WHERE status <> 'failed'),
+           'credit_entries', (SELECT COUNT(*) FROM public.customer_credit_ledger),
+           'credit_outstanding', (SELECT COALESCE(SUM(balance), 0)
+                                    FROM public.customer_credit_balances)
+         ) AS detail
 )
 
-SELECT * FROM units_over_returned
-UNION ALL SELECT * FROM refunds_over_total
-UNION ALL SELECT * FROM money_over_paid
-UNION ALL SELECT * FROM duplicate_return_line
-UNION ALL SELECT * FROM double_credit
-UNION ALL SELECT * FROM credit_drift
-UNION ALL SELECT * FROM exchange_with_refund
-ORDER BY 1, 2, 3;
-
-\echo ''
-\echo '=== Scope of the audit (always prints) ========================'
-
-SELECT (SELECT COUNT(*) FROM public.orders)                  AS orders,
-       (SELECT COUNT(*) FROM public.order_returns)           AS returns,
-       (SELECT COUNT(*) FROM public.order_return_items)      AS return_lines,
-       (SELECT COUNT(*) FROM public.order_refunds)           AS refunds,
-       (SELECT COALESCE(SUM(amount), 0) FROM public.order_refunds
-         WHERE status <> 'failed')                           AS refunded_value,
-       (SELECT COUNT(*) FROM public.customer_credit_ledger)  AS credit_entries,
-       (SELECT COALESCE(SUM(balance), 0)
-          FROM public.customer_credit_balances)              AS credit_outstanding;
+SELECT *
+  FROM (
+        SELECT * FROM scope
+  UNION ALL SELECT * FROM units_over_returned
+  UNION ALL SELECT * FROM refunds_over_total
+  UNION ALL SELECT * FROM money_over_paid
+  UNION ALL SELECT * FROM duplicate_return_line
+  UNION ALL SELECT * FROM double_credit
+  UNION ALL SELECT * FROM credit_drift
+  UNION ALL SELECT * FROM exchange_with_refund
+       ) rows
+ -- Scope first, then findings alphabetically. The UNION is wrapped in a FROM
+ -- because a UNION's own ORDER BY takes only bare result column names, never
+ -- an expression. And the column is `finding`, not `check`: `check` survives
+ -- as a column ALIAS but is parsed as the CHECK keyword the moment you sort
+ -- by it.
+ ORDER BY (finding <> 'scope'), finding, store_id, ref;
