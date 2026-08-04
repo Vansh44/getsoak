@@ -22,6 +22,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { makeDbMock } from "@/app/actions/_test-helpers";
 
 vi.mock("./crypto", () => ({ decryptSecret: vi.fn() }));
+vi.mock("@/lib/observability/logger", () => ({
+  logError: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 vi.mock("@/lib/db/client", () => ({
@@ -29,6 +34,7 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { decryptSecret } from "./crypto";
+import { logError } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds, getStoreGateway } from "./provider";
 
 const STORE = "store-1";
@@ -38,18 +44,11 @@ const ROW = {
   enabled: true,
 };
 
-let errorSpy: ReturnType<typeof vi.spyOn>;
-
 beforeEach(() => {
   vi.clearAllMocks();
-  // The module logs through console.error rather than the observability
-  // logger, so it is silenced here rather than mocked away.
-  errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.mocked(decryptSecret).mockReturnValue("plaintext-secret");
   dbHolder.current = makeDbMock({ selectQueue: [[ROW]] });
 });
-
-afterEach(() => errorSpy.mockRestore());
 
 // ---------------------------------------------------------------------------
 // getStoreGateway
@@ -108,7 +107,11 @@ describe("getStoreGateway", () => {
       calls: { select: [] },
     };
     expect(await getStoreGateway(STORE)).toBeNull();
-    expect(errorSpy).toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      "payments.gateway_load",
+      expect.any(Error),
+      { storeId: STORE },
+    );
   });
 
   it("★★ returns null when the stored secret won't decrypt", async () => {
@@ -120,9 +123,12 @@ describe("getStoreGateway", () => {
       throw new Error("Unsupported state or unable to authenticate data");
     });
     expect(await getStoreGateway(STORE)).toBeNull();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "getStoreGateway (decrypt):",
-      "Unsupported state or unable to authenticate data",
+    expect(logError).toHaveBeenCalledWith(
+      "payments.gateway_decrypt",
+      expect.objectContaining({
+        message: "Unsupported state or unable to authenticate data",
+      }),
+      { storeId: STORE },
     );
   });
 
@@ -130,10 +136,13 @@ describe("getStoreGateway", () => {
     vi.mocked(decryptSecret).mockImplementation(() => {
       throw "just a string";
     });
+    // logError normalises it into an Error, so a thrown string still reaches
+    // Error Reporting with a stack instead of vanishing into a log line.
     expect(await getStoreGateway(STORE)).toBeNull();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "getStoreGateway (decrypt):",
+    expect(logError).toHaveBeenCalledWith(
+      "payments.gateway_decrypt",
       "just a string",
+      { storeId: STORE },
     );
   });
 
@@ -147,7 +156,11 @@ describe("getStoreGateway", () => {
       calls: { select: [] },
     };
     expect(await getStoreGateway(STORE)).toBeNull();
-    expect(errorSpy).toHaveBeenCalledWith("getStoreGateway:", "db exploded");
+    expect(logError).toHaveBeenCalledWith(
+      "payments.gateway_load",
+      "db exploded",
+      { storeId: STORE },
+    );
   });
 });
 

@@ -54,6 +54,7 @@ import {
 } from "@/lib/returns/in-store";
 import { issueRefund } from "@/lib/payments/issue-refund";
 import { refundableAmount } from "@/lib/payments/refunds";
+import { logError } from "@/lib/observability/logger";
 import { OPEN_RETURN_STATUSES } from "@/lib/returns/lifecycle";
 
 /** Tenders a shop can hand money back through at the counter. */
@@ -182,7 +183,7 @@ export async function findOrderForReturn(
       })),
     };
   } catch (err) {
-    console.error("findOrderForReturn:", err);
+    logError("pos.return_search", err);
     return { results: [], error: "Couldn't search orders." };
   }
 }
@@ -245,7 +246,9 @@ async function borisGates(
       locationAccepts: locationCan(caps, "returns", { plan }),
     };
   } catch (err) {
-    console.error("borisGates:", err);
+    // Fails CLOSED, so this log is the only trace: the counter simply reports
+    // that it can't take the return, and nothing says why.
+    logError("pos.boris_gates", err, { storeId, locationId });
     return { storeAllows: false, locationAccepts: false };
   }
 }
@@ -670,7 +673,11 @@ export async function processReturn(
       );
       restocked.push(l.id);
     } catch (err) {
-      console.error("processReturn restock:", l.id, err);
+      // ★ The money has ALREADY crossed the counter by this point, so this
+      // can't be undone — the goods are back on the shelf and the count is
+      // wrong until someone notices. Exactly the silent failure that belongs
+      // in Error Reporting rather than a console line nobody reads.
+      logError("pos.return_restock", err, { returnId, orderItemId: l.id });
     }
   }
 
@@ -685,7 +692,7 @@ export async function processReturn(
             inArray(orderReturnItems.orderItemId, restocked),
           ),
         ),
-    ).catch((err) => console.error("processReturn restock flag:", err));
+    ).catch((err) => logError("pos.return_restock_flag", err, { returnId }));
 
     // Coming back on the shelf can cross a low-stock threshold in reverse —
     // the same reporting a sale does, with a positive delta.
@@ -744,7 +751,7 @@ export async function processReturn(
         .update(orders)
         .set({ status: "refunded", paymentStatus: "refunded" })
         .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId))),
-    ).catch((err) => console.error("processReturn status:", err));
+    ).catch((err) => logError("pos.return_order_status", err, { orderId }));
   }
 
   emitEvent({
