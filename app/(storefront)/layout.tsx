@@ -12,10 +12,11 @@ import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
+import { resolveStorefrontAppearance } from "@/lib/chrome/types";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
-import { isThemeId } from "@/lib/themes/meta";
+import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
 import { GOOGLE_VERIFICATION_TOKEN_KEY } from "@/lib/seo/store-indexing";
@@ -81,28 +82,43 @@ export default async function StorefrontLayout({
   ]);
   const chrome = draftChrome ?? publishedChrome;
 
-  // The visual skin: resolve the store's theme (settings.template) and flatten
+  // The visual skin: resolve the store's pinned theme release (falling back to
+  // the legacy settings.template id) and flatten
   // its palette/fonts/shape into CSS custom properties written inline on
   // .storefront-root. Inline-style specificity beats the globals.css :root
   // defaults, so the whole storefront re-skins with no per-component wiring.
   // A store with NO real theme id (the WholeSip fallback, legacy stores) gets
   // only --brand-primary — the globals.css defaults ARE the WholeSip look, so
   // it stays exactly as today.
-  const template = (store.settings as Record<string, unknown> | null)?.template;
-  const design = isThemeId(template)
-    ? getThemeDefinition(template).design
+  const themeSelection = readThemeSelection(store.settings);
+  const design = themeSelection
+    ? getThemeDefinition(themeSelection.id, themeSelection.version).preset
+        .design
     : null;
   const themeVars: Record<string, string> = design
     ? designToCssVars(design, brand.primaryColor)
     : { "--brand-primary": brand.primaryColor };
 
-  // Chrome layout variants (theme-driven; absent = classic WholeSip chrome).
-  // Rendered as root classes so plain CSS can switch header/card treatments.
+  // Theme defaults + the merchant's published builder overrides resolve into
+  // one appearance. Root classes let CSS switch treatments without forking
+  // components; the same resolver runs client-side for instant builder preview.
+  const appearance = resolveStorefrontAppearance(
+    design?.layout,
+    chrome.appearance,
+  );
   const rootClass = [
     "storefront-root",
-    design?.layout?.header === "market" ? "sm-header-market" : "",
-    design?.layout?.card === "quick_add" ? "sm-card-quickadd" : "",
-    design?.layout?.storefront === "grocery" ? "sm-storefront-grocery" : "",
+    `sm-header-${appearance.header}`,
+    `sm-card-${appearance.card}`,
+    appearance.cardQuickAdd ? "sm-card-quickadd" : "",
+    `sm-pdp-${appearance.productDetail}`,
+    `sm-cart-${appearance.cart}`,
+    `sm-footer-${appearance.footer}`,
+    appearance.card === "grocery" ||
+    appearance.productDetail === "grocery" ||
+    appearance.cart === "grocery"
+      ? "sm-storefront-grocery"
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -111,7 +127,11 @@ export default async function StorefrontLayout({
     <AuthProvider>
       <CartProvider>
         <BrandProvider brand={brand}>
-          <ChromeProvider chrome={chrome} live={previewing}>
+          <ChromeProvider
+            chrome={chrome}
+            themeLayout={design?.layout}
+            live={previewing}
+          >
             <div className={rootClass} style={themeVars as CSSProperties}>
               <Header />
               {children}

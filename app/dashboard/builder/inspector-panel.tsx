@@ -125,7 +125,12 @@ export function InspectorPanel({
           {chromeTarget === "header" ? (
             <HeaderForm chrome={chrome} onChange={onChromeChange} />
           ) : chromeTarget === "brand" ? (
-            <BrandForm brand={brand} onChange={onBrandChange} />
+            <BrandForm
+              brand={brand}
+              onChange={onBrandChange}
+              chrome={chrome}
+              onChromeChange={onChromeChange}
+            />
           ) : (
             <FooterForm chrome={chrome} onChange={onChromeChange} />
           )}

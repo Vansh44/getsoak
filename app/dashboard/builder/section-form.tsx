@@ -9,7 +9,9 @@ import CodeEditor from "./code-editor-lazy";
 import { FieldGroup } from "./field-group";
 import {
   MAX_FAQ_ITEMS,
+  MAX_GALLERY_ITEMS,
   MAX_HERO_SLIDES,
+  MAX_TESTIMONIAL_ITEMS,
   MAX_TICKER_MESSAGES,
   MAX_TILES,
   MAX_USP_ITEMS,
@@ -19,19 +21,26 @@ import {
   type FaqAccordionConfig,
   type FaqItem,
   type FeaturedProductsConfig,
+  type GalleryConfig,
+  type GalleryItem,
   type HeroCarouselConfig,
   type HeroConfig,
   type HeroSlide,
   type HomepageSectionType,
   type LatestBlogsConfig,
+  type MediaTextConfig,
+  type NewsletterSectionConfig,
   type PromoBannerConfig,
   type RichTextConfig,
   type ShopByCategoryConfig,
   type TickerConfig,
   type TileGridConfig,
   type TileItem,
+  type TestimonialItem,
+  type TestimonialsConfig,
   type UspBarConfig,
   type UspItem,
+  type VideoConfig,
 } from "@/lib/homepage/section-types";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +113,35 @@ export function SectionForm({
       return (
         <TileGridFields
           config={config as TileGridConfig}
+          setConfig={setConfig}
+        />
+      );
+    case "media_text":
+      return (
+        <MediaTextFields
+          config={config as MediaTextConfig}
+          setConfig={setConfig}
+        />
+      );
+    case "gallery":
+      return (
+        <GalleryFields config={config as GalleryConfig} setConfig={setConfig} />
+      );
+    case "testimonials":
+      return (
+        <TestimonialsFields
+          config={config as TestimonialsConfig}
+          setConfig={setConfig}
+        />
+      );
+    case "video":
+      return (
+        <VideoFields config={config as VideoConfig} setConfig={setConfig} />
+      );
+    case "newsletter":
+      return (
+        <NewsletterFields
+          config={config as NewsletterSectionConfig}
           setConfig={setConfig}
         />
       );
@@ -1244,6 +1282,784 @@ function FaqFields({
           </button>
         )}
       </div>
+    </>
+  );
+}
+
+function MediaTextFields({
+  config,
+  setConfig,
+}: {
+  config: MediaTextConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof MediaTextConfig>(
+    key: K,
+    value: MediaTextConfig[K],
+  ) => setConfig({ ...config, [key]: value });
+
+  return (
+    <>
+      <FieldGroup title="Story">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Our story"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Heading</label>
+          <input
+            className={fieldClass}
+            value={config.heading}
+            onChange={(e) => set("heading", e.target.value)}
+            placeholder="Made with intention"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Body</label>
+          <textarea
+            className={`${fieldClass} min-h-[120px] resize-y`}
+            value={config.body}
+            onChange={(e) => set("body", e.target.value)}
+            placeholder="Tell the story behind your materials, process or people."
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Image">
+        <ImageUpload
+          folder="homepage"
+          defaultImage={config.image_url || undefined}
+          onUploadSuccess={(url) => set("image_url", url)}
+        />
+        <div>
+          <label className={labelClass}>Image description</label>
+          <input
+            className={fieldClass}
+            value={config.image_alt}
+            onChange={(e) => set("image_alt", e.target.value)}
+            placeholder="Describe the image for screen readers"
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Layout">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className={labelClass}>Image position</label>
+            <select
+              className={fieldClass}
+              value={config.media_position}
+              onChange={(e) =>
+                set(
+                  "media_position",
+                  e.target.value as MediaTextConfig["media_position"],
+                )
+              }
+            >
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Image shape</label>
+            <select
+              className={fieldClass}
+              value={config.media_ratio}
+              onChange={(e) =>
+                set(
+                  "media_ratio",
+                  e.target.value as MediaTextConfig["media_ratio"],
+                )
+              }
+            >
+              <option value="portrait">Portrait</option>
+              <option value="square">Square</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Text alignment</label>
+            <select
+              className={fieldClass}
+              value={config.alignment}
+              onChange={(e) =>
+                set("alignment", e.target.value as MediaTextConfig["alignment"])
+              }
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+            </select>
+          </div>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Button">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Button label</label>
+            <input
+              className={fieldClass}
+              value={config.cta_label}
+              onChange={(e) => set("cta_label", e.target.value)}
+              placeholder="Discover more"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Button link</label>
+            <input
+              className={fieldClass}
+              value={config.cta_href}
+              onChange={(e) => set("cta_href", e.target.value)}
+              placeholder="/our-story"
+            />
+          </div>
+        </div>
+      </FieldGroup>
+    </>
+  );
+}
+
+const EMPTY_GALLERY_ITEM: GalleryItem = {
+  image_url: "",
+  image_alt: "",
+  caption: "",
+  href: "",
+};
+
+function GalleryFields({
+  config,
+  setConfig,
+}: {
+  config: GalleryConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof GalleryConfig>(
+    key: K,
+    value: GalleryConfig[K],
+  ) => setConfig({ ...config, [key]: value });
+  const setItem = (index: number, patch: Partial<GalleryItem>) =>
+    set(
+      "items",
+      config.items.map((item, i) =>
+        i === index ? { ...item, ...patch } : item,
+      ),
+    );
+  const move = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= config.items.length) return;
+    const items = [...config.items];
+    [items[index], items[target]] = [items[target], items[index]];
+    set("items", items);
+  };
+
+  return (
+    <>
+      <FieldGroup title="Header">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Heading</label>
+            <input
+              className={fieldClass}
+              value={config.heading}
+              onChange={(e) => set("heading", e.target.value)}
+              placeholder="The edit"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Subheading</label>
+            <input
+              className={fieldClass}
+              value={config.subheading}
+              onChange={(e) => set("subheading", e.target.value)}
+              placeholder="A closer look at the collection"
+            />
+          </div>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Layout">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className={labelClass}>Composition</label>
+            <select
+              className={fieldClass}
+              value={config.layout}
+              onChange={(e) =>
+                set("layout", e.target.value as GalleryConfig["layout"])
+              }
+            >
+              <option value="editorial">Editorial lead image</option>
+              <option value="grid">Even grid</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Columns</label>
+            <select
+              className={fieldClass}
+              value={config.columns}
+              onChange={(e) =>
+                set(
+                  "columns",
+                  Number(e.target.value) as GalleryConfig["columns"],
+                )
+              }
+            >
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Image shape</label>
+            <select
+              className={fieldClass}
+              value={config.image_ratio}
+              onChange={(e) =>
+                set(
+                  "image_ratio",
+                  e.target.value as GalleryConfig["image_ratio"],
+                )
+              }
+            >
+              <option value="portrait">Portrait</option>
+              <option value="square">Square</option>
+              <option value="landscape">Landscape</option>
+            </select>
+          </div>
+        </div>
+      </FieldGroup>
+
+      <div className="space-y-2">
+        <label className={labelClass}>Images</label>
+        {config.items.map((item, index) => (
+          <div
+            key={index}
+            className="bg-background space-y-2 rounded-md border p-2"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground text-xs font-medium">
+                Image {index + 1}
+              </span>
+              <div className="ml-auto flex items-center">
+                <button
+                  type="button"
+                  onClick={() => move(index, -1)}
+                  disabled={index === 0}
+                  title="Move up"
+                  className="text-muted-foreground hover:bg-muted flex h-7 w-6 items-center justify-center rounded disabled:opacity-30"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => move(index, 1)}
+                  disabled={index === config.items.length - 1}
+                  title="Move down"
+                  className="text-muted-foreground hover:bg-muted flex h-7 w-6 items-center justify-center rounded disabled:opacity-30"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    set(
+                      "items",
+                      config.items.filter((_, i) => i !== index),
+                    )
+                  }
+                  title="Remove"
+                  className="text-muted-foreground hover:text-[var(--dash-red)] flex h-7 w-6 items-center justify-center rounded hover:bg-[var(--dash-red-soft)]"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <ImageUpload
+              folder="homepage"
+              defaultImage={item.image_url || undefined}
+              onUploadSuccess={(url) => setItem(index, { image_url: url })}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className={fieldClass}
+                value={item.image_alt}
+                onChange={(e) => setItem(index, { image_alt: e.target.value })}
+                placeholder="Image description"
+              />
+              <input
+                className={fieldClass}
+                value={item.caption}
+                onChange={(e) => setItem(index, { caption: e.target.value })}
+                placeholder="Caption (optional)"
+              />
+            </div>
+            <input
+              className={fieldClass}
+              value={item.href}
+              onChange={(e) => setItem(index, { href: e.target.value })}
+              placeholder="Link (optional, e.g. /shop/new-arrivals)"
+            />
+          </div>
+        ))}
+        {config.items.length < MAX_GALLERY_ITEMS && (
+          <button
+            type="button"
+            onClick={() =>
+              set("items", [...config.items, { ...EMPTY_GALLERY_ITEM }])
+            }
+            className="text-muted-foreground hover:bg-muted flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add image
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+const EMPTY_TESTIMONIAL: TestimonialItem = {
+  quote: "",
+  author: "",
+  detail: "",
+  logo_url: "",
+  logo_alt: "",
+};
+
+function TestimonialsFields({
+  config,
+  setConfig,
+}: {
+  config: TestimonialsConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof TestimonialsConfig>(
+    key: K,
+    value: TestimonialsConfig[K],
+  ) => setConfig({ ...config, [key]: value });
+  const setItem = (index: number, patch: Partial<TestimonialItem>) =>
+    set(
+      "items",
+      config.items.map((item, i) =>
+        i === index ? { ...item, ...patch } : item,
+      ),
+    );
+  const move = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= config.items.length) return;
+    const items = [...config.items];
+    [items[index], items[target]] = [items[target], items[index]];
+    set("items", items);
+  };
+
+  return (
+    <>
+      <FieldGroup title="Header">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Loved by customers"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Heading</label>
+            <input
+              className={fieldClass}
+              value={config.heading}
+              onChange={(e) => set("heading", e.target.value)}
+              placeholder="What people are saying"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Subheading</label>
+            <input
+              className={fieldClass}
+              value={config.subheading}
+              onChange={(e) => set("subheading", e.target.value)}
+              placeholder="(optional)"
+            />
+          </div>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Layout">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Style</label>
+            <select
+              className={fieldClass}
+              value={config.layout}
+              onChange={(e) =>
+                set("layout", e.target.value as TestimonialsConfig["layout"])
+              }
+            >
+              <option value="cards">Cards</option>
+              <option value="editorial">Editorial quotes</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Columns</label>
+            <select
+              className={fieldClass}
+              value={config.columns}
+              onChange={(e) =>
+                set(
+                  "columns",
+                  Number(e.target.value) as TestimonialsConfig["columns"],
+                )
+              }
+            >
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
+        </div>
+      </FieldGroup>
+
+      <div className="space-y-2">
+        <label className={labelClass}>Quotes and mentions</label>
+        {config.items.map((item, index) => (
+          <div
+            key={index}
+            className="bg-background space-y-2 rounded-md border p-2"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground text-xs font-medium">
+                Item {index + 1}
+              </span>
+              <div className="ml-auto flex items-center">
+                <button
+                  type="button"
+                  onClick={() => move(index, -1)}
+                  disabled={index === 0}
+                  title="Move up"
+                  className="text-muted-foreground hover:bg-muted flex h-7 w-6 items-center justify-center rounded disabled:opacity-30"
+                >
+                  <ChevronUp className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => move(index, 1)}
+                  disabled={index === config.items.length - 1}
+                  title="Move down"
+                  className="text-muted-foreground hover:bg-muted flex h-7 w-6 items-center justify-center rounded disabled:opacity-30"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    set(
+                      "items",
+                      config.items.filter((_, i) => i !== index),
+                    )
+                  }
+                  title="Remove"
+                  className="text-muted-foreground hover:text-[var(--dash-red)] flex h-7 w-6 items-center justify-center rounded hover:bg-[var(--dash-red-soft)]"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <textarea
+              className={`${fieldClass} min-h-[88px] resize-y`}
+              value={item.quote}
+              onChange={(e) => setItem(index, { quote: e.target.value })}
+              placeholder="The product changed our daily ritual…"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className={fieldClass}
+                value={item.author}
+                onChange={(e) => setItem(index, { author: e.target.value })}
+                placeholder="Name or publication"
+              />
+              <input
+                className={fieldClass}
+                value={item.detail}
+                onChange={(e) => setItem(index, { detail: e.target.value })}
+                placeholder="Customer, city or award"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Logo (optional)</label>
+              <ImageUpload
+                folder="homepage"
+                defaultImage={item.logo_url || undefined}
+                onUploadSuccess={(url) => setItem(index, { logo_url: url })}
+              />
+              <input
+                className={`${fieldClass} mt-2`}
+                value={item.logo_alt}
+                onChange={(e) => setItem(index, { logo_alt: e.target.value })}
+                placeholder="Logo description"
+              />
+            </div>
+          </div>
+        ))}
+        {config.items.length < MAX_TESTIMONIAL_ITEMS && (
+          <button
+            type="button"
+            onClick={() =>
+              set("items", [...config.items, { ...EMPTY_TESTIMONIAL }])
+            }
+            className="text-muted-foreground hover:bg-muted flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add item
+          </button>
+        )}
+      </div>
+    </>
+  );
+}
+
+function VideoFields({
+  config,
+  setConfig,
+}: {
+  config: VideoConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof VideoConfig>(key: K, value: VideoConfig[K]) =>
+    setConfig({ ...config, [key]: value });
+
+  return (
+    <>
+      <FieldGroup title="Header">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Watch"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Heading</label>
+            <input
+              className={fieldClass}
+              value={config.heading}
+              onChange={(e) => set("heading", e.target.value)}
+              placeholder="See the story unfold"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Subheading</label>
+            <input
+              className={fieldClass}
+              value={config.subheading}
+              onChange={(e) => set("subheading", e.target.value)}
+              placeholder="(optional)"
+            />
+          </div>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Video">
+        <VideoField
+          value={config.video_url}
+          onChange={(url) => set("video_url", url)}
+        />
+        <div>
+          <label className={labelClass}>Poster image</label>
+          <ImageUpload
+            folder="homepage"
+            defaultImage={config.poster_url || undefined}
+            onUploadSuccess={(url) => set("poster_url", url)}
+          />
+          <input
+            className={`${fieldClass} mt-2`}
+            value={config.poster_alt}
+            onChange={(e) => set("poster_alt", e.target.value)}
+            placeholder="Describe the poster image"
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Playback and layout">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Aspect ratio</label>
+            <select
+              className={fieldClass}
+              value={config.aspect_ratio}
+              onChange={(e) =>
+                set(
+                  "aspect_ratio",
+                  e.target.value as VideoConfig["aspect_ratio"],
+                )
+              }
+            >
+              <option value="landscape">Landscape (16:9)</option>
+              <option value="square">Square</option>
+              <option value="portrait">Portrait</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Width</label>
+            <select
+              className={fieldClass}
+              value={config.width}
+              onChange={(e) =>
+                set("width", e.target.value as VideoConfig["width"])
+              }
+            >
+              <option value="contained">Contained</option>
+              <option value="full">Full width</option>
+            </select>
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.autoplay}
+            onChange={(e) => set("autoplay", e.target.checked)}
+          />
+          Auto-play muted
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.loop}
+            onChange={(e) => set("loop", e.target.checked)}
+          />
+          Loop playback
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={config.controls}
+            onChange={(e) => set("controls", e.target.checked)}
+          />
+          Show player controls
+        </label>
+      </FieldGroup>
+    </>
+  );
+}
+
+function NewsletterFields({
+  config,
+  setConfig,
+}: {
+  config: NewsletterSectionConfig;
+  setConfig: (c: AnySectionConfig) => void;
+}) {
+  const set = <K extends keyof NewsletterSectionConfig>(
+    key: K,
+    value: NewsletterSectionConfig[K],
+  ) => setConfig({ ...config, [key]: value });
+
+  return (
+    <>
+      <FieldGroup title="Message">
+        <div>
+          <label className={labelClass}>Eyebrow</label>
+          <input
+            className={fieldClass}
+            value={config.eyebrow}
+            onChange={(e) => set("eyebrow", e.target.value)}
+            placeholder="Stay close"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Heading</label>
+          <input
+            className={fieldClass}
+            value={config.heading}
+            onChange={(e) => set("heading", e.target.value)}
+            placeholder="Notes worth opening"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Subheading</label>
+          <textarea
+            className={`${fieldClass} min-h-[72px] resize-y`}
+            value={config.subheading}
+            onChange={(e) => set("subheading", e.target.value)}
+            placeholder="New releases, useful stories and occasional offers."
+          />
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Form copy">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Button label</label>
+            <input
+              className={fieldClass}
+              value={config.button_label}
+              onChange={(e) => set("button_label", e.target.value)}
+              placeholder="Subscribe"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Success message</label>
+            <input
+              className={fieldClass}
+              value={config.success_message}
+              onChange={(e) => set("success_message", e.target.value)}
+              placeholder="You're on the list — thank you."
+            />
+          </div>
+        </div>
+        <div>
+          <label className={labelClass}>Consent text</label>
+          <textarea
+            className={`${fieldClass} min-h-[72px] resize-y`}
+            value={config.consent_text}
+            onChange={(e) => set("consent_text", e.target.value)}
+            placeholder="I agree to receive store news and offers by email."
+          />
+          <p className="text-muted-foreground mt-1 text-[11px]">
+            Visitors must tick this before subscribing.
+          </p>
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Layout">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Alignment</label>
+            <select
+              className={fieldClass}
+              value={config.alignment}
+              onChange={(e) =>
+                set(
+                  "alignment",
+                  e.target.value as NewsletterSectionConfig["alignment"],
+                )
+              }
+            >
+              <option value="center">Centered</option>
+              <option value="left">Split / left</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelClass}>Text theme</label>
+            <select
+              className={fieldClass}
+              value={config.theme}
+              onChange={(e) =>
+                set("theme", e.target.value as NewsletterSectionConfig["theme"])
+              }
+            >
+              <option value="dark">Dark text / light field</option>
+              <option value="light">Light text / dark field</option>
+            </select>
+          </div>
+        </div>
+      </FieldGroup>
     </>
   );
 }

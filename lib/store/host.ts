@@ -71,7 +71,8 @@ export function parseHost(host: string | null | undefined): HostKind {
   if (
     hostname === ROOT_DOMAIN ||
     hostname === `www.${ROOT_DOMAIN}` ||
-    hostname === `app.${ROOT_DOMAIN}`
+    hostname === `app.${ROOT_DOMAIN}` ||
+    hostname === `themes.${ROOT_DOMAIN}`
   ) {
     return { type: "platform" };
   }
@@ -112,4 +113,14 @@ export function isHelpHost(host: string | null | undefined): boolean {
   if (!host) return false;
   const hostname = host.split(":")[0].trim().toLowerCase();
   return hostname === `help.${ROOT_DOMAIN}` || hostname === "help.localhost";
+}
+
+// The public theme catalog. It is a platform surface, never a merchant store,
+// even though its hostname has the same shape as `{slug}.{ROOT_DOMAIN}`.
+export function isThemesHost(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.split(":")[0].trim().toLowerCase();
+  return (
+    hostname === `themes.${ROOT_DOMAIN}` || hostname === "themes.localhost"
+  );
 }

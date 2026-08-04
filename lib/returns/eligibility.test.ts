@@ -168,3 +168,65 @@ describe("returnEligibility", () => {
     ).toBe(true);
   });
 });
+
+describe("★ malformed dates and windows fail safe", () => {
+  it("★ gives no possession date for a POS sale with a garbage timestamp", () => {
+    // A `completed` order is the one case that dates from created_at. If that
+    // value won't parse there is nothing to measure a window from, and
+    // returnEligibility then fails OPEN rather than refusing a real return
+    // over our own bad data.
+    expect(
+      possessionDate({ status: "completed", createdAt: "not-a-date" }),
+    ).toBeNull();
+  });
+
+  it("the order stays returnable when its date is unusable", () => {
+    const r = returnEligibility(
+      { status: "completed", createdAt: "not-a-date" },
+      null,
+      { enabled: true, windowDays: 7 },
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.until).toBeNull();
+    expect(r.daysLeft).toBeNull();
+  });
+
+  it.each([0, Number.NaN, undefined, null])(
+    "★ treats a store window of %s as same-day only, not unlimited",
+    (windowDays) => {
+      // A missing or unparseable setting must not silently grant an infinite
+      // return window. Zero days means the day of delivery — the safe reading.
+      const delivered = new Date(Date.now() - 2 * 86_400_000).toISOString();
+      const r = returnEligibility(
+        { status: "delivered", deliveredAt: delivered },
+        null,
+        { enabled: true, windowDays: windowDays as unknown as number },
+      );
+      expect(r.eligible).toBe(false);
+      expect(r.reason).toBe("window_expired");
+    },
+  );
+
+  it("a zero window still allows a return on the day itself", () => {
+    const r = returnEligibility(
+      { status: "delivered", deliveredAt: new Date().toISOString() },
+      null,
+      { enabled: true, windowDays: 0 },
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.daysLeft).toBe(0);
+  });
+
+  it("★ a per-product window of 0 survives, because it MEANS something", () => {
+    // "Same day only" is a real policy. A `||` fallback here would silently
+    // widen it to the store default, which is the opposite of what the
+    // merchant asked for.
+    const r = returnEligibility(
+      { status: "delivered", deliveredAt: new Date().toISOString() },
+      { returnable: true, returnWindowDays: 0 },
+      { enabled: true, windowDays: 30 },
+    );
+    expect(r.daysLeft).toBe(0);
+    expect(r.eligible).toBe(true);
+  });
+});

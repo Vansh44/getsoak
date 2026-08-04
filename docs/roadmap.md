@@ -54,7 +54,9 @@ side of it; what's left is everywhere ELSE a collection order shows up.
 searchable store picker (merchant-typed postcode serviceability was built as
 F.1 and then **removed** — the shopper knows where they are and the merchant
 cannot), the billing address, pay-at-store, the configurable ready-by date, and
-real copy for the four pickup emails.
+real copy for the four pickup emails. `locations_10` also closes the new-store
+stock gap: an auto-created Main location now explicitly fulfils online orders,
+so seeded inventory contributes to storefront `online_stock` immediately.
 
 **Still open:**
 

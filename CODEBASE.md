@@ -41,6 +41,7 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | Host                                                         | Behavior                                                                                                          |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
+| `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
 | `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
 | `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
 | Anything else                                                | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
@@ -130,10 +131,13 @@ wholesip/
 │   │       │                  # page-section-renderer, custom-code-frame (sandboxed iframe),
 │   │       │                  # custom-code-section, rich-text-section, hero-section,
 │   │       │                  # usp-bar-section, ticker-section, tile-grid-section,
-│   │       │                  # faq-accordion-section,
+│   │       │                  # faq-accordion-section, media-text-section,
+│   │       │                  # gallery-section, testimonials-section, video-section/player,
+│   │       │                  # newsletter-section,
 │   │       │                  # preview-bridge, draft-canvas (client-side instant
 │   │       │                  # builder preview, §11), builder-overlay
 │   │       ├── brand-provider.tsx   # Injects per-store branding CSS vars
+│   │       ├── newsletter-form.tsx  # Consent-aware footer/section signup form
 │   │       ├── menu-provider.tsx    # Supplies per-store header/footer nav (store_menus)
 │   │       ├── shop-card.tsx / share-buttons.tsx
 │   │       ├── structured-data.tsx  # homepage Organization + WebSite JSON-LD
@@ -261,6 +265,9 @@ wholesip/
 │   ├── auth/                  # Store-host auth: login (email+pw + Google popup),
 │   │                          # forgot/set/update-password (Firebase; callback route removed)
 │   ├── help/                  # Help centre (served at help.storemink.com)
+│   ├── themes/                # ★ Public metadata-driven theme catalog served at
+│   │                          # themes.storemink.com; own canonical/OG/CSS, industry
+│   │                          # filters, truthful demo/release/plan state
 │   │
 │   ├── actions/               # ★ ALL SERVER ACTIONS ("use server") — one file per domain:
 │   │   │                      # product/category/color/coupon/coupon-email/blog/blog-social/
@@ -289,6 +296,7 @@ wholesip/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role
 │   │   ├── menu-actions.ts    # ★ Per-store nav read/save (see §11 menu builder, store_menus)
+│   │   ├── newsletter-actions.ts # ★ Host-scoped, rate-limited mailing-list upsert (§11)
 │   │   ├── checkout-actions.ts # ★ placeOrder (COD + razorpay — §12/§18): re-prices from
 │   │   │                      # DB, store-scoped by host, re-validates coupon, rate-limited,
 │   │   │                      # SERVICE-ROLE writes (no customer INSERT policy — convention
@@ -514,8 +522,8 @@ wholesip/
 │   │                          # mailers.ts — the mail-type catalog + which types
 │   │                          # are redacted because they carry a credential
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
-│   │                          # custom pages; 12 types incl. hero, tile_grid, usp_bar,
-│   │                          # ticker, faq_accordion, rich_text + custom_code (see §11)
+│   │                          # custom pages; 17 types incl. editorial media/gallery/
+│   │                          # testimonials, video, newsletter, rich_text + custom_code (§11)
 │   ├── menus.ts               # ★ Per-store nav (§11): StoreMenus types, DEFAULT_MENUS,
 │   │                          # normalize/sanitize. Read cached via getStoreMenus.
 │   ├── ai/gemini.ts           # Gemini/Vertex AI client for AI copy (dual backend, §7);
@@ -548,7 +556,7 @@ wholesip/
 │   ├── pricing.ts / slug.ts / sanitize.ts / rate-limit.ts / og-image.ts
 │   ├── blog-taxonomy.ts   # fetchBlogTaxonomy(): per-store blog categories/tags reader
 │   ├── blog-reactions.ts / phone-labels.ts / use-otp-throttle.ts
-│   ├── site.ts / utils.ts     # cn() etc.
+│   ├── site.ts / utils.ts     # Canonical platform/help/themes origins + cn() etc.
 │
 ├── components/
 │   ├── ui/                    # shadcn/ui primitives (button, dialog, table, sidebar…)
@@ -570,6 +578,8 @@ wholesip/
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
 │   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
 │   │                          # RPCs; available = on_hand - reserved
+│   ├── locations_10_default_online_fulfil.sql  # ★ auto-created Main locations
+│   │                          # fulfil online; repairs bare capability rows
 │   ├── locations_03_fulfilment.sql  # ★ store_fulfilment_rules + products.online_stock
 │   │                          # (sellable-online total, trigger-maintained)
 │   ├── locations_02_admin_scope.sql  # ★ admin_locations — location scope for
@@ -590,6 +600,8 @@ wholesip/
 │   │                          # reserve/release (enforces max_uses under concurrency)
 │   ├── blog_taxonomy.sql      # per-store blog_categories + blog_tags (+ RLS + seed)
 │   ├── store_menus.sql        # ★ per-store header/footer nav (+ RLS + WholeSip seed) — §11
+│   ├── themes_01_newsletter_subscribers.sql # ★ host-scoped email consent rows for
+│   │                          # footer/section newsletter forms; admin-read RLS (§11)
 │   ├── notifications_01_schema.sql  # ★ the event spine (§22): activity_events
 │   │                          # (append-only audit) + notifications (per-recipient
 │   │                          # inbox, UNIQUE on event+recipient) + notification_
@@ -783,7 +795,7 @@ wholesip/
 11. **Website Builder — pages & custom code are per-store, dashboard-editable.**
     The storefront itself is a per-store artifact, not hardcoded: - **Section registry**: `lib/homepage/section-types.ts` is the single typed
     section schema (config types, `EMPTY_CONFIG`, `META`, `validateConfig`),
-    shared by the homepage AND custom pages. Twelve block types: `hero`
+    shared by the homepage AND custom pages. Seventeen block types: `hero`
     (banner/split/minimal variants — first-class hero, replaces the old
     custom_code hero hack; optional `video_url` plays muted/looping in place
     of the image with the image as poster), `hero_carousel` (auto-playing
@@ -792,6 +804,13 @@ wholesip/
     `shop_by_category` (with a
     `display: circles|cards` tile-shape variant), `promo_banner`, `tile_grid`
     (linked colour/image tiles — offers, collections, 2-up mini banners),
+    `media_text` (theme-agnostic editorial image/copy split with media position,
+    aspect-ratio, alignment and CTA controls), `gallery` (even grid or
+    asymmetric editorial lookbook with linked/captioned images), `testimonials`
+    (customer quotes and optional press logos in cards or editorial rows),
+    `video` (YouTube/Vimeo privacy embeds or direct video with poster, aspect,
+    width and playback controls), `newsletter` (consent-aware email signup with
+    merchant copy, theme and alignment controls),
     `usp_bar` (fixed icon catalog `USP_ICONS` + label strip), `ticker`
     (scrolling marquee — `messages[]` + speed + text theme; CSS-animated
     `ticker-section.tsx`, pauses on hover, static under reduced-motion),
@@ -800,7 +819,11 @@ wholesip/
     `latest_blogs`, `rich_text` (inline sanitized HTML, SEO-friendly) and
     `custom_code` (merchant HTML/CSS/JS). Hero/tile/slide `background` fields
     are strict colours (`safeColor`) because they render into inline style
-    attrs; `video_url` fields are `safeHref`-validated.
+    attrs; media, logo, CTA and `video_url` fields are `safeHref`-validated.
+    All seventeen types have builder forms and section-library thumbnails;
+    Phase 3's renderers live in `media-text-section.tsx`, `gallery-section.tsx`,
+    `testimonials-section.tsx`, `video-section.tsx`, and
+    `newsletter-section.tsx`.
     `lib/sections/registry.ts` re-exports it and adds page-level helpers:
     `PageSectionItem`, `validateSections`, `RESERVED_PAGE_SLUGS`,
     `validatePageSlug`. - **Custom pages** live in `store_pages` (draft `sections` jsonb +
@@ -938,31 +961,72 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     from a two-field panel would blank the merchant's email, social links and
     legal name. Contact/social/legal stay in `/dashboard/branding` because they
     are store IDENTITY (they print on invoices and go out in email), not a
-    website decision. Pages list in an always-visible **rail** rather than a
+    website decision. The Brand inspector also owns **Storefront layout**:
+    header, product-card, PDP, cart and footer can each inherit the pinned theme
+    or take a merchant override. These values live in the same draft/published
+    `store_chrome` payload, update the iframe through `ChromeProvider`, and do
+    not mutate the immutable theme preset. Pages list in an always-visible
+    **rail** rather than a
     dropdown that overlaid the section outline you were about to edit, and
     `loadingDraft` starts TRUE when there is a page to auto-open so the first,
     pre-hydration paint says "Opening…" instead of "Select a page" — React
     state cannot fix that frame, only the initial value can. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
-    `meta.ts` (client-safe catalog for the signup picker: id/name/category/
-    previewImage/demoSlug; the picker must NEVER import definitions),
-    `definitions/basket.ts` (brand accents, **`design` skin**, pages incl. the
-    homepage sentinel, menus, sample categories/products+variants — imagery
+    `meta.ts` (client-safe, versioned catalog manifest: id/name, engine ref,
+    release state/version/notes, industries, catalog-size fit, feature claims,
+    keywords, plan gate, preview/screenshots, demo health and catalog
+    visibility; client surfaces must NEVER import definitions),
+    `definitions/basket.ts`, `definitions/studio.ts`, and
+    `definitions/ritual.ts` (immutable `preset` releases: brand accents,
+    **`design` skin**, pages incl. the homepage sentinel, menus, sample
+    categories/products+variants — imagery
     bundled under `public/themes/{id}/`; **basket** is the grocery/F&B
     reference template with real Unsplash photography, per
-    docs/vertical-templates-plan.md §9.1, and currently the only/default
-    theme — the Arcade/Fresko placeholders were retired 2026-07-04),
+    docs/vertical-templates-plan.md §9.1, and the default theme; **studio** and
+    **ritual** are hidden `0.1.0` editorial home-design and botanical-wellness
+    drafts with generated, provenance-logged imagery and cannot appear in signup
+    or the public catalog until approved — the Arcade/Fresko placeholders were
+    retired 2026-07-04),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
-    `reset` refuses unless `stores.settings.demo === true`. `createStore`
-    (signup) calls it with the picked template (published immediately; brand
-    NAME preserved). v1 constraints CI-tested in `lib/themes/themes.test.ts`:
+    `reset` refuses unless `stores.settings.demo === true`. `applyTheme` keeps
+    legacy `settings.template` but also pins `{presetId,presetVersion,engineId,
+    engineVersion,appliedAt}` in `settings.theme`; the authored preset seeds a
+    starting point, while subsequent merchant pages/menus/products remain
+    store-scoped DB content rather than theme-package state. Rendering reads
+    the pin first and falls back to legacy `template`, so existing stores need
+    no migration; old immutable releases stay in `THEME_DEFINITIONS` when a
+    preset advances. `createStore` (signup) calls it with the picked template
+    (published immediately; brand NAME preserved). v1 constraints CI-tested in
+    `lib/themes/themes.test.ts`:
     non-id sources only, no latest_blogs, homepage present, strict publish
-    validation, every referenced asset exists. **Demo stores**: one per theme
+    validation, every referenced asset exists, catalog metadata is unique and
+    publishable, seeded pages/homepages/catalogs meet minimum content floors,
+    and referenced imagery is optimized + catalog-sized. The full release gate
+    is **`docs/theme-acceptance.md`**: CI package integrity + live storefront
+    stories + accessibility/performance + a scored two-reviewer design pass;
+    generated/licensed asset provenance lives in **`docs/theme-assets.md`**.
+    A valid definition is deliberately NOT the same as an approved theme.
+    **Demo stores**: one per theme
     (`demo-{id}` — the namespace is blocked at signup), seeded/reseeded via
     `seedDemoStore` (platform superadmin action) from the Themes panel on the
     platform stores console; the signup picker's Preview opens
-    `https://demo-{id}.{ROOT_DOMAIN}`. - **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
+    `https://demo-{id}.{ROOT_DOMAIN}` only when manifest demo health is
+    `healthy`; an unavailable demo renders a disabled, explanatory control
+    instead of opening a known 404. `createStore` repeats catalog visibility
+    validation server-side, so posting a hidden/draft/unknown id around the
+    signup UI cannot install it.
+    **Public theme catalog (Phase 4, in progress)**:
+    `themes.{ROOT_DOMAIN}` is a reserved platform host (`isThemesHost`) rewritten
+    by `proxy.ts` to `app/themes/`, never resolved as merchant tenancy. The
+    server-rendered catalog imports only client-safe `THEME_META`, so its
+    industry filters, plan badges, release labels, preview image, demo health,
+    and signup CTA share the exact source used by onboarding. It has its own
+    canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
+    one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
+    demos render an honest unavailable state rather than a broken live link.
+    `themes` is also rejected by store-signup slug validation.
+    **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
     design system, not just one accent. `ThemeDesign` (`lib/themes/types.ts`) =
     `palette` (all 14 `--sm-*` colour tokens + `onAccent`/`onInk`/
     `shadowRgb`/`success`/`error`/`star`/`highlight` semantic tokens), `fonts`
@@ -985,13 +1049,19 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     profile/enquiry forms, blog + write-blog editor). CI-guards in
     `themes.test.ts` assert each theme ships a complete, injectable design.
     **Layout variants** (`ThemeDesign.layout`, all optional — absent = classic
-    WholeSip chrome): `header: "market"` renders a solid brand-coloured header
-    bar with a prominent search box (colours via `--sm-header-bg`/`--sm-header-fg`
-    from `designToCssVars`; activated by the `sm-header-market` class the
-    storefront layout puts on `.storefront-root`); `card: "quick_add"` shows an
-    inline "+ Add" to-cart button on product cards (`quick-add-button.tsx`,
-    class `sm-card-quickadd`; multi-variant products fall through to the detail
-    page). The header search is FUNCTIONAL on all variants — it submits to
+    WholeSip chrome): header supports `classic`, `market`, `centered`, and
+    `minimal`; cards support `classic`, `quick_add`, `overlay`, `framed`, and
+    `grocery`; product detail supports `classic`, `grocery`, and `editorial`;
+    cart supports `classic`, `grocery`, and `compact`; footer supports `rich`,
+    `minimal`, and `editorial`. `resolveStorefrontAppearance` in
+    `lib/chrome/types.ts` is the single pure resolver for theme defaults plus
+    published merchant overrides; it also preserves the pinned legacy
+    `storefront:"grocery"` shorthand. Root `sm-*` classes drive CSS variants,
+    while `lib/store/storefront-layout.ts` supplies resolved values where
+    grocery markup branches are required. `header:"market"` retains its
+    theme-controlled colours and `card:"quick_add"` retains safe inline add
+    behavior (multi-variant products fall through to detail). Header search is
+    FUNCTIONAL on all variants — it submits to
     `/shop?q=`, and the shop grid filters by name/description/category
     (`shop-client.tsx`, synced to the deep link).
     `storefront: "grocery"` is the deepest variant: it swaps the shared
@@ -1010,8 +1080,16 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     builder section type now, §11.)
     All of this is GATED, so the WholeSip fallback and any classic theme keep
     today's shared layout untouched. (Basket is the first grocery theme.)
-    Design derives from the theme id at RENDER time (no DB column), so no reseed
-    is needed when a theme's skin changes. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
+    Design derives from the installed preset release at RENDER time. New
+    installs are version-pinned in store settings; legacy stores without the
+    pin resolve the catalog's current release. - **Newsletter capture**:
+    `newsletter-form.tsx` is shared by the footer and the builder newsletter
+    section. `subscribeNewsletter` derives tenancy from the request host,
+    validates email plus explicit consent, honeypots bots, rate-limits per
+    store/IP, and service-upserts one active row per store/email while recording
+    the displayed consent copy and source. Storage is
+    `newsletter_subscribers` (`themes_01_newsletter_subscribers.sql`): anon has
+    no direct write grant and authenticated store admins have read-only RLS. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
     pages, and menus are all migrated. config/site.ts, brand.md and the
     file-based AI skills are deleted, and the shop hero is brand-aware. The
     `--wholesip-*` CSS token namespace (→ `--sm-*`) and `WHOLESIP_STORE_ID` (→

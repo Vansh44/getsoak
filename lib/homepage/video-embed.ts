@@ -11,7 +11,14 @@ const YT_RE =
 
 const VIMEO_RE = /vimeo\.com\/(?:video\/)?(\d{6,12})/;
 
-export function videoEmbedUrl(url: string): string | null {
+export function videoEmbedUrl(
+  url: string,
+  {
+    autoplay = true,
+    loop = true,
+    controls = true,
+  }: { autoplay?: boolean; loop?: boolean; controls?: boolean } = {},
+): string | null {
   if (!url) return null;
 
   const yt = url.match(YT_RE);
@@ -20,17 +27,29 @@ export function videoEmbedUrl(url: string): string | null {
     // Autoplay MUTED (browsers block autoplay-with-sound) but keep the player
     // CONTROLS visible so a visitor can unmute and hear the audio. playlist=id
     // is YouTube's required trick for looping a single video.
-    return (
-      `https://www.youtube-nocookie.com/embed/${id}` +
-      `?autoplay=1&mute=1&loop=1&playlist=${id}&playsinline=1&rel=0`
-    );
+    const params = new URLSearchParams({
+      autoplay: autoplay ? "1" : "0",
+      mute: autoplay ? "1" : "0",
+      loop: loop ? "1" : "0",
+      playsinline: "1",
+      rel: "0",
+      controls: controls ? "1" : "0",
+    });
+    if (loop) params.set("playlist", id);
+    return `https://www.youtube-nocookie.com/embed/${id}?${params.toString()}`;
   }
 
   const vimeo = url.match(VIMEO_RE);
   if (vimeo) {
     // Autoplay muted, looping, with controls (no background=1 — that mode
     // strips the unmute control, so the visitor could never hear it).
-    return `https://player.vimeo.com/video/${vimeo[1]}?autoplay=1&muted=1&loop=1`;
+    const params = new URLSearchParams({
+      autoplay: autoplay ? "1" : "0",
+      muted: autoplay ? "1" : "0",
+      loop: loop ? "1" : "0",
+      controls: controls ? "1" : "0",
+    });
+    return `https://player.vimeo.com/video/${vimeo[1]}?${params.toString()}`;
   }
 
   return null;

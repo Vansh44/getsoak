@@ -218,3 +218,96 @@ describe("cancelsAtCycleEnd", () => {
     expect(cancelsAtCycleEnd("halted", "2026-09-01T00:00:00Z")).toBe(false);
   });
 });
+
+describe("★ cancelsAtCycleEnd — an active mandate", () => {
+  it("waits for the cycle end once billing is actually running", () => {
+    // The merchant has paid for this cycle; cancelling immediately would take
+    // away something already bought.
+    expect(cancelsAtCycleEnd("active", "2026-09-01T00:00:00Z")).toBe(true);
+  });
+
+  it("★ cancels IMMEDIATELY when active but no cycle has an end", () => {
+    // Razorpay refuses a cycle-end cancel when no billing cycle is going on,
+    // and a cycle only starts at the first successful charge. Between
+    // authorising a mandate and being billed on it there is nothing to
+    // preserve, so this must fall back rather than fail.
+    expect(cancelsAtCycleEnd("active", null)).toBe(false);
+    expect(cancelsAtCycleEnd("active", undefined)).toBe(false);
+    expect(cancelsAtCycleEnd("active", "")).toBe(false);
+  });
+
+  it("matches the status case-insensitively", () => {
+    expect(cancelsAtCycleEnd("ACTIVE", "2026-09-01T00:00:00Z")).toBe(true);
+  });
+
+  it.each([null, undefined])(
+    "★ treats a %s status as not-active rather than throwing",
+    (status) => {
+      // The status comes from a Razorpay row that may not have been fetched.
+      // Cancelling immediately is the safe reading: it is what happens when
+      // no cycle is running, and it can never take away a paid-for period.
+      expect(cancelsAtCycleEnd(status, "2026-09-01T00:00:00Z")).toBe(false);
+    },
+  );
+});
+
+describe("★ describePlanChange — what changed decides the sentence", () => {
+  /** The exact shape describePlanChange accepts, so no cast is needed. */
+  type Decision = Parameters<typeof describePlanChange>[0];
+  const change = (over: Partial<Decision> = {}): Decision => ({
+    kind: "change",
+    when: "cycle_end",
+    immediate: false,
+    periodChanged: false,
+    planChanged: false,
+    ...over,
+  });
+
+  it("★ names only the BILLING PERIOD when the tier is unchanged", () => {
+    // "You'll move to Pro" would read as no change at all to someone who is
+    // already on Pro and is only switching monthly → yearly.
+    const s = describePlanChange(
+      change({ periodChanged: true }),
+      "Pro",
+      "yearly",
+    );
+    expect(s).toContain("Pro billed yearly");
+    expect(s).toContain("until it runs out");
+  });
+
+  it("★ names BOTH when the tier and the period move together", () => {
+    const s = describePlanChange(
+      change({
+        periodChanged: true,
+        planChanged: true,
+        immediate: true,
+        when: "now",
+      }),
+      "Pro",
+      "yearly",
+    );
+    expect(s).toContain("Pro, billed yearly");
+    expect(s).toContain("charged the difference");
+  });
+
+  it("names only the tier when the period is unchanged", () => {
+    const s = describePlanChange(
+      change({ planChanged: true, immediate: true, when: "now" }),
+      "Pro",
+      "monthly",
+    );
+    expect(s).toContain("move to Pro now");
+    expect(s).not.toContain("billed");
+  });
+
+  it("★ promises nothing is charged today on a downgrade", () => {
+    // The whole reason a cheaper move waits: no refund, no proration, no
+    // dispute. The copy has to say so or the merchant expects money back.
+    const s = describePlanChange(
+      change({ planChanged: true }),
+      "Basic",
+      "monthly",
+    );
+    expect(s).toContain("Nothing is charged today");
+  });
+});

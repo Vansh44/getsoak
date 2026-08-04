@@ -725,6 +725,67 @@
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25);
 }
 
+/* Centered-logo and minimal variants are layout-only: every configured link
+   and control remains available, and mobile falls back to the proven header. */
+@media (min-width: 1025px) {
+  :global(.sm-header-centered) .header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 24px;
+  }
+  :global(.sm-header-centered) .headerLeft {
+    display: contents;
+  }
+  :global(.sm-header-centered) .logo {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  :global(.sm-header-centered) .navLinks {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+    gap: clamp(18px, 2.4vw, 36px);
+  }
+  :global(.sm-header-centered) .headerRight {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    gap: 20px;
+  }
+  :global(.sm-header-centered) .searchBar {
+    width: clamp(170px, 18vw, 260px);
+  }
+
+  :global(.sm-header-minimal) .header {
+    padding-block: 12px;
+    border-bottom: 1px solid transparent;
+  }
+  :global(.sm-header-minimal) .headerScrolled {
+    border-bottom-color: var(--sm-border);
+    box-shadow: none;
+  }
+  :global(.sm-header-minimal) .headerLeft {
+    gap: clamp(20px, 3vw, 42px);
+  }
+  :global(.sm-header-minimal) .navLinks {
+    gap: clamp(16px, 2vw, 28px);
+  }
+  :global(.sm-header-minimal) .navLinks a {
+    font-size: 0.78rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  :global(.sm-header-minimal) .searchBar {
+    width: 190px;
+    border-color: transparent;
+    border-bottom-color: var(--sm-border);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
 /* Unread count beside "Notifications" in the profile dropdown. */
 .profileItemBadge {
   margin-left: auto;

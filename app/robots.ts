@@ -5,8 +5,13 @@ import {
   STOREFRONT_DISALLOW,
   disallowPaths,
 } from "@/lib/seo/disallow";
-import { HELP_URL, PLATFORM_URL, storeOrigin } from "@/lib/site";
-import { SEARCH_INDEXABLE, isHelpHost, isPlatformHost } from "@/lib/store/host";
+import { HELP_URL, PLATFORM_URL, THEMES_URL, storeOrigin } from "@/lib/site";
+import {
+  SEARCH_INDEXABLE,
+  isHelpHost,
+  isPlatformHost,
+  isThemesHost,
+} from "@/lib/store/host";
 import { isStoreLaunched } from "@/lib/store/launch";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 
@@ -29,6 +34,14 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
       rules: { userAgent: "*", allow: "/" },
       sitemap: `${HELP_URL}/sitemap.xml`,
       host: HELP_URL,
+    };
+  }
+
+  if (isThemesHost(host)) {
+    return {
+      rules: { userAgent: "*", allow: "/" },
+      sitemap: `${THEMES_URL}/sitemap.xml`,
+      host: THEMES_URL,
     };
   }
 

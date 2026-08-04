@@ -210,3 +210,49 @@ describe("★ duplicate request entries can't multiply a refund", () => {
     expect(r.total).toBe(100);
   });
 });
+
+describe("★ a line with no quantity", () => {
+  it.each([0, undefined, null, Number.NaN])(
+    "remainingQty reports nothing returnable for a quantity of %s",
+    (quantity) => {
+      // A corrupt or half-written order_items row must read as "nothing to
+      // send back", never as an unbounded one.
+      expect(
+        remainingQty({
+          id: "a",
+          quantity: quantity as unknown as number,
+          lineTotal: 100,
+          taxAmount: 0,
+        }),
+      ).toBe(0);
+    },
+  );
+
+  it("★ is what stops such a line reaching the money arithmetic at all", () => {
+    // `refundBreakdown` skips any line whose remaining quantity is zero, so a
+    // quantity-less line can never be priced. That is also why the `Math.max(1,
+    // …)` divisor further down is unreachable in practice — by the time it
+    // runs, remainingQty has already proved the quantity is at least 1.
+    const r = refundBreakdown({
+      lines: [{ id: "a", quantity: 0, lineTotal: 100, taxAmount: 10 }],
+      request: [{ id: "a", quantity: 5 }],
+    });
+    expect(r.lines).toEqual([]);
+    expect(r.total).toBe(0);
+  });
+
+  it("prices the healthy lines and drops the broken one", () => {
+    const r = refundBreakdown({
+      lines: [
+        { id: "a", quantity: 0, lineTotal: 100, taxAmount: 10 },
+        { id: "b", quantity: 2, lineTotal: 200, taxAmount: 20 },
+      ],
+      request: [
+        { id: "a", quantity: 1 },
+        { id: "b", quantity: 2 },
+      ],
+    });
+    expect(r.lines.map((l) => l.id)).toEqual(["b"]);
+    expect(r.total).toBe(220);
+  });
+});

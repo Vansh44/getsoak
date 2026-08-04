@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { parseHost, isHelpHost } from "@/lib/store/host";
+import { parseHost, isHelpHost, isThemesHost } from "@/lib/store/host";
 import { logError } from "@/lib/observability/logger";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/auth/session-cookie";
 import {
@@ -45,6 +45,16 @@ export async function proxy(request: NextRequest) {
   if (isHelpHost(host) && !pathname.startsWith("/help")) {
     const url = request.nextUrl.clone();
     url.pathname = `/help${pathname === "/" ? "" : pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // --- Theme catalog: themes.storemink.com -> /themes/* ---
+  // Branch before the generic platform rewrite. `themes` is reserved in store
+  // signup and parseHost classifies it as platform, so it can never become a
+  // merchant storefront by accident.
+  if (isThemesHost(host) && !pathname.startsWith("/themes")) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/themes${pathname === "/" ? "" : pathname}`;
     return NextResponse.rewrite(url);
   }
 

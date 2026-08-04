@@ -4,7 +4,7 @@ import { videoEmbedUrl } from "./video-embed";
 describe("videoEmbedUrl", () => {
   it("converts every common YouTube URL shape to a nocookie muted-autoplay embed with controls", () => {
     const expected = (id: string) =>
-      `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&loop=1&playlist=${id}&playsinline=1&rel=0`;
+      `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&loop=1&playsinline=1&rel=0&controls=1&playlist=${id}`;
     expect(videoEmbedUrl("https://www.youtube.com/watch?v=aoc6aPPRqVY")).toBe(
       expected("aoc6aPPRqVY"),
     );
@@ -28,10 +28,31 @@ describe("videoEmbedUrl", () => {
 
   it("converts Vimeo links to a muted-autoplay player with controls", () => {
     expect(videoEmbedUrl("https://vimeo.com/123456789")).toBe(
-      "https://player.vimeo.com/video/123456789?autoplay=1&muted=1&loop=1",
+      "https://player.vimeo.com/video/123456789?autoplay=1&muted=1&loop=1&controls=1",
     );
     expect(videoEmbedUrl("https://vimeo.com/video/123456789")).toBe(
-      "https://player.vimeo.com/video/123456789?autoplay=1&muted=1&loop=1",
+      "https://player.vimeo.com/video/123456789?autoplay=1&muted=1&loop=1&controls=1",
+    );
+  });
+
+  it("honours playback controls for dedicated video sections", () => {
+    expect(
+      videoEmbedUrl("https://youtu.be/aoc6aPPRqVY", {
+        autoplay: false,
+        loop: false,
+        controls: false,
+      }),
+    ).toBe(
+      "https://www.youtube-nocookie.com/embed/aoc6aPPRqVY?autoplay=0&mute=0&loop=0&playsinline=1&rel=0&controls=0",
+    );
+    expect(
+      videoEmbedUrl("https://vimeo.com/123456789", {
+        autoplay: false,
+        loop: false,
+        controls: false,
+      }),
+    ).toBe(
+      "https://player.vimeo.com/video/123456789?autoplay=0&muted=0&loop=0&controls=0",
     );
   });
 

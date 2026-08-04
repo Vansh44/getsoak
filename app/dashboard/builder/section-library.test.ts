@@ -11,11 +11,16 @@ describe("filterSectionTypes", () => {
   it("matches by label, case-insensitively", () => {
     expect(filterSectionTypes("FAQ")).toContain("faq_accordion");
     expect(filterSectionTypes("hero")).toContain("hero");
+    expect(filterSectionTypes("Testimonials")).toContain("testimonials");
   });
 
   it("matches by keyword", () => {
     expect(filterSectionTypes("javascript")).toEqual(["custom_code"]);
     expect(filterSectionTypes("bestsellers")).toEqual(["featured_products"]);
+    expect(filterSectionTypes("lookbook")).toEqual(["gallery"]);
+    expect(filterSectionTypes("social proof")).toEqual(["testimonials"]);
+    expect(filterSectionTypes("vimeo")).toEqual(["video"]);
+    expect(filterSectionTypes("mailing list")).toEqual(["newsletter"]);
   });
 
   it("matches by description", () => {

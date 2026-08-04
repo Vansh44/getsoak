@@ -12,13 +12,18 @@ import { slugify } from "@/lib/slug";
 import { emitEvent } from "@/lib/notifications/record";
 import { recordSignupConsent } from "@/lib/legal/store";
 import { applyTheme } from "@/lib/themes/apply";
-import { DEFAULT_THEME_ID } from "@/lib/themes/meta";
+import {
+  DEFAULT_THEME_ID,
+  THEME_META,
+  isThemeSelectable,
+} from "@/lib/themes/meta";
 
 // Subdomains we can never hand out (platform-reserved or operational).
 const RESERVED = new Set([
   "www",
   "app",
   "help",
+  "themes",
   "api",
   "admin",
   "dashboard",
@@ -213,7 +218,12 @@ export async function createStore(
   input: CreateStoreInput,
 ): Promise<CreateStoreResult> {
   const rawName = input.name;
-  const template = input.template || DEFAULT_THEME_ID;
+  const requestedTheme = input.template || DEFAULT_THEME_ID;
+  const themeMeta = THEME_META.find((theme) => theme.id === requestedTheme);
+  if (!themeMeta || !isThemeSelectable(themeMeta)) {
+    return { error: "That store theme is not available." };
+  }
+  const template = themeMeta.id;
 
   const user = await getServerUser();
   if (!user) {
