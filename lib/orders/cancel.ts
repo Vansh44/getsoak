@@ -31,6 +31,7 @@ import type { Db } from "@/lib/db/client";
 import { withService } from "@/lib/db/client";
 import { orderItems, orders, stockReservations } from "@/drizzle/schema";
 import { releaseHold } from "@/lib/inventory/reservations";
+import { reinstateCreditForOrder } from "@/lib/credit/store-credit";
 import { logError } from "@/lib/observability/logger";
 
 /** A DB scope to run the claim in — `withService`, or `(fn) => withUser(id, fn)`. */
@@ -114,6 +115,13 @@ export async function releaseCancelledOrder(
       ).catch((err) => logError("cancel: release_stock", err, { orderId }));
     }
   }
+
+  // ── Store credit ─────────────────────────────────────────────────────────
+  // ★ An order paid (wholly or partly) with credit gives it back when the
+  // order is cancelled — otherwise cancelling silently destroys the
+  // customer's money. Keyed on the order, so a second cancel reinstates
+  // nothing rather than minting it.
+  await reinstateCreditForOrder(storeId, orderId);
 
   // ── Pickup holds ─────────────────────────────────────────────────────────
   // Never restocked (see the header): the units are still physically on the

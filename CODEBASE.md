@@ -342,6 +342,11 @@ wholesip/
 │
 ├── lib/
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
+│   ├── credit/                # ★ §29: store credit — apply.ts (PURE: how much
+│   │                          # credit goes on an order, incl. the unpayable-
+│   │                          # remainder gap below the gateway minimum) +
+│   │                          # store-credit.ts (the ONE way credit moves —
+│   │                          # issue/spend/reinstate, all via the RPCs)
 │   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
 │   │                          # refundRouteFor: the TENDER decides where money goes,
 │   │                          # and a sale rung HERE is always returnable here),
@@ -616,6 +621,10 @@ wholesip/
 │   │                          # always right; only the SQL mirror was wrong. Adds
 │   │                          # sm_pad() + a self-check. Backward compatible: at
 │   │                          # ≤ 9999 the two forms are byte-identical
+│   ├── store_credit_01_schema.sql # ★ §29: customer_credit_balances +
+│   │                          # append-only customer_credit_ledger + the two
+│   │                          # RPCs (spend is a conditional UPDATE, so a race
+│   │                          # can't overdraw) + orders.store_credit_used
 │   ├── returns_04_credit_notes.sql # ★ §28: GST credit notes — store_counters.
 │   │                          # credit_note_seq + next_credit_note_no() +
 │   │                          # sm_credit_note_ref() + a TRIGGER that allocates the
@@ -2738,6 +2747,51 @@ group, span}` (span = columns of the 4-wide desktop grid),
         one order can be refunded more than once.
       - **⚠ NOT reviewed by a CA**, the §25 posture. It covers the fields the
         format needs; get a professional to check it before anyone files.
+
+29. **Store credit — a balance the store owes, spendable at checkout.**
+    Design: `docs/returns-exchanges-plan.md` §16 (roadmap Step 4).
+    - **Modelled on `ai_credits.sql`**, which already solves this here: the
+      append-only `customer_credit_ledger` is the truth,
+      `customer_credit_balances` is a cached sum with `CHECK (balance >= 0)`,
+      and every mutation is a single conditional UPDATE. Issuing is idempotent
+      per `(store, customer, kind, ref)`, so a double-confirmed refund credits
+      once.
+    - **★ `try_spend_customer_credit` puts `balance >= amount` INSIDE the
+      UPDATE**, so two checkouts racing on one balance can't both pass a prior
+      check-then-act and overdraw it.
+    - **★ CREDIT IS A PAYMENT, NOT A DISCOUNT.** `orders.total` stays the FULL
+      goods value and `orders.store_credit_used` records what was settled with
+      credit; only the REMAINDER is charged. Netting it off would be wrong in
+      three places at once — the invoice would understate the sale, GST would
+      be computed on the wrong base, and the §28 credit note would reverse the
+      wrong amount. Pinned by a test asserting the same basket writes the same
+      total with and without credit.
+    - **★ THE UNPAYABLE-REMAINDER GAP** (`lib/credit/apply.ts`, pure + tested).
+      A ₹200.50 order against a ₹200 balance naively leaves ₹0.50 — which
+      Razorpay refuses, so checkout would fail on an order the customer nearly
+      had credit for. It only shows up when the balance lands within a rupee of
+      the total. So LESS credit is applied, leaving a chargeable amount; the
+      difference stays on the balance. Rounding UP to cover the order was
+      rejected — it spends money they didn't agree to spend. Off for COD and
+      the counter, which have no floor. The checkout summary calls the SAME
+      function, so preview and charge can't disagree, and it says when credit
+      was held back.
+    - **Fully covered ⇒ `payment_method: 'store_credit'`, `paid`.** Otherwise a
+      COD courier is told to collect ₹0 and the gateway is asked for an amount
+      it refuses.
+    - **Cancelling reinstates**, keyed on the order so a second cancel
+      reinstates nothing rather than minting money. `reinstate` is its own
+      ledger kind, not a second `grant`: a report that can't tell a returned
+      spend from a goodwill gesture overstates what the store gave away.
+    - **Spending never refuses a sale** (invariant 6) — a balance that moved
+      means they pay the full amount, not that checkout fails.
+    - **Offered, never forced** (§28's §3.3 rule): the refund panel shows it
+      only when the order has a customer account, and tells the merchant to
+      make sure the customer agreed to a balance rather than their money back.
+    - **Not built:** gift cards (they share this ledger shape — that is why
+      `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
+      needs no migration), a merchant grant UI (`issueCredit` takes
+      `kind: 'grant'` and is ready), and split-tender refunds.
 
 ## 6. Commands
 

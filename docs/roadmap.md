@@ -33,8 +33,8 @@ the sequence; those are the specifications.**
 | —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done |
 | **1**  | **Finish pickup + close the gaps**                                  | ⏭ next |
 | **2**  | **Refunds & cancellation** — the money-out path                     | ✅ done |
-| **3**  | Returns & **exchanges** — in-store ✅ done; the rest waits on 2     | ◐ part  |
-| **4**  | Store credit & gift cards                                           | ⏳      |
+| **3**  | Returns, exchanges & BORIS                                          | ✅ done |
+| **4**  | Store credit ✅ — gift cards left                                   | ◐ part  |
 | **5**  | Metered extra-location billing (POS 7)                              | ⏳      |
 | **6**  | Channel stock policy (LOC H)                                        | ⏳      |
 | **7**  | Transfer lifecycle (LOC I)                                          | ⏳      |
@@ -197,11 +197,15 @@ schema has to keep them apart.
 Store credit is the natural refund alternative once Step 3 exists, and the
 cheaper one for the merchant. Gift cards share the ledger shape.
 
-★ **Two things now pull this earlier than its number suggests** — a COD refund
-has no instrument to go back to, and an exchange settles cleanest as a credit
-that the replacement order consumes. See `docs/returns-exchanges-plan.md` §3.3
-and §4.1. It is still ordered after returns, because a credit with nothing to
-issue it is a balance nobody can earn.
+**✅ Store credit is done** (returns-plan Step 7, see its §16): the balance +
+append-only ledger, issued from a refund, spent at checkout, reinstated on
+cancel. `orders.total` stays the goods value — credit is a payment, not a
+discount — and the unpayable-remainder gap below the gateway minimum is
+handled.
+
+**Still ships:** gift cards. They share this ledger shape, which is why
+`customer_credit_ledger.kind` is an enum rather than a boolean; what they add
+is a redeemable code and a purchase flow.
 
 **Watch for:** a balance is money. Append-only ledger, atomic spend via a
 conditional UPDATE — the `ai_credit_ledger` pattern, which already solves this

@@ -38,6 +38,8 @@ function methodLabel(m: string): string {
       return "Online";
     case "manual":
       return "Paid by hand";
+    case "store_credit":
+      return "Store credit";
     default:
       return m.charAt(0).toUpperCase() + m.slice(1);
   }
@@ -90,6 +92,8 @@ export function RefundPanel({
     canRefundOnline,
     onlineBlockedReason,
     refundOwed,
+    canRefundToCredit,
+    creditBalance,
   } = state;
   const nothingLeft = refundable <= 0;
 
@@ -260,6 +264,16 @@ export function RefundPanel({
               onClick={() => setMethod("manual")}
               label="I paid them by hand"
             />
+            {/* No money leaves — the honest answer for COD, where nothing was
+                captured. Offered, never forced: a customer owed money for a
+                faulty item is entitled to refuse a balance. */}
+            {canRefundToCredit && (
+              <MethodChip
+                active={method === "store_credit"}
+                onClick={() => setMethod("store_credit")}
+                label="Store credit"
+              />
+            )}
           </div>
 
           <label className="block">
@@ -279,6 +293,14 @@ export function RefundPanel({
             />
           </label>
 
+          {method === "store_credit" && (
+            <p className="text-xs text-muted-foreground">
+              Adds to their balance here — no money leaves.
+              {creditBalance > 0 &&
+                ` They currently hold ${formatPrice(creditBalance)}.`}{" "}
+              Make sure they&apos;ve agreed to this rather than a refund.
+            </p>
+          )}
           {method === "manual" && (
             <label className="block">
               <span className="text-xs text-muted-foreground">
@@ -321,7 +343,11 @@ export function RefundPanel({
               className="inline-flex items-center gap-1.5 rounded-md bg-foreground px-2.5 py-1 text-xs font-medium text-background disabled:opacity-50"
             >
               {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-              {method === "razorpay" ? "Send refund" : "Record refund"}
+              {method === "razorpay"
+                ? "Send refund"
+                : method === "store_credit"
+                  ? "Add store credit"
+                  : "Record refund"}
             </button>
           </div>
         </div>

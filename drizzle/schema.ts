@@ -1203,6 +1203,17 @@ export const orders = pgTable(
       mode: "string",
     }),
     collectedBy: text("collected_by"),
+    // How much of `total` was settled with store credit
+    // (store_credit_01_schema.sql). `total` stays the FULL goods value —
+    // credit is a PAYMENT, not a discount, so netting it off would understate
+    // the sale on the invoice and compute GST on the wrong base.
+    storeCreditUsed: numeric("store_credit_used", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
     // When the parcel actually LANDED (refunds_01_gateway.sql). The return
     // window starts here — measured from created_at, a 7-day window on a
     // 10-day delivery expires before the customer has the goods.
@@ -3939,6 +3950,45 @@ export const orderReturnItems = pgTable("order_return_items", {
   }),
   /** stock_reservations.id — units held so the size can't sell out in transit. */
   exchangeHoldId: uuid("exchange_hold_id"),
+});
+
+// Store credit (store_credit_01_schema.sql). A balance a store owes a
+// customer, spendable at checkout. The LEDGER is the truth; this is a cached
+// sum of it, kept non-negative by a CHECK.
+export const customerCreditBalances = pgTable(
+  "customer_credit_balances",
+  {
+    storeId: uuid("store_id").notNull(),
+    /** Firebase uid — TEXT, per phase6_01. */
+    customerId: text("customer_id").notNull(),
+    balance: numeric({ precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    }).defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.storeId, t.customerId] })],
+);
+
+export const customerCreditLedger = pgTable("customer_credit_ledger", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  customerId: text("customer_id").notNull(),
+  /** Positive issues, negative spends. Never zero. */
+  delta: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** refund | grant | spend | reinstate | expire (reserved). */
+  kind: text().notNull(),
+  /** An order_refunds.id, an orders.id, or an operator's email. UNIQUE per
+   *  (store, customer, kind) so a double-confirmed refund credits once. */
+  ref: text(),
+  note: text(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
 });
 
 export const orderRefunds = pgTable("order_refunds", {

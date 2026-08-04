@@ -23,7 +23,11 @@ export type RefundStatus = (typeof REFUND_STATUSES)[number];
  *
  * `cash` / `card` / `upi` are the at-the-counter tenders pos-return-actions
  * already writes; they are listed so this type covers every row in the table,
- * NOT so the dashboard offers them. `store_credit` lands with roadmap Step 4.
+ * NOT so the dashboard offers them.
+ *
+ * `store_credit` moves no money at all — it hands the customer a balance to
+ * spend here. It is the honest answer for COD, where nothing was captured and
+ * there is no instrument to reverse. Always OFFERED, never forced (§3.3).
  */
 export const REFUND_METHODS = [
   "razorpay",
@@ -31,13 +35,19 @@ export const REFUND_METHODS = [
   "cash",
   "card",
   "upi",
+  /** Settled as a balance the customer can spend here. No money leaves. */
+  "store_credit",
 ] as const;
 export type RefundMethod = (typeof REFUND_METHODS)[number];
 
 /** Methods the dashboard may CHOOSE. A gateway refund is decided by the
  *  tender, never offered as a preference — see §3.1: handing cash back for a
  *  card sale is the card-not-present laundering path. */
-export const DASHBOARD_REFUND_METHODS = ["razorpay", "manual"] as const;
+export const DASHBOARD_REFUND_METHODS = [
+  "razorpay",
+  "manual",
+  "store_credit",
+] as const;
 
 export const toPaise = (n: number) => Math.round((Number(n) || 0) * 100);
 export const toRupees = (p: number) => Math.round(p) / 100;

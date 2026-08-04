@@ -37,16 +37,26 @@ import {
   reconcileOrderRefunds,
   syncOrderRefundState,
 } from "./refund-reconcile";
+import { issueCredit } from "@/lib/credit/store-credit";
 import { logError } from "@/lib/observability/logger";
 
 /** Where the money physically goes. `razorpay` is the only one that moves it
  *  by itself; the rest RECORD money moved elsewhere (a drawer, a card
  *  terminal, a bank transfer the merchant made). */
-export type IssueRefundMethod = "razorpay" | "manual" | "cash" | "card" | "upi";
+export type IssueRefundMethod =
+  | "razorpay"
+  | "manual"
+  | "cash"
+  | "card"
+  | "upi"
+  | "store_credit";
 
 export interface IssueRefundInput {
   storeId: string;
   orderId: string;
+  /** Required for `store_credit` — there has to be somebody to credit. A
+   *  walk-in with no account can't be given a balance. */
+  customerId?: string | null;
   /** Omit to refund everything still refundable. */
   amount?: number;
   method: IssueRefundMethod;
@@ -84,7 +94,11 @@ export interface IssueRefundResult {
    * on. "Reconnect it in Channels" is right for a merchant at a desk and
    * useless to a cashier at a counter who has no way to get there.
    */
-  code?: "gateway_not_connected" | "no_captured_payment" | "gateway_refused";
+  code?:
+    | "gateway_not_connected"
+    | "no_captured_payment"
+    | "gateway_refused"
+    | "no_customer";
 }
 
 interface LockedOrder {
@@ -217,13 +231,47 @@ export async function issueRefund(
     customerId: order.customer_id,
   };
 
-  // ── 2. Non-gateway: the money already moved ──────────────────────────────
+  // ── 2. Store credit: no money moves, a balance appears ───────────────────
+  // Done AFTER the refund row so the row is the thing being credited FOR —
+  // its id is the idempotency ref, which makes a retry a no-op rather than a
+  // second credit.
+  if (input.method === "store_credit") {
+    const customerId = input.customerId ?? order.customer_id;
+    if (!customerId) {
+      await failRefund(refundId, "No customer to credit.");
+      return {
+        code: "no_customer",
+        error:
+          "This order has no customer account, so there's nobody to give store credit to.",
+      };
+    }
+    const credited = await issueCredit({
+      storeId,
+      customerId,
+      amount,
+      kind: "refund",
+      ref: refundId,
+      note: `Refund on ${order.order_ref ?? orderId}`,
+      actor: input.actor,
+    });
+    if (!credited.ok) {
+      await failRefund(
+        refundId,
+        credited.error ?? "Couldn't add store credit.",
+      );
+      return { error: credited.error ?? "Couldn't add store credit." };
+    }
+    await syncOrderRefundState(orderId);
+    return { refundId, status: "completed", amount, ...identity };
+  }
+
+  // ── 3. Other non-gateway: the money already moved ────────────────────────
   if (input.method !== "razorpay") {
     await syncOrderRefundState(orderId);
     return { refundId, status: "completed", amount, ...identity };
   }
 
-  // ── 3. Gateway ───────────────────────────────────────────────────────────
+  // ── 4. Gateway ───────────────────────────────────────────────────────────
   const gateway = await getStoreGateway(storeId);
   if (!gateway) {
     await failRefund(refundId, "Razorpay isn't connected for this store.");

@@ -1,8 +1,8 @@
 # Returns, exchanges & refunds — the design
 
-**Status:** design, with **Steps 1–6 built** — see §9 (refunds), §10
-(cancellation), §11 (returns config), §12 (the request flow), §13 (exchanges),
-§14 (BORIS), §15 (credit notes). Only Step 7 (store credit) is left.
+**Status:** ✅ **all seven steps built** — §9 (refunds), §10 (cancellation),
+§11 (returns config), §12 (the request flow), §13 (exchanges), §14 (BORIS),
+§15 (credit notes), §16 (store credit).
 **Slots into:** `docs/roadmap.md` Steps 2 (refunds), 3 (returns), 4 (store credit).
 **Depends on:** `CODEBASE.md` §12 (checkout), §17 (tax/invoices), §18 (Razorpay),
 §22 (POS), §23 (locations), §24 (notifications), §25 (policies).
@@ -991,3 +991,87 @@ note. Linked from the refund panel.
 **⚠ NOT reviewed by a CA or a lawyer**, the same posture §25 takes on the
 platform's own policies. It covers the fields the format needs; get a
 professional to check it before a merchant files against it.
+
+---
+
+## 16. Step 7 — what shipped
+
+Store credit: a balance a store owes a customer, spendable at checkout. Two
+paths were waiting on it — COD refunds (§3.3), where nothing was captured and
+there is no instrument to reverse, and exchanges where the replacement costs
+less.
+
+**Migration** `supabase/store_credit_01_schema.sql` — `customer_credit_balances`
+(one row per store+customer, `CHECK (balance >= 0)`), the append-only
+`customer_credit_ledger`, two RPCs, and `orders.store_credit_used`.
+
+Modelled on `ai_credits.sql`, which already solves this exact problem here: the
+**ledger is the truth**, the balance is a cached sum, every mutation is a
+single conditional UPDATE, and issuing is idempotent per `(store, customer,
+kind, ref)` so a double-confirmed refund credits once.
+
+★ **`try_spend_customer_credit` puts `balance >= amount` INSIDE the UPDATE**, so
+two checkouts racing on one balance cannot both pass a prior check-then-act and
+overdraw it.
+
+★ **`reinstate` is its own ledger kind, not a second `grant`.** A report that
+can't tell a returned spend from a goodwill gesture will overstate what the
+store gave away.
+
+### ★ Credit is a PAYMENT, not a discount
+
+`orders.total` stays the FULL value of the goods; `store_credit_used` records
+how much of it was settled with credit, and only the REMAINDER is charged.
+
+Netting it off the total would be quietly wrong in three places at once: the
+invoice would understate the sale, GST would be computed on a base that isn't
+what was sold, and the credit note (§15) would reverse the wrong amount. A
+customer paying ₹200 of a ₹500 order with credit still bought ₹500 of goods,
+and the tax authority's share doesn't shrink because of how they settled it.
+Pinned by a test that asserts the same basket writes the same total with and
+without credit.
+
+### ★ The unpayable-remainder gap
+
+`lib/credit/apply.ts` (pure, 13 tests). A ₹200.50 order against a ₹200 balance
+naively leaves **₹0.50** to charge — and Razorpay refuses anything under ₹1, so
+checkout would fail with an error about the amount being too small, on an order
+the customer nearly had enough credit for. It only appears when the balance
+lands within a rupee of the total, which is exactly the kind of thing that
+reaches production.
+
+So when the remainder would fall in that gap, **less** credit is applied — just
+enough to leave a chargeable amount, and the difference stays on the balance.
+Rounding the credit UP to cover the whole order was rejected: it spends money
+the customer didn't agree to spend, to save them a rupee they were willing to
+pay. The rule is off for COD and the counter, which have no floor.
+
+The checkout summary uses the SAME pure function as the server, so the preview
+and the charge cannot disagree on the rule — and it says so when credit was
+held back, since silently charging ₹1 more than expected is worse than a line
+of text.
+
+### The rest
+
+- **Fully covered ⇒ the order is `store_credit` / `paid`.** Without that a COD
+  courier is told to collect ₹0 and the gateway is asked for an amount it
+  refuses.
+- **Cancelling reinstates.** `lib/orders/cancel.ts` calls
+  `reinstateCreditForOrder`, keyed on the order so a second cancel reinstates
+  nothing rather than minting money. Without it, cancelling silently destroys
+  the customer's balance.
+- **Spending never refuses a sale** (invariant 6). A balance that moved
+  underneath us means they pay the full amount, not that checkout fails.
+- **Offered, never forced.** The refund panel adds a "Store credit" option
+  only when the order has a customer account, and says to make sure they have
+  agreed to it rather than a refund — a customer owed money for a faulty item
+  is entitled to refuse a balance (§3.3).
+
+**Not built:** gift cards (codes bought and redeemed — they share this ledger
+shape, which is why `kind` is an enum), expiry (`'expire'` is reserved in the
+CHECK so it needs no migration), a merchant UI to grant credit by hand
+(`issueCredit` takes `kind: 'grant'` and is ready for one), and split-tender
+refunds — refunding an order that was part-paid with credit currently offers
+the full amount to whichever method the merchant picks.
+
+**Never run in a browser.** New acceptance cases: PS-17.1 – PS-17.12.

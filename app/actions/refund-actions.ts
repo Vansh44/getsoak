@@ -39,6 +39,7 @@ import {
   isStoreSuperadmin,
 } from "@/app/dashboard/lib/access";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import { getCreditBalance } from "@/lib/credit/store-credit";
 import { emitEvent } from "@/lib/notifications/record";
 import { getStoreGateway } from "@/lib/payments/provider";
 import {
@@ -83,6 +84,10 @@ export interface OrderRefundState {
   canRefundOnline: boolean;
   /** Why not, when it can't — shown instead of a dead button. */
   onlineBlockedReason: string | null;
+  /** Whether this order has a customer account to credit. A walk-in doesn't. */
+  canRefundToCredit: boolean;
+  /** What they already hold here, so the merchant can see the effect. */
+  creditBalance: number;
   refunds: RefundRow[];
 }
 
@@ -213,6 +218,10 @@ export async function getOrderRefundState(
             order.payment_status === "partially_refunded"),
         canRefundOnline,
         onlineBlockedReason,
+        canRefundToCredit: Boolean(order.customer_id),
+        creditBalance: order.customer_id
+          ? await getCreditBalance(storeId, order.customer_id)
+          : 0,
         refunds,
       },
     };

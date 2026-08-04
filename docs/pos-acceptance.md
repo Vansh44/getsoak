@@ -1005,6 +1005,65 @@ With a restocking fee configured, refund a change-of-mind return.
 Open another store's refund id in the URL.
 **Expect:** 404.
 
+## 10h. Store credit (CODEBASE §29)
+
+**PS-17.1 — Refund as store credit**
+Refund a COD order, method "Store credit".
+**Expect:** the refund row shows `Store credit`, no money moves, and the
+customer's balance goes up by that amount.
+
+**PS-17.2 — A walk-in can't be credited**
+Open a POS sale with no customer attached.
+**Expect:** no "Store credit" option. There is nobody to give a balance to.
+
+**PS-17.3 — The balance shows at checkout**
+Sign in as that customer and open `/checkout`.
+**Expect:** a "Store credit" line under the total and a reduced "To pay now".
+
+**PS-17.4 ★ — The order total is NOT reduced**
+Place that order, then open its invoice.
+**Expect:** the invoice shows the FULL goods value and the full tax. Credit is
+a payment, not a discount — netting it off would understate the sale and
+compute GST on the wrong base.
+
+**PS-17.5 — `store_credit_used` records the split**
+**Expect:** `orders.store_credit_used` = the amount applied, `orders.total`
+unchanged, and the gateway charged only the remainder.
+
+**PS-17.6 ★ — The unpayable-remainder gap**
+Get a balance to within under ₹1 of an order total (e.g. ₹200 against ₹200.50)
+and pay online.
+**Expect:** checkout SUCCEEDS, charging ₹1, with a note that some credit was
+held back. Razorpay refuses under ₹1, so applying the full ₹200 would fail.
+
+**PS-17.7 — A fully-covered order collects nothing**
+Have more credit than the order total.
+**Expect:** payment method `store_credit`, status `paid`, no gateway call, and
+COD does not tell the courier to collect anything.
+
+**PS-17.8 ★ — Cancelling gives the credit back**
+Cancel an order that used credit.
+**Expect:** the balance is restored and the ledger shows a `reinstate` row —
+distinct from `grant`, so reports can tell them apart.
+
+**PS-17.9 ★ — …exactly once**
+Cancel the same order twice.
+**Expect:** the credit comes back ONCE. A second reinstate would mint money.
+
+**PS-17.10 ★ — The balance can never go negative**
+Spend the balance in one tab, then complete a second checkout that also
+wanted it.
+**Expect:** the second order charges the full amount. Checkout must NOT fail —
+a race on an optional feature never refuses a sale (invariant 6).
+
+**PS-17.11 ★ — Crediting the same refund twice credits once**
+Trigger the refund confirmation twice (reconcile plus the callback).
+**Expect:** one ledger row, one balance increase.
+
+**PS-17.12 — Credit is per store**
+Check the balance while browsing a DIFFERENT store's subdomain.
+**Expect:** zero. Credit is the issuing merchant's money.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

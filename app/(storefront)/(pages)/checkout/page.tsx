@@ -46,6 +46,7 @@ import {
   usePolicyLinks,
 } from "@/app/(storefront)/components/policy-consent";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
+import { creditToApply } from "@/lib/credit/apply";
 import { formatPrice } from "@/lib/pricing";
 import { Button } from "@/components/ui/button";
 import styles from "./checkout.module.css";
@@ -241,6 +242,20 @@ export default function CheckoutPage() {
     cart.hydrated,
     cart.couponValid ? cart.couponDiscount : 0,
   );
+
+  // The amount the order is actually FOR, before any credit is applied.
+  const orderTotal =
+    taxInfo?.enabled && !taxInfo.inclusive
+      ? cart.total + taxInfo.tax
+      : cart.total;
+
+  // Preview of the credit split, using the SAME pure function the server uses
+  // — so what is shown here and what is charged cannot disagree on the rule.
+  const creditSplit = creditToApply({
+    orderTotal,
+    balance: payConfig?.storeCredit ?? 0,
+    gatewayMinimum: payMethod === "razorpay" ? undefined : 0,
+  });
 
   const selected = addresses.find((a) => a.id === selectedId) ?? null;
 
@@ -1214,13 +1229,36 @@ export default function CheckoutPage() {
               <div className={styles.totalRow}>
                 <span className={styles.totalLabel}>Total</span>
                 <span className={styles.totalValue}>
-                  {formatPrice(
-                    taxInfo?.enabled && !taxInfo.inclusive
-                      ? cart.total + taxInfo.tax
-                      : cart.total,
-                  )}
+                  {formatPrice(orderTotal)}
                 </span>
               </div>
+
+              {/* Store credit. Shown as a PAYMENT below the total, not as a
+                  discount above it — the goods still cost what they cost, and
+                  the invoice will say so. The exact amount is recomputed
+                  server-side, so this is a preview. */}
+              {creditSplit.applied > 0 && (
+                <>
+                  <div className={`${styles.row} ${styles.rowDiscount}`}>
+                    <span>Store credit</span>
+                    <span>−{formatPrice(creditSplit.applied)}</span>
+                  </div>
+                  <div className={styles.totalRow}>
+                    <span className={styles.totalLabel}>
+                      {creditSplit.coversAll ? "Nothing to pay" : "To pay now"}
+                    </span>
+                    <span className={styles.totalValue}>
+                      {formatPrice(creditSplit.remaining)}
+                    </span>
+                  </div>
+                  {creditSplit.heldBackForMinimum && (
+                    <p className={styles.creditHeldBack}>
+                      We&apos;ve kept a little credit back so there&apos;s a
+                      chargeable amount — the rest stays on your balance.
+                    </p>
+                  )}
+                </>
+              )}
 
               <PolicyConsent
                 links={policyLinks}
