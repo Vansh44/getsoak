@@ -943,10 +943,13 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `loadingDraft` starts TRUE when there is a page to auto-open so the first,
     pre-hydration paint says "Opening…" instead of "Select a page" — React
     state cannot fix that frame, only the initial value can. - **Themes (signup seeding)**: a theme is a DATA PACKAGE in `lib/themes/` —
-    `meta.ts` (client-safe catalog for the signup picker: id/name/category/
-    previewImage/demoSlug; the picker must NEVER import definitions),
-    `definitions/basket.ts` (brand accents, **`design` skin**, pages incl. the
-    homepage sentinel, menus, sample categories/products+variants — imagery
+    `meta.ts` (client-safe, versioned catalog manifest: id/name, engine ref,
+    release state/version/notes, industries, catalog-size fit, feature claims,
+    keywords, plan gate, preview/screenshots, demo health and catalog
+    visibility; client surfaces must NEVER import definitions),
+    `definitions/basket.ts` (one immutable `preset`: brand accents,
+    **`design` skin**, pages incl. the homepage sentinel, menus, sample
+    categories/products+variants — imagery
     bundled under `public/themes/{id}/`; **basket** is the grocery/F&B
     reference template with real Unsplash photography, per
     docs/vertical-templates-plan.md §9.1, and currently the only/default
@@ -954,15 +957,32 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
-    `reset` refuses unless `stores.settings.demo === true`. `createStore`
-    (signup) calls it with the picked template (published immediately; brand
-    NAME preserved). v1 constraints CI-tested in `lib/themes/themes.test.ts`:
+    `reset` refuses unless `stores.settings.demo === true`. `applyTheme` keeps
+    legacy `settings.template` but also pins `{presetId,presetVersion,engineId,
+    engineVersion,appliedAt}` in `settings.theme`; the authored preset seeds a
+    starting point, while subsequent merchant pages/menus/products remain
+    store-scoped DB content rather than theme-package state. Rendering reads
+    the pin first and falls back to legacy `template`, so existing stores need
+    no migration; old immutable releases stay in `THEME_DEFINITIONS` when a
+    preset advances. `createStore` (signup) calls it with the picked template
+    (published immediately; brand NAME preserved). v1 constraints CI-tested in
+    `lib/themes/themes.test.ts`:
     non-id sources only, no latest_blogs, homepage present, strict publish
-    validation, every referenced asset exists. **Demo stores**: one per theme
+    validation, every referenced asset exists, catalog metadata is unique and
+    publishable, seeded pages/homepages/catalogs meet minimum content floors,
+    and referenced imagery is optimized + catalog-sized. The full release gate
+    is **`docs/theme-acceptance.md`**: CI package integrity + live storefront
+    stories + accessibility/performance + a scored two-reviewer design pass.
+    A valid definition is deliberately NOT the same as an approved theme.
+    **Demo stores**: one per theme
     (`demo-{id}` — the namespace is blocked at signup), seeded/reseeded via
     `seedDemoStore` (platform superadmin action) from the Themes panel on the
     platform stores console; the signup picker's Preview opens
-    `https://demo-{id}.{ROOT_DOMAIN}`. - **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
+    `https://demo-{id}.{ROOT_DOMAIN}` only when manifest demo health is
+    `healthy`; an unavailable demo renders a disabled, explanatory control
+    instead of opening a known 404. `createStore` repeats catalog visibility
+    validation server-side, so posting a hidden/draft/unknown id around the
+    signup UI cannot install it. - **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
     design system, not just one accent. `ThemeDesign` (`lib/themes/types.ts`) =
     `palette` (all 14 `--sm-*` colour tokens + `onAccent`/`onInk`/
     `shadowRgb`/`success`/`error`/`star`/`highlight` semantic tokens), `fonts`
@@ -1010,8 +1030,9 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     builder section type now, §11.)
     All of this is GATED, so the WholeSip fallback and any classic theme keep
     today's shared layout untouched. (Basket is the first grocery theme.)
-    Design derives from the theme id at RENDER time (no DB column), so no reseed
-    is needed when a theme's skin changes. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
+    Design derives from the installed preset release at RENDER time. New
+    installs are version-pinned in store settings; legacy stores without the
+    pin resolve the catalog's current release. - **Phase 4d (not built, by design)**: nothing pending — homepage, static
     pages, and menus are all migrated. config/site.ts, brand.md and the
     file-based AI skills are deleted, and the shop hero is brand-aware. The
     `--wholesip-*` CSS token namespace (→ `--sm-*`) and `WHOLESIP_STORE_ID` (→

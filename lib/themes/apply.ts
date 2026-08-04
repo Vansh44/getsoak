@@ -20,6 +20,7 @@ import {
   type RichTextConfig,
 } from "@/lib/sections/registry";
 import { getThemeDefinition } from "./index";
+import type { StoredThemeInstallation } from "./meta";
 import type { ThemeDefinition } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -75,6 +76,7 @@ export async function applyTheme(
   },
 ): Promise<ApplyThemeResult> {
   const theme = getThemeDefinition(themeId);
+  const { preset } = theme;
   const errors: string[] = [];
   const fail = (step: string, message: string) => {
     console.error(`applyTheme(${theme.id}) ${step}:`, message);
@@ -110,14 +112,25 @@ export async function applyTheme(
   }
 
   const existingBrand = (settings.brand as Record<string, unknown>) ?? {};
+  const installation: StoredThemeInstallation = {
+    presetId: theme.id,
+    presetVersion: theme.release.version,
+    engineId: theme.engine.id,
+    engineVersion: theme.engine.version,
+    appliedAt: new Date().toISOString(),
+  };
   const mergedSettings = {
     ...settings,
+    // `template` remains for old readers and old stores. `theme` is the new
+    // pinned installation contract; future releases must not silently rewrite
+    // a merchant's storefront merely because the catalog advanced.
     template: theme.id,
+    theme: installation,
     brand: {
       ...existingBrand, // keeps the merchant's chosen name/logo
-      primaryColor: theme.brand.primaryColor,
-      tagline: existingBrand.tagline ?? theme.brand.tagline ?? null,
-      blurb: existingBrand.blurb ?? theme.brand.blurb ?? null,
+      primaryColor: preset.brand.primaryColor,
+      tagline: existingBrand.tagline ?? preset.brand.tagline ?? null,
+      blurb: existingBrand.blurb ?? preset.brand.blurb ?? null,
     },
   };
   try {
@@ -155,8 +168,8 @@ export async function applyTheme(
 
   // --- sample categories + products ------------------------------------------
   const categoryIdBySlug = new Map<string, string>();
-  if (theme.sampleData) {
-    for (const c of theme.sampleData.categories) {
+  if (preset.sampleData) {
+    for (const c of preset.sampleData.categories) {
       try {
         const [row] = await withService((db) =>
           db
@@ -192,7 +205,7 @@ export async function applyTheme(
       }
     }
 
-    for (const p of theme.sampleData.products) {
+    for (const p of preset.sampleData.products) {
       let productId: string;
       try {
         const [row] = await withService((db) =>
@@ -303,17 +316,17 @@ export async function applyTheme(
         .insert(storeMenus)
         .values({
           storeId,
-          header: theme.menus.header,
-          footerGroups: theme.menus.footerGroups,
-          footerLegal: theme.menus.footerLegal,
+          header: preset.menus.header,
+          footerGroups: preset.menus.footerGroups,
+          footerLegal: preset.menus.footerLegal,
           updatedBy: actorUserId,
         })
         .onConflictDoUpdate({
           target: storeMenus.storeId,
           set: {
-            header: theme.menus.header,
-            footerGroups: theme.menus.footerGroups,
-            footerLegal: theme.menus.footerLegal,
+            header: preset.menus.header,
+            footerGroups: preset.menus.footerGroups,
+            footerLegal: preset.menus.footerLegal,
             updatedBy: actorUserId,
           },
         }),
@@ -323,7 +336,7 @@ export async function applyTheme(
   }
 
   // --- pages ---------------------------------------------------------------------
-  for (const page of theme.pages) {
+  for (const page of preset.pages) {
     const sections = prepareSections(theme, page.slug);
     if ("error" in sections) {
       fail(`page ${page.slug || "(home)"}`, sections.error);
@@ -395,7 +408,7 @@ function prepareSections(
   theme: ThemeDefinition,
   pageSlug: string,
 ): { sections: PageSectionItem[] } | { error: string } {
-  const page = theme.pages.find((p) => p.slug === pageSlug);
+  const page = theme.preset.pages.find((p) => p.slug === pageSlug);
   if (!page) return { error: "page missing from theme" };
 
   const withIds = page.sections.map((s) => ({ ...s, id: randomUUID() }));

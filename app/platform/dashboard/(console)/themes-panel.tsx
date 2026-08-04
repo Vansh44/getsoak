@@ -44,7 +44,7 @@ export function ThemesPanel({
       </div>
       <ul className="divide-y divide-gray-100">
         {THEME_META.map((t) => {
-          const exists = live.has(t.demoSlug);
+          const exists = live.has(t.demo.slug);
           return (
             <li
               key={t.id}
@@ -54,18 +54,26 @@ export function ThemesPanel({
                 <div className="flex items-center gap-2 font-semibold text-gray-900">
                   {t.name}
                   <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500">
-                    {t.category}
+                    {t.catalog.industries[0]}
+                  </span>
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                    {t.release.status} · v{t.release.version}
                   </span>
                 </div>
                 <div className="mt-0.5 text-sm text-gray-500">
-                  {t.demoSlug}.{rootDomain}
+                  {t.demo.slug}.{rootDomain}
                   {!exists && " — not seeded yet"}
                 </div>
+                {t.demo.status !== "healthy" && (
+                  <div className="mt-1 text-xs font-medium text-amber-700">
+                    Manifest demo status: {t.demo.status}
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {exists && (
                   <a
-                    href={`https://${t.demoSlug}.${rootDomain}`}
+                    href={`https://${t.demo.slug}.${rootDomain}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:border-gray-300"

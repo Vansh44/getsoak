@@ -43,7 +43,7 @@ export default async function PlatformDashboard({
   const stores = await listAllStores(q);
 
   // Which theme demo stores already exist (for the Themes panel).
-  const demoSlugs = new Set(THEME_META.map((t) => t.demoSlug));
+  const demoSlugs = new Set(THEME_META.map((t) => t.demo.slug));
   const demoSlugsLive = stores
     .filter((s) => demoSlugs.has(s.slug))
     .map((s) => s.slug);

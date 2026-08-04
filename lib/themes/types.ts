@@ -145,7 +145,9 @@ export interface ThemeDesign {
   layout?: ThemeLayout;
 }
 
-export interface ThemeDefinition extends ThemeMeta {
+/** Immutable authored preset package. Applying it seeds starting content;
+ * merchant edits then live in store-scoped DB rows and are not this object. */
+export interface ThemePreset {
   brand: {
     primaryColor: string;
     tagline?: string;
@@ -159,6 +161,12 @@ export interface ThemeDefinition extends ThemeMeta {
     categories: ThemeCategorySeed[];
     products: ThemeProductSeed[];
   };
+}
+
+/** One immutable preset release. Multiple releases with the same id may stay
+ * registered so stores pinned to an older version never change implicitly. */
+export interface ThemeDefinition extends ThemeMeta {
+  preset: ThemePreset;
 }
 
 /**

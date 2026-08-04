@@ -736,7 +736,7 @@ export async function seedDemoStore(themeId: string): Promise<SeedDemoResult> {
     return { error: `Unknown theme "${themeId}".` };
   }
 
-  const slug = theme.demoSlug;
+  const slug = theme.demo.slug;
 
   // Create the store row if missing.
   let storeId: string | undefined;

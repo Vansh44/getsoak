@@ -1,6 +1,6 @@
 import { getCurrentStoreOrNull } from "./resolve";
 import { getThemeDefinition } from "@/lib/themes";
-import { isThemeId } from "@/lib/themes/meta";
+import { readThemeSelection } from "@/lib/themes/meta";
 import type { ThemeLayout } from "@/lib/themes/types";
 
 // Resolve the current host store's theme layout flags for server components
@@ -13,8 +13,10 @@ import type { ThemeLayout } from "@/lib/themes/types";
 // (classic layout), so a store with no real theme is untouched.
 export async function getStorefrontLayout(): Promise<ThemeLayout> {
   const store = await getCurrentStoreOrNull();
-  const template = (store?.settings as Record<string, unknown> | null)
-    ?.template;
-  if (!isThemeId(template)) return {};
-  return getThemeDefinition(template).design.layout ?? {};
+  const selection = readThemeSelection(store?.settings);
+  if (!selection) return {};
+  return (
+    getThemeDefinition(selection.id, selection.version).preset.design.layout ??
+    {}
+  );
 }

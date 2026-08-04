@@ -15,7 +15,7 @@ import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
-import { isThemeId } from "@/lib/themes/meta";
+import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
 import { GOOGLE_VERIFICATION_TOKEN_KEY } from "@/lib/seo/store-indexing";
@@ -81,16 +81,18 @@ export default async function StorefrontLayout({
   ]);
   const chrome = draftChrome ?? publishedChrome;
 
-  // The visual skin: resolve the store's theme (settings.template) and flatten
+  // The visual skin: resolve the store's pinned theme release (falling back to
+  // the legacy settings.template id) and flatten
   // its palette/fonts/shape into CSS custom properties written inline on
   // .storefront-root. Inline-style specificity beats the globals.css :root
   // defaults, so the whole storefront re-skins with no per-component wiring.
   // A store with NO real theme id (the WholeSip fallback, legacy stores) gets
   // only --brand-primary — the globals.css defaults ARE the WholeSip look, so
   // it stays exactly as today.
-  const template = (store.settings as Record<string, unknown> | null)?.template;
-  const design = isThemeId(template)
-    ? getThemeDefinition(template).design
+  const themeSelection = readThemeSelection(store.settings);
+  const design = themeSelection
+    ? getThemeDefinition(themeSelection.id, themeSelection.version).preset
+        .design
     : null;
   const themeVars: Record<string, string> = design
     ? designToCssVars(design, brand.primaryColor)
