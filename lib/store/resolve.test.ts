@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PLAN_LIMITS, effectivePlan } from "@/lib/plans";
 import { parseHost } from "./resolve";
+import { isThemesHost } from "./host";
 
 // parseHost() is the pure core of tenant resolution: it maps a raw Host header
 // to "which store (or the platform) does this request belong to". Default
@@ -27,6 +28,13 @@ describe("parseHost", () => {
     expect(parseHost("storemink.com").type).toBe("platform");
     expect(parseHost("www.storemink.com").type).toBe("platform");
     expect(parseHost("app.storemink.com").type).toBe("platform");
+    expect(parseHost("themes.storemink.com").type).toBe("platform");
+  });
+
+  it("recognises the reserved themes catalog host", () => {
+    expect(isThemesHost("themes.storemink.com")).toBe(true);
+    expect(isThemesHost("themes.localhost:3000")).toBe(true);
+    expect(isThemesHost("my-themes.storemink.com")).toBe(false);
   });
 
   // A merchant's own domain doesn't end in the root domain → custom domain,

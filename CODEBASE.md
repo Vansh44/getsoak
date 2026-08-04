@@ -41,6 +41,7 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | Host                                                         | Behavior                                                                                                          |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
+| `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
 | `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
 | `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
 | Anything else                                                | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
@@ -264,6 +265,9 @@ wholesip/
 │   ├── auth/                  # Store-host auth: login (email+pw + Google popup),
 │   │                          # forgot/set/update-password (Firebase; callback route removed)
 │   ├── help/                  # Help centre (served at help.storemink.com)
+│   ├── themes/                # ★ Public metadata-driven theme catalog served at
+│   │                          # themes.storemink.com; own canonical/OG/CSS, industry
+│   │                          # filters, truthful demo/release/plan state
 │   │
 │   ├── actions/               # ★ ALL SERVER ACTIONS ("use server") — one file per domain:
 │   │   │                      # product/category/color/coupon/coupon-email/blog/blog-social/
@@ -552,7 +556,7 @@ wholesip/
 │   ├── pricing.ts / slug.ts / sanitize.ts / rate-limit.ts / og-image.ts
 │   ├── blog-taxonomy.ts   # fetchBlogTaxonomy(): per-store blog categories/tags reader
 │   ├── blog-reactions.ts / phone-labels.ts / use-otp-throttle.ts
-│   ├── site.ts / utils.ts     # cn() etc.
+│   ├── site.ts / utils.ts     # Canonical platform/help/themes origins + cn() etc.
 │
 ├── components/
 │   ├── ui/                    # shadcn/ui primitives (button, dialog, table, sidebar…)
@@ -1004,7 +1008,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `healthy`; an unavailable demo renders a disabled, explanatory control
     instead of opening a known 404. `createStore` repeats catalog visibility
     validation server-side, so posting a hidden/draft/unknown id around the
-    signup UI cannot install it. - **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
+    signup UI cannot install it.
+    **Public theme catalog (Phase 4, in progress)**:
+    `themes.{ROOT_DOMAIN}` is a reserved platform host (`isThemesHost`) rewritten
+    by `proxy.ts` to `app/themes/`, never resolved as merchant tenancy. The
+    server-rendered catalog imports only client-safe `THEME_META`, so its
+    industry filters, plan badges, release labels, preview image, demo health,
+    and signup CTA share the exact source used by onboarding. It has its own
+    canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
+    one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
+    demos render an honest unavailable state rather than a broken live link.
+    `themes` is also rejected by store-signup slug validation.
+    **Theme DESIGN engine (the visual "skin")**: a theme controls the FULL
     design system, not just one accent. `ThemeDesign` (`lib/themes/types.ts`) =
     `palette` (all 14 `--sm-*` colour tokens + `onAccent`/`onInk`/
     `shadowRgb`/`success`/`error`/`star`/`highlight` semantic tokens), `fonts`

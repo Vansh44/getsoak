@@ -20,6 +20,9 @@ export { PLATFORM_URL } from "@/lib/store/host";
 // canonicals, OG urls, JSON-LD and the help branch of sitemap.ts/robots.ts.
 export const HELP_URL = `https://help.${ROOT_DOMAIN}`;
 
+// Canonical origin of the public theme discovery catalog.
+export const THEMES_URL = `https://themes.${ROOT_DOMAIN}`;
+
 /**
  * The store's PUBLIC canonical origin — its custom domain **only once that
  * domain is proven-owned**, otherwise its {slug}.{ROOT_DOMAIN} subdomain.

@@ -188,6 +188,18 @@ consent copy and source are recorded under the request-host store, repeat
 submissions reactivate one store/email row, and no address crosses tenants or is
 revealed through response wording.
 
+**TA-3.11 ★ — The public catalog tells the release truth**
+
+Open the theme on `themes.storemink.com`, filter to each declared industry, and
+compare its card with `THEME_META`, signup, and the live demo.
+
+**Expect:** name, description, preview, industries, plan gate, and availability
+agree everywhere; hidden themes never render; blocked or unhealthy demos never
+open a broken preview; a healthy preview uses the declared `demo-{id}` host;
+catalog/signup links preserve the StoreMink platform host; keyboard focus,
+mobile layout, canonical, robots host, sitemap host, and social preview all
+belong to `themes.storemink.com` rather than a merchant store or the apex.
+
 ---
 
 ## 4. Accessibility and performance gate

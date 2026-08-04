@@ -1,7 +1,7 @@
 # Vertical Store Templates — Implementation Plan
 
 > **Current expansion phase:** **Quality Phases 1–2 and Capability Phase 3
-> DONE (2026-08-05)** — the
+> DONE; Phase 4 IN PROGRESS (2026-08-05)** — the
 > catalog release bar lives in `docs/theme-acceptance.md`; objective package
 > requirements are enforced in `lib/themes/themes.test.ts`; and the versioned
 > engine → immutable preset → merchant-owned content contract now lives in
@@ -11,6 +11,10 @@
 > persistent consent-aware `newsletter`; plus header, card, PDP, cart, and
 > footer variants that can inherit immutable theme defaults or take
 > draft/published merchant overrides in the visual builder.
+> Phase 4 has started with the public catalog foundation at
+> `themes.storemink.com`: reserved host routing, a responsive metadata-driven
+> gallery, truthful release/demo/plan states, independent SEO metadata, and a
+> discoverable link from the platform site.
 > Basket is the only/default implementation, but it is **blocked from approval**
 > under the new bar until its missing live demo is repaired and the browser,
 > accessibility, performance, and two-reviewer gates are recorded.
@@ -318,10 +322,13 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
   Shared header/card/PDP/cart/footer variants resolve from the pinned theme plus
   draft/published merchant overrides without forking the storefront or mutating
   the immutable preset. Legacy Basket grocery pins remain compatible.
-- **Phase 4 — next:** repair Basket's demo/release evidence, then author the
-  Studio, Ritual, and subsequent vertical presets against the completed shared
-  capability contract. A preset is not done until every applicable acceptance
-  story and two-reviewer gate is recorded.
+- **Phase 4 — in progress:** the public `themes.storemink.com` catalog
+  foundation is built from `THEME_META`, with reserved host routing, industry
+  filters, canonical/robots/sitemap/OG metadata, and demo links gated by live
+  health. Next repair Basket's demo/release evidence, then author Studio, Ritual,
+  and subsequent vertical presets against the completed shared capability
+  contract. A preset is not done until every applicable acceptance story and
+  two-reviewer gate is recorded.
 - **Basket repair — parallel prerequisite:** restore/reseed `demo-basket` and
   run the new acceptance stories. This can return Basket to Candidate, but does
   not block designing the Phase 2 contract.
