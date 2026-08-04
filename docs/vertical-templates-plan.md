@@ -20,6 +20,9 @@
 > three-page presets, eight credible sample products each, twenty optimized
 > generated assets, and automated package coverage. They remain absent from
 > signup/catalog until their live demos and review evidence pass.
+> Local demo smoke now passes for Basket, Studio and Ritual across homepage,
+> shop, PDP, cart, content and themed 404 routes; Ritual's variant add-to-cart
+> and totals also pass. Public demos and full browser gates remain outstanding.
 > Basket remains the default implementation, but it is **blocked from approval**
 > until its missing live demo is repaired and the browser, accessibility,
 > performance, and two-reviewer gates are recorded.
@@ -331,8 +334,9 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
   foundation is built from `THEME_META`, with reserved host routing, industry
   filters, canonical/robots/sitemap/OG metadata, and demo links gated by live
   health. Studio and Ritual `0.1.0` now pass the automated package gate as hidden
-  drafts and have their asset provenance recorded. Next provision and review
-  both demos, restore Basket's demo/release evidence, then author subsequent
+  drafts, have their asset provenance recorded, and pass local route smoke.
+  Next provision and review both public demos, restore Basket's production
+  demo/release evidence, then author subsequent
   vertical presets against the completed shared capability contract. A preset is
   not done until every applicable acceptance story and two-reviewer gate is
   recorded.

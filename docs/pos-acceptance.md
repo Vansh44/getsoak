@@ -14,16 +14,18 @@ stories are here.**
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                              | Why                                                                                        |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08` as `postgres` | Column-not-found errors otherwise                                                          |
-| Store on the **Pro** plan                                                                 | POS and Locations are Pro-gated                                                            |
-| `POS_SESSION_SECRET` set                                                                  | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
-| `RESEND_*` configured                                                                     | Staff invitations and pickup emails go nowhere otherwise                                   |
+| Prerequisite                                                                                             | Why                                                                                        |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                            |
+| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                            |
+| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
+| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                   |
 
-**Status on staging:** all applied — `pos_00`–`pos_11` and
-`locations_01`–`locations_09`. (`locations_07` added merchant postcode rules
-and `locations_08` removed them again; both ran.)
+**Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
+are applied. `locations_10` is pending a `postgres` migration run; the three
+local theme-demo rows were repaired explicitly for smoke testing only.
+(`locations_07` added merchant postcode rules and `locations_08` removed them
+again; both ran.)
 
 ---
 
@@ -80,6 +82,12 @@ On a store that existed before `locations_01`: check the default location.
 **Expect:** **Fulfil online orders ON** (it describes what was already
 happening), **Customer pickup and Accept returns OFF** (they introduce new
 behaviour). A migration may not change what a live store does.
+
+**PS-2.9 ★ — A newly created store can sell its seeded stock online**
+Create a store after `locations_10`, then inspect its auto-created Main location
+and one stocked product on the storefront.
+**Expect:** Main stores `online_fulfil: true`; inventory seeded at Main
+contributes to both aggregate and online stock; the PDP is not falsely sold out.
 
 **PS-2.7 — Rename a location**
 Open a location → Details → change the name → Save details.
