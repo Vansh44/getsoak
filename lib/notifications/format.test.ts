@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatDate,
   formatMoney,
   formatVariable,
   summariseItems,
@@ -78,6 +79,48 @@ describe("formatVariable", () => {
   // twice — which is what made the old one read like a form.
   it("hides currency, because the total already carries it", () => {
     expect(HIDDEN_VARIABLES.has("currency")).toBe(true);
+  });
+});
+
+describe("formatDate", () => {
+  // ★ The bug this pins: an order placed on 5 August 2026 was confirmed to the
+  // customer as "8 May 2026". record.ts passed a LOCALE string
+  // ("5/8/2026, 9:42:46 am", en-IN D/M/Y), templateValues formatted every value
+  // including that one, and V8 parses a bare M/D/Y date — so the day and month
+  // swapped. Past the 12th it doesn't parse at all and the raw string reached
+  // the email instead.
+  it("reads an ISO timestamp, the only unambiguous input", () => {
+    expect(formatDate("2026-08-05T04:12:46.000Z")).toBe(
+      "5 August 2026 at 9:42 am",
+    );
+    expect(formatDate("2026-07-28T18:50:00.000Z")).toBe(
+      "29 July 2026 at 12:20 am",
+    );
+  });
+
+  // ★ Pinned timezone: without it this renders in the system zone — UTC on
+  // Cloud Run — so a 3:12 pm order was confirmed as "9:42 am".
+  it("renders in IST regardless of the server's timezone", () => {
+    // 09:42 UTC is 15:12 IST on the same day.
+    expect(formatDate("2026-08-05T09:42:00.000Z")).toBe(
+      "5 August 2026 at 3:12 pm",
+    );
+  });
+
+  // A date that never round-trips is better shown raw than dropped, but it must
+  // not silently become a different day.
+  it("returns an unparseable value untouched", () => {
+    expect(formatDate("28/7/2026, 12:20:46 am")).toBe("28/7/2026, 12:20:46 am");
+    expect(formatDate("")).toBe("");
+  });
+
+  it("is reached through formatVariable for date-shaped names", () => {
+    expect(formatVariable("date", "2026-08-05T04:12:46.000Z")).toBe(
+      "5 August 2026 at 9:42 am",
+    );
+    expect(formatVariable("delivered_at", "2026-08-05T04:12:46.000Z")).toBe(
+      "5 August 2026 at 9:42 am",
+    );
   });
 });
 

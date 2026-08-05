@@ -1,8 +1,13 @@
 import "server-only";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { withService, withUser } from "@/lib/db/client";
-import { orderItems, orders, storeBillingSettings } from "@/drizzle/schema";
+import {
+  orderItems,
+  orders,
+  storeBillingSettings,
+  storeLocations,
+} from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getActingStoreId } from "@/app/dashboard/lib/access";
 import { getStoreBillingSettings } from "@/lib/storefront/queries";
@@ -37,6 +42,16 @@ const ORDER_COLS = {
   notes: orders.notes,
   shipping_address: orders.shippingAddress,
   billing_address: orders.billingAddress,
+  // ★ An invoice for a collection must not print a delivery address. Without
+  // these the document had no way to tell the two apart, so it billed a
+  // walk-in customer against a home address nothing was ever sent to.
+  fulfilment_type: orders.fulfilmentType,
+  pickup_location_name: sql<string | null>`(
+    select l.name from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
+  pickup_location_address: sql<Record<string, unknown> | null>`(
+    select l.address from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
 };
 const ITEM_COLS = {
   name: orderItems.name,

@@ -5,7 +5,7 @@ import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getMyOrders } from "@/app/actions/customer-order-actions";
 import styles from "./orders.module.css";
-import { StatusPill, formatDate, money } from "./order-status";
+import { FulfilmentBadge, StatusPill, formatDate, money } from "./order-status";
 
 export const dynamic = "force-dynamic";
 
@@ -94,11 +94,12 @@ export default async function MyOrdersPage() {
                           ·
                         </span>
                         {formatDate(order.created_at)}
+                        <FulfilmentBadge order={order} />
                       </div>
                     </div>
 
                     <div className={styles.trailing}>
-                      <StatusPill status={order.status} />
+                      <StatusPill order={order} />
                       <div className={styles.total}>
                         {money(order.total, order.currency)}
                       </div>

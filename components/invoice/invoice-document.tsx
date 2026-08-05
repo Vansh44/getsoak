@@ -1,5 +1,6 @@
 import { formatPrice } from "@/lib/pricing";
 import type { BillingSettings } from "@/lib/billing/types";
+import { locationAddressLines } from "@/lib/locations/address";
 import "./invoice.css";
 
 export interface InvoiceOrderData {
@@ -20,6 +21,14 @@ export interface InvoiceOrderData {
   notes: string | null;
   shipping_address: Record<string, unknown> | null;
   billing_address: Record<string, unknown> | null;
+  /** 'delivery' for everything that isn't a collection. Optional so an older
+   *  caller still type-checks; absent reads as delivery, which is what every
+   *  order was before pickup existed. */
+  fulfilment_type?: string | null;
+  pickup_location_name?: string | null;
+  /** The SHOP's address — `line1`/`city`/… , not the customer address shape
+   *  (see lib/locations/address.ts). */
+  pickup_location_address?: Record<string, unknown> | null;
 }
 
 export interface InvoiceItemData {
@@ -82,6 +91,16 @@ export function InvoiceDocument({
   const billTo = order.billing_address
     ? formatAddress(order.billing_address)
     : shipTo;
+
+  // ★ NOTHING IS SHIPPED TO A COLLECTION ORDER. The second party block named
+  // the customer's home address under "Ship To" on an order they walked in and
+  // picked up — an address the goods never went to, on the document that is
+  // supposed to be the record of the sale. For a pickup it names the SHOP
+  // instead, and the customer party is always rendered so the invoice still
+  // says who bought it even when the Bill To flag is off.
+  const isPickup = order.fulfilment_type === "pickup";
+  const showCustomerParty = t.showBillingAddress || isPickup;
+  const pickupLines = locationAddressLines(order.pickup_location_address);
 
   // Whether this ORDER carried tax — from the order's own snapshot, never the
   // store's live settings, so a later settings change can't rewrite history.
@@ -158,9 +177,10 @@ export function InvoiceDocument({
         </div>
       </div>
 
-      {/* Parties — Bill To (optional, template flag) + Ship To (always). */}
+      {/* Parties — the customer (optional by template flag, but always shown
+          for a collection) + where the goods went: Ship To, or Collect From. */}
       <div className="inv-parties">
-        {t.showBillingAddress && (
+        {showCustomerParty && (
           <div>
             <div className="inv-party-label">Bill To</div>
             <div className="inv-party-body">
@@ -173,17 +193,35 @@ export function InvoiceDocument({
             </div>
           </div>
         )}
-        <div>
-          <div className="inv-party-label">Ship To</div>
-          <div className="inv-party-body">
-            <div className="name">{shipTo.name || "Customer"}</div>
-            {shipTo.lines.map((l, i) => (
-              <div key={i}>{l}</div>
-            ))}
-            {!t.showBillingAddress && shipTo.phone && <div>{shipTo.phone}</div>}
-            {!t.showBillingAddress && shipTo.email && <div>{shipTo.email}</div>}
+        {isPickup ? (
+          <div>
+            <div className="inv-party-label">Collect From</div>
+            <div className="inv-party-body">
+              <div className="name">
+                {order.pickup_location_name || "Our shop"}
+              </div>
+              {pickupLines.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div>
+            <div className="inv-party-label">Ship To</div>
+            <div className="inv-party-body">
+              <div className="name">{shipTo.name || "Customer"}</div>
+              {shipTo.lines.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+              {!t.showBillingAddress && shipTo.phone && (
+                <div>{shipTo.phone}</div>
+              )}
+              {!t.showBillingAddress && shipTo.email && (
+                <div>{shipTo.email}</div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Items */}

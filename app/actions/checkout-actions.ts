@@ -43,6 +43,7 @@ import {
   readyOn,
 } from "@/lib/fulfilment/pickup";
 import { holdStock, releaseHold } from "@/lib/inventory/reservations";
+import { formatAddressLine } from "@/lib/locations/address";
 import {
   recordStorePolicyConsent,
   getCheckoutPolicies,
@@ -664,7 +665,7 @@ export async function getPickupOptions(
         return {
           id: l.id,
           name: l.name,
-          address: formatPickupAddress(l.address),
+          address: formatAddressLine(l.address),
           city: str("city"),
           postalCode: str("postalCode"),
           hasStock: l.hasStock,
@@ -680,15 +681,6 @@ export async function getPickupOptions(
     console.error("getPickupOptions:", errMsg(err));
     return off;
   }
-}
-
-/** The shop's address as one readable line. */
-function formatPickupAddress(a: Record<string, unknown> | null): string {
-  if (!a) return "";
-  return ["line1", "line2", "city", "state", "postalCode"]
-    .map((k) => (typeof a[k] === "string" ? (a[k] as string).trim() : ""))
-    .filter(Boolean)
-    .join(", ");
 }
 
 export async function placeOrder(
@@ -1075,7 +1067,7 @@ export async function placeOrder(
     // the whole point of the email changing for a pickup.
     pickupShop = {
       name: chosen.name,
-      address: formatPickupAddress(chosen.address),
+      address: formatAddressLine(chosen.address),
     };
   }
 

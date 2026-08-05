@@ -178,6 +178,19 @@ export interface DefaultTemplate {
 export function defaultEmailTemplate(
   eventKey: string,
   audience: TemplateAudience = "team",
+  /**
+   * ★ The values of a REAL send, if this is one. Given them, a fact whose value
+   * is blank is dropped instead of rendering as a label above nothing — which
+   * is how a "Ready to collect" email went out with "Pickup location" and
+   * "Pickup address" as two empty rows.
+   *
+   * The generated list comes from the variable CATALOG, so it declares
+   * everything an event COULD carry; whether a particular emitter supplies all
+   * of it is a different question, and one only the send can answer. Omitted
+   * by the console preview on purpose — a preview is showing which tokens
+   * exist, so it should show them all.
+   */
+  values?: Record<string, string>,
 ): DefaultTemplate {
   const def = getEventDef(eventKey);
   const label = def?.label ?? "Notification";
@@ -223,6 +236,7 @@ export function defaultEmailTemplate(
   ];
 
   const rows = facts
+    .filter((f) => !values || (values[f.token] ?? "").trim() !== "")
     .map((f) => `  <li><strong>${f.label}</strong><br />{{${f.token}}}</li>`)
     .join("\n");
 
