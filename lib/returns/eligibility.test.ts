@@ -207,11 +207,17 @@ describe("★ malformed dates and windows fail safe", () => {
     },
   );
 
+  // ★ These two MUST inject the clock. With a window of 0, `until` IS the
+  // delivery instant, so a real `new Date()` for delivery leaves the default
+  // `now` a millisecond or two later and the window reads as already closed.
+  // That passes on a fast machine and fails on a loaded CI runner — the
+  // reason `now` is a parameter at all.
   it("a zero window still allows a return on the day itself", () => {
     const r = returnEligibility(
-      { status: "delivered", deliveredAt: new Date().toISOString() },
+      { status: "delivered", deliveredAt: NOW.toISOString() },
       null,
       { enabled: true, windowDays: 0 },
+      NOW,
     );
     expect(r.eligible).toBe(true);
     expect(r.daysLeft).toBe(0);
@@ -222,9 +228,10 @@ describe("★ malformed dates and windows fail safe", () => {
     // widen it to the store default, which is the opposite of what the
     // merchant asked for.
     const r = returnEligibility(
-      { status: "delivered", deliveredAt: new Date().toISOString() },
+      { status: "delivered", deliveredAt: NOW.toISOString() },
       { returnable: true, returnWindowDays: 0 },
       { enabled: true, windowDays: 30 },
+      NOW,
     );
     expect(r.daysLeft).toBe(0);
     expect(r.eligible).toBe(true);
