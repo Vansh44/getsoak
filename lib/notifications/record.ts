@@ -381,7 +381,16 @@ async function fanOut(
         actorLabel: input.actor?.label ?? null,
         subjectLabel: input.subject?.label ?? null,
         eventName: def?.label ?? key,
-        date: new Date().toLocaleString("en-IN"),
+        // ★ ISO, NOT a locale string. `templateValues` runs every value
+        // through `formatVariable`, and `date` is the one that used to arrive
+        // pre-formatted — so it was formatted TWICE, and the second pass
+        // misread the first. "5/8/2026, 9:42:46 am" (en-IN, D/M/Y) parses in
+        // V8 as US M/D/Y, so an order placed on 5 August was confirmed to the
+        // customer as "8 May 2026". Past the 12th it is unparseable instead,
+        // and the raw "28/7/2026, 12:20:46 am" fell straight through to the
+        // email. Formatting belongs in exactly one place; this is the stored
+        // shape, like every other value.
+        date: new Date().toISOString(),
         link: builtIn.url,
       },
       input.payload ?? null,
@@ -422,7 +431,16 @@ async function fanOut(
           actorLabel: input.actor?.label ?? null,
           subjectLabel: input.subject?.label ?? null,
           eventName: def?.label ?? key,
-          date: new Date().toLocaleString("en-IN"),
+          // ★ ISO, NOT a locale string. `templateValues` runs every value
+          // through `formatVariable`, and `date` is the one that used to arrive
+          // pre-formatted — so it was formatted TWICE, and the second pass
+          // misread the first. "5/8/2026, 9:42:46 am" (en-IN, D/M/Y) parses in
+          // V8 as US M/D/Y, so an order placed on 5 August was confirmed to the
+          // customer as "8 May 2026". Past the 12th it is unparseable instead,
+          // and the raw "28/7/2026, 12:20:46 am" fell straight through to the
+          // email. Formatting belongs in exactly one place; this is the stored
+          // shape, like every other value.
+          date: new Date().toISOString(),
           link: builtIn?.url ?? null,
         },
         input.payload ?? null,

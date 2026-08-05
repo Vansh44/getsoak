@@ -513,6 +513,35 @@ describe("recordEvent", () => {
     expect(fannedOut(mock)[0].title).toBe("Ka-ching! ORD10010004");
   });
 
+  // ★ An order placed on 5 August 2026 was confirmed to the customer as
+  // "8 May 2026". The envelope handed `date` to templateValues ALREADY
+  // formatted as an en-IN locale string, which formatVariable then re-parsed
+  // the American way — D/M/Y read as M/D/Y. The envelope must carry the stored
+  // shape (ISO), like every other value; formatting happens in one place.
+  it("renders {{date}} as the day it actually happened", async () => {
+    // Fake only Date — faking timers would hang the awaits below.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-05T04:12:46.000Z")); // 9:42 am IST
+    try {
+      const mock = setupDb({
+        staff: [superadmin],
+        settings: [
+          settingsRow({ templates: { web: { subject: "Placed {{date}}" } } }),
+        ],
+      });
+
+      await recordEvent({
+        type: "order.placed",
+        storeId: STORE,
+        subject: { type: "order", id: "o1", label: "ORD10010004" },
+      });
+
+      expect(fannedOut(mock)[0].title).toBe("Placed 5 August 2026 at 9:42 am");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A merchant customises what their TEAM is told; a shopper's confirmation
   // keeps the platform's tested copy.
   it("never applies merchant copy to the customer's notification", async () => {

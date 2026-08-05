@@ -2342,6 +2342,19 @@ group, span}` (span = columns of the 4-wide desktop grid),
         log line. The CTA button is renderer chrome (`emailButton` from the
         notification's url), not editable copy, so a body can never end up with
         two of them.
+    - **★ FORMAT ONCE, AND ONLY FROM THE STORED SHAPE.** `{{date}}` was the one
+      value that arrived at `templateValues` ALREADY formatted — the envelope
+      passed `new Date().toLocaleString("en-IN")` — so `formatVariable` ran over
+      it a second time and misread the first: V8 parses "5/8/2026" as **M/D/Y**,
+      so an order placed on 5 August 2026 was confirmed to the customer as
+      **"8 May 2026"**. Past the 12th it doesn't parse at all, and the raw
+      "28/7/2026, 12:20:46 am" fell through to the email — the exact string the
+      bullet above cites as fixed. The envelope now carries ISO, like every
+      other value. **`formatDate` also PINS `timeZone: "Asia/Kolkata"`**: without
+      it the render uses the system zone, which is UTC on Cloud Run, so a 3:12 pm
+      order was confirmed as "9:42 am" with nothing to say it wasn't local (the
+      India-first default the dashboard tables already use, until per-store
+      timezones exist). Tests run under `TZ=UTC` to prove the pin holds.
     - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
       `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
       passed it, so EVERY email rendered as team mail: a shopper's order

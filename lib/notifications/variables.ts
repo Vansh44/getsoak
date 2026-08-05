@@ -51,7 +51,9 @@ export const BASE_VARIABLES: readonly TemplateVariable[] = [
   {
     name: "date",
     description: "When it happened.",
-    sample: "26 Jul 2026, 10:32",
+    // Exactly what formatDate produces — a sample the send can't reproduce is
+    // how the console ends up promising something the customer never gets.
+    sample: "26 July 2026 at 10:32 am",
   },
   {
     name: "link",
