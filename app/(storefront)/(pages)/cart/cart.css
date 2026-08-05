@@ -32,6 +32,8 @@
 /* Phase 3 compact cart — denser line items and a quiet bordered summary. */
 .sm-cart-compact .cart-main {
   max-width: 1040px;
+  width: 100%;
+  margin-inline: auto;
 }
 .sm-cart-compact .cart-head {
   padding-bottom: 18px;
@@ -55,7 +57,7 @@
 }
 .sm-cart-compact .cart-summary {
   border: 1px solid var(--sm-border);
-  border-radius: var(--sm-radius-control);
+  border-radius: var(--sm-radius-card);
   background: transparent;
   box-shadow: none;
 }

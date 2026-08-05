@@ -22,7 +22,15 @@
 > signup/catalog until their live demos and review evidence pass.
 > Local demo smoke now passes for Basket, Studio and Ritual across homepage,
 > shop, PDP, cart, content and themed 404 routes; Ritual's variant add-to-cart
-> and totals also pass. Public demos and full browser gates remain outstanding.
+> and totals also pass. Studio and Ritual production demos are now provisioned.
+> Their first production visual review exposed low-contrast linked CTAs,
+> oversized editorial PDP actions and homepage galleries, an off-centre
+> compact cart, and Ritual's full-pill order summary; the shared CSS fixes pass
+> local desktop/mobile checks and await deployment. Studio's black-heavy first
+> composition is also rebalanced around light framed product cards, a
+> pale-cobalt material story, a warm light newsletter, and the light minimal
+> footer. Manifest health, full
+> browser gates, and the two-reviewer release gate remain outstanding.
 > Basket remains the default implementation, but it is **blocked from approval**
 > until its missing live demo is repaired and the browser, accessibility,
 > performance, and two-reviewer gates are recorded.

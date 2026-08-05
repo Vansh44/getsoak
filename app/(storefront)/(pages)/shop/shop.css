@@ -7,7 +7,7 @@
    Change colours THERE, never reintroduce raw hex inline here.
    ============================================================ */
 
-:root {
+.storefront-root {
   /* Mapped onto the global cream + ink theme (--sm-* in globals.css)
      so the shop listing AND product (pages) stay consistent. */
   --shop-bg: var(--sm-cream); /* page background — near white */
@@ -1225,7 +1225,7 @@
 .pdp-review-signin {
   background: var(--shop-surface);
   border: 1px dashed var(--shop-border);
-  border-radius: var(--sm-radius-control);
+  border-radius: var(--sm-radius-card);
   padding: 22px 20px;
   text-align: center;
   margin-bottom: 24px;
@@ -1669,7 +1669,8 @@
   align-items: start;
 }
 .sm-pdp-editorial .pdp-main-img {
-  min-height: clamp(560px, 72vw, 900px);
+  min-height: 0;
+  aspect-ratio: 4 / 3;
   border-radius: 0;
   background: var(--sm-cream-deep);
 }
@@ -1688,8 +1689,11 @@
   flex-direction: column;
 }
 .sm-pdp-editorial .pdp-btn {
+  flex: 0 0 auto;
   width: 100%;
   border-radius: 0;
+  min-height: 52px;
+  padding: 14px 20px;
 }
 .sm-pdp-editorial .pdp-description {
   border-top: 1px solid var(--sm-border);
@@ -1701,7 +1705,7 @@
   }
   .sm-pdp-editorial .pdp-main-img {
     min-height: 0;
-    aspect-ratio: 4 / 5;
+    aspect-ratio: 4 / 3;
   }
   .sm-pdp-editorial .pdp-info {
     position: static;

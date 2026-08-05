@@ -226,7 +226,7 @@
   right: 0;
   width: 268px;
   background: var(--sm-surface);
-  border-radius: var(--sm-radius-control);
+  border-radius: var(--sm-radius-card);
   box-shadow:
     0 12px 40px rgba(var(--sm-shadow-rgb), 0.1),
     0 2px 8px rgba(var(--sm-shadow-rgb), 0.04);

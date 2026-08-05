@@ -1399,17 +1399,14 @@ a.home-tile:hover {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .home-gallery.layout-editorial {
-  grid-template-columns: minmax(0, 1.7fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  max-width: 1200px;
 }
 .home-gallery.layout-editorial .home-gallery-card:first-child {
-  grid-row: span 2;
+  grid-row: auto;
 }
-.home-gallery.layout-editorial
-  .home-gallery-card:first-child
-  .home-gallery-media {
-  height: 100%;
-  min-height: clamp(440px, 58vw, 820px);
-  aspect-ratio: auto;
+.home-gallery.layout-editorial .home-gallery-media {
+  aspect-ratio: 4 / 3;
 }
 .home-gallery-card {
   display: block;
@@ -1680,15 +1677,6 @@ a.home-gallery-card:hover .home-gallery-image {
   .home-testimonials.cols-2,
   .home-testimonials.cols-3 {
     grid-template-columns: 1fr;
-  }
-  .home-gallery.layout-editorial .home-gallery-card:first-child {
-    grid-row: auto;
-  }
-  .home-gallery.layout-editorial
-    .home-gallery-card:first-child
-    .home-gallery-media {
-    min-height: 0;
-    aspect-ratio: 4 / 5;
   }
   .home-testimonial {
     min-height: 220px;

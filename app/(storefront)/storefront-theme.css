@@ -39,11 +39,6 @@
   padding-top: var(--sm-header-h);
 }
 
-/* Default link colour inside the storefront (Header/Footer override locally) */
-.storefront-root a {
-  color: inherit;
-}
-
 /* Shared "sticky note" highlight — reuse anywhere with class .wholesip-note */
 .wholesip-note {
   font-family: var(--font-outfit), sans-serif;
@@ -502,7 +497,11 @@
 .sm-card-overlay.storefront-root .shop-card-from {
   color: var(--sm-on-ink);
 }
-.sm-card-overlay.storefront-root .shop-card-cat,
+.sm-card-overlay.storefront-root .shop-card-cat {
+  color: var(--sm-ink);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--sm-surface) 92%, transparent);
+}
 .sm-card-overlay.storefront-root .shop-card-base {
   color: color-mix(in srgb, var(--sm-on-ink) 72%, transparent);
 }
