@@ -1,0 +1,16 @@
+{
+  // Turbopack rewrites .next on every edit, and here that directory is ~3.7 GB
+  // across ~9,500 files. VS Code excludes node_modules from watching by
+  // default but NOT .next, so without this the editor's file watcher and
+  // search index chase every compiled chunk the dev server emits.
+  "files.watcherExclude": {
+    "**/.next/**": true,
+    "**/node_modules/**": true,
+    "**/coverage/**": true
+  },
+  "search.exclude": {
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/coverage": true
+  }
+}
