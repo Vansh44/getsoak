@@ -99,7 +99,13 @@
 
 .newsletterForm {
   display: flex;
+  flex-direction: column;
   flex-shrink: 0;
+  gap: 8px;
+}
+
+.newsletterFields {
+  display: flex;
 }
 
 .newsletterInput {
@@ -135,6 +141,40 @@
 
 .newsletterBtn:hover {
   background: var(--sm-ink);
+}
+
+.newsletterBtn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.newsletterConsent {
+  display: flex;
+  max-width: 420px;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--sm-ink-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.newsletterConsent input {
+  margin-top: 2px;
+}
+
+.newsletterMessage {
+  min-height: 16px;
+  margin: 0;
+  color: var(--sm-ink-soft);
+  font-size: 12px;
+}
+
+.newsletterMessage[data-status="success"] {
+  color: var(--sm-success);
+}
+
+.newsletterMessage[data-status="error"] {
+  color: var(--sm-error);
 }
 
 /* ============================================
@@ -386,6 +426,10 @@
     width: 100%;
   }
 
+  .newsletterFields {
+    width: 100%;
+  }
+
   .newsletterInput {
     width: 100%;
   }
@@ -429,5 +473,67 @@
   .paymentRow {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+/* Phase 3 footer variants. Content toggles remain authoritative: variants
+   change composition and tone, never silently remove a merchant's blocks. */
+:global(.sm-footer-minimal) .footerMain {
+  border-top: 1px solid var(--sm-border);
+}
+:global(.sm-footer-minimal) .mainGrid {
+  grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(120px, 0.5fr));
+  gap: 28px;
+  padding-block: 36px;
+}
+:global(.sm-footer-minimal) .tagline {
+  max-width: 340px;
+}
+:global(.sm-footer-minimal) .newsletterBar,
+:global(.sm-footer-minimal) .trustBar {
+  border-bottom: 1px solid var(--sm-border);
+  background: transparent;
+}
+
+:global(.sm-footer-editorial) .footerMain,
+:global(.sm-footer-editorial) .newsletterBar,
+:global(.sm-footer-editorial) .trustBar {
+  background: var(--sm-ink);
+  color: var(--sm-on-ink);
+}
+:global(.sm-footer-editorial) .mainGrid {
+  grid-template-columns: minmax(280px, 1.7fr) repeat(3, minmax(130px, 0.55fr));
+  gap: clamp(32px, 5vw, 78px);
+  padding-block: clamp(64px, 8vw, 110px);
+}
+:global(.sm-footer-editorial) .brandNameText,
+:global(.sm-footer-editorial) .newsletterLabel,
+:global(.sm-footer-editorial) .columnTitle,
+:global(.sm-footer-editorial) .copyright {
+  color: var(--sm-on-ink);
+}
+:global(.sm-footer-editorial) .tagline,
+:global(.sm-footer-editorial) .newsletterSub,
+:global(.sm-footer-editorial) .newsletterConsent,
+:global(.sm-footer-editorial) .newsletterMessage,
+:global(.sm-footer-editorial) .linkList a,
+:global(.sm-footer-editorial) .contactLine,
+:global(.sm-footer-editorial) .legalLinks a {
+  color: color-mix(in srgb, var(--sm-on-ink) 70%, transparent);
+}
+:global(.sm-footer-editorial) .bottomSection {
+  border-top-color: color-mix(in srgb, var(--sm-on-ink) 18%, transparent);
+  background: var(--sm-ink);
+}
+@media (max-width: 1024px) {
+  :global(.sm-footer-minimal) .mainGrid,
+  :global(.sm-footer-editorial) .mainGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 600px) {
+  :global(.sm-footer-minimal) .mainGrid,
+  :global(.sm-footer-editorial) .mainGrid {
+    grid-template-columns: 1fr;
   }
 }

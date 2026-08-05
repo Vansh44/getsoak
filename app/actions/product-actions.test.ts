@@ -11,12 +11,8 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("next/server", () => ({ after: vi.fn() }));
-vi.mock("@/lib/site", () => ({
-  getStoreUrl: vi.fn(async () => "https://store-1.storemink.com"),
-}));
-vi.mock("@/lib/seo/search-engines", () => ({
-  pingIndexNow: vi.fn(),
-  submitSitemapToGoogle: vi.fn(),
+vi.mock("@/lib/seo/store-indexing", () => ({
+  notifyStoreContentPublished: vi.fn(),
 }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),
@@ -69,6 +65,7 @@ import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
 import { consumeAiQuota } from "@/lib/ai/quota";
 import { callGemini } from "@/lib/ai/gemini";
+import { after } from "next/server";
 
 const validForm = {
   name: "Almonds",
@@ -134,6 +131,9 @@ describe("product-actions", () => {
       });
       expect(dbHolder.current.calls.set[0].publishedAt).toBeTruthy();
       expect(dbHolder.current.calls.where).toHaveLength(1);
+      // Bulk publish used to be the only product publishing path that never
+      // launched the store or scheduled search-engine discovery.
+      expect(after).toHaveBeenCalled();
     });
 
     it("bulkToggleProductPublish unpublishes (clears published_at)", async () => {

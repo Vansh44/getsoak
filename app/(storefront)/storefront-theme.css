@@ -442,3 +442,74 @@
   border: 1.5px solid var(--sm-ink);
   padding: 7px 16px;
 }
+
+/* ---- Phase 3 product-card variants ------------------------------------- */
+.sm-card-framed.storefront-root .shop-card {
+  padding: 10px;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-card);
+  background: var(--sm-surface);
+  box-shadow: none;
+}
+.sm-card-framed.storefront-root .shop-card-img {
+  overflow: hidden;
+  border-radius: calc(var(--sm-radius-card) * 0.72);
+}
+.sm-card-framed.storefront-root .shop-card-body {
+  padding: 14px 4px 4px;
+}
+.sm-card-framed.storefront-root .shop-card:hover {
+  border-color: var(--sm-ink-faint);
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px rgba(var(--sm-shadow-rgb), 0.1);
+}
+
+.sm-card-overlay.storefront-root .shop-card {
+  position: relative;
+  min-height: clamp(330px, 34vw, 500px);
+  overflow: hidden;
+  border-radius: var(--sm-radius-card);
+  background: var(--sm-ink);
+}
+.sm-card-overlay.storefront-root .shop-card-img {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  border-radius: 0;
+}
+.sm-card-overlay.storefront-root .shop-card-img::after {
+  content: "";
+  position: absolute;
+  inset: 35% 0 0;
+  background: linear-gradient(
+    transparent,
+    color-mix(in srgb, var(--sm-ink) 86%, transparent)
+  );
+  pointer-events: none;
+}
+.sm-card-overlay.storefront-root .shop-card-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: inherit;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: clamp(20px, 3vw, 30px);
+}
+.sm-card-overlay.storefront-root .shop-card-name,
+.sm-card-overlay.storefront-root .shop-card-price,
+.sm-card-overlay.storefront-root .shop-card-sell,
+.sm-card-overlay.storefront-root .shop-card-from {
+  color: var(--sm-on-ink);
+}
+.sm-card-overlay.storefront-root .shop-card-cat,
+.sm-card-overlay.storefront-root .shop-card-base {
+  color: color-mix(in srgb, var(--sm-on-ink) 72%, transparent);
+}
+.sm-card-overlay.storefront-root .shop-card-off {
+  color: var(--sm-on-ink);
+  background: color-mix(in srgb, var(--sm-on-ink) 16%, transparent);
+}
+.sm-card-overlay.storefront-root .shop-card:hover .shop-card-img-el {
+  transform: scale(1.025);
+}

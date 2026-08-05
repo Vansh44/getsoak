@@ -639,3 +639,190 @@ a.card:hover {
 .invoiceBtn:hover {
   border-color: rgba(var(--sm-shadow-rgb), 0.32);
 }
+
+/* Cancel — roadmap Step 2. Quiet by default: it is a destructive action the
+   shopper should be able to find, not one the page pushes them toward. */
+.cancelRow {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sm-border, rgba(0, 0, 0, 0.08));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cancelBtn {
+  appearance: none;
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  background: transparent;
+  color: var(--sm-ink-soft, #555);
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 7px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.cancelBtn:hover:not(:disabled) {
+  color: var(--sm-error, #b3261e);
+  border-color: var(--sm-error, #b3261e);
+}
+
+.cancelBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cancelNote {
+  font-size: 0.8rem;
+  color: var(--sm-ink-faint, #777);
+  margin: 0;
+  flex: 1 1 180px;
+}
+
+/* Returns — roadmap Step 3. */
+.returnList {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.returnItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.88rem;
+}
+
+.returnMeta {
+  color: var(--sm-ink-faint, #777);
+}
+
+.returnNote {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--sm-ink-faint, #777);
+}
+
+.returnForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.returnLines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.returnLine {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+}
+
+.returnQty {
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 5px 8px;
+  font-size: 0.85rem;
+  background: var(--sm-surface, #fff);
+  color: inherit;
+}
+
+.returnQty:disabled {
+  opacity: 0.5;
+}
+
+.returnField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.85rem;
+}
+
+.returnField > span {
+  color: var(--sm-ink-soft, #555);
+  font-weight: 500;
+}
+
+.returnField select,
+.returnField textarea {
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  background: var(--sm-surface, #fff);
+  color: inherit;
+  resize: vertical;
+}
+
+.returnTotals {
+  border-top: 1px solid var(--sm-border, rgba(0, 0, 0, 0.08));
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+
+.returnTotals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.returnTotalRow {
+  font-weight: 600;
+  border-top: 1px solid var(--sm-border, rgba(0, 0, 0, 0.08));
+  padding-top: 8px;
+}
+
+.returnActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.returnSubmit {
+  appearance: none;
+  border: none;
+  background: var(--sm-ink, #111);
+  color: var(--sm-on-ink, #fff);
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 8px 18px;
+  font-size: 0.87rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.returnSubmit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.returnSwap {
+  margin-top: 6px;
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  background: var(--sm-surface, #fff);
+  color: inherit;
+  max-width: 100%;
+}

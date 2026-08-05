@@ -7,6 +7,7 @@ import { getPlatformRazorpayCreds } from "./provider";
 import { rzpCreatePlan, type RazorpayCreds } from "./razorpay";
 import { PLAN_META, type Plan } from "@/lib/plans";
 import { getPlanPricingLive } from "@/lib/plans/pricing";
+import { logError } from "@/lib/observability/logger";
 
 // Recurring-billing helpers: resolve the Razorpay Plan id for a (tier, period)
 // on the PLATFORM account, creating + caching it on first use so we never
@@ -84,19 +85,22 @@ export async function resolveRazorpayPlanId(
   if (!created) return null;
 
   // Cache best-effort; a lost race just recreates a (harmless) duplicate plan.
-  await withService((db) =>
-    db
-      .insert(razorpayPlans)
-      .values({ plan, period, amountPaise, rzpPlanId: created })
-      .onConflictDoUpdate({
-        target: [
-          razorpayPlans.plan,
-          razorpayPlans.period,
-          razorpayPlans.amountPaise,
-        ],
-        set: { rzpPlanId: created },
-      }),
-  ).catch((err) => console.error("resolveRazorpayPlanId (cache):", err));
+  await withService(
+    (db) =>
+      db
+        .insert(razorpayPlans)
+        .values({ plan, period, amountPaise, rzpPlanId: created })
+        .onConflictDoUpdate({
+          target: [
+            razorpayPlans.plan,
+            razorpayPlans.period,
+            razorpayPlans.amountPaise,
+          ],
+          set: { rzpPlanId: created },
+        }),
+    // Best-effort: a lost cache write costs a duplicate Razorpay plan, not a
+    // wrong charge — but it repeats on every checkout until someone sees it.
+  ).catch((err) => logError("billing.plan_cache", err, { plan, period }));
   return { rzpPlanId: created, amountPaise };
 }
 
@@ -112,7 +116,10 @@ async function createPlan(
     name: `StoreMink ${PLAN_META[plan].name} (${period})`,
   });
   if (!res.ok) {
-    console.error("resolveRazorpayPlanId (create):", res.error);
+    // ★ This is the end of the road for an upgrade: the caller returns null
+    // and the merchant is told the subscription couldn't start, with the
+    // gateway's actual reason living only here.
+    logError("billing.plan_create", res.error, { plan, period, amountPaise });
     return null;
   }
   return res.data.id;

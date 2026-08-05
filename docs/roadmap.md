@@ -2,12 +2,13 @@
 
 **The single ordered plan.** What ships next, in what order, and why that order.
 
-Two design docs feed this one and stay authoritative for HOW each piece works —
-`docs/pos-plan.md` (register, staff, devices, shifts) and
-`docs/inventory-fulfilment-roadmap.md` (locations, routing, reservations). They
-each carried their own phase list, which is how "POS Phase 5" and "Locations
-Phase G" ended up being the same work described twice. **This file is the
-sequence; those are the specifications.**
+Three design docs feed this one and stay authoritative for HOW each piece works —
+`docs/pos-plan.md` (register, staff, devices, shifts),
+`docs/inventory-fulfilment-roadmap.md` (locations, routing, reservations) and
+`docs/returns-exchanges-plan.md` (returns, exchanges, refunds — Steps 2–4). The
+first two each carried their own phase list, which is how "POS Phase 5" and
+"Locations Phase G" ended up being the same work described twice. **This file is
+the sequence; those are the specifications.**
 
 - **Acceptance tests:** `docs/pos-acceptance.md`
 - **Architecture:** `CODEBASE.md` §22 (POS), §23 (locations), §24 (notifications)
@@ -21,26 +22,26 @@ sequence; those are the specifications.**
 
 ## Status at a glance
 
-| #      | Step                                                                | State          |
-| ------ | ------------------------------------------------------------------- | -------------- |
-| —      | POS 0: locations, per-location inventory, plan gate                 | ✅ done        |
-| —      | POS 1: `/pos` shell, staff accounts, device authorization           | ✅ done        |
-| —      | POS 2: the register, GST, thermal receipt, catalog cache            | ✅ done        |
-| —      | POS 3: shifts & cash reconciliation                                 | ✅ done        |
-| —      | POS 4: inventory from the shop floor, transfers                     | ✅ done        |
-| —      | LOC A–C: capabilities, Locations section, scope, inventory selector | ✅ done        |
-| —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done        |
-| **1**  | **Finish pickup + close the gaps**                                  | ⏭ next        |
-| **2**  | **Refunds & cancellation** — the money-out path                     | ⏭ blocks 3, 4 |
-| **3**  | Returns (POS 5 = LOC G)                                             | ⏳             |
-| **4**  | Store credit & gift cards                                           | ⏳             |
-| **5**  | Metered extra-location billing (POS 7)                              | ⏳             |
-| **6**  | Channel stock policy (LOC H)                                        | ⏳             |
-| **7**  | Transfer lifecycle (LOC I)                                          | ⏳             |
-| **8**  | More routing strategies (LOC J)                                     | ⏳             |
-| **9**  | WhatsApp/SMS receipts (POS 6)                                       | ⏳             |
-| **10** | Offline outbox (POS 9)                                              | ⏳             |
-| **11** | Full omnichannel (POS 8 = LOC K)                                    | ⏳             |
+| #      | Step                                                                | State   |
+| ------ | ------------------------------------------------------------------- | ------- |
+| —      | POS 0: locations, per-location inventory, plan gate                 | ✅ done |
+| —      | POS 1: `/pos` shell, staff accounts, device authorization           | ✅ done |
+| —      | POS 2: the register, GST, thermal receipt, catalog cache            | ✅ done |
+| —      | POS 3: shifts & cash reconciliation                                 | ✅ done |
+| —      | POS 4: inventory from the shop floor, transfers                     | ✅ done |
+| —      | LOC A–C: capabilities, Locations section, scope, inventory selector | ✅ done |
+| —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done |
+| **1**  | **Finish pickup + close the gaps**                                  | ⏭ next |
+| **2**  | **Refunds & cancellation** — the money-out path                     | ✅ done |
+| **3**  | Returns, exchanges & BORIS                                          | ✅ done |
+| **4**  | Store credit ✅ — gift cards left                                   | ◐ part  |
+| **5**  | Metered extra-location billing (POS 7)                              | ⏳      |
+| **6**  | Channel stock policy (LOC H)                                        | ⏳      |
+| **7**  | Transfer lifecycle (LOC I)                                          | ⏳      |
+| **8**  | More routing strategies (LOC J)                                     | ⏳      |
+| **9**  | WhatsApp/SMS receipts (POS 6)                                       | ⏳      |
+| **10** | Offline outbox (POS 9)                                              | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                                    | ⏳      |
 
 ---
 
@@ -53,7 +54,9 @@ side of it; what's left is everywhere ELSE a collection order shows up.
 searchable store picker (merchant-typed postcode serviceability was built as
 F.1 and then **removed** — the shopper knows where they are and the merchant
 cannot), the billing address, pay-at-store, the configurable ready-by date, and
-real copy for the four pickup emails.
+real copy for the four pickup emails. `locations_10` also closes the new-store
+stock gap: an auto-created Main location now explicitly fulfils online orders,
+so seeded inventory contributes to storefront `online_stock` immediately.
 
 **Still open:**
 
@@ -74,68 +77,110 @@ real copy for the four pickup emails.
 
 **Done when:** the acceptance doc's Known gaps table loses those rows, and its
 section 8 has been run for real.
-section 8 has been run for real.
 
 ---
 
-## Step 2 — Refunds & cancellation ★ the unblocker
+## Step 2 — Refunds & cancellation ✅ DONE ★ the unblocker
 
-**Money only moves one way today.** A Razorpay order cancelled from the
-dashboard returns the stock, notifies the customer, and leaves the payment
-sitting there until the merchant remembers to refund it by hand in their own
-Razorpay dashboard. `order.refund_issued` has been registered in the events file
-and PENDING in the coverage guard since the notification spine was built.
+**Money now moves both ways, and it never moves on its own.** Implementation
+notes: `docs/returns-exchanges-plan.md` §9 (refunds) and §10 (cancellation).
+The three features that were waiting on this are unblocked.
 
-**Three separate features are already waiting on this**, which is the signal to
-build the capability rather than the features:
+**✅ Shipped:** `supabase/refunds_01_gateway.sql`, `rzpRefund` +
+`rzpFetchPaymentRefunds`, `lib/payments/refunds.ts` (pure, tested),
+`app/actions/refund-actions.ts`, `lib/payments/refund-reconcile.ts`
+(reconcile-on-read + a cron sweep), `orders.delivered_at`, the refund panel in
+the order drawer, `lib/orders/cancel.ts` (ONE implementation of the cancel
+side-effects, shared by both callers), `cancelMyOrder` + the storefront button,
+and the two `orders.*` settings.
 
-- pickup expiry currently cancels **without** refunding (shipped that way,
-  deliberately);
-- returns needs "refund to the original tender" before it can start;
-- the locked order-cancellation decisions include **automatic** Razorpay
-  refunds.
+**★ `PENDING` in `lib/notifications/coverage.test.ts` is now EMPTY** — every
+registry event has a real emitter. `order.cancellation_requested` was the last
+entry, and it fires when a shopper asks to cancel an order that has moved too
+far to stop.
 
-**Ships**
+**Shipped (detail)**
 
 - `rzpRefund` + `rzpFetchRefund` in `lib/payments/razorpay.ts` (plain fetch,
   the existing pattern, pure helpers tested).
-- A **`refunds` table**: order, amount, tender, gateway refund id, actor,
-  reason, status. A refund with no record is indistinguishable from a bug, and
-  this is the row a merchant will be asked about months later.
-- `refundOrder` — idempotent on the gateway refund id, partial-ready from day
-  one (schema takes a per-line amount even if v1 only refunds wholes), claiming
-  its state transition conditionally like every other exactly-once path here.
+- ~~A **`refunds` table**~~ — `pos_12_returns.sql` already shipped
+  `order_refunds`, precisely so this step needed no new table. It took only
+  additive columns, in their own file (`refunds_01_gateway.sql`) per §15b's
+  never-edit-an-applied-migration rule.
+- `refundOrder` — partial from day one, claiming its state transition
+  conditionally like every other exactly-once path here.
 - **Reconcile-on-read, not webhooks** — the §18 decision, unchanged. A refund
   can lag; asking Razorpay when someone looks is cheaper than a webhook
   endpoint to secure.
-- Customer-initiated cancellation, within a merchant-configurable window.
-- Emit `order.refund_issued`; drop it from `PENDING`.
+- `order.refund_issued` is emitted by the dashboard path as well as the till.
+  It was never in `PENDING` — `order.cancellation_requested` is, and stays
+  there until the cancellation half of this step lands.
 
-**Decisions to make before starting**
+**Decisions — made, in `docs/returns-exchanges-plan.md` §3**
 
-- Auto-refund on cancel, or refund as a separate merchant action? _(The locked
-  note says auto — worth re-confirming, since auto means money leaves without a
-  human looking at it.)_
-- Does pickup expiry now auto-refund? _(My instinct: yes once this exists —
-  that's why it was deferred rather than declined.)_
-- COD orders: nothing to refund. Confirm the UI says so rather than offering a
-  dead button.
+- **Auto-refund on cancel: NO**, and not as a setting either. Cancel _prompts_
+  to refund, pre-filled, one click. Money leaving with no human looking at it is
+  the same argument §22 makes for owner-only discounts.
+- **Pickup expiry: same** — it prompts, it does not pay out on a schedule.
+- **COD: not a dead button.** The merchant picks per refund from {store credit,
+  manual transfer (recorded), cash at counter}. No automated payout in v1 —
+  RazorpayX is a separate product most COD merchants don't have, and it drops in
+  later as one more `method` with no schema change. This is Shopify parity: on a
+  manual-payment order Shopify records the refund and the money moves offline.
+- **Idempotency: insert the `order_refunds` row FIRST**, `pending`, carrying our
+  own unique key — you cannot key on a gateway id you don't have yet, and a
+  timeout is indistinguishable from a failure. Reconcile-on-read resolves the
+  unknowns.
 
 **Watch for**
 
-- A refund must never exceed what was captured, and never double-refund.
-  Idempotency on the gateway id, not on our own state.
+- A refund must never exceed what was captured, and never double-refund. The
+  gateway id makes the RECORD idempotent, but it cannot make the CALL
+  idempotent — you don't have the id until the call returns, and a timeout
+  looks exactly like a failure. Hence the pending-row-first design above.
 - A refund does **not** imply a restock. A returned item may be damaged — that's
   Step 3's decision, and conflating them here would pre-empt it.
 
 ---
 
-## Step 3 — Returns _(POS 5 = LOC G)_
+## Step 3 — Returns _(POS 5 = LOC G)_ — spec: `docs/returns-exchanges-plan.md`
 
-**Ships:** `processReturn` (full and partial), refund to the original tender via
-Step 2, and a **restock decision per line** — sellable or damaged.
-`/pos/returns` at the till, plus return-in-store for online orders at locations
-carrying the `returns` capability.
+**In-store returns of in-store sales are DONE** (`pos_12_returns.sql`,
+`lib/pos/returns.ts`, `/pos/returns`). What remains is everything the customer
+and the merchant's own dashboard touch, plus **exchanges**, which the design doc
+adds to this step: an exchange is a return plus a new order, not a third entity.
+
+**✅ Also done** (returns-plan Step 2, see its §11): the twelve `returns.*`
+settings, `products.returnable` + `return_window_days`, `lib/returns/reasons.ts`
+(reason-driven fees) and `lib/returns/eligibility.ts`, the product-editor policy
+card, and Final-sale badges on both PDP layouts.
+
+**✅ Also done** (returns-plan Step 3, see its §12): the customer request flow
+on `/orders/[id]`, the dashboard review queue at `/dashboard/orders/returns`,
+approve/reject with a mandatory decline reason, and receive-and-restock.
+
+**✅ Also done** (returns-plan Step 4, see its §13): exchanges — per-line swap
+targets, replacement stock held from the moment it's requested, and the
+replacement order raised at receipt.
+
+**✅ Also done** (returns-plan Step 5, see its §14): BORIS — a store-scoped
+lookup at `/pos/returns`, the tender-locked refund at the counter, and the
+`returns` location capability finally read.
+
+**✅ Also done** (returns-plan Step 6, see its §15): GST credit notes — a
+trigger-allocated per-store serial issued on settlement, and a printable
+document that names the invoice it reverses and splits the tax the way it was
+charged.
+
+**Deliberately deferred:** photo upload, per-line damaged marking at receipt,
+advance exchanges, cross-product swaps, and enforcing the return window at the
+till (invariant 1 — the merchant is standing right there).
+
+**Three gaps in the existing code this step closes:** `getReturnableSale`
+filters on `orders.location_id = operator's location`, so it can never find an
+online order; `orders` has no `delivered_at`, so a window measured from
+`created_at` can expire before the parcel lands; `products` has no returnability
+flag.
 
 **Introduces the first extra inventory bucket, `damaged`** — added here because
 this is the first workflow that moves stock into it, not before.
@@ -153,6 +198,16 @@ schema has to keep them apart.
 
 Store credit is the natural refund alternative once Step 3 exists, and the
 cheaper one for the merchant. Gift cards share the ledger shape.
+
+**✅ Store credit is done** (returns-plan Step 7, see its §16): the balance +
+append-only ledger, issued from a refund, spent at checkout, reinstated on
+cancel. `orders.total` stays the goods value — credit is a payment, not a
+discount — and the unpayable-remainder gap below the gateway minimum is
+handled.
+
+**Still ships:** gift cards. They share this ledger shape, which is why
+`customer_credit_ledger.kind` is an enum rather than a boolean; what they add
+is a redeemable code and a purchase flow.
 
 **Watch for:** a balance is money. Append-only ledger, atomic spend via a
 conditional UPDATE — the `ai_credit_ledger` pattern, which already solves this

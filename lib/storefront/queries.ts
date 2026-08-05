@@ -66,6 +66,8 @@ export interface ProductCardRow {
   stock: number;
   low_stock_threshold: number | null;
   allow_backorder: boolean;
+  /** FALSE = final sale. Said BEFORE the sale, not discovered after it. */
+  returnable: boolean;
   /**
    * Last change to something a VISITOR sees — not stock. The sitemap's lastmod
    * source; see supabase/seo_01_product_content_timestamp.sql.
@@ -130,6 +132,7 @@ export const getPublishedProducts = unstable_cache(
             sort_order: products.sortOrder,
             card_color: products.cardColor,
             track_inventory: products.trackInventory,
+            returnable: products.returnable,
             stock: products.onlineStock,
             low_stock_threshold: products.lowStockThreshold,
             allow_backorder: products.allowBackorder,

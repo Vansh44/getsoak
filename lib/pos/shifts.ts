@@ -69,6 +69,8 @@ export interface ShiftTotals {
   paidIn: number;
   payouts: number;
   drops: number;
+  /** Cash handed back on returns — money OUT of this drawer. */
+  cashRefunds: number;
   /** What the drawer SHOULD hold right now. */
   expectedCash: number;
 }
@@ -77,6 +79,9 @@ export function shiftTotals(input: {
   openingFloat: number;
   payments: CashPaymentRow[];
   movements: MovementRow[];
+  /** Cash refunds paid out of this drawer (pos_12). Omitted = none, so a
+   *  store with no returns behaves exactly as before. */
+  cashRefunds?: number;
 }): ShiftTotals {
   const openingFloat = round2(input.openingFloat || 0);
   const cashSales = netCashFromSales(input.payments);
@@ -93,13 +98,21 @@ export function shiftTotals(input: {
     else if (m.type === "drop") drops += amt;
   }
 
+  // ★ A cash refund leaves the drawer. Without this the count comes up SHORT
+  // by exactly the refunds taken that day — and a short drawer gets blamed on
+  // a cashier, which is the same failure the double-counted change caused.
+  const cashRefunds = round2(Math.abs(input.cashRefunds || 0));
+
   return {
     openingFloat,
     cashSales,
     paidIn: round2(paidIn),
     payouts: round2(payouts),
     drops: round2(drops),
-    expectedCash: round2(openingFloat + cashSales + paidIn - payouts - drops),
+    cashRefunds,
+    expectedCash: round2(
+      openingFloat + cashSales + paidIn - payouts - drops - cashRefunds,
+    ),
   };
 }
 

@@ -21,6 +21,12 @@ import { computeTax } from "@/lib/billing/tax";
 import { effectivePlan, limitsFor } from "@/lib/plans";
 import { getStoreGateway } from "@/lib/payments/provider";
 import {
+  getCreditBalance,
+  spendCredit,
+  reinstateCreditForOrder,
+} from "@/lib/credit/store-credit";
+import { creditToApply } from "@/lib/credit/apply";
+import {
   capturedPayment,
   rzpCreateOrder,
   rzpFetchOrderPayments,
@@ -517,6 +523,10 @@ export interface CheckoutConfig {
   keyId: string | null;
   /** Display name for the payment modal header. */
   storeName: string;
+  /** Store credit this shopper can spend here, 0 when signed out or none.
+   *  DISPLAY ONLY — placeOrder recomputes and deducts it atomically, so a
+   *  stale figure on screen can never overspend the balance. */
+  storeCredit: number;
 }
 
 /** What payment methods this store's checkout offers. Server-computed; the
@@ -525,10 +535,16 @@ export interface CheckoutConfig {
 export async function getCheckoutConfig(): Promise<CheckoutConfig> {
   const store = await getCurrentStore();
   const creds = await onlineGateway(store.id);
+  // Store credit the signed-in shopper can spend here. Display only — the
+  // amount actually applied is recomputed and deducted atomically in
+  // placeOrder, so a stale figure on screen can't overspend a balance.
+  const user = await getServerUser();
+  const storeCredit = user ? await getCreditBalance(store.id, user.id) : 0;
   return {
     onlinePayments: !!creds,
     keyId: creds?.keyId ?? null,
     storeName: store.name,
+    storeCredit,
   };
 }
 
@@ -950,6 +966,11 @@ export async function placeOrder(
     subtotal - discount + shipping + (billing.pricesIncludeTax ? 0 : tax),
   );
 
+  // What this shopper has to spend here. Read now so the gateway amount below
+  // is computed once; the actual deduction is atomic and happens after the
+  // order row exists.
+  const creditBalance = await getCreditBalance(storeId, user.id);
+
   // Store only trimmed, length-capped values (the fields render in the admin
   // dashboard; React escapes output, but we keep the stored data clean too).
   const shippingAddress = {
@@ -1191,6 +1212,49 @@ export async function placeOrder(
     ).catch((err) => console.error("order rollback delete:", errMsg(err)));
   };
 
+  // ── Store credit ─────────────────────────────────────────────────────────
+  // Spent AFTER the order row exists, so the ledger entry refs a real order —
+  // which is also what makes the reinstate exactly-once.
+  //
+  // ★ `orders.total` is NOT reduced. Credit is a PAYMENT, not a discount: the
+  // invoice must still show what the goods cost and GST is computed on that,
+  // so the amount settled with credit is recorded separately and only the
+  // REMAINDER is charged to the gateway.
+  //
+  // Failing to spend is never fatal — the customer simply pays the full amount
+  // by other means. Refusing a sale because a balance moved would be the
+  // "never refuse a sale over an optional feature" rule broken (invariant 6).
+  let creditApplied = 0;
+  const releaseCredit = async () => {
+    if (creditApplied > 0) await reinstateCreditForOrder(storeId, order.id);
+  };
+  if (creditBalance > 0) {
+    const split = creditToApply({
+      orderTotal: total,
+      balance: creditBalance,
+      // COD and pay-at-store have no floor; only the gateway does.
+      gatewayMinimum: paymentMethod === "razorpay" ? undefined : 0,
+    });
+    if (split.applied > 0) {
+      const spent = await spendCredit({
+        storeId,
+        customerId: user.id,
+        amount: split.applied,
+        orderId: order.id,
+        note: `Order ${order.id}`,
+      });
+      if (spent) {
+        creditApplied = split.applied;
+        await withService((db) =>
+          db
+            .update(orders)
+            .set({ storeCreditUsed: creditApplied })
+            .where(eq(orders.id, order.id)),
+        ).catch((err) => console.error("credit stamp:", errMsg(err)));
+      }
+    }
+  }
+
   for (const item of validItems) {
     let reserved: boolean | null | undefined;
     let reserveFailed = false;
@@ -1404,13 +1468,28 @@ export async function placeOrder(
   //    confirmOnlinePayment verifies the HMAC (or a reconcile path finds the
   //    captured payment); the expire-pending-payments reaper cancels + restocks
   //    it if no payment ever lands.
-  if (paymentMethod === "razorpay" && gatewayCreds) {
-    const amountPaise = Math.round(total * 100);
+  // ★ CREDIT COVERED THE WHOLE THING — there is nothing to charge.
+  // Without this the gateway would be asked for ₹0 (which it refuses, minimum
+  // ₹1) and a COD order would tell the courier to collect nothing. The order
+  // is already paid, by the balance.
+  if (creditApplied > 0 && total - creditApplied <= 0) {
+    await withService((db) =>
+      db
+        .update(orders)
+        .set({ paymentMethod: "store_credit", paymentStatus: "paid" })
+        .where(eq(orders.id, order.id)),
+    ).catch((err) => console.error("credit-paid stamp:", errMsg(err)));
+  } else if (paymentMethod === "razorpay" && gatewayCreds) {
+    // ★ Charge what is LEFT after credit, not the order total. `creditToApply`
+    // guarantees this is either 0 or at least the gateway minimum, so it can
+    // never be an amount Razorpay refuses.
+    const amountPaise = Math.round((total - creditApplied) * 100);
     const rollback = async () => {
       await releaseHolds();
       await releaseStock();
       await deleteOrder();
       await releaseCoupon();
+      await releaseCredit();
     };
 
     const rzpRes = await rzpCreateOrder(gatewayCreds, {

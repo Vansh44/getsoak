@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { storePaymentProviders } from "@/drizzle/schema";
 import { decryptSecret } from "./crypto";
+import { logError } from "@/lib/observability/logger";
 import type { RazorpayCreds } from "./razorpay";
 
 // Loaders for payment credentials. Two entirely separate accounts:
@@ -44,7 +45,12 @@ export async function getStoreGateway(
     );
     data = rows[0];
   } catch (err) {
-    console.error("getStoreGateway:", err instanceof Error ? err.message : err);
+    // ★ Structured, not console.error. Both failures here silently revert a
+    // store to COD — the merchant sees online payments stop working with no
+    // error anywhere — so they are exactly what should reach Cloud Error
+    // Reporting. logError normalises a non-Error itself, so the raw value goes
+    // straight in.
+    logError("payments.gateway_load", err, { storeId });
     return null;
   }
   if (!data) return null;
@@ -56,13 +62,11 @@ export async function getStoreGateway(
       },
       enabled: !!data.enabled,
     };
-  } catch (e) {
+  } catch (err) {
     // Wrong/rotated PAYMENT_CRED_KEY or corrupt row — treat as not connected
-    // rather than crashing checkout.
-    console.error(
-      "getStoreGateway (decrypt):",
-      e instanceof Error ? e.message : e,
-    );
+    // rather than crashing checkout. This is the one an operator most needs
+    // alerting on: nothing else in the system will ever mention it.
+    logError("payments.gateway_decrypt", err, { storeId });
     return null;
   }
 }

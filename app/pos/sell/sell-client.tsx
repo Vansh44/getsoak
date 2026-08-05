@@ -28,6 +28,7 @@ import {
   LayoutGrid,
   Banknote,
   Boxes,
+  Receipt,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -507,6 +508,17 @@ export function SellClient({
               <span className="hidden sm:inline">Edit layout</span>
             </button>
           )}
+          {/* Reachable mid-queue, not just from the home screen: the customer
+              asking for their bill again is standing at the counter now. Any
+              operator who can sell can reprint. */}
+          <Link
+            href="/pos/sales"
+            title="Find a sale and reprint its receipt"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+          >
+            <Receipt className="h-4 w-4" strokeWidth={2} />
+            <span className="hidden sm:inline">Sales</span>
+          </Link>
           {canEditLayout && (
             <Link
               href="/pos/inventory"

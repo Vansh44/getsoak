@@ -1,9 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   indexNowPayload,
   googleSitemapEndpoint,
   INDEXNOW_KEY,
+  pingIndexNow,
 } from "./search-engines";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("indexNowPayload", () => {
   it("declares host + keyLocation and carries the urlList", () => {
@@ -16,6 +21,44 @@ describe("indexNowPayload", () => {
       keyLocation: `https://acme.storemink.com/${INDEXNOW_KEY}.txt`,
       urlList: ["https://acme.storemink.com/shop/tomatoes"],
     });
+  });
+});
+
+describe("pingIndexNow", () => {
+  it("submits one payload per host instead of dropping later hosts", async () => {
+    const fetchMock = vi.fn(
+      async (...args: [string | URL | Request, RequestInit?]) => {
+        void args;
+        return new Response(null, { status: 200 });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await pingIndexNow([
+      "https://acme.storemink.com/shop/a",
+      "https://acme.storemink.com/shop/b",
+      "https://other.example/blogs/c",
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const payloads = fetchMock.mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body)),
+    );
+    expect(payloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          host: "acme.storemink.com",
+          urlList: [
+            "https://acme.storemink.com/shop/a",
+            "https://acme.storemink.com/shop/b",
+          ],
+        }),
+        expect.objectContaining({
+          host: "other.example",
+          urlList: ["https://other.example/blogs/c"],
+        }),
+      ]),
+    );
   });
 });
 

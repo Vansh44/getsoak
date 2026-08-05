@@ -29,7 +29,11 @@ import { SEARCH_INDEXABLE } from "@/lib/store/host";
 export const INDEXNOW_KEY =
   process.env.INDEXNOW_KEY ?? "3b7d8ad31a67d0ae436d04d13a099b6c";
 
-const TIMEOUT_MS = 3000;
+const TIMEOUT_MS = 5000;
+
+export type SearchEngineResult =
+  | { ok: true; status: number }
+  | { ok: false; status?: number; error: string; skipped?: boolean };
 
 async function fetchWithTimeout(
   url: string,
@@ -63,23 +67,42 @@ export function indexNowPayload(host: string, urls: string[]) {
 // preview / dev hosts aren't meant to be indexed), so it never pings with
 // non-production URLs; set INDEXNOW_FORCE=1 to override for local testing.
 export async function pingIndexNow(urls: string[]): Promise<void> {
-  const https = urls.filter((u) => u.startsWith("https://"));
+  const https = [...new Set(urls.filter((u) => u.startsWith("https://")))];
   if (!https.length) return;
   if (!SEARCH_INDEXABLE && !process.env.INDEXNOW_FORCE) {
     return;
   }
-  // One request per host (IndexNow requires a single host per submission).
-  const host = new URL(https[0]).host;
-  const sameHost = https.filter((u) => new URL(u).host === host);
-  try {
-    await fetchWithTimeout("https://api.indexnow.org/indexnow", {
-      method: "POST",
-      headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify(indexNowPayload(host, sameHost)),
-    });
-  } catch (err) {
-    console.error("pingIndexNow failed:", (err as Error).message);
+  // IndexNow accepts URLs for exactly one host per payload. Callers normally
+  // pass one store, but grouping here prevents a future batch/reconciliation
+  // caller from silently dropping every host after the first one.
+  const byHost = new Map<string, string[]>();
+  for (const url of https) {
+    try {
+      const host = new URL(url).host;
+      byHost.set(host, [...(byHost.get(host) ?? []), url]);
+    } catch {
+      // Invalid URLs are ignored; one malformed entry must not drop the batch.
+    }
   }
+  await Promise.allSettled(
+    [...byHost].map(async ([host, hostUrls]) => {
+      try {
+        const res = await fetchWithTimeout(
+          "https://api.indexnow.org/indexnow",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify(indexNowPayload(host, hostUrls)),
+          },
+        );
+        if (!res.ok) {
+          logWarn("pingIndexNow rejected", { host, status: res.status });
+        }
+      } catch (err) {
+        logError("pingIndexNow failed", err, { host });
+      }
+    }),
+  );
 }
 
 // ── Google Search Console ────────────────────────────────────────────────────
@@ -121,7 +144,14 @@ export function googleSitemapEndpoint(
   )}/sitemaps/${encodeURIComponent(sitemapUrl)}`;
 }
 
-const WEBMASTERS_SCOPE = "https://www.googleapis.com/auth/webmasters";
+export const WEBMASTERS_SCOPE = "https://www.googleapis.com/auth/webmasters";
+export const SITE_VERIFICATION_SCOPE =
+  "https://www.googleapis.com/auth/siteverification";
+
+const googleTokenCache = new Map<
+  string,
+  { token: string; expiresAt: number }
+>();
 
 // Mint a Search Console access token. Two paths:
 //   • creds present → JWT-bearer grant (RS256) from that service-account key
@@ -130,15 +160,28 @@ const WEBMASTERS_SCOPE = "https://www.googleapis.com/auth/webmasters";
 //     runtime service account (no key to store; grant it access to the property
 //     in Search Console). Uses google-auth-library, already a dependency (Vertex).
 // Returns null on any failure.
-async function googleAccessToken(
-  creds: GoogleCreds | null,
+export async function googleAccessToken(
+  scopes: readonly string[] = [WEBMASTERS_SCOPE],
 ): Promise<string | null> {
+  const scope = [...new Set(scopes)].sort().join(" ");
+  const cached = googleTokenCache.get(scope);
+  if (cached && cached.expiresAt > Date.now()) return cached.token;
+
+  const creds = loadGoogleCreds();
   if (!creds) {
     try {
       const { GoogleAuth } = await import("google-auth-library");
-      const auth = new GoogleAuth({ scopes: WEBMASTERS_SCOPE });
+      const auth = new GoogleAuth({ scopes: scope.split(" ") });
       const client = await auth.getClient();
       const { token } = await client.getAccessToken();
+      if (token) {
+        // Access tokens normally live for an hour. Refresh five minutes early;
+        // the exact expiry is not exposed consistently by all ADC clients.
+        googleTokenCache.set(scope, {
+          token,
+          expiresAt: Date.now() + 55 * 60 * 1000,
+        });
+      }
       return token ?? null;
     } catch (err) {
       console.error("googleAccessToken (ADC) failed:", (err as Error).message);
@@ -151,7 +194,7 @@ async function googleAccessToken(
     Buffer.from(JSON.stringify(o)).toString("base64url");
   const unsigned = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({
     iss: creds.client_email,
-    scope: WEBMASTERS_SCOPE,
+    scope,
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -173,15 +216,27 @@ async function googleAccessToken(
   });
   if (!res.ok) return null;
   const data = (await res.json()) as { access_token?: string };
+  if (data.access_token) {
+    googleTokenCache.set(scope, {
+      token: data.access_token,
+      expiresAt: Date.now() + 55 * 60 * 1000,
+    });
+  }
   return data.access_token ?? null;
 }
 
 // Submit a store's sitemap to Google Search Console. Dormant (no-op) until
 // GOOGLE_SEARCH_CONSOLE_PROPERTY is set (auth is then ADC on Cloud Run, or an
 // explicit key via GOOGLE_SEARCH_CONSOLE_CREDENTIALS). Best-effort, never throws.
-export async function submitSitemapToGoogle(sitemapUrl: string): Promise<void> {
-  if (!SEARCH_INDEXABLE) return;
-  const property = process.env.GOOGLE_SEARCH_CONSOLE_PROPERTY;
+export async function submitSitemapToGoogle(
+  sitemapUrl: string,
+  propertyOverride?: string,
+): Promise<SearchEngineResult> {
+  if (!SEARCH_INDEXABLE) {
+    return { ok: false, error: "search indexing disabled", skipped: true };
+  }
+  const property =
+    propertyOverride ?? process.env.GOOGLE_SEARCH_CONSOLE_PROPERTY;
   // This is the ONLY Google-facing notification in the codebase, and it used to
   // `return` here in silence. A prod deploy that lost the substitution, or a
   // service account never granted access to the property, therefore looked
@@ -192,16 +247,16 @@ export async function submitSitemapToGoogle(sitemapUrl: string): Promise<void> {
       sitemapUrl,
       hint: "set GOOGLE_SEARCH_CONSOLE_PROPERTY (e.g. sc-domain:storemink.com)",
     });
-    return;
+    return { ok: false, error: "no Search Console property", skipped: true };
   }
   try {
-    const token = await googleAccessToken(loadGoogleCreds());
+    const token = await googleAccessToken();
     if (!token) {
       logWarn("submitSitemapToGoogle skipped: no access token", {
         sitemapUrl,
         property,
       });
-      return;
+      return { ok: false, error: "no Google access token", skipped: true };
     }
     const res = await fetchWithTimeout(
       googleSitemapEndpoint(property, sitemapUrl),
@@ -216,10 +271,171 @@ export async function submitSitemapToGoogle(sitemapUrl: string): Promise<void> {
         status: res.status,
         body: await res.text().catch(() => ""),
       });
-      return;
+      return {
+        ok: false,
+        status: res.status,
+        error: `Search Console rejected sitemap (${res.status})`,
+      };
     }
     logInfo("submitSitemapToGoogle ok", { sitemapUrl, property });
+    return { ok: true, status: res.status };
   } catch (err) {
     logError("submitSitemapToGoogle failed", err, { sitemapUrl, property });
+    return {
+      ok: false,
+      error:
+        err instanceof Error ? err.message : "Google sitemap submit failed",
+    };
+  }
+}
+
+/** Add a URL-prefix property to the authenticated account after ownership has
+ * been established through the Site Verification API. */
+export async function addGoogleSearchConsoleSite(
+  siteUrl: string,
+): Promise<SearchEngineResult> {
+  if (!SEARCH_INDEXABLE) {
+    return { ok: false, error: "search indexing disabled", skipped: true };
+  }
+  try {
+    const token = await googleAccessToken();
+    if (!token) return { ok: false, error: "no Google access token" };
+    const res = await fetchWithTimeout(
+      `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}`,
+      { method: "PUT", headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      logError("addGoogleSearchConsoleSite rejected", undefined, {
+        siteUrl,
+        status: res.status,
+        body,
+      });
+      return {
+        ok: false,
+        status: res.status,
+        error: `Search Console rejected property (${res.status})`,
+      };
+    }
+    return { ok: true, status: res.status };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Google property add failed",
+    };
+  }
+}
+
+export async function requestGoogleSiteVerificationToken(
+  siteUrl: string,
+): Promise<{ result: SearchEngineResult; token?: string }> {
+  if (!SEARCH_INDEXABLE) {
+    return {
+      result: { ok: false, error: "search indexing disabled", skipped: true },
+    };
+  }
+  try {
+    const token = await googleAccessToken([
+      WEBMASTERS_SCOPE,
+      SITE_VERIFICATION_SCOPE,
+    ]);
+    if (!token) {
+      return { result: { ok: false, error: "no Google access token" } };
+    }
+    const res = await fetchWithTimeout(
+      "https://www.googleapis.com/siteVerification/v1/token",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          site: { type: "SITE", identifier: siteUrl },
+          verificationMethod: "META",
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      logError("requestGoogleSiteVerificationToken rejected", undefined, {
+        siteUrl,
+        status: res.status,
+        body,
+      });
+      return {
+        result: {
+          ok: false,
+          status: res.status,
+          error: `Site Verification token rejected (${res.status})`,
+        },
+      };
+    }
+    const data = (await res.json()) as { token?: string };
+    if (!data.token) {
+      return {
+        result: { ok: false, error: "Site Verification returned no token" },
+      };
+    }
+    return { result: { ok: true, status: res.status }, token: data.token };
+  } catch (err) {
+    return {
+      result: {
+        ok: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Google verification token failed",
+      },
+    };
+  }
+}
+
+/** Ask Google to verify the META token currently served on siteUrl. */
+export async function verifyGoogleSite(
+  siteUrl: string,
+): Promise<SearchEngineResult> {
+  if (!SEARCH_INDEXABLE) {
+    return { ok: false, error: "search indexing disabled", skipped: true };
+  }
+  try {
+    const token = await googleAccessToken([
+      WEBMASTERS_SCOPE,
+      SITE_VERIFICATION_SCOPE,
+    ]);
+    if (!token) return { ok: false, error: "no Google access token" };
+    const res = await fetchWithTimeout(
+      "https://www.googleapis.com/siteVerification/v1/webResource?verificationMethod=META",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          site: { type: "SITE", identifier: siteUrl },
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      logError("verifyGoogleSite rejected", undefined, {
+        siteUrl,
+        status: res.status,
+        body,
+      });
+      return {
+        ok: false,
+        status: res.status,
+        error: `Site Verification rejected token (${res.status})`,
+      };
+    }
+    return { ok: true, status: res.status };
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error ? err.message : "Google site verification failed",
+    };
   }
 }

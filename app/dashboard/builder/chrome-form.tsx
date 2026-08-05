@@ -338,6 +338,21 @@ export function FooterForm({
                 }
               />
             </label>
+            <label className="sm-b-field">
+              <span>Consent text</span>
+              <input
+                className="sm-b-input"
+                value={f.newsletter.consentText}
+                onChange={(e) =>
+                  patch({
+                    newsletter: {
+                      ...f.newsletter,
+                      consentText: e.target.value,
+                    },
+                  })
+                }
+              />
+            </label>
           </>
         )}
       </Group>
@@ -395,10 +410,21 @@ export interface BrandAppearance {
 export function BrandForm({
   brand,
   onChange,
+  chrome,
+  onChromeChange,
 }: {
   brand: BrandAppearance;
   onChange: (next: BrandAppearance) => void;
+  chrome: StoreChrome;
+  onChromeChange: (next: StoreChrome) => void;
 }) {
+  const appearance = chrome.appearance;
+  const patchAppearance = (patch: Partial<typeof appearance>) =>
+    onChromeChange({
+      ...chrome,
+      appearance: { ...appearance, ...patch },
+    });
+
   return (
     <>
       <Group title="Colour" hint="Used for buttons, links and accents.">
@@ -421,6 +447,101 @@ export function BrandForm({
             aria-label="Primary colour hex"
           />
         </div>
+      </Group>
+
+      <Group
+        title="Storefront layout"
+        hint="Use the theme default, or override individual surfaces. Changes publish with the website."
+      >
+        <label className="sm-b-field">
+          <span>Header</span>
+          <select
+            className="sm-b-input"
+            value={appearance.header}
+            onChange={(e) =>
+              patchAppearance({
+                header: e.target.value as typeof appearance.header,
+              })
+            }
+          >
+            <option value="theme">Theme default</option>
+            <option value="classic">Classic left logo</option>
+            <option value="market">Market search bar</option>
+            <option value="centered">Centered logo</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </label>
+        <label className="sm-b-field">
+          <span>Product cards</span>
+          <select
+            className="sm-b-input"
+            value={appearance.card}
+            onChange={(e) =>
+              patchAppearance({
+                card: e.target.value as typeof appearance.card,
+              })
+            }
+          >
+            <option value="theme">Theme default</option>
+            <option value="classic">Classic</option>
+            <option value="quick_add">Classic with quick add</option>
+            <option value="overlay">Editorial overlay</option>
+            <option value="framed">Framed</option>
+            <option value="grocery">Grocery</option>
+          </select>
+        </label>
+        <label className="sm-b-field">
+          <span>Product page</span>
+          <select
+            className="sm-b-input"
+            value={appearance.productDetail}
+            onChange={(e) =>
+              patchAppearance({
+                productDetail: e.target
+                  .value as typeof appearance.productDetail,
+              })
+            }
+          >
+            <option value="theme">Theme default</option>
+            <option value="classic">Classic</option>
+            <option value="editorial">Editorial</option>
+            <option value="grocery">Grocery</option>
+          </select>
+        </label>
+        <label className="sm-b-field">
+          <span>Cart</span>
+          <select
+            className="sm-b-input"
+            value={appearance.cart}
+            onChange={(e) =>
+              patchAppearance({
+                cart: e.target.value as typeof appearance.cart,
+              })
+            }
+          >
+            <option value="theme">Theme default</option>
+            <option value="classic">Classic</option>
+            <option value="compact">Compact</option>
+            <option value="grocery">Grocery</option>
+          </select>
+        </label>
+        <label className="sm-b-field">
+          <span>Footer</span>
+          <select
+            className="sm-b-input"
+            value={appearance.footer}
+            onChange={(e) =>
+              patchAppearance({
+                footer: e.target.value as typeof appearance.footer,
+              })
+            }
+          >
+            <option value="theme">Theme default</option>
+            <option value="rich">Rich columns</option>
+            <option value="editorial">Editorial</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </label>
       </Group>
 
       <Group title="Logo" defaultOpen={false}>

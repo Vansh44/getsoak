@@ -5,7 +5,12 @@
 // getStoreUrl() returns the CURRENT request's store canonical origin — use it
 // for per-store SEO/canonical.
 import { ROOT_DOMAIN } from "@/lib/store/host";
-import { getCurrentStore, type Store } from "@/lib/store/resolve";
+import {
+  getCurrentStore,
+  lookupStoreById,
+  type Store,
+} from "@/lib/store/resolve";
+import { PLAN_LIMITS, effectivePlan } from "@/lib/plans";
 
 // Defined in lib/store/host.ts (pure, no DB imports) and re-exported here so
 // this stays the one place most code looks for platform origins.
@@ -14,6 +19,9 @@ export { PLATFORM_URL } from "@/lib/store/host";
 // Canonical origin of the help centre (help.{root}). Used for help-article
 // canonicals, OG urls, JSON-LD and the help branch of sitemap.ts/robots.ts.
 export const HELP_URL = `https://help.${ROOT_DOMAIN}`;
+
+// Canonical origin of the public theme discovery catalog.
+export const THEMES_URL = `https://themes.${ROOT_DOMAIN}`;
 
 /**
  * The store's PUBLIC canonical origin — its custom domain **only once that
@@ -35,11 +43,19 @@ export const HELP_URL = `https://help.${ROOT_DOMAIN}`;
  * robots.ts / sitemap.ts can share exactly one definition.
  */
 export function storeOrigin(
-  store: Pick<Store, "slug" | "custom_domain" | "settings">,
+  store: Pick<
+    Store,
+    "slug" | "custom_domain" | "settings" | "plan" | "plan_expires_at"
+  >,
 ): string {
   const verified = store.settings?.custom_domain_verified === true;
+  // Serving and canonical selection must share the entitlement gate. An
+  // expired timed plan is no longer allowed on its custom domain in
+  // lookupStoreByHost(); continuing to publish that dead host in canonical,
+  // robots and sitemap metadata would deindex the still-working subdomain.
+  const entitled = PLAN_LIMITS[effectivePlan(store)].customDomain;
   const host =
-    verified && store.custom_domain
+    verified && entitled && store.custom_domain
       ? store.custom_domain
       : `${store.slug}.${ROOT_DOMAIN}`;
   return `https://${host}`;
@@ -48,4 +64,14 @@ export function storeOrigin(
 // Canonical origin of the current request's store.
 export async function getStoreUrl(): Promise<string> {
   return storeOrigin(await getCurrentStore());
+}
+
+/** Canonical origin for a known store id. Server actions that can run from the
+ * platform operator host must use this instead of deriving tenancy from the
+ * request Host header. */
+export async function getStoreOriginById(
+  storeId: string,
+): Promise<string | null> {
+  const store = await lookupStoreById(storeId);
+  return store ? storeOrigin(store) : null;
 }

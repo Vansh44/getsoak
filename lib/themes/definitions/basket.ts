@@ -1,4 +1,4 @@
-import type { ThemeDefinition } from "../types";
+import type { ThemeDefinition, ThemePreset } from "../types";
 import { THEME_META } from "../meta";
 
 // ---------------------------------------------------------------------------
@@ -10,9 +10,7 @@ import { THEME_META } from "../meta";
 
 const img = (name: string) => `/themes/basket/${name}.webp`;
 
-export const basket: ThemeDefinition = {
-  ...THEME_META.find((t) => t.id === "basket")!,
-
+const preset: ThemePreset = {
   brand: {
     primaryColor: "#ef5a2a",
     tagline: "Fresh groceries, delivered fast",
@@ -630,4 +628,9 @@ export const basket: ThemeDefinition = {
       },
     ],
   },
+};
+
+export const basket: ThemeDefinition = {
+  ...THEME_META.find((t) => t.id === "basket")!,
+  preset,
 };

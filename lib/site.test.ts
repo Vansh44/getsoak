@@ -4,11 +4,19 @@ import { describe, it, expect, vi } from "vitest";
 // this stays a pure unit test of storeOrigin().
 vi.mock("@/lib/store/resolve", () => ({
   getCurrentStore: vi.fn(),
+  lookupStoreById: vi.fn(),
 }));
 
-import { storeOrigin } from "./site";
+import { lookupStoreById } from "@/lib/store/resolve";
+import { getStoreOriginById, storeOrigin } from "./site";
 
-const base = { slug: "acme", custom_domain: null, settings: {} };
+const base = {
+  slug: "acme",
+  custom_domain: null,
+  settings: {},
+  plan: "pro",
+  plan_expires_at: null,
+};
 
 describe("storeOrigin", () => {
   it("uses the store subdomain when there is no custom domain", () => {
@@ -48,6 +56,17 @@ describe("storeOrigin", () => {
     ).toBe("https://wholesip.com");
   });
 
+  it("falls back to the subdomain when the custom-domain plan has expired", () => {
+    expect(
+      storeOrigin({
+        ...base,
+        custom_domain: "wholesip.com",
+        settings: { custom_domain_verified: true },
+        plan_expires_at: "2020-01-01T00:00:00.000Z",
+      }),
+    ).toBe("https://acme.storemink.com");
+  });
+
   // A verified flag with no domain to go with it must not produce
   // "https://null" — fall back to the subdomain, which always exists.
   it("falls back to the subdomain when verified but no domain is set", () => {
@@ -58,5 +77,22 @@ describe("storeOrigin", () => {
         settings: { custom_domain_verified: true },
       }),
     ).toBe("https://acme.storemink.com");
+  });
+});
+
+describe("getStoreOriginById", () => {
+  it("resolves the canonical origin without depending on the request host", async () => {
+    vi.mocked(lookupStoreById).mockResolvedValue({
+      id: "store-1",
+      name: "Acme",
+      status: "active",
+      ...base,
+      custom_domain: "shop.acme.com",
+      settings: { custom_domain_verified: true },
+    });
+
+    await expect(getStoreOriginById("store-1")).resolves.toBe(
+      "https://shop.acme.com",
+    );
   });
 });

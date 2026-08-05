@@ -12,11 +12,10 @@ vi.mock("next/cache", () => ({
 }));
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/lib/site", () => ({
-  getStoreUrl: vi.fn(async () => "https://store-1.storemink.com"),
+  getStoreOriginById: vi.fn(async () => "https://store-1.storemink.com"),
 }));
-vi.mock("@/lib/seo/search-engines", () => ({
-  pingIndexNow: vi.fn(),
-  submitSitemapToGoogle: vi.fn(),
+vi.mock("@/lib/seo/store-indexing", () => ({
+  notifyStoreContentPublished: vi.fn(),
 }));
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerUserId: vi.fn(),

@@ -26,7 +26,10 @@ export type ReservationOwner =
   | "pickup"
   | "payment_pending"
   | "channel"
-  | "manual";
+  | "manual"
+  /** An exchange's replacement, held from the moment it's requested so the
+   *  size they swapped for can't sell out while the parcel is in transit. */
+  | "exchange";
 
 export interface HoldRequest {
   storeId: string;

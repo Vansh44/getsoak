@@ -1,38 +1,78 @@
 # Vertical Store Templates — Implementation Plan
 
-> **Status:** in build — P1 (F&B slice) + P2 DONE (2026-07-04): hero /
+> **Current expansion phase:** **Quality Phases 1–2 and Capability Phase 3
+> DONE; Phase 4 IN PROGRESS (2026-08-05)** — the
+> catalog release bar lives in `docs/theme-acceptance.md`; objective package
+> requirements are enforced in `lib/themes/themes.test.ts`; and the versioned
+> engine → immutable preset → merchant-owned content contract now lives in
+> `lib/themes/meta.ts`, `types.ts`, `index.ts`, and `apply.ts`.
+> Phase 3 now supplies the shared professional-theme capability layer:
+> `media_text`, editorial `gallery`, `testimonials`, dedicated `video`, and a
+> persistent consent-aware `newsletter`; plus header, card, PDP, cart, and
+> footer variants that can inherit immutable theme defaults or take
+> draft/published merchant overrides in the visual builder.
+> Phase 4 has started with the public catalog foundation at
+> `themes.storemink.com`: reserved host routing, a responsive metadata-driven
+> gallery, truthful release/demo/plan states, independent SEO metadata, and a
+> discoverable link from the platform site.
+> Studio and Ritual `0.1.0` are implemented as deliberately hidden drafts:
+> distinct editorial home-design and botanical-wellness art direction, complete
+> three-page presets, eight credible sample products each, twenty optimized
+> generated assets, and automated package coverage. They remain absent from
+> signup/catalog until their live demos and review evidence pass.
+> Local demo smoke now passes for Basket, Studio and Ritual across homepage,
+> shop, PDP, cart, content and themed 404 routes; Ritual's variant add-to-cart
+> and totals also pass. Public demos and full browser gates remain outstanding.
+> Basket remains the default implementation, but it is **blocked from approval**
+> until its missing live demo is repaired and the browser, accessibility,
+> performance, and two-reviewer gates are recorded.
+>
+> **Earlier implementation status:** P1 (F&B slice) + P2 DONE (2026-07-04): hero /
 > usp_bar / tile_grid blocks, market header + quick-add card layout variants,
 > functional header search (`/shop?q=`), real-photo imagery pipeline, and the
 > **Basket** grocery template (`lib/themes/definitions/basket.ts`) verified
-> live on desktop + mobile with a seeded `demo-basket` store. Remaining P1
-> blocks (media_text, gallery, testimonials, faq_accordion, newsletter,
-> logo_marquee) land with the verticals that need them (P3).
+> live on desktop + mobile with a seeded `demo-basket` store. Newsletter and
+> the Phase 3 editorial/video capability set are now built; `logo_marquee`
+> remains vertical-specific work, not a Phase 3 platform blocker.
 > **Branch:** `feature` · **Strategy:** single big merge into `main`.
 > **Decisions locked:** imagery = curated free stock (Unsplash/Pexels, commercial-use); layout fidelity = data-driven block library (not bespoke per-template code).
 
+The acceptance document is authoritative for **whether a theme may ship**.
+This plan remains authoritative for **what theme capability and vertical work
+comes next**. A theme phase is not complete until its stories are recorded
+there, just as POS phases are not complete until their acceptance stories are
+recorded in `docs/pos-acceptance.md`.
+
 A merchant picks a business-type template at signup and gets a genuinely
 distinct, brand-named store they can then customise (products, categories,
-blogs, pages…). This document is the plan to get from what the `feature` branch
-has today to that.
+blogs, pages…). Basket proved that the data-driven renderer can support a deep
+vertical treatment. The remaining work is to turn that one successful slice
+into a professional, safely releasable catalog.
 
 ---
 
-## The core problem
+## The core problem — current
 
-A template today changes only **tokens** — colour, font, radius — over
-WholeSip's **one fixed layout** and its **synthetic gradient images**. Same
-bones + same art + new paint still looks like WholeSip.
+StoreMink has one substantive theme. Basket includes real imagery and dedicated
+grocery treatments for cards, product detail, and cart, but there is no breadth
+of visual direction and no release evidence under the new acceptance gate. A
+single good vertical is a reference implementation, not a theme catalog.
 
-The fix is **not** more architecture — the signup → seed → customise pipeline
-already works. It is making the **data** expressive enough (richer blocks,
-layout variants, real photography, tailored content) that data alone produces
-stores that look nothing alike.
+The versioned catalog seam and Phase 3 shared capability layer are now built.
+The next work is to author and release distinct vertical presets on those
+primitives, starting only after Basket's demo and acceptance evidence are
+repaired. Theme-specific additions such as `logo_marquee` can land with the
+first vertical that genuinely needs them.
 
 ---
 
-## 1. Three states: `main` → current → target
+## 1. Historical progression — archived context
 
-| Dimension               | `main`                                                              | `feature` (current)                                             | Target                                                                    |
+This table records the pre-Basket branch state that motivated the original
+work. It is not a description of the current repository; current state is in
+the status block and §9.1.
+
+| Dimension               | Historical `main`                                                   | Historical pre-Basket `feature`                                 | Intended target                                                           |
 | ----------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | **Storefront pages**    | Homepage via `homepage_sections`; static pages hardcoded route dirs | All pages are `store_pages` rows, builder-editable ✅ **built** | Same — keep                                                               |
 | **Templates at signup** | None — new store is bare/generic ⛔ **absent**                      | 2 templates (Arcade, Fresko) ⚠️ **near-identical**              | 7 vertical templates, visually distinct 🎯                                |
@@ -44,7 +84,7 @@ stores that look nothing alike.
 
 ---
 
-## 2. What `main` has
+## 2. What historical `main` had
 
 - Multi-tenant SaaS: host-based tenancy, per-store branding, platform admin
   console, settings-based features, per-store blog taxonomy.
@@ -55,7 +95,7 @@ stores that look nothing alike.
 - **No template system at all** — `lib/themes`, the builder, and `store_pages`
   do not exist on `main`. Signup creates a bare store.
 
-## 3. What the `feature` branch built
+## 3. What the historical `feature` branch built
 
 Substantial and mostly _correct_ — the plumbing the vision needs already exists
 here.
@@ -73,9 +113,9 @@ here.
 - **Design-token engine** (this session) — full palette + fonts + shape injected
   per store; all chrome CSS tokenised. Reusable foundation.
 
-## 4. What is wrong
+## 4. What was wrong before Basket
 
-**Diagnosis (confirmed in code):** both templates use the **same six section
+**Historical diagnosis:** both placeholder templates used the **same six section
 types in the same homepage structure** — just reordered and recoloured.
 Arcade's "hero" is a hardcoded dark-gradient custom-code block; product images
 are 4–7 KB synthetic gradients with black silhouettes. The result reads as one
@@ -266,20 +306,43 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
 
 ## 10. Testing & guardrails
 
-- Extend `themes.test.ts` invariants: every template must ship a complete
-  design, valid sections (strict publish mode), a homepage, and existing bundled
-  assets.
-- Per template: live visual pass on desktop + mobile before it counts as done —
-  no "renders in theory".
+- `themes.test.ts` now enforces the objective package gate: catalog metadata,
+  content floors, strict section validity, complete design tokens, theme-local
+  optimized assets, and a catalog-sized preview.
+- `docs/theme-acceptance.md` owns the complete gate: package CI, live storefront
+  stories, accessibility/performance evidence, and a scored two-reviewer design
+  pass. A theme does not count as done merely because it renders.
 - CI parity throughout: `lint`, `typecheck`, `test`, `prettier`, `build`.
 
-## 11. What's needed to start
+## 11. Next phase
 
-- **Per-vertical design ideas** — for each: hero style, ordered homepage blocks,
-  vibe / palette / type, must-have pages. Even just Food & Beverage to start the
-  reference build.
-- **Go-ahead on Phase 1** — the vertical-agnostic foundation needs no input and
-  unblocks everything else.
+- **Quality Phase 1 — done:** acceptance source of truth plus enforceable
+  package/asset checks.
+- **Quality Phase 2 — done:** the client-safe manifest now declares engine and
+  preset versions, release state, industries, catalog-size fit, feature claims,
+  screenshots, demo health, plan gate, and catalog visibility. Full definitions
+  nest immutable authored content under `preset`; `applyTheme` pins engine and
+  preset versions in `stores.settings.theme`; rendering honors that pin and
+  falls back to legacy `settings.template` without a migration.
+- **Capability Phase 3 — done:** media with text, editorial gallery/lookbook,
+  testimonials/press, dedicated video, and persistent consent-aware newsletter
+  are typed, validated, builder-editable, rendered responsively, and tested.
+  Shared header/card/PDP/cart/footer variants resolve from the pinned theme plus
+  draft/published merchant overrides without forking the storefront or mutating
+  the immutable preset. Legacy Basket grocery pins remain compatible.
+- **Phase 4 — in progress:** the public `themes.storemink.com` catalog
+  foundation is built from `THEME_META`, with reserved host routing, industry
+  filters, canonical/robots/sitemap/OG metadata, and demo links gated by live
+  health. Studio and Ritual `0.1.0` now pass the automated package gate as hidden
+  drafts, have their asset provenance recorded, and pass local route smoke.
+  Next provision and review both public demos, restore Basket's production
+  demo/release evidence, then author subsequent
+  vertical presets against the completed shared capability contract. A preset is
+  not done until every applicable acceptance story and two-reviewer gate is
+  recorded.
+- **Basket repair — parallel prerequisite:** restore/reseed `demo-basket` and
+  run the new acceptance stories. This can return Basket to Candidate, but does
+  not block designing the Phase 2 contract.
 
 ---
 

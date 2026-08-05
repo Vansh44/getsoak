@@ -1,49 +1,354 @@
 // ---------------------------------------------------------------------------
-// Theme META — the client-safe catalog for the signup template picker.
-// Deliberately split from the full definitions (lib/themes/definitions/*),
-// which embed up-to-64KB custom_code strings and sample data: the signup page
-// is a client component and must never bundle those. Server code resolves the
-// full package via lib/themes/index.ts getThemeDefinition().
+// Theme catalog META — deliberately client-safe.
+//
+// Full preset packages live in definitions/* and can contain large page,
+// menu, and sample-catalog payloads. Client components (signup today; the
+// merchant theme catalog later) import only this manifest.
 // ---------------------------------------------------------------------------
 
-export type ThemeCategory = "general" | "food" | "fashion";
+export type ThemeIndustry =
+  | "general"
+  | "art"
+  | "automotive"
+  | "beauty"
+  | "clothing"
+  | "electronics"
+  | "entertainment"
+  | "food-and-drink"
+  | "garden"
+  | "hardware"
+  | "home"
+  | "jewelry-and-accessories"
+  | "kids"
+  | "office"
+  | "pets"
+  | "services"
+  | "shoes"
+  | "sports"
+  | "toys"
+  | "wellness"
+  | "wholesale";
+
+export type ThemeCatalogSize = "one-product" | "small" | "medium" | "large";
+
+export type ThemeFeature =
+  | "advanced-search"
+  | "blogs"
+  | "cart-drawer"
+  | "category-navigation"
+  | "faq"
+  | "product-filtering"
+  | "product-recommendations"
+  | "promo-tiles"
+  | "quick-add"
+  | "variant-picker";
+
+export type ThemeReleaseStatus =
+  | "draft"
+  | "candidate"
+  | "approved"
+  | "published"
+  | "blocked";
+
+/** `legacy` keeps an existing default selectable while making clear it has
+ * not passed the professional catalog gate. Only `public` is a normal catalog
+ * release; `hidden` is unavailable to merchants. */
+export type ThemeCatalogVisibility = "hidden" | "legacy" | "public";
+
+export type ThemeDemoStatus = "healthy" | "unavailable" | "provisioning";
+
+export interface ThemeEngineRef {
+  /** Shared structural renderer/capability family, not the merchant preset. */
+  id: string;
+  /** Integer contract version. Engine changes are independent of preset copy. */
+  version: number;
+}
+
+export interface ThemeReleaseMeta {
+  /** Semver for the immutable preset package registered server-side. */
+  version: string;
+  status: ThemeReleaseStatus;
+  releasedAt?: string;
+  notes: string[];
+}
+
+export interface ThemeScreenshot {
+  src: string;
+  viewport: "desktop" | "mobile";
+  alt: string;
+}
+
+export interface ThemeCatalogMeta {
+  visibility: ThemeCatalogVisibility;
+  industries: ThemeIndustry[];
+  catalogSizes: ThemeCatalogSize[];
+  features: ThemeFeature[];
+  keywords: string[];
+  /** Plan gate (undefined = every plan). Signup provisions `free`. */
+  minPlan?: "basic" | "pro";
+  /** Primary 4:3 card image used by compact pickers. */
+  previewImage: string;
+  /** Detail-gallery contract. More views can be added without changing UI. */
+  screenshots: ThemeScreenshot[];
+}
+
+export interface ThemeDemoMeta {
+  slug: string;
+  status: ThemeDemoStatus;
+  checkedAt?: string;
+  unavailableReason?: string;
+}
 
 export interface ThemeMeta {
+  /** Preset id stored as stores.settings.template for legacy compatibility. */
   id: string;
   name: string;
   description: string;
-  category: ThemeCategory;
-  /** Plan gate for the picker (undefined = every plan). Signup provisions
-   *  plan "free", so gated themes render locked with an upsell note. */
-  minPlan?: "basic" | "pro";
-  /** Bundled preview image (public/ path). */
-  previewImage: string;
-  /** The live demo store's slug — Preview opens https://{demoSlug}.{root}. */
-  demoSlug: string;
+  engine: ThemeEngineRef;
+  release: ThemeReleaseMeta;
+  catalog: ThemeCatalogMeta;
+  demo: ThemeDemoMeta;
 }
 
-export const THEME_CATEGORIES: { id: ThemeCategory | "all"; label: string }[] =
-  [
-    { id: "all", label: "All" },
-    { id: "general", label: "General & Grocery" },
-    { id: "food", label: "Food & Beverages" },
-    { id: "fashion", label: "Fashion & Lifestyle" },
-  ];
-
-export const THEME_META: ThemeMeta[] = [
+export const THEME_META: readonly ThemeMeta[] = [
   {
     id: "basket",
     name: "Basket",
     description:
       "A bright grocery-market theme — solid search header, category circles, offer tiles and quick-add product cards.",
-    category: "food",
-    previewImage: "/themes/basket/preview.webp",
-    demoSlug: "demo-basket",
+    engine: { id: "storefront-grocery", version: 1 },
+    release: {
+      version: "1.0.0",
+      status: "blocked",
+      releasedAt: "2026-07-04",
+      notes: [
+        "Initial grocery storefront preset.",
+        "Awaiting a restored live demo and the Phase 1 acceptance evidence.",
+      ],
+    },
+    catalog: {
+      // Basket remains the signup default so store creation still has a valid
+      // starting point, but `legacy` prevents it being represented as a theme
+      // that passed the new professional catalog gate.
+      visibility: "legacy",
+      industries: ["food-and-drink"],
+      catalogSizes: ["small", "medium", "large"],
+      features: [
+        "advanced-search",
+        "blogs",
+        "cart-drawer",
+        "category-navigation",
+        "faq",
+        "product-filtering",
+        "product-recommendations",
+        "promo-tiles",
+        "quick-add",
+        "variant-picker",
+      ],
+      keywords: ["grocery", "food", "delivery", "market", "quick add"],
+      previewImage: "/themes/basket/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/basket/preview.webp",
+          viewport: "desktop",
+          alt: "Basket grocery storefront homepage",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-basket",
+      status: "unavailable",
+      checkedAt: "2026-08-05",
+      unavailableReason:
+        "The demo host currently resolves to StoreMink's storefront-not-found page.",
+    },
   },
-];
+  {
+    id: "studio",
+    name: "Studio",
+    description:
+      "An editorial home-design theme with gallery-like space, image-led storytelling and refined product discovery.",
+    engine: { id: "storefront-editorial", version: 1 },
+    release: {
+      version: "0.1.0",
+      status: "draft",
+      notes: [
+        "Initial hidden Studio package for Phase 4 implementation and review.",
+        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+      ],
+    },
+    catalog: {
+      visibility: "hidden",
+      industries: ["home", "art"],
+      catalogSizes: ["small", "medium"],
+      features: [
+        "advanced-search",
+        "blogs",
+        "cart-drawer",
+        "category-navigation",
+        "faq",
+        "product-filtering",
+        "product-recommendations",
+        "promo-tiles",
+        "variant-picker",
+      ],
+      keywords: [
+        "furniture",
+        "home decor",
+        "design studio",
+        "objects",
+        "editorial",
+      ],
+      previewImage: "/themes/studio/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/studio/preview.webp",
+          viewport: "desktop",
+          alt: "Studio editorial home-design storefront preview",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-studio",
+      status: "provisioning",
+      unavailableReason:
+        "Studio is a hidden draft and does not have a public demo yet.",
+    },
+  },
+  {
+    id: "ritual",
+    name: "Ritual",
+    description:
+      "A sensorial beauty and wellness theme built around product routines, botanical storytelling and intimate editorial imagery.",
+    engine: { id: "storefront-editorial", version: 1 },
+    release: {
+      version: "0.1.0",
+      status: "draft",
+      notes: [
+        "Initial hidden Ritual package for Phase 4 implementation and review.",
+        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+      ],
+    },
+    catalog: {
+      visibility: "hidden",
+      industries: ["beauty", "wellness"],
+      catalogSizes: ["small", "medium"],
+      features: [
+        "advanced-search",
+        "blogs",
+        "cart-drawer",
+        "category-navigation",
+        "faq",
+        "product-filtering",
+        "product-recommendations",
+        "variant-picker",
+      ],
+      keywords: ["skincare", "beauty", "wellness", "botanical", "body care"],
+      previewImage: "/themes/ritual/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/ritual/preview.webp",
+          viewport: "desktop",
+          alt: "Ritual botanical beauty storefront preview",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-ritual",
+      status: "provisioning",
+      unavailableReason:
+        "Ritual is a hidden draft and does not have a public demo yet.",
+    },
+  },
+] as const;
 
 export const DEFAULT_THEME_ID = "basket";
 
+const INDUSTRY_LABELS: Record<ThemeIndustry, string> = {
+  general: "General",
+  art: "Art",
+  automotive: "Automotive",
+  beauty: "Beauty",
+  clothing: "Clothing",
+  electronics: "Electronics",
+  entertainment: "Entertainment",
+  "food-and-drink": "Food & Beverages",
+  garden: "Garden",
+  hardware: "Hardware",
+  home: "Home & Decor",
+  "jewelry-and-accessories": "Jewelry & Accessories",
+  kids: "Kids",
+  office: "Office",
+  pets: "Pets",
+  services: "Services",
+  shoes: "Shoes",
+  sports: "Sports",
+  toys: "Toys",
+  wellness: "Wellness",
+  wholesale: "Wholesale",
+};
+
+/** Only render filters backed by at least one visible catalog entry. */
+export const THEME_CATEGORIES: readonly {
+  id: ThemeIndustry | "all";
+  label: string;
+}[] = [
+  { id: "all", label: "All" },
+  ...Array.from(
+    new Set(
+      THEME_META.filter(
+        (theme) => theme.catalog.visibility !== "hidden",
+      ).flatMap((theme) => theme.catalog.industries),
+    ),
+    (id) => ({ id, label: INDUSTRY_LABELS[id] }),
+  ),
+];
+
+export interface StoredThemeInstallation {
+  presetId: string;
+  presetVersion: string;
+  engineId: string;
+  engineVersion: number;
+  appliedAt: string;
+}
+
+export interface ThemeSelection {
+  id: string;
+  version?: string;
+}
+
+/** Read the new pinned installation first, then the legacy `template` id.
+ * This lets already-created stores render without a data migration. */
+export function readThemeSelection(settings: unknown): ThemeSelection | null {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return null;
+  }
+  const record = settings as Record<string, unknown>;
+  const installed = record.theme;
+  if (installed && typeof installed === "object" && !Array.isArray(installed)) {
+    const value = installed as Record<string, unknown>;
+    if (typeof value.presetId === "string" && isThemeId(value.presetId)) {
+      return {
+        id: value.presetId,
+        ...(typeof value.presetVersion === "string" && value.presetVersion
+          ? { version: value.presetVersion }
+          : {}),
+      };
+    }
+  }
+  return typeof record.template === "string" && isThemeId(record.template)
+    ? { id: record.template }
+    : null;
+}
+
 export function isThemeId(id: unknown): id is string {
-  return typeof id === "string" && THEME_META.some((t) => t.id === id);
+  return typeof id === "string" && THEME_META.some((theme) => theme.id === id);
+}
+
+export function isThemeSelectable(theme: ThemeMeta): boolean {
+  return theme.catalog.visibility !== "hidden";
+}
+
+export function canPreviewTheme(theme: ThemeMeta): boolean {
+  return theme.demo.status === "healthy";
 }

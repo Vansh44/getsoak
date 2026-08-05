@@ -29,6 +29,45 @@
   }
 }
 
+/* Phase 3 compact cart — denser line items and a quiet bordered summary. */
+.sm-cart-compact .cart-main {
+  max-width: 1040px;
+}
+.sm-cart-compact .cart-head {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--sm-border);
+}
+.sm-cart-compact .cart-layout {
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: clamp(24px, 4vw, 48px);
+}
+.sm-cart-compact .cart-item {
+  padding: 16px 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.sm-cart-compact .cart-item-img {
+  width: 76px;
+  height: 92px;
+  border-radius: var(--sm-radius-sm);
+}
+.sm-cart-compact .cart-summary {
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-control);
+  background: transparent;
+  box-shadow: none;
+}
+.sm-cart-compact .cart-checkout-btn {
+  border-radius: var(--sm-radius-control);
+}
+@media (max-width: 800px) {
+  .sm-cart-compact .cart-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Header ───────────────────────────────────────── */
 .cart-head {
   display: flex;

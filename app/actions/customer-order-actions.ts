@@ -16,11 +16,17 @@
 // ---------------------------------------------------------------------------
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { withUser } from "@/lib/db/client";
+import { revalidatePath } from "next/cache";
+import { withService, withUser } from "@/lib/db/client";
 import { orderItems, orders, products, storeLocations } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
+import { getStoreSettings } from "@/lib/settings/resolve";
+import { rateLimit } from "@/lib/rate-limit";
+import { emitEvent } from "@/lib/notifications/record";
+import { releaseCancelledOrder } from "@/lib/orders/cancel";
+import { refundDueForOrder } from "@/lib/payments/refund-reconcile";
 
 export interface MyOrderRow {
   id: string;
@@ -249,4 +255,212 @@ export async function getMyOrder(
     logError("customer orders: detail failed", error, { orderId });
     return { error: "Couldn't load that order." };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Customer-initiated cancellation (roadmap Step 2)
+// ---------------------------------------------------------------------------
+
+export interface CancelMyOrderResult {
+  /** Cancelled outright — stock is back, the store has been told. */
+  cancelled?: boolean;
+  /** Too late to cancel automatically; the store has been asked to. */
+  requested?: boolean;
+  /** Money the store now owes, when there is any. Display only. */
+  refundDue?: number;
+  error?: string;
+}
+
+/** Statuses a shopper may cancel out of without anyone looking. Anything
+ *  further along has left the building, physically or nearly. */
+const SELF_CANCELLABLE = ["pending", "processing"];
+
+/**
+ * Cancel my own order — or, when it's too late for that, ask the store to.
+ *
+ * ★ ONE BUTTON, TWO OUTCOMES, and the difference is decided server-side. A
+ * shopper should not have to work out whether their order is still stoppable;
+ * they press Cancel and either it stops or the store hears about it. Hiding
+ * the button once an order ships would be worse — the customer still wants out
+ * and would have nowhere to say so.
+ *
+ * ★ AND IT NEVER MOVES MONEY. A cancellation returns stock and records what is
+ * owed; the refund stays a human decision in the dashboard (§2.2). The
+ * alternative is a shopper being able to trigger a payout from a public
+ * storefront action, which is not a thing to build.
+ */
+export async function cancelMyOrder(
+  orderId: string,
+  reason?: string,
+): Promise<CancelMyOrderResult> {
+  const user = await getServerUser();
+  if (!user) return { error: "Please sign in." };
+  if (typeof orderId !== "string" || !orderId.trim()) {
+    return { error: "Invalid order." };
+  }
+  const storeId = await requireStorefrontStoreId();
+
+  // Server-side gate: a disabled control is not a permission (invariant 5).
+  const settings = await getStoreSettings();
+  if (!settings["orders.allowCustomerCancellation"]) {
+    return {
+      error: "This store handles cancellations directly — please contact them.",
+    };
+  }
+
+  const { allowed } = await rateLimit(`cancel:${user.id}`, {
+    max: 10,
+    windowSeconds: 3600,
+  });
+  if (!allowed) {
+    return { error: "Too many attempts. Please try again shortly." };
+  }
+
+  const identity = { uid: user.id, email: user.email ?? null };
+  const note = reason?.trim().slice(0, 200) || null;
+
+  let order:
+    | {
+        id: string;
+        order_ref: string | null;
+        status: string;
+        payment_status: string | null;
+        total: number | null;
+        created_at: string | null;
+        collected_at: string | null;
+      }
+    | undefined;
+  try {
+    const rows = await withUser(identity, (db) =>
+      db
+        .select({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          status: orders.status,
+          payment_status: orders.paymentStatus,
+          total: orders.total,
+          created_at: orders.createdAt,
+          collected_at: orders.collectedAt,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.customerId, user.id),
+            eq(orders.storeId, storeId),
+          ),
+        )
+        .limit(1),
+    );
+    order = rows[0];
+  } catch (error) {
+    logError("customer orders: cancel lookup failed", error, { orderId });
+    return { error: "Couldn't load that order." };
+  }
+  if (!order) return { error: "Not found." };
+
+  if (order.status === "cancelled") {
+    return { error: "This order is already cancelled." };
+  }
+
+  const windowHours = Number(settings["orders.cancellationWindowHours"]) || 24;
+  const placedAt = order.created_at ? new Date(order.created_at).getTime() : 0;
+  const withinWindow =
+    placedAt > 0 && Date.now() - placedAt <= windowHours * 3_600_000;
+  const stoppable =
+    SELF_CANCELLABLE.includes(order.status) &&
+    !order.collected_at &&
+    withinWindow;
+
+  // ── Too late: tell the store, don't touch the order ──────────────────────
+  if (!stoppable) {
+    emitEvent({
+      type: "order.cancellation_requested",
+      storeId,
+      actor: { type: "customer", id: user.id, label: user.email ?? null },
+      subject: { type: "order", id: order.id, label: order.order_ref },
+      customerId: user.id,
+      payload: {
+        orderRef: order.order_ref ?? "",
+        status: order.status,
+        total: Number(order.total ?? 0),
+        currency: "INR",
+        ...(note ? { reason: note } : {}),
+      },
+    });
+    return { requested: true };
+  }
+
+  // ── Still stoppable: claim it ────────────────────────────────────────────
+  // The WHERE is the authority AND the exactly-once guarantee in one: it
+  // re-proves ownership and store scope, and re-checks the status inside the
+  // same statement that changes it — so a dispatch racing this cancel means
+  // one of them matches nothing rather than both "succeeding".
+  //
+  // withService because a shopper holds SELECT on their own orders but not
+  // UPDATE (orders_table.sql), the checkout pattern: validate first, then
+  // write with the service role (convention #12).
+  let claimed: { id: string }[];
+  try {
+    claimed = await withService((db) =>
+      db
+        .update(orders)
+        .set({ status: "cancelled" })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.customerId, user.id),
+            eq(orders.storeId, storeId),
+            inArray(orders.status, SELF_CANCELLABLE),
+          ),
+        )
+        .returning({ id: orders.id }),
+    );
+  } catch (error) {
+    logError("customer orders: cancel claim failed", error, { orderId });
+    return { error: "Couldn't cancel that order. Please contact the store." };
+  }
+  if (!claimed.length) {
+    // Someone moved it between our read and our write.
+    return {
+      error: "This order has moved on and can't be cancelled now.",
+    };
+  }
+
+  // Give back reserved stock / pickup holds — the same implementation the
+  // dashboard uses, so this path cannot drift from it.
+  await releaseCancelledOrder(
+    storeId,
+    orderId,
+    withService,
+    "customer_cancelled",
+  );
+
+  const refundDue = await refundDueForOrder({
+    id: order.id,
+    total: order.total,
+    paymentStatus: order.payment_status,
+  });
+
+  emitEvent({
+    type: "order.cancelled",
+    storeId,
+    actor: { type: "customer", id: user.id, label: user.email ?? null },
+    subject: { type: "order", id: order.id, label: order.order_ref },
+    customerId: user.id,
+    payload: {
+      orderRef: order.order_ref ?? "",
+      status: "cancelled",
+      total: Number(order.total ?? 0),
+      currency: "INR",
+      // Surfaced BECAUSE nothing pays it automatically — this is how the
+      // merchant learns they owe money (§2.2).
+      ...(refundDue > 0 ? { refund_due: refundDue } : {}),
+      ...(note ? { reason: note } : {}),
+    },
+  });
+
+  revalidatePath("/orders");
+  revalidatePath(`/orders/${orderId}`);
+  return { cancelled: true, refundDue };
 }

@@ -169,7 +169,11 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     maxStaff: 3,
     aiGenerationsPerMonth: 10,
     maxActiveCoupons: null,
-    customDomain: true,
+    // Pro only. Connecting a domain provisions a certificate per merchant on
+    // the platform's load balancer — real infrastructure with a real ceiling,
+    // unlike a row limit — so it sits on the top tier. The pricing page derives
+    // its feature list from here, so this flag is also what it advertises.
+    customDomain: false,
     onlinePayments: true,
     emailCampaigns: false,
     removeBadge: true,

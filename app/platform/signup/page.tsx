@@ -42,7 +42,9 @@ import {
   THEME_META,
   THEME_CATEGORIES,
   DEFAULT_THEME_ID,
-  type ThemeCategory,
+  canPreviewTheme,
+  isThemeSelectable,
+  type ThemeIndustry,
 } from "@/lib/themes/meta";
 import { PLAN_META, PLAN_LIMITS, type Plan } from "@/lib/plans";
 import { COUNTRIES, DEFAULT_COUNTRY } from "@/lib/countries";
@@ -216,7 +218,7 @@ export default function SignupPage() {
 
   // Theme
   const [template, setTemplate] = useState<string>(DEFAULT_THEME_ID);
-  const [themeFilter, setThemeFilter] = useState<ThemeCategory | "all">("all");
+  const [themeFilter, setThemeFilter] = useState<ThemeIndustry | "all">("all");
 
   // Plan
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
@@ -1087,72 +1089,88 @@ export default function SignupPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-                {THEME_META.filter(
-                  (t) => themeFilter === "all" || t.category === themeFilter,
-                ).map((t) => {
-                  const selected = template === t.id;
-                  const locked = !!t.minPlan; // signup provisions plan "free"
-                  return (
-                    <div
-                      key={t.id}
-                      onClick={() => !locked && setTemplate(t.id)}
-                      className={`group relative overflow-hidden rounded-xl border-2 bg-white shadow-sm transition-all ${
-                        locked
-                          ? "cursor-not-allowed opacity-70"
-                          : "cursor-pointer"
-                      } ${
-                        selected
-                          ? "border-primary ring-2 ring-primary ring-offset-2"
-                          : "border-gray-200 hover:border-primary/50 hover:shadow-md"
-                      }`}
-                    >
-                      <div className="relative aspect-[4/3] w-full overflow-hidden border-b bg-gray-100">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={t.previewImage}
-                          alt={t.name}
-                          className="h-full w-full object-cover"
-                        />
-                        {selected && (
-                          <div className="absolute inset-0 flex items-center justify-center bg-primary/10">
-                            <div className="rounded-full bg-white p-1 shadow-md">
-                              <CheckCircle2 className="h-6 w-6 text-primary" />
+                {THEME_META.filter(isThemeSelectable)
+                  .filter(
+                    (t) =>
+                      themeFilter === "all" ||
+                      t.catalog.industries.includes(themeFilter),
+                  )
+                  .map((t) => {
+                    const selected = template === t.id;
+                    const locked = !!t.catalog.minPlan; // signup provisions "free"
+                    const previewable = canPreviewTheme(t);
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => !locked && setTemplate(t.id)}
+                        className={`group relative overflow-hidden rounded-xl border-2 bg-white shadow-sm transition-all ${
+                          locked
+                            ? "cursor-not-allowed opacity-70"
+                            : "cursor-pointer"
+                        } ${
+                          selected
+                            ? "border-primary ring-2 ring-primary ring-offset-2"
+                            : "border-gray-200 hover:border-primary/50 hover:shadow-md"
+                        }`}
+                      >
+                        <div className="relative aspect-[4/3] w-full overflow-hidden border-b bg-gray-100">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={t.catalog.previewImage}
+                            alt={t.name}
+                            className="h-full w-full object-cover"
+                          />
+                          {selected && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-primary/10">
+                              <div className="rounded-full bg-white p-1 shadow-md">
+                                <CheckCircle2 className="h-6 w-6 text-primary" />
+                              </div>
                             </div>
-                          </div>
-                        )}
-                        {locked && (
-                          <span className="absolute right-2 top-2 rounded-full bg-gray-900/80 px-2.5 py-1 text-[11px] font-bold text-white">
-                            {t.minPlan!.toUpperCase()}+ plan
-                          </span>
-                        )}
-                      </div>
-                      <div className="p-4">
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <h3 className="text-lg font-bold text-gray-900">
-                            {t.name}
-                          </h3>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              window.open(
-                                demoUrl(t.demoSlug),
-                                "_blank",
-                                "noopener,noreferrer",
-                              );
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 hover:border-primary/50 hover:text-primary"
-                          >
-                            Preview <ExternalLink className="h-3 w-3" />
-                          </button>
+                          )}
+                          {locked && (
+                            <span className="absolute right-2 top-2 rounded-full bg-gray-900/80 px-2.5 py-1 text-[11px] font-bold text-white">
+                              {t.catalog.minPlan!.toUpperCase()}+ plan
+                            </span>
+                          )}
                         </div>
-                        <p className="line-clamp-2 h-8 text-xs text-gray-500">
-                          {t.description}
-                        </p>
+                        <div className="p-4">
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <h3 className="text-lg font-bold text-gray-900">
+                              {t.name}
+                            </h3>
+                            <button
+                              type="button"
+                              disabled={!previewable}
+                              title={
+                                previewable
+                                  ? `Preview ${t.name}`
+                                  : t.demo.unavailableReason ||
+                                    "Preview is temporarily unavailable"
+                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!previewable) return;
+                                window.open(
+                                  demoUrl(t.demo.slug),
+                                  "_blank",
+                                  "noopener,noreferrer",
+                                );
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400 disabled:hover:border-gray-200"
+                            >
+                              {previewable ? "Preview" : "Preview unavailable"}
+                              {previewable && (
+                                <ExternalLink className="h-3 w-3" />
+                              )}
+                            </button>
+                          </div>
+                          <p className="line-clamp-2 h-8 text-xs text-gray-500">
+                            {t.description}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
 
               <button

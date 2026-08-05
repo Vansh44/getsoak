@@ -1,149 +1,130 @@
 # SEO & search indexing
 
-How StoreMink gets the platform, the fallback store, and every merchant store
-discovered and ranked on search engines — and the **one-time human setup** for
-Google (everything else is automatic and already in code).
+How StoreMink makes the platform and every launched merchant store eligible,
+discoverable, and observable on search engines.
 
-## TL;DR
+## What the system guarantees — and what Google decides
 
-- **Code is done.** Host-aware `robots.txt` + `sitemap.xml`, per-page metadata +
-  canonicals, JSON-LD, OG cards, and auto-notify (IndexNow + Google) all ship.
-- **Only production (`storemink.com`) is indexable.** Staging, previews, and
-  local dev are auto-`noindex`d and never ping search engines — no flag to set.
-  This is derived from the apex domain (`SEARCH_INDEXABLE` in
-  `lib/store/host.ts`), so it can't be forgotten and can't accidentally hide prod.
-- **One human step for Google** (below): verify the domain in Search Console and
-  grant the Cloud Run service account access. IndexNow needs nothing.
+The application guarantees that an eligible public page has a crawlable host,
+a self-consistent canonical URL, accurate metadata/JSON-LD, internal links, and
+an automatically registered sitemap. Every failed Google setup is persisted on
+the store and retried by the daily reconciliation job.
 
-## What runs automatically
+Google still decides whether and when to crawl or index a URL, how it ranks, and
+whether a new coined brand name is spell-corrected. Google explicitly says that
+crawling can take days to weeks and that a sitemap does not guarantee indexing.
+The general-purpose Indexing API cannot be used here: it is restricted to
+`JobPosting` and livestream `BroadcastEvent` pages.
 
-| Piece             | File                                | Behavior                                                                                                                                                   |
-| ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `robots.txt`      | `app/robots.ts`                     | Per host: allows `/`, disallows admin/auth/api/cart/profile/etc., advertises the host's own `sitemap.xml` + canonical host. Non-prod → `Disallow: /`.      |
-| `sitemap.xml`     | `app/sitemap.ts`                    | Per host: platform apex → marketing pages; a store host → its static pages + all products, blogs, and custom pages (with image entries). Non-prod → empty. |
-| Page metadata     | each route's `generateMetadata`     | Title/description/OpenGraph + `alternates.canonical` on the store's own origin.                                                                            |
-| Structured data   | `lib/seo/schema.ts` + `<JsonLd>`    | Product / Article / Breadcrumb / Organization / WebSite JSON-LD.                                                                                           |
-| OG share cards    | `app/api/og` + `lib/seo/og-card.ts` | Branded default share image.                                                                                                                               |
-| **IndexNow**      | `lib/seo/search-engines.ts`         | Pings Bing/Yandex/Naver/Seznam on store create + product/blog/page/help-article publish. **Live in prod, zero setup. Does NOT reach Google.**              |
-| **Google submit** | `lib/seo/search-engines.ts`         | `sitemaps.submit` to Search Console — **only from `store-signup.ts`**, i.e. once per new store. See the correction below.                                  |
+## Automatic pipeline
 
-IndexNow fires via `after()` from the mutation actions (`store-signup`,
-`product-actions`, `blog-actions`, `page-actions`, `help-actions`), so a slow or
-failed ping never blocks or breaks the user's request. It is gated on
-`SEARCH_INDEXABLE`, so staging never pings with non-production URLs (important:
-staging runs as `NODE_ENV=production` on Cloud Run).
+| Piece              | File                                              | Behaviour                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host gate          | `lib/store/host.ts`                               | Only the real `storemink.com` production build is indexable. Staging, previews, and local dev emit noindex/empty sitemaps and never notify engines.                                                                                                   |
+| `robots.txt`       | `app/robots.ts`                                   | Per host, shares the same disallow registry as the sitemap and advertises the host's canonical sitemap. Unknown, demo, and unlaunched stores are closed.                                                                                              |
+| `sitemap.xml`      | `app/sitemap.ts`                                  | Per host: platform marketing/legal pages, help content, or the current store's homepage, product/blog hubs, products, blogs, and published custom pages. `lastmod` is derived from real content timestamps.                                           |
+| Canonicals         | route metadata + `lib/site.ts`                    | Uses a verified **and currently entitled** custom domain; otherwise `{slug}.storemink.com`. This matches the serving gate, including timed-plan expiry.                                                                                               |
+| Merchant identity  | `app/(storefront)/components/structured-data.tsx` | Organization/WebSite graph using merchant name, legal name, logo, description, email, phone, and valid social profile URLs. Product and blog nodes point to the same Organization `@id`.                                                              |
+| StoreMink identity | `lib/seo/brand-identity.ts`                       | One StoreMink Organization entity shared by the apex and help host, with alternate spellings, official profiles, contact point, and visible matching links.                                                                                           |
+| Publish hook       | `lib/seo/store-indexing.ts`                       | Products (including bulk publish), blogs (editor, bulk, customer direct-publish, approval), and builder pages all launch the store, notify IndexNow, and ensure Google coverage after the content write commits.                                      |
+| IndexNow           | `lib/seo/search-engines.ts`                       | Groups URLs by host and notifies participating engines. This does **not** reach Google.                                                                                                                                                               |
+| Google             | `lib/seo/store-indexing.ts`                       | StoreMink subdomains submit under `sc-domain:storemink.com`. Verified custom domains are META-verified automatically, added as URL-prefix properties, and get their own sitemap submission. Success/error timestamps are stored in `stores.settings`. |
+| Reconciliation     | `app/api/cron/seo-refresh/route.ts`               | Daily, authenticated repair pass for the platform/help sitemaps and every active, launched, non-demo store. A partial failure returns HTTP 503 so Cloud Scheduler retries it. Successful per-store submissions refresh at most every seven days.      |
 
-> **⚠ The two channels are NOT symmetric — an earlier version of this document
-> said they were.** `submitSitemapToGoogle` has exactly one non-test call site
-> (`app/actions/store-signup.ts`). Publishing a product, blog, page or help
-> article notifies IndexNow only. **Google is never actively told anything after
-> a store is created**, and neither `storemink.com/sitemap.xml` nor
-> `help.storemink.com/sitemap.xml` has ever been submitted — they are discovered
-> only through the `Sitemap:` line in each host's `robots.txt`.
->
-> That is less bad than it sounds, and mostly by design: `sitemaps.submit` is a
-> one-time **registration** call, not a nudge. Repeat submissions of the same
-> sitemap are rate-limited and ignored, so wiring it into per-publish paths would
-> buy nothing. There is also **no Google equivalent of IndexNow** — the Indexing
-> API is restricted to `JobPosting` and `BroadcastEvent`. For Google, the sitemap
-> (with an honest `lastmod`) plus internal linking IS the mechanism.
->
-> What this means in practice: submit each sitemap **once** by hand (step 4
-> below), and keep `lastmod` truthful. See `docs/seo-action-plan.md` §4.
+The Google verification token is deliberately public: it must appear as
+`<meta name="google-site-verification">` on the custom-domain storefront. No
+OAuth token or service-account credential is stored in the database.
 
-## Indexability is derived, not flagged
+## Launch/readiness rule
 
-`SEARCH_INDEXABLE` (in `lib/store/host.ts`) is:
+A newly created store is shared theme seed, not an indexable business. Signup
+writes `settings.launched: false`; robots closes the host and the sitemap is
+empty. Publishing the first real product, blog, or builder page calls the
+unified publish hook and marks it launched. Legacy stores with no flag are
+treated as launched so the rollout cannot deindex existing shops. Demo stores
+remain permanently excluded.
 
-```ts
-ROOT_DOMAIN === "storemink.com" && process.env.NEXT_PUBLIC_NOINDEX !== "1";
-```
+## Production Google setup (one time)
 
-- **Production** bakes `NEXT_PUBLIC_ROOT_DOMAIN=storemink.com` → indexable. This
-  covers the platform, the WholeSip fallback, and every `{slug}.storemink.com`
-  and verified custom-domain store.
-- **Staging** bakes `staging.storemink.com` → not the apex → auto-`noindex`,
-  empty sitemap, no pings. Same for `*.vercel.app` previews and `localhost`.
-- `NEXT_PUBLIC_NOINDEX=1` is an optional override to force prod off (e.g. an
-  incident) — normally unset.
+1. Verify the `storemink.com` **Domain property** in Search Console. It covers
+   the apex, help, and every `{slug}.storemink.com` tenant.
+2. Add the production Cloud Run runtime service account
+   (`storemink-run@storemink-prod.iam.gserviceaccount.com`) as an Owner/Full user
+   on that Search Console property.
+3. Keep `_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com` on the prod
+   Cloud Build trigger. It becomes `GOOGLE_SEARCH_CONSOLE_PROPERTY`; Cloud Run
+   authenticates through ADC, so there is no key file to rotate.
+4. Enable the **Google Search Console API** and **Google Site Verification API**
+   in the production GCP project. The latter is required only for custom-domain
+   URL-prefix ownership.
+5. Create the Cloud Scheduler job documented in `docs/cron-jobs.md`. Deploying
+   the route alone does not schedule it on Cloud Run.
 
-There is deliberately **no per-deploy `noindex` flag** to remember: keying off the
-canonical apex means we can never accidentally leave prod hidden or staging
-crawlable.
+For a non-GCP host, `GOOGLE_SEARCH_CONSOLE_CREDENTIALS` may contain a service
+account key JSON; ADC is preferred in production.
 
-## One-time Google Search Console setup (do this once for prod)
+### Custom-domain lifecycle
 
-Goal: verify the domain and let the prod Cloud Run service submit sitemaps —
-**with no service-account key to store** (auth is the runtime SA via ADC).
+When StoreMink's certificate + routing verification flips a domain to verified:
 
-1. **Verify the domain property.** In [Search Console](https://search.google.com/search-console),
-   add a **Domain** property for `storemink.com` and complete DNS TXT
-   verification (Cloud DNS). A Domain property covers **every** subdomain
-   (`www`, `help`, and all `{slug}.storemink.com` stores) in one shot.
-2. **Grant the Cloud Run service account access.** In the property → **Settings →
-   Users and permissions → Add user**, add
-   `storemink-run@storemink-prod.iam.gserviceaccount.com` (the `_RUN_SA` from
-   `cloudbuild.yaml`) with the **Owner** (or Full) role. This is the identity the
-   prod service already runs as, so its ADC token can call `sitemaps.submit`.
-3. **Set the property env on prod.** Already wired: the prod Cloud Build trigger
-   passes `_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com`
-   (`docs/gcp-ci-cd.md`), which becomes `GOOGLE_SEARCH_CONSOLE_PROPERTY` on the
-   service. Nothing to paste. Redeploy prod (or wait for the next `main` push) so
-   the env is present.
-4. **Submit both root sitemaps once — NOT optional.** In Search Console →
-   **Sitemaps**, add `https://storemink.com/sitemap.xml` **and**
-   `https://help.storemink.com/sitemap.xml`. Nothing in the code submits either
-   (see the correction above), so this is the only time they get registered.
-   Google re-reads a registered sitemap on its own schedule afterwards, which is
-   why once is enough. Per-store subdomain sitemaps ARE submitted automatically,
-   but only at store creation (`store-signup.ts`).
+1. the background hook requests a Google META token for `https://domain/`;
+2. the token is stored in public store settings and rendered in `<head>`;
+3. Google verifies that URL-prefix property;
+4. the service account adds it to Search Console and submits
+   `https://domain/sitemap.xml`;
+5. the cron retries any incomplete step and preserves the last error for
+   diagnosis.
 
-That's it — no key file, no Secret Manager entry, nothing to rotate.
+Changing or disconnecting the domain deletes the old Google verification state.
+At larger scale, note Search Console's account limit of 1,000 properties: shard
+custom-domain ownership across service accounts or move to merchant-authorized
+OAuth before approaching that limit. StoreMink subdomains do not consume one
+property each because the single Domain property covers them all.
 
-> **Alternative (non-GCP / local):** set `GOOGLE_SEARCH_CONSOLE_CREDENTIALS` to a
-> service-account key JSON instead of using ADC. The code prefers this key when
-> present and falls back to ADC when it's absent. Not needed on Cloud Run.
+## Scheduling and failure semantics
 
-### IndexNow — nothing to do
+`/api/cron/seo-refresh` accepts GET or POST with
+`Authorization: Bearer <CRON_SECRET>`. It returns:
 
-Already active in prod. The public key file is `public/3b7d8ad31a67d0ae436d04d13a099b6c.txt`;
-`INDEXNOW_KEY` can override it (the file must match). Set `INDEXNOW_FORCE=1`
-locally if you want to test the ping path off prod.
+- `200` only when both root sitemaps and all eligible stores are ready;
+- `503` when any Google operation failed, so Cloud Scheduler's configured
+  retries run;
+- `401` for a missing/wrong secret;
+- `200 { skipped: ... }` on non-indexable environments such as staging.
 
-## Caveat: custom domains
+The per-store settings keys are public operational state:
 
-Automatic Google submission only covers hosts under the verified
-`sc-domain:storemink.com` property — i.e. the apex and all `*.storemink.com`
-stores. A merchant on their **own** custom domain (`mystore.com`) is served and
-`robots`/`sitemap` are correct, and IndexNow still pings, but Google won't accept
-a `sitemaps.submit` for a property we haven't verified. The submit call simply
-no-ops for that host (it isn't under our property). Options when this matters:
-per-custom-domain Search Console properties + credentials, or rely on IndexNow +
-organic crawl + the on-page canonicals/sitemap (which are all present). Not built
-in v1.
+- `google_site_verification_token`
+- `google_site_verification_domain`
+- `google_site_verified_at`
+- `google_sitemap_submitted_at`
+- `google_sitemap_submitted_origin`
+- `google_indexing_attempted_at`
+- `google_indexing_error`
 
-## Verify it's working
+## Verification
 
 ```bash
-# Production must be crawlable with a real sitemap:
-curl -s https://storemink.com/robots.txt        # → Allow: / …, Sitemap: https://storemink.com/sitemap.xml
+# Production platform
+curl -s https://storemink.com/robots.txt
 curl -s https://storemink.com/sitemap.xml | head
 
-# A store subdomain advertises its own canonical + catalog:
+# StoreMink tenant
 curl -s https://<slug>.storemink.com/robots.txt
 curl -s https://<slug>.storemink.com/sitemap.xml | head
 
-# Staging must be fully blocked:
-curl -s https://staging.storemink.com/robots.txt   # → Disallow: /
-curl -s https://staging.storemink.com/sitemap.xml  # → empty <urlset>
+# Custom domain (after connection)
+curl -s https://<domain>/robots.txt
+curl -s https://<domain>/sitemap.xml | head
+curl -s https://<domain>/ | grep google-site-verification
+
+# Staging must remain closed
+curl -s https://staging.storemink.com/robots.txt
+curl -s https://staging.storemink.com/sitemap.xml
 ```
 
-In Search Console, watch **Sitemaps** (submitted/last-read) and **Pages**
-(indexed count) over the following days. Use **URL Inspection → Request indexing**
-to fast-track a specific important page.
-
-> **If staging was ever indexed** (it was crawlable before this change): `robots.txt
-Disallow: /` stops future crawling but won't evict pages already in the index.
-> Add a Search Console property for `staging.storemink.com` and use **Removals →
-> Temporarily remove** (or **Indexing → Remove**) to purge them. Going forward
-> nothing new will be indexed.
+After deployment, run the Scheduler job manually once and verify a 200 response.
+In Search Console, monitor Sitemaps, Pages, Crawl Stats, and individual URL
+Inspection. For a small number of urgent pages, URL Inspection's manual
+“Request indexing” can ask Google to recrawl sooner; there is no compliant API
+for automating that button for ecommerce/product/blog pages.

@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   canUpdateSubscription,
+  cancelsAtCycleEnd,
   decidePlanChange,
   describePlanChange,
+  hasLiveMandate,
   type PlanChangeRequest,
 } from "./plan-change";
 
@@ -157,5 +159,155 @@ describe("describePlanChange", () => {
       "monthly",
     );
     expect(later).toMatch(/nothing is charged today/i);
+  });
+});
+
+describe("hasLiveMandate", () => {
+  // The bug: this was "anything not cancelled/completed", so `created` counted.
+  // We create the subscription at Razorpay BEFORE showing the mandate screen,
+  // so closing the upgrade modal leaves a `created` row behind for good — and
+  // the billing card then told a store paying nothing that autopay would renew
+  // it, offered a Cancel that the gateway refused, and routed later upgrades
+  // through changePlan (which Razorpay only allows on authenticated/active),
+  // so one abandoned checkout disabled upgrading entirely.
+  it("is false for a subscription the merchant never authorised", () => {
+    expect(hasLiveMandate("created")).toBe(false);
+  });
+
+  it("is true once a mandate exists, including after a failed charge", () => {
+    // `pending` and `halted` are post-failure states: the mandate is real, and
+    // the merchant must still be able to cancel it.
+    for (const s of ["authenticated", "active", "pending", "halted"]) {
+      expect(hasLiveMandate(s), s).toBe(true);
+    }
+  });
+
+  it("is false for terminal states, null and unknown ones", () => {
+    for (const s of [
+      "cancelled",
+      "completed",
+      "expired",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(hasLiveMandate(s), String(s)).toBe(false);
+    }
+    // An allowlist, so a state Razorpay adds later reads as "no mandate" —
+    // a Subscribe button rather than controls that error.
+    expect(hasLiveMandate("some_future_state")).toBe(false);
+  });
+});
+
+describe("cancelsAtCycleEnd", () => {
+  // Razorpay refuses cancel_at_cycle_end when no cycle is running:
+  // "Subscription cannot be cancelled since no billing cycle is going on".
+  it("is false before the first charge, when no cycle exists", () => {
+    expect(cancelsAtCycleEnd("authenticated", null)).toBe(false);
+    expect(cancelsAtCycleEnd("created", null)).toBe(false);
+  });
+
+  it("is true only when active AND a cycle end is known", () => {
+    expect(cancelsAtCycleEnd("active", "2026-09-01T00:00:00Z")).toBe(true);
+    // Active with no current_end means we haven't seen the cycle yet; asking
+    // for a cycle-end cancel would be the call the gateway rejects.
+    expect(cancelsAtCycleEnd("active", null)).toBe(false);
+  });
+
+  it("is false for a paused or failed subscription", () => {
+    expect(cancelsAtCycleEnd("halted", "2026-09-01T00:00:00Z")).toBe(false);
+  });
+});
+
+describe("★ cancelsAtCycleEnd — an active mandate", () => {
+  it("waits for the cycle end once billing is actually running", () => {
+    // The merchant has paid for this cycle; cancelling immediately would take
+    // away something already bought.
+    expect(cancelsAtCycleEnd("active", "2026-09-01T00:00:00Z")).toBe(true);
+  });
+
+  it("★ cancels IMMEDIATELY when active but no cycle has an end", () => {
+    // Razorpay refuses a cycle-end cancel when no billing cycle is going on,
+    // and a cycle only starts at the first successful charge. Between
+    // authorising a mandate and being billed on it there is nothing to
+    // preserve, so this must fall back rather than fail.
+    expect(cancelsAtCycleEnd("active", null)).toBe(false);
+    expect(cancelsAtCycleEnd("active", undefined)).toBe(false);
+    expect(cancelsAtCycleEnd("active", "")).toBe(false);
+  });
+
+  it("matches the status case-insensitively", () => {
+    expect(cancelsAtCycleEnd("ACTIVE", "2026-09-01T00:00:00Z")).toBe(true);
+  });
+
+  it.each([null, undefined])(
+    "★ treats a %s status as not-active rather than throwing",
+    (status) => {
+      // The status comes from a Razorpay row that may not have been fetched.
+      // Cancelling immediately is the safe reading: it is what happens when
+      // no cycle is running, and it can never take away a paid-for period.
+      expect(cancelsAtCycleEnd(status, "2026-09-01T00:00:00Z")).toBe(false);
+    },
+  );
+});
+
+describe("★ describePlanChange — what changed decides the sentence", () => {
+  /** The exact shape describePlanChange accepts, so no cast is needed. */
+  type Decision = Parameters<typeof describePlanChange>[0];
+  const change = (over: Partial<Decision> = {}): Decision => ({
+    kind: "change",
+    when: "cycle_end",
+    immediate: false,
+    periodChanged: false,
+    planChanged: false,
+    ...over,
+  });
+
+  it("★ names only the BILLING PERIOD when the tier is unchanged", () => {
+    // "You'll move to Pro" would read as no change at all to someone who is
+    // already on Pro and is only switching monthly → yearly.
+    const s = describePlanChange(
+      change({ periodChanged: true }),
+      "Pro",
+      "yearly",
+    );
+    expect(s).toContain("Pro billed yearly");
+    expect(s).toContain("until it runs out");
+  });
+
+  it("★ names BOTH when the tier and the period move together", () => {
+    const s = describePlanChange(
+      change({
+        periodChanged: true,
+        planChanged: true,
+        immediate: true,
+        when: "now",
+      }),
+      "Pro",
+      "yearly",
+    );
+    expect(s).toContain("Pro, billed yearly");
+    expect(s).toContain("charged the difference");
+  });
+
+  it("names only the tier when the period is unchanged", () => {
+    const s = describePlanChange(
+      change({ planChanged: true, immediate: true, when: "now" }),
+      "Pro",
+      "monthly",
+    );
+    expect(s).toContain("move to Pro now");
+    expect(s).not.toContain("billed");
+  });
+
+  it("★ promises nothing is charged today on a downgrade", () => {
+    // The whole reason a cheaper move waits: no refund, no proration, no
+    // dispute. The copy has to say so or the merchant expects money back.
+    const s = describePlanChange(
+      change({ planChanged: true }),
+      "Basic",
+      "monthly",
+    );
+    expect(s).toContain("Nothing is charged today");
   });
 });

@@ -1,19 +1,51 @@
 // Server-side theme resolution. NEVER import this from a client component —
-// definitions embed large custom_code strings and sample data; the signup
-// picker imports lib/themes/meta.ts instead.
-import { DEFAULT_THEME_ID } from "./meta";
+// definitions embed page, menu, and sample-catalog payloads. Client surfaces
+// import the lightweight lib/themes/meta.ts catalog instead.
+import { DEFAULT_THEME_ID, THEME_META } from "./meta";
 import { basket } from "./definitions/basket";
+import { ritual } from "./definitions/ritual";
+import { studio } from "./definitions/studio";
 import type { ThemeDefinition } from "./types";
 
-export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [basket];
+/** Keep older immutable releases here when a preset version advances. */
+export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [
+  basket,
+  studio,
+  ritual,
+];
 
-const BY_ID = new Map(THEME_DEFINITIONS.map((t) => [t.id, t]));
+const BY_RELEASE = new Map(
+  THEME_DEFINITIONS.map((theme) => [
+    `${theme.id}@${theme.release.version}`,
+    theme,
+  ]),
+);
 
-/** Resolve a theme id (e.g. stores.settings.template) — unknown → default. */
-export function getThemeDefinition(id: unknown): ThemeDefinition {
+function currentRelease(id: string): ThemeDefinition | undefined {
+  const meta = THEME_META.find((theme) => theme.id === id);
+  return meta ? BY_RELEASE.get(`${id}@${meta.release.version}`) : undefined;
+}
+
+/** Resolve an installed preset. A supplied version is honored when its
+ * immutable definition remains registered. Missing/legacy versions fall back
+ * to that preset's current release, then the platform default. */
+export function getThemeDefinition(
+  id: unknown,
+  version?: unknown,
+): ThemeDefinition {
   if (typeof id === "string") {
-    const t = BY_ID.get(id);
-    if (t) return t;
+    if (typeof version === "string") {
+      const pinned = BY_RELEASE.get(`${id}@${version}`);
+      if (pinned) return pinned;
+    }
+    const current = currentRelease(id);
+    if (current) return current;
   }
-  return BY_ID.get(DEFAULT_THEME_ID)!;
+  const fallback = currentRelease(DEFAULT_THEME_ID);
+  if (!fallback) {
+    throw new Error(
+      `Default theme release is not registered: ${DEFAULT_THEME_ID}`,
+    );
+  }
+  return fallback;
 }

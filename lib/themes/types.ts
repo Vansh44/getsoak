@@ -123,13 +123,20 @@ export interface ThemeShape {
 export interface ThemeLayout {
   /** "market": solid coloured header bar with a prominent, functional search
    *  box (grocery style). "classic" (default): transparent-to-cream bar. */
-  header?: "classic" | "market";
+  header?: "classic" | "market" | "centered" | "minimal";
   /** Market header colours (strict colours; defaults: ink / on-ink). */
   headerBackground?: string;
   headerForeground?: string;
   /** "quick_add": product cards get an inline "+ Add" to-cart button.
    *  "classic" (default): the whole card is a click-through link only. */
-  card?: "classic" | "quick_add";
+  card?: "classic" | "quick_add" | "overlay" | "framed" | "grocery";
+  /** Product-detail composition. `storefront:grocery` remains the legacy
+   *  shorthand and is used when this field is absent. */
+  productDetail?: "classic" | "grocery" | "editorial";
+  /** Cart composition. `storefront:grocery` remains the legacy fallback. */
+  cart?: "classic" | "grocery" | "compact";
+  /** Footer composition; current multi-column footer is `rich`. */
+  footer?: "rich" | "minimal" | "editorial";
   /** The overall storefront treatment. "grocery" switches product cards, the
    *  product-detail page and the cart to a distinct premium grocery layout
    *  (new markup + new classes, gated by the `sm-storefront-grocery` root
@@ -145,7 +152,9 @@ export interface ThemeDesign {
   layout?: ThemeLayout;
 }
 
-export interface ThemeDefinition extends ThemeMeta {
+/** Immutable authored preset package. Applying it seeds starting content;
+ * merchant edits then live in store-scoped DB rows and are not this object. */
+export interface ThemePreset {
   brand: {
     primaryColor: string;
     tagline?: string;
@@ -159,6 +168,12 @@ export interface ThemeDefinition extends ThemeMeta {
     categories: ThemeCategorySeed[];
     products: ThemeProductSeed[];
   };
+}
+
+/** One immutable preset release. Multiple releases with the same id may stay
+ * registered so stores pinned to an older version never change implicitly. */
+export interface ThemeDefinition extends ThemeMeta {
+  preset: ThemePreset;
 }
 
 /**

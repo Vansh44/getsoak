@@ -33,6 +33,8 @@ const MONEY = new Set([
   "tax",
   "shipping",
   "refund_amount",
+  "refund_due",
+  "fees",
   "price",
   "balance",
 ]);

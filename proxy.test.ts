@@ -107,4 +107,13 @@ describe("proxy — host routing (unchanged)", () => {
     );
     expect(res.headers.get("x-middleware-rewrite")).toContain("/platform");
   });
+
+  it("rewrites the reserved themes host into the public catalog", async () => {
+    const res = await proxy(
+      req("https://themes.storemink.com/", "themes.storemink.com"),
+    );
+    expect(res.headers.get("x-middleware-rewrite")).toContain("/themes");
+    expect(res.headers.get("x-middleware-rewrite")).not.toContain("/platform");
+    expect(verifySessionCookie).not.toHaveBeenCalled();
+  });
 });

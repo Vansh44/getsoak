@@ -37,10 +37,18 @@ each job is a landmine the moment it does:
 | `storemink-send-emails`             | `0 0 * * *`    | `https://storemink.com/api/cron/send-emails`             |
 | `storemink-plan-expiry`             | `15 0 * * *`   | `https://storemink.com/api/cron/plan-expiry`             |
 | `storemink-expire-pending-payments` | `30 1 * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
+| `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
 
-All three: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+All four: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
+
+`seo-refresh` registers the platform/help sitemaps, retries sitemap coverage for
+every launched store, and automatically verifies Search Console URL-prefix
+properties for connected custom domains. It returns **503 on any partial
+failure**, so Scheduler retries are part of its reliability contract. Enable
+the Google Search Console + Site Verification APIs and configure the runtime
+service account first; see `docs/seo-indexing.md`.
 
 > **⚠ `send-emails` must stay at 00:00 UTC.** `DAILY_DIGEST_HOUR_UTC` is 23:00
 > _because_ the heartbeat is 00:00 UTC (CODEBASE.md §24). Moving this schedule
@@ -65,6 +73,17 @@ gcloud scheduler jobs create http storemink-plan-expiry \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
+Create the SEO job with the same secret/header contract:
+
+```bash
+gcloud scheduler jobs create http storemink-seo-refresh \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="0 2 * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/seo-refresh" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
 ## Verifying
 
 Trigger one by hand and confirm Cloud Run answered 200 — a job can be `ENABLED`
@@ -78,7 +97,8 @@ gcloud scheduler jobs run storemink-plan-expiry --project=storemink-prod --locat
 gcloud logging read 'resource.type="cloud_run_revision" AND httpRequest.requestUrl=~"/api/cron/"' --project=storemink-prod --limit=10 --format="value(httpRequest.status,httpRequest.requestUrl)"
 ```
 
-Verified this way on 2026-07-30: all three returned **200**.
+The original three were verified this way on 2026-07-30. The SEO job is new and
+must be created and verified after this change reaches production.
 
 ## Staging
 
@@ -90,7 +110,7 @@ environment's `CRON_SECRET`.
 ## If you rotate `CRON_SECRET`
 
 The header is baked into each job at creation. Rotating the secret without
-updating the jobs makes all three start returning 401 — silently, because a
+updating the jobs makes all four start returning 401 — silently, because a
 failing cron looks identical to one that had nothing to do. Update them with
 `gcloud scheduler jobs update http <name> --headers=...`, then re-verify with the
 logging query above.

@@ -18,9 +18,7 @@ import {
 } from "@/app/dashboard/lib/access";
 import { emitEvent } from "@/lib/notifications/record";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
-import { getStoreUrl } from "@/lib/site";
-import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
-import { markStoreLaunched } from "@/lib/store/launch";
+import { notifyStoreContentPublished } from "@/lib/seo/store-indexing";
 import { TAGS } from "@/lib/storefront/tags";
 import { callGemini, brandSystemText } from "@/lib/ai/gemini";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
@@ -75,6 +73,8 @@ export interface ProductFormData {
   // Optional per-product tax class (public.tax_classes). Products without one
   // fall back to the store default at checkout. Empty string / null = none.
   tax_class_id?: string | null;
+  returnable?: boolean;
+  return_window_days?: number | null;
 }
 
 export interface ActionResult {
@@ -299,31 +299,27 @@ function revalidateProduct(slug?: string) {
 }
 
 // Nudge search engines to (re)crawl a product page after it goes live. No-op
-// for drafts — a draft URL isn't publicly indexable. Best-effort, off the
-// response path; getStoreUrl reads the request host so resolve it before after.
-async function notifyProductPublished(
-  slug: string | undefined,
+// for drafts — a draft URL isn't publicly indexable. Best-effort and off the
+// response path; the helper derives the canonical origin from the store id.
+async function notifyProductsPublished(
+  slugs: (string | null | undefined)[],
   published: boolean,
 ) {
-  if (!published || !slug) return;
+  const live = [...new Set(slugs.filter((slug): slug is string => !!slug))];
+  if (!published || live.length === 0) return;
   // Swallow everything: this runs after the product is already saved, and a
   // search-engine ping must never turn a successful save into an error the
   // merchant sees and retries.
   try {
-    const base = await getStoreUrl();
     const storeId = await getActingStoreId();
-    after(async () => {
-      // Publishing a real product means the store is no longer just the theme
-      // seed (sample products now seed as drafts — lib/themes/apply.ts), so
-      // this is a genuine signal that the shop is open. See lib/store/launch.ts.
-      await markStoreLaunched(storeId);
-      await Promise.allSettled([
-        pingIndexNow([`${base}/shop/${slug}`, `${base}/shop`]),
-        submitSitemapToGoogle(`${base}/sitemap.xml`),
-      ]);
-    });
+    after(() =>
+      notifyStoreContentPublished({
+        storeId,
+        paths: [...live.map((slug) => `/shop/${slug}`), "/shop", "/"],
+      }),
+    );
   } catch (err) {
-    console.error("notifyProductPublished failed:", (err as Error).message);
+    console.error("notifyProductsPublished failed:", (err as Error).message);
   }
 }
 
@@ -376,6 +372,21 @@ async function fetchProductImageUrls(
 // Create
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-product return window override.
+ *
+ * NULL means "use the store's `returns.windowDays`" — deliberately not a copy
+ * of the store value, so a merchant changing their store-wide window later
+ * still reaches products saved before the change. 0 is MEANINGFUL (same-day
+ * only), so it must survive rather than being coerced to null.
+ */
+function normalizeReturnWindow(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(365, Math.max(0, Math.trunc(n)));
+}
+
 export async function createProduct(
   formData: ProductFormData,
 ): Promise<ActionResult> {
@@ -418,6 +429,8 @@ export async function createProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    returnable: formData.returnable !== false,
+    returnWindowDays: normalizeReturnWindow(formData.return_window_days),
     // The merchant's own scannable supplier code (NOT the system sku below).
     barcode:
       typeof formData.barcode === "string"
@@ -461,7 +474,7 @@ export async function createProduct(
       return { error: `Product saved but variants failed: ${variantError}` };
     }
     revalidateProduct(slug);
-    await notifyProductPublished(slug, formData.status === "published");
+    await notifyProductsPublished([slug], formData.status === "published");
     emitEvent({
       type: "product.created",
       storeId,
@@ -537,6 +550,8 @@ export async function updateProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    returnable: formData.returnable !== false,
+    returnWindowDays: normalizeReturnWindow(formData.return_window_days),
     barcode:
       typeof formData.barcode === "string"
         ? formData.barcode.trim() || null
@@ -581,7 +596,7 @@ export async function updateProduct(
     await deleteStorageUrls(oldImageUrls.filter((u) => !kept.has(u)));
 
     revalidateProduct(slug);
-    await notifyProductPublished(slug, formData.status === "published");
+    await notifyProductsPublished([slug], formData.status === "published");
     emitEvent({
       type: "product.updated",
       storeId,
@@ -668,7 +683,7 @@ export async function toggleProductPublish(
   if (!updated) return { error: "Product not found." };
 
   revalidateProduct(updated.slug);
-  await notifyProductPublished(updated.slug, publish);
+  await notifyProductsPublished([updated.slug], publish);
   return { success: true };
 }
 
@@ -686,8 +701,9 @@ export async function bulkToggleProductPublish(
   const userId = admin.uid;
   if (ids.length === 0) return { error: "Nothing selected." };
 
+  let touched: { slug: string }[] = [];
   try {
-    await withUser(admin, (db) =>
+    touched = await withUser(admin, (db) =>
       db
         .update(products)
         .set({
@@ -695,13 +711,20 @@ export async function bulkToggleProductPublish(
           publishedAt: publish ? new Date().toISOString() : null,
           updatedBy: userId,
         })
-        .where(inArray(products.id, ids)),
+        .where(inArray(products.id, ids))
+        .returning({ slug: products.slug }),
     );
   } catch (err) {
     console.error("bulkToggleProductPublish error:", err);
     return { error: dbErrorMessage(err, "Failed to update products.") };
   }
   revalidateProduct();
+  if (publish) {
+    await notifyProductsPublished(
+      touched.map((product) => product.slug),
+      true,
+    );
+  }
   return { success: true };
 }
 

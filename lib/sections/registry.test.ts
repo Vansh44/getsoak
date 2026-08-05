@@ -142,6 +142,11 @@ describe("draft vs publish validation modes", () => {
       ["rich_text", { html: "" }],
       ["custom_code", { html: "", css: "", js: "" }],
       ["promo_banner", { heading: "", image_url: "" }],
+      ["media_text", { heading: "", body: "", image_url: "" }],
+      ["gallery", { items: [] }],
+      ["testimonials", { items: [] }],
+      ["video", { video_url: "" }],
+      ["newsletter", { heading: "", subheading: "", consent_text: "" }],
     ];
     for (const [type, raw] of incomplete) {
       expect(

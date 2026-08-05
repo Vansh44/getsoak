@@ -218,3 +218,22 @@ describe("round2", () => {
     expect(round2(1.005)).toBe(1);
   });
 });
+
+describe("cash refunds leave the drawer", () => {
+  const base = { openingFloat: 1000, payments: [], movements: [] };
+
+  it("★ subtracts refunds from what the drawer should hold", () => {
+    expect(shiftTotals({ ...base, cashRefunds: 250 }).expectedCash).toBe(750);
+  });
+
+  it("a store with no returns is unchanged", () => {
+    expect(shiftTotals(base).expectedCash).toBe(1000);
+    expect(shiftTotals(base).cashRefunds).toBe(0);
+  });
+
+  it("treats a stored negative as an amount, not a direction", () => {
+    // Direction is carried by being a refund at all — a signed amount AND a
+    // meaning would be two sources of truth.
+    expect(shiftTotals({ ...base, cashRefunds: -250 }).expectedCash).toBe(750);
+  });
+});

@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Printer, X } from "lucide-react";
+import { Check, Loader2, Printer, Receipt, X } from "lucide-react";
 import { getPosReceipt } from "@/app/actions/pos-sale-actions";
 import { ThermalReceipt } from "@/components/pos/thermal-receipt";
 import type { ReceiptModel } from "@/lib/pos/receipt";
+
+// Two decimals always — change handed back is money, and "₹249.9" reads as a
+// typo at the exact moment a customer is checking it.
+const money = (n: number) =>
+  n.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
 // Shown the moment a sale completes: confirmation + change to hand back, with
 // the 80mm receipt ready to print. thermal-receipt.css hides everything except
@@ -12,9 +20,17 @@ import type { ReceiptModel } from "@/lib/pos/receipt";
 export function ReceiptOverlay({
   orderId,
   onClose,
+  mode = "completed",
 }: {
   orderId: string;
   onClose: () => void;
+  /**
+   * "completed" is the moment of sale — it leads with change due, because
+   * that's money about to leave the drawer. "reprint" is a customer asking
+   * for a duplicate bill minutes or days later: the change was handed over
+   * long ago, so repeating it would just be confusing.
+   */
+  mode?: "completed" | "reprint";
 }) {
   const [receipt, setReceipt] = useState<ReceiptModel | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +47,8 @@ export function ReceiptOverlay({
     };
   }, [orderId]);
 
+  const reprint = mode === "reprint";
+
   // Enter starts the next sale — the cashier's hands stay on the keyboard.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -43,23 +61,35 @@ export function ReceiptOverlay({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
       <div className="tr-no-print w-full max-w-sm rounded-2xl border border-white/10 bg-[#12171f] p-5 text-center">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400">
-          <Check className="h-7 w-7" strokeWidth={2.5} />
+        <div
+          className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
+            reprint
+              ? "bg-white/10 text-white/70"
+              : "bg-emerald-500/15 text-emerald-400"
+          }`}
+        >
+          {reprint ? (
+            <Receipt className="h-7 w-7" strokeWidth={2} />
+          ) : (
+            <Check className="h-7 w-7" strokeWidth={2.5} />
+          )}
         </div>
-        <h2 className="mt-3 text-lg font-bold">Sale complete</h2>
+        <h2 className="mt-3 text-lg font-bold">
+          {reprint ? "Receipt" : "Sale complete"}
+        </h2>
 
-        {receipt && receipt.changeDue > 0 && (
+        {!reprint && receipt && receipt.changeDue > 0 && (
           <div className="mt-3 rounded-xl bg-amber-400/15 px-4 py-3">
             <div className="text-sm text-amber-200">Change due</div>
             <div className="text-2xl font-bold text-amber-100">
-              ₹{receipt.changeDue.toLocaleString("en-IN")}
+              ₹{money(receipt.changeDue)}
             </div>
           </div>
         )}
 
         {receipt && (
           <p className="mt-2 text-sm text-white/60">
-            {receipt.receiptNo} · ₹{receipt.total.toLocaleString("en-IN")}
+            {receipt.receiptNo} · ₹{money(receipt.total)}
           </p>
         )}
         {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
@@ -80,20 +110,26 @@ export function ReceiptOverlay({
           <button
             type="button"
             onClick={onClose}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold hover:bg-emerald-500"
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold ${
+              reprint
+                ? "bg-white/10 hover:bg-white/20"
+                : "bg-emerald-600 hover:bg-emerald-500"
+            }`}
           >
             <X className="h-4 w-4" strokeWidth={2} />
-            New sale
+            {reprint ? "Done" : "New sale"}
           </button>
         </div>
         <p className="mt-2 text-[11px] text-white/40">
-          Press Enter to start the next sale
+          {reprint
+            ? "Press Enter to close"
+            : "Press Enter to start the next sale"}
         </p>
       </div>
 
       {/* Off-screen until printed. */}
       {receipt && (
-        <div className="pointer-events-none fixed left-[-9999px] top-0">
+        <div className="tr-print-host pointer-events-none fixed top-0 left-[-9999px]">
           <ThermalReceipt receipt={receipt} />
         </div>
       )}

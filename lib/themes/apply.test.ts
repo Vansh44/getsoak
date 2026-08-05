@@ -144,6 +144,13 @@ describe("applyTheme", () => {
     await applyTheme("store-1", "basket", { publish: true });
     const update = dbHolder.current.calls.update.stores[0];
     expect(update.settings.template).toBe("basket");
+    expect(update.settings.theme).toMatchObject({
+      presetId: "basket",
+      presetVersion: "1.0.0",
+      engineId: "storefront-grocery",
+      engineVersion: 1,
+    });
+    expect(update.settings.theme.appliedAt).toEqual(expect.any(String));
     expect(update.settings.brand.name).toBe("My Shop"); // preserved
     expect(update.settings.brand.primaryColor).toBe("#ef5a2a"); // themed
   });

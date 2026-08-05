@@ -7,19 +7,26 @@ import {
   LIMIT_MIN,
   LIMIT_MAX,
   MAX_FAQ_ITEMS,
+  MAX_GALLERY_ITEMS,
   MAX_HERO_SLIDES,
   MAX_TICKER_MESSAGES,
   MAX_TILES,
+  MAX_TESTIMONIAL_ITEMS,
   MAX_USP_ITEMS,
   type FaqAccordionConfig,
   type FeaturedProductsConfig,
+  type GalleryConfig,
   type HeroCarouselConfig,
   type HeroConfig,
   type ShopByCategoryConfig,
   type PromoBannerConfig,
   type LatestBlogsConfig,
+  type MediaTextConfig,
+  type NewsletterSectionConfig,
   type TickerConfig,
   type TileGridConfig,
+  type TestimonialsConfig,
+  type VideoConfig,
   type UspBarConfig,
 } from "./section-types";
 
@@ -63,7 +70,7 @@ describe("clampLimit", () => {
 // into a clean, storable config (irrelevant keys dropped) or returns an error.
 describe("validateConfig", () => {
   it("rejects an unknown section type", () => {
-    const out = validateConfig("testimonials" as never, {});
+    const out = validateConfig("definitely_unknown" as never, {});
     expect(out).toEqual({ error: "Unknown section type." });
   });
 
@@ -376,6 +383,126 @@ describe("validateConfig", () => {
     });
   });
 
+  describe("media_text", () => {
+    it("normalises editorial layout and strips unsafe links", () => {
+      const out = validateConfig("media_text", {
+        eyebrow: "  Our craft  ",
+        heading: "  Made slowly  ",
+        body: "  A considered process.  ",
+        cta_label: "Read more",
+        cta_href: "javascript:alert(1)",
+        image_url: "https://cdn.example.com/story.webp",
+        image_alt: "  An artisan at work  ",
+        media_position: "right",
+        media_ratio: "landscape",
+        alignment: "center",
+      });
+      const config = (out as { config: MediaTextConfig }).config;
+      expect(config).toEqual({
+        eyebrow: "Our craft",
+        heading: "Made slowly",
+        body: "A considered process.",
+        cta_label: "Read more",
+        cta_href: "",
+        image_url: "https://cdn.example.com/story.webp",
+        image_alt: "An artisan at work",
+        media_position: "right",
+        media_ratio: "landscape",
+        alignment: "center",
+      });
+    });
+
+    it("requires content when publishing but keeps an empty draft", () => {
+      expect(validateConfig("media_text", {})).toEqual({
+        error: "Add a heading, story or image.",
+      });
+      expect("config" in validateConfig("media_text", {}, "draft")).toBe(true);
+    });
+  });
+
+  describe("gallery", () => {
+    it("requires two images, drops empty published rows and normalises layout", () => {
+      const out = validateConfig("gallery", {
+        heading: "  Lookbook  ",
+        layout: "unexpected",
+        columns: 9,
+        image_ratio: "square",
+        items: [
+          { image_url: "/one.webp", caption: " One " },
+          { image_url: "", caption: "No image" },
+          {
+            image_url: "/two.webp",
+            href: "javascript:alert(1)",
+          },
+        ],
+      });
+      const config = (out as { config: GalleryConfig }).config;
+      expect(config.heading).toBe("Lookbook");
+      expect(config.items).toHaveLength(2);
+      expect(config.items[0].caption).toBe("One");
+      expect(config.items[1].href).toBe("");
+      expect(config.layout).toBe("editorial");
+      expect(config.columns).toBe(3);
+      expect(config.image_ratio).toBe("square");
+    });
+
+    it("allows incomplete rows in drafts and enforces the item cap", () => {
+      expect(
+        validateConfig("gallery", { items: [{ image_url: "/one" }] }),
+      ).toEqual({ error: "Add at least two gallery images." });
+      expect(
+        "config" in
+          validateConfig("gallery", { items: [{ image_url: "" }] }, "draft"),
+      ).toBe(true);
+      const items = Array.from({ length: MAX_GALLERY_ITEMS + 1 }, () => ({
+        image_url: "/image.webp",
+      }));
+      expect(validateConfig("gallery", { items })).toEqual({
+        error: `At most ${MAX_GALLERY_ITEMS} gallery images.`,
+      });
+    });
+  });
+
+  describe("testimonials", () => {
+    it("supports quotes and logo-only press mentions", () => {
+      const out = validateConfig("testimonials", {
+        eyebrow: "  In the press ",
+        layout: "editorial",
+        columns: 2,
+        items: [
+          { quote: "  Beautifully made. ", author: "Asha" },
+          {
+            logo_url: "/press.svg",
+            logo_alt: "Design Journal",
+            detail: "Editors’ pick",
+          },
+          { quote: "", logo_url: "" },
+        ],
+      });
+      const config = (out as { config: TestimonialsConfig }).config;
+      expect(config.items).toHaveLength(2);
+      expect(config.items[0].quote).toBe("Beautifully made.");
+      expect(config.items[1].logo_alt).toBe("Design Journal");
+      expect(config.layout).toBe("editorial");
+      expect(config.columns).toBe(2);
+    });
+
+    it("requires one item on publish and enforces the item cap", () => {
+      expect(validateConfig("testimonials", { items: [] })).toEqual({
+        error: "Add at least one testimonial or press mention.",
+      });
+      expect(
+        "config" in validateConfig("testimonials", { items: [] }, "draft"),
+      ).toBe(true);
+      const items = Array.from({ length: MAX_TESTIMONIAL_ITEMS + 1 }, () => ({
+        quote: "Great",
+      }));
+      expect(validateConfig("testimonials", { items })).toEqual({
+        error: `At most ${MAX_TESTIMONIAL_ITEMS} testimonials.`,
+      });
+    });
+  });
+
   // --- faq_accordion ---------------------------------------------------------
   describe("faq_accordion", () => {
     it("drops empty rows and caps question length", () => {
@@ -635,6 +762,76 @@ describe("validateConfig", () => {
       expect(config.heading).toBe("Sale");
       expect(config.subtext).toBe("Up to 50% off");
       expect(config.cta_label).toBe("Shop now");
+    });
+  });
+});
+
+describe("phase 3 video and newsletter sections", () => {
+  it("requires a safe video URL on publish and keeps incomplete drafts", () => {
+    expect(validateConfig("video", { video_url: "" })).toEqual({
+      error: "Add a video before publishing.",
+    });
+    expect("config" in validateConfig("video", {}, "draft")).toBe(true);
+    expect(
+      validateConfig("video", { video_url: "javascript:alert(1)" }),
+    ).toEqual({
+      error: "Add a video before publishing.",
+    });
+  });
+
+  it("normalises video playback and layout options", () => {
+    const out = validateConfig("video", {
+      eyebrow: " Watch ",
+      heading: " Studio film ",
+      video_url: "https://vimeo.com/123456789",
+      poster_url: "javascript:alert(1)",
+      aspect_ratio: "portrait",
+      width: "full",
+      autoplay: true,
+      loop: true,
+      controls: false,
+    });
+    const config = (out as { config: VideoConfig }).config;
+    expect(config).toMatchObject({
+      eyebrow: "Watch",
+      heading: "Studio film",
+      video_url: "https://vimeo.com/123456789",
+      poster_url: "",
+      aspect_ratio: "portrait",
+      width: "full",
+      autoplay: true,
+      loop: true,
+      controls: false,
+    });
+  });
+
+  it("requires newsletter copy and explicit consent text on publish", () => {
+    expect(validateConfig("newsletter", {})).toEqual({
+      error: "Add a newsletter heading or description.",
+    });
+    expect(validateConfig("newsletter", { heading: "Join us" })).toEqual({
+      error: "Add consent text before publishing.",
+    });
+    expect("config" in validateConfig("newsletter", {}, "draft")).toBe(true);
+  });
+
+  it("normalises newsletter copy, theme and alignment", () => {
+    const out = validateConfig("newsletter", {
+      heading: "  Notes worth opening ",
+      consent_text: " I agree to receive updates. ",
+      button_label: "",
+      success_message: "",
+      theme: "light",
+      alignment: "left",
+    });
+    const config = (out as { config: NewsletterSectionConfig }).config;
+    expect(config).toMatchObject({
+      heading: "Notes worth opening",
+      consent_text: "I agree to receive updates.",
+      button_label: "Subscribe",
+      success_message: "You're on the list — thank you.",
+      theme: "light",
+      alignment: "left",
     });
   });
 });

@@ -123,6 +123,7 @@ export interface DbMock {
     execute: any[];
     limit: any[];
     offset: any[];
+    forUpdate: any[];
   };
 }
 
@@ -163,6 +164,7 @@ export function makeDbMock(
     execute: [],
     limit: [],
     offset: [],
+    forUpdate: [],
   };
 
   // A thenable step that also exposes .where()/.returning() terminals, so both
@@ -203,6 +205,13 @@ export function makeDbMock(
       }),
       offset: vi.fn((n: any) => {
         calls.offset.push(n);
+        return s;
+      }),
+      // SELECT ... FOR UPDATE — the row lock refund-actions takes so two
+      // concurrent refunds on one order serialise instead of both passing the
+      // cap. Recorded so a test can assert the lock is still there.
+      for: vi.fn((mode: any) => {
+        calls.forUpdate.push(mode);
         return s;
       }),
       then: (resolve: any) => Promise.resolve(rows).then(resolve),

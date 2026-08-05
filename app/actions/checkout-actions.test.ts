@@ -12,6 +12,15 @@ vi.mock("@/lib/store/resolve", () => ({
   getCurrentStore: vi.fn(async () => ({ id: STORE, name: "Test Store" })),
 }));
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn() }));
+// Store credit is a separate concern from what these tests assert (pricing,
+// stock, coupons). Mocked so it neither adds a query to their fixture queues
+// nor changes any amount — a 0 balance is exactly today's behaviour. Its own
+// integration is covered in the "store credit" block at the bottom.
+vi.mock("@/lib/credit/store-credit", () => ({
+  getCreditBalance: vi.fn(async () => 0),
+  spendCredit: vi.fn(async () => true),
+  reinstateCreditForOrder: vi.fn(async () => 0),
+}));
 vi.mock("./coupon-actions", () => ({ validateCoupon: vi.fn() }));
 // Online payments: the gateway loader (credential decrypt) and the Razorpay
 // HTTP calls are mocked at the module boundary; the pure helpers
@@ -54,6 +63,11 @@ import {
   reconcileMyOrderPayment,
   type CheckoutFormData,
 } from "./checkout-actions";
+import {
+  getCreditBalance,
+  spendCredit,
+  reinstateCreditForOrder,
+} from "@/lib/credit/store-credit";
 import { getServerUser } from "@/lib/auth/server-user";
 import { rateLimit } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
@@ -720,5 +734,111 @@ describe("reconcileMyOrderPayment", () => {
     const res = await reconcileMyOrderPayment("order-1");
     expect(res).toEqual({ success: true, paid: false });
     expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Store credit at checkout (roadmap Step 4 / returns-exchanges-plan Step 7)
+// ---------------------------------------------------------------------------
+
+describe("placeOrder — store credit", () => {
+  /** The happy COD fixture, with a balance to spend. */
+  function seedWithCredit(balance: number) {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+    vi.mocked(getServerUser).mockResolvedValue({ id: "user-1" } as any);
+    vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
+    vi.mocked(validateCoupon).mockResolvedValue({} as any);
+    vi.mocked(getCreditBalance).mockResolvedValue(balance);
+    vi.mocked(spendCredit).mockResolvedValue(true);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("spends credit against the order and records how much", async () => {
+    seedWithCredit(50);
+    const res = await placeOrder(validForm, [oneItem()]);
+    expect("error" in res && res.error).toBeFalsy();
+
+    expect(spendCredit).toHaveBeenCalledWith(
+      expect.objectContaining({ customerId: "user-1", orderId: "order-1" }),
+    );
+    // ★ Recorded on the order, NOT netted off the total — credit is a payment,
+    // not a discount, and the invoice/GST must still reflect the goods value.
+    const stamped = dbHolder.current.calls.set.find(
+      (v: any) => v && "storeCreditUsed" in v,
+    );
+    expect(stamped.storeCreditUsed).toBe(50);
+  });
+
+  it("★ leaves orders.total alone — it is the goods value, not the amount due", async () => {
+    // Netting credit off would understate the sale on the invoice and compute
+    // GST on the wrong base. So the SAME basket must write the SAME total
+    // whether or not credit was applied.
+    const totalFor = async (balance: number) => {
+      seedWithCredit(balance);
+      await placeOrder(validForm, [oneItem()]);
+      return dbHolder.current.calls.values.find(
+        (v: any) => v && !Array.isArray(v) && "subtotal" in v,
+      ).total;
+    };
+    const withoutCredit = await totalFor(0);
+    const withCredit = await totalFor(50);
+    expect(withCredit).toBe(withoutCredit);
+  });
+
+  it("does nothing when the customer has no balance", async () => {
+    seedWithCredit(0);
+    await placeOrder(validForm, [oneItem()]);
+    expect(spendCredit).not.toHaveBeenCalled();
+  });
+
+  it("★ never refuses the sale when the balance moved underneath it", async () => {
+    // Invariant 6: never refuse a sale over an optional feature. A race on the
+    // balance means they pay the full amount, not that checkout fails.
+    seedWithCredit(50);
+    vi.mocked(spendCredit).mockResolvedValue(false);
+    const res = await placeOrder(validForm, [oneItem()]);
+    expect("error" in res && res.error).toBeFalsy();
+    const stamped = dbHolder.current.calls.set.find(
+      (v: any) => v && "storeCreditUsed" in v,
+    );
+    expect(stamped).toBeUndefined();
+  });
+
+  it("★ marks a fully-covered order PAID, with nothing to collect", async () => {
+    // Otherwise a COD courier is told to collect ₹0 and the gateway would be
+    // asked for an amount it refuses.
+    seedWithCredit(500);
+    await placeOrder(validForm, [oneItem()]);
+    const paid = dbHolder.current.calls.set.find(
+      (v: any) => v && v.paymentMethod === "store_credit",
+    );
+    expect(paid).toMatchObject({
+      paymentMethod: "store_credit",
+      paymentStatus: "paid",
+    });
+  });
+
+  it("does not mark a partly-covered order paid", async () => {
+    seedWithCredit(50);
+    await placeOrder(validForm, [oneItem()]);
+    const paid = dbHolder.current.calls.set.find(
+      (v: any) => v && v.paymentMethod === "store_credit",
+    );
+    expect(paid).toBeUndefined();
+  });
+
+  it("doesn't look up a balance for a signed-out shopper", async () => {
+    seedWithCredit(50);
+    vi.mocked(getServerUser).mockResolvedValue(null as any);
+    await placeOrder(validForm, [oneItem()]);
+    expect(spendCredit).not.toHaveBeenCalled();
+    expect(reinstateCreditForOrder).not.toHaveBeenCalled();
   });
 });

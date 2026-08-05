@@ -2,8 +2,13 @@ import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
 import { LEGAL_DOCS } from "@/lib/legal/documents";
 import { matchesDisallow } from "@/lib/seo/disallow";
-import { HELP_URL, PLATFORM_URL, storeOrigin } from "@/lib/site";
-import { SEARCH_INDEXABLE, isHelpHost, isPlatformHost } from "@/lib/store/host";
+import { HELP_URL, PLATFORM_URL, THEMES_URL, storeOrigin } from "@/lib/site";
+import {
+  SEARCH_INDEXABLE,
+  isHelpHost,
+  isPlatformHost,
+  isThemesHost,
+} from "@/lib/store/host";
 import { isStoreLaunched } from "@/lib/store/launch";
 import {
   getPublishedProducts,
@@ -152,6 +157,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       })),
     ];
     return entries;
+  }
+
+  if (isThemesHost(host)) {
+    return [
+      {
+        url: THEMES_URL,
+        changeFrequency: "weekly",
+        priority: 1,
+      },
+    ];
   }
 
   // Per-host: resolve the store on the requesting domain.

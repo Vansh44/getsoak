@@ -1203,6 +1203,24 @@ export const orders = pgTable(
       mode: "string",
     }),
     collectedBy: text("collected_by"),
+    // How much of `total` was settled with store credit
+    // (store_credit_01_schema.sql). `total` stays the FULL goods value —
+    // credit is a PAYMENT, not a discount, so netting it off would understate
+    // the sale on the invoice and compute GST on the wrong base.
+    storeCreditUsed: numeric("store_credit_used", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    // When the parcel actually LANDED (refunds_01_gateway.sql). The return
+    // window starts here — measured from created_at, a 7-day window on a
+    // 10-day delivery expires before the customer has the goods.
+    deliveredAt: timestamp("delivered_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     // Claimed by the reminder job so the nudge fires exactly once
     // (locations_06_pickup_reminder.sql).
     // When the shop expects it ready (locations_09). The hold window is
@@ -1607,6 +1625,10 @@ export const products = pgTable(
     skuNo: integer("sku_no").notNull(),
     variantSeq: integer("variant_seq").default(0).notNull(),
     taxClassId: uuid("tax_class_id"),
+    // Return policy (returns_01_product_policy.sql). `returnable` FALSE = final
+    // sale; `returnWindowDays` NULL = use the store's returns.windowDays.
+    returnable: boolean().notNull().default(true),
+    returnWindowDays: integer("return_window_days"),
     // pos_06: the SUPPLIER barcode a cashier scans — distinct from the
     // system-generated Luhn `sku`, which is ours and immutable.
     barcode: text(),
@@ -2554,6 +2576,8 @@ export const storeCounters = pgTable(
     storeId: uuid("store_id").primaryKey().notNull(),
     orderSeq: integer("order_seq").default(999).notNull(),
     productSeq: integer("product_seq").default(0).notNull(),
+    /** GST credit note serial (returns_04_credit_notes.sql). */
+    creditNoteSeq: integer("credit_note_seq").default(0).notNull(),
   },
   (table) => [
     foreignKey({
@@ -2592,6 +2616,61 @@ export const storeChrome = pgTable(
       foreignColumns: [stores.id],
       name: "store_chrome_store_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// Store-scoped mailing-list consent captured by the footer and newsletter
+// page section (supabase/themes_01_newsletter_subscribers.sql). Public forms
+// write through a validated, rate-limited server action using service scope;
+// RLS exposes rows only to the owning store's admins.
+export const newsletterSubscribers = pgTable(
+  "newsletter_subscribers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    email: text().notNull(),
+    status: text().default("active").notNull(),
+    source: text().default("section").notNull(),
+    consentText: text("consent_text").notNull(),
+    consentedAt: timestamp("consented_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("newsletter_subscribers_store_email_key").on(
+      table.storeId,
+      table.email,
+    ),
+    index("idx_newsletter_subscribers_store_status").on(
+      table.storeId,
+      table.status,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "newsletter_subscribers_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "newsletter_subscribers_status_check",
+      sql`status = ANY (ARRAY['active'::text, 'unsubscribed'::text])`,
+    ),
+    check(
+      "newsletter_subscribers_source_check",
+      sql`source = ANY (ARRAY['footer'::text, 'section'::text])`,
+    ),
+    check(
+      "newsletter_subscribers_email_normalized_check",
+      sql`email = lower(btrim(email))`,
+    ),
   ],
 );
 
@@ -3832,4 +3911,172 @@ export const planPrices = pgTable("plan_prices", {
     .defaultNow()
     .notNull(),
   updatedBy: text("updated_by"),
+});
+
+// ---- Returns & refunds (supabase/pos_12_returns.sql) ----------------------
+// Two tables because they are two facts: a return can be refunded across
+// several tenders, and a refund can happen with no return (a cancellation).
+
+export const orderReturns = pgTable("order_returns", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+  /** Where the goods came back TO — not necessarily where they were sold. */
+  locationId: uuid("location_id"),
+  shiftId: uuid("shift_id"),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** The customer's own words. `reasonCode` is the one that decides fees. */
+  reason: text(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+  // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
+  /** requested → approved → received → completed, or rejected/cancelled.
+   *  DEFAULTS to 'completed': every pre-existing row is a finished till
+   *  return, and pos-return-actions still doesn't set it. */
+  status: text().notNull().default("completed"),
+  /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
+  channel: text().notNull().default("pos"),
+  requestedBy: text("requested_by"),
+  /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
+  reasonCode: text("reason_code"),
+  photos: jsonb().notNull().default([]),
+  /** Snapshotted at decision time, never recomputed. */
+  restockingFee: numeric("restocking_fee", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
+  returnShippingFee: numeric("return_shipping_fee", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  })
+    .notNull()
+    .default(0),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  /** Shown to the CUSTOMER, so a rejection is never a silent no. */
+  reviewNote: text("review_note"),
+  receivedAt: timestamp("received_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  /** The replacement order (returns_03_exchanges.sql). An exchange is a return
+   *  PLUS a new order, never a third entity. NULL until the goods arrive. */
+  exchangeOrderId: uuid("exchange_order_id"),
+});
+
+export const orderReturnItems = pgTable("order_return_items", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  returnId: uuid("return_id").notNull(),
+  orderItemId: uuid("order_item_id").notNull(),
+  quantity: integer().notNull(),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** 'sellable' goes back on the shelf, 'damaged' does not. */
+  condition: text().notNull(),
+  restocked: boolean().notNull(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+  // ── Exchange target (returns_03_exchanges.sql) ──────────────────────────
+  /** What they want instead. Per LINE, so one return can mix exchanged and
+   *  refunded items. */
+  exchangeProductId: uuid("exchange_product_id"),
+  exchangeVariantId: uuid("exchange_variant_id"),
+  /** Its price WHEN THEY ASKED — re-reading it at receipt would bill them for
+   *  a repricing they were never quoted. */
+  exchangePrice: numeric("exchange_price", {
+    precision: 12,
+    scale: 2,
+    mode: "number",
+  }),
+  /** stock_reservations.id — units held so the size can't sell out in transit. */
+  exchangeHoldId: uuid("exchange_hold_id"),
+});
+
+// Store credit (store_credit_01_schema.sql). A balance a store owes a
+// customer, spendable at checkout. The LEDGER is the truth; this is a cached
+// sum of it, kept non-negative by a CHECK.
+export const customerCreditBalances = pgTable(
+  "customer_credit_balances",
+  {
+    storeId: uuid("store_id").notNull(),
+    /** Firebase uid — TEXT, per phase6_01. */
+    customerId: text("customer_id").notNull(),
+    balance: numeric({ precision: 12, scale: 2, mode: "number" })
+      .notNull()
+      .default(0),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    }).defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.storeId, t.customerId] })],
+);
+
+export const customerCreditLedger = pgTable("customer_credit_ledger", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  customerId: text("customer_id").notNull(),
+  /** Positive issues, negative spends. Never zero. */
+  delta: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** refund | grant | spend | reinstate | expire (reserved). */
+  kind: text().notNull(),
+  /** An order_refunds.id, an orders.id, or an operator's email. UNIQUE per
+   *  (store, customer, kind) so a double-confirmed refund credits once. */
+  ref: text(),
+  note: text(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
+});
+
+export const orderRefunds = pgTable("order_refunds", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  orderId: uuid("order_id").notNull(),
+  returnId: uuid("return_id"),
+  locationId: uuid("location_id"),
+  shiftId: uuid("shift_id"),
+  method: text().notNull(),
+  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+  /** Razorpay refund id — UNIQUE, so a replay can't record it twice. */
+  gatewayRefundId: text("gateway_refund_id"),
+  /** Ours, generated BEFORE the gateway call — UNIQUE. The gateway id can only
+   *  make the RECORD idempotent; this makes the CALL idempotent. */
+  idempotencyKey: text("idempotency_key"),
+  /** Why the money went back (a cancellation has no order_returns row). */
+  reason: text(),
+  /** Proof for money moved outside a gateway — a typed UPI transaction id. */
+  reference: text(),
+  // ── GST credit note (returns_04_credit_notes.sql) ───────────────────────
+  /** Per-store serial, allocated by a TRIGGER on settlement — never by app
+   *  code, because a gap in a GST series is what an audit flags. */
+  creditNoteNo: integer("credit_note_no"),
+  creditNoteRef: text("credit_note_ref"),
+  creditNoteAt: timestamp("credit_note_at", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  status: text().notNull(),
+  actor: text(),
+  createdAt: timestamp("created_at", {
+    withTimezone: true,
+    mode: "string",
+  }).defaultNow(),
 });

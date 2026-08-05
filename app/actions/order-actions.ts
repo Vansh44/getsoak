@@ -11,6 +11,7 @@ import {
   isNull,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
@@ -20,9 +21,8 @@ import {
   orders,
   products,
   productVariants,
-  stockReservations,
 } from "@/drizzle/schema";
-import { releaseHold } from "@/lib/inventory/reservations";
+import { releaseCancelledOrder } from "@/lib/orders/cancel";
 import {
   getActingStoreId,
   getManagerIdentity,
@@ -47,7 +47,27 @@ const ORDER_STATUSES = [
   "completed",
   "cancelled",
 ] as const;
-const PAYMENT_STATUSES = ["pending", "paid", "failed"] as const;
+// ★ Two lists, because "a value the column can hold" and "a value a human may
+// choose" are different questions.
+//
+// `refunded` / `partially_refunded` are written by the refund machinery
+// (refund-actions.ts, and the till's processReturn before it), derived from
+// the refunds that actually settled. A human must NOT be able to set them
+// directly: doing so asserts money went back when no order_refunds row says
+// so, and that row is the one a merchant gets asked about months later.
+//
+// Filtering, though, has to know about them — before this split, `refunded`
+// was a value the DB already contained and the orders list treated as invalid,
+// so a merchant could not find their own refunded orders.
+const PAYMENT_STATUSES = [
+  "pending",
+  "paid",
+  "failed",
+  "refunded",
+  "partially_refunded",
+] as const;
+/** What `updateOrderStatus` will accept. Strictly narrower — see above. */
+const SETTABLE_PAYMENT_STATUSES = ["pending", "paid", "failed"] as const;
 // "split" = a POS sale settled across several tenders; the itemised breakdown
 // lives in order_payments.
 const PAYMENT_METHODS = [
@@ -309,117 +329,41 @@ export async function updateOrderStatus(
   }
   if (
     paymentStatus !== undefined &&
-    !PAYMENT_STATUSES.includes(paymentStatus as PaymentStatus)
+    !SETTABLE_PAYMENT_STATUSES.includes(
+      paymentStatus as (typeof SETTABLE_PAYMENT_STATUSES)[number],
+    )
   ) {
+    // Includes the refund states on purpose: they are derived from
+    // order_refunds, never typed in. Refund the order to reach them.
     return { error: "Invalid payment status." };
   }
 
   const storeId = await getActingStoreId();
 
-  // If cancelling, restock the order's stock EXACTLY ONCE. We atomically
-  // "claim" the release by flipping stock_status 'reserved' → 'released' in a
-  // single conditional UPDATE, then release only if this call won the claim:
-  //   - Legacy / never-reserved orders are stuck at 'none' → claim matches
-  //     nothing → no phantom restock (finding #2).
-  //   - An already-cancelled order (or one reinstated after a cancel) is
-  //     'released' → claim matches nothing → no double restock (finding #3).
-  //   - Two concurrent cancels → only one UPDATE flips the row → one release.
-  // The release itself never blocks the status change (fails open); the ledger
-  // is best-effort, the status update is the source of truth.
+  // Cancelling gives back whatever the order was holding — reserved stock at
+  // the location that reserved it, or pickup holds for a collection order.
+  // ONE implementation, shared with the customer-initiated path
+  // (lib/orders/cancel.ts); the manager gate + store scope above is the
+  // authority it relies on. Best-effort: the status change is the source of
+  // truth and must never be blocked by a stock write.
   if (status === "cancelled") {
-    const claimed = await withUser(admin, (db) =>
-      db
-        .update(orders)
-        .set({ stockStatus: "released" })
-        .where(
-          and(
-            eq(orders.id, orderId),
-            eq(orders.storeId, storeId),
-            eq(orders.stockStatus, "reserved"),
-          ),
-        )
-        // location_id comes back with the claim: a POS sale reserved stock at
-        // the register's own location (reserve_stock_at), so the units must go
-        // BACK there. The plain release_stock wrapper delegates to the store's
-        // DEFAULT location, which would silently move stock between shops —
-        // the selling location never gets its unit back and the default gains
-        // one it never had.
-        .returning({ id: orders.id, location_id: orders.locationId }),
-    ).catch((err) => {
-      console.error(
-        "stock release claim:",
-        err instanceof Error ? err.message : err,
-      );
-      return [] as { id: string; location_id: string | null }[];
-    });
-
-    if (claimed.length > 0) {
-      // The claim above already proved this order belongs to `storeId`; RLS
-      // (via the parent order) scopes the line items again.
-      const items = await withUser(admin, (db) =>
-        db
-          .select({
-            product_id: orderItems.productId,
-            variant_id: orderItems.variantId,
-            quantity: orderItems.quantity,
-          })
-          .from(orderItems)
-          .where(eq(orderItems.orderId, orderId)),
-      ).catch(() => []);
-
-      // Where the stock came from. Online orders have no location and reserved
-      // against the default, so the wrapper is right for them; a POS sale must
-      // be released at the location it was rung up on.
-      const locationId = claimed[0]?.location_id ?? null;
-
-      for (const item of items) {
-        // The Postgres function does the atomic restock + ledger row.
-        await withService((db) =>
-          db.execute(
-            locationId
-              ? sql`select release_stock_at(p_store => ${storeId}, p_location => ${locationId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`
-              : sql`select release_stock(p_store => ${storeId}, p_product => ${item.product_id}, p_variant => ${item.variant_id}, p_qty => ${item.quantity}, p_order => ${orderId}, p_reason => ${"order_cancelled"})`,
-          ),
-        ).catch((err) =>
-          console.error(
-            "release_stock:",
-            err instanceof Error ? err.message : err,
-          ),
-        );
-      }
-    }
+    await releaseCancelledOrder(storeId, orderId, (fn) => withUser(admin, fn));
   }
 
-  // A PICKUP order's units were never taken off the shelf — they are held
-  // (locations_04). Cancelling it therefore releases the holds instead of
-  // restocking, which is why such orders carry stock_status 'none' and the
-  // claim above matches nothing. Releasing is idempotent, so a second cancel
-  // is a no-op rather than a double-free.
-  if (status === "cancelled") {
-    try {
-      const holds = await withService((db) =>
-        db
-          .select({ id: stockReservations.id })
-          .from(stockReservations)
-          .where(
-            and(
-              eq(stockReservations.storeId, storeId),
-              eq(stockReservations.ownerType, "pickup"),
-              eq(stockReservations.ownerId, orderId),
-              eq(stockReservations.status, "held"),
-            ),
-          ),
-      );
-      for (const h of holds) await releaseHold(h.id);
-    } catch (err) {
-      // Never block the cancellation over a hold. The TTL sweep is the backstop.
-      console.error("release pickup holds:", err);
-    }
-  }
-
-  const updateData: { status: string; paymentStatus?: string } = { status };
+  const updateData: {
+    status: string;
+    paymentStatus?: string;
+    deliveredAt?: SQL;
+  } = { status };
   if (paymentStatus) {
     updateData.paymentStatus = paymentStatus;
+  }
+  // When the parcel actually landed — the return window counts from here, not
+  // from created_at (refunds_01_gateway.sql). COALESCE, deliberately: toggling
+  // an order back to delivered must not restart the customer's window, and a
+  // status flipped by mistake and corrected shouldn't hand them a fresh one.
+  if (status === "delivered") {
+    updateData.deliveredAt = sql`coalesce(${orders.deliveredAt}, now())`;
   }
 
   // customer_id is NULLABLE — an order can have no account behind it (a POS
