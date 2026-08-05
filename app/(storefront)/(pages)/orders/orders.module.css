@@ -292,6 +292,44 @@ a.card:hover {
   background: rgba(220, 38, 38, 0.1);
   color: #b91c1c;
 }
+/* "Ready to collect" is the one state the shopper has to ACT on, so it gets a
+   colour of its own rather than borrowing a delivery step's. */
+.pillReady {
+  background: rgba(13, 148, 136, 0.12);
+  color: #0f766e;
+}
+
+/* ---- Fulfilment badge ----
+   Says "Pickup" on the order itself. The status badge cannot carry this:
+   "Order placed" looks identical whether a van is coming or the shopper has to
+   drive over, which is exactly what they need to remember a week later. */
+.fulfilBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: var(--sm-radius-pill);
+  background: rgba(13, 148, 136, 0.1);
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* The detail header stacks the fulfilment badge above the status pill so both
+   stay right-aligned with the title, and neither squeezes the other. */
+.headerBadges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.headerBadges .fulfilBadge {
+  margin-left: 0;
+}
 
 /* ---- Timeline (detail page) ---- */
 .timeline {

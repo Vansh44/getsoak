@@ -32,6 +32,7 @@ import {
   normalizeCapabilities,
   isLocationType,
 } from "@/lib/locations/capabilities";
+import { formatAddressLine } from "@/lib/locations/address";
 import { effectivePlan } from "@/lib/plans";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -451,13 +452,4 @@ export async function sweepPickupReminders(limit = 200): Promise<number> {
   }
 
   return claimed.length;
-}
-
-/** The shop's address as one readable line. */
-function formatAddressLine(a: Record<string, unknown> | null): string {
-  if (!a) return "";
-  return ["line1", "line2", "city", "state", "postalCode"]
-    .map((k) => (typeof a[k] === "string" ? (a[k] as string).trim() : ""))
-    .filter(Boolean)
-    .join(", ");
 }

@@ -2053,6 +2053,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
     redirects to it, and `pos-location-actions.ts` became
     `location-actions.ts`. Full design: `docs/locations-ia.md`; the phased
     build: `docs/inventory-fulfilment-roadmap.md`.
+    - **★ `lib/locations/address.ts` — TWO address shapes, and they are not
+      the same.** A customer address (`customer_addresses`,
+      `orders.shipping_address`) uses `addressLine1`/`addressLine2`/`country`/
+      `phone`; a LOCATION's (`store_locations.address`) uses the five fields
+      its editor writes — `line1`, `line2`, `city`, `state`, `postalCode`.
+      Reading one with the other's keys fails SILENTLY: every field comes back
+      undefined and simply doesn't render, which is how the shopper's "Collect
+      from" card dropped the street line of every shop with no error anywhere.
+      `locationAddressLines` (a card) and `formatAddressLine` (one line, for an
+      email row or event payload) are now the only two readers, pure and
+      tested — checkout and `pickup.ts` each carried their own byte-identical
+      copy of the joiner before.
     - **`lib/locations/capabilities.ts` is a REGISTRY, not columns.** Six
       capabilities (`pos`, `online_fulfil`, `pickup`, `returns`,
       `receive_stock`, `transfer_stock`) with labels, `requires`, `minPlan` and
@@ -2172,6 +2184,48 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
+        (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
+        not a delivery with a different address, and these pages used one
+        vocabulary for both. (1) The tracker read **Order placed → Being
+        prepared → On the way → Delivered**, so a collection could never
+        advance past step two (nothing ships) and its last two steps described
+        a van that was never coming; `orderProgress` gives pickup its own
+        **… → Ready to collect → Collected**, driven by `pickup_status`, which
+        is where the till writes. (2) Hand-over writes `status: "completed"`,
+        which is NOT in `ORDER_FLOW` — so `indexOf` returned −1 and a finished
+        order rendered with every step un-started, under a pill showing the raw
+        enum. (3) `pickupNote` quotes **`pickup_ready_at`**, the date promised
+        at checkout, not just whether a human has pressed Ready: reading only
+        `pickup_status` (which stays `awaiting` until the till acts) meant a
+        same-day store said "Available today" at checkout and "we'll let you
+        know as soon as it's ready" one screen later. (4) A **Pickup badge** on
+        both list and detail, because "Order placed" looks identical whether a
+        van is coming or the shopper has to drive over — `getMyOrders` selects
+        `fulfilment_type`/`pickup_status` for it, having had no idea before.
+        Dates pin `timeZone: "Asia/Kolkata"`, the §24 reason: these render on
+        the server, where the zone is UTC on Cloud Run. ⚠ The DASHBOARD is
+        still pickup-blind (pos-acceptance §11).
+      - **★ A COLLECTION IS VISIBLE EVERYWHERE AN ORDER IS.** Three surfaces
+        knew nothing about `fulfilment_type`, and each failed differently.
+        (1) The **success page** showed only an order reference — no shop, no
+        address, no deadline — at the moment the shopper most wants all three;
+        it is a SERVER component now (`searchParams` prop + `getMyOrder`), so
+        the collection card is in the first paint rather than flashing in, with
+        the reconcile-on-read effect (§18) split into `reconcile-payment.tsx`.
+        (2) The **invoice** printed the customer's home address under "Ship
+        To" on an order nothing was ever sent to; it renders **"Collect From"**
+        with the SHOP's address instead, and the customer party now always
+        renders for a pickup — otherwise turning off `showBillingAddress` left
+        the invoice naming no buyer at all, because the only place they
+        appeared was the block a pickup doesn't have. (3) The **dashboard**
+        list gained a Pickup badge + the collection stage under the status
+        pill, and the drawer a Collection section (shop, address, ready date,
+        hold deadline) with the customer block relabelled "Customer" — their
+        address is not a destination. `ORDER_LIST_COLUMNS` /
+        `ORDER_DETAIL_COLUMNS` carry the pickup fields; merchant-voiced labels
+        live in `app/dashboard/orders/pickup-badge.tsx`, kept apart from the
+        shopper's wording for the same reason `CUSTOMER_STATUS_LABEL` is.
       - **★ THE SHOPPER SEARCHES THE SHOP LIST; THE MERCHANT DOESN'T PREDICT
         IT.** Every shop with the goods is offered, and the checkout picker
         filters the list by postcode, city or shop name as they type. To keep a
@@ -2355,6 +2409,19 @@ group, span}` (span = columns of the 4-wide desktop grid),
       order was confirmed as "9:42 am" with nothing to say it wasn't local (the
       India-first default the dashboard tables already use, until per-store
       timezones exist). Tests run under `TZ=UTC` to prove the pin holds.
+    - **★ A LABEL WITH NOTHING UNDER IT IS WORSE THAN NO ROW.** The default
+      email's fact list is generated from the variable CATALOG, which declares
+      everything an event COULD carry — so an emitter that supplies none of it
+      doesn't produce a shorter email, it produces empty labelled rows. A
+      "Ready to collect" notice went out with **"Pickup location"** and
+      **"Pickup address"** above blank space, on the one message in the pickup
+      flow whose entire job is an address. Two fixes: `markReadyForPickup` /
+      `markCollected` now pass the shop (read in the same statement that claims
+      the row, so a name can't be fetched for a claim that didn't win), and
+      `defaultEmailTemplate` takes the resolved `values` on a REAL send and
+      drops any fact that came back blank. The console preview still passes
+      none, deliberately — a preview shows which tokens EXIST, so it should
+      show them all.
     - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
       `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
       passed it, so EVERY email rendered as team mail: a shopper's order

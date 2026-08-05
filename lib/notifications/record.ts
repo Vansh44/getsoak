@@ -422,7 +422,6 @@ async function fanOut(
     if (!audienceKey) return builtIn;
 
     if (!emailCopy.has(audienceKey)) {
-      const fallback = defaultEmailTemplate(key, audienceKey);
       const template = config?.audiences[audienceKey]?.templates.email;
       const values = templateValues(
         key,
@@ -445,6 +444,9 @@ async function fanOut(
         },
         input.payload ?? null,
       );
+      // Built AFTER the values, so a fact this particular emitter didn't
+      // supply is left out rather than rendered as an empty labelled row.
+      const fallback = defaultEmailTemplate(key, audienceKey, values);
       emailCopy.set(audienceKey, {
         // A blank template field falls through to the built-in copy: a
         // shopper must never receive an empty subject because a merchant

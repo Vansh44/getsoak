@@ -14,11 +14,33 @@ import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
-import { orderItems, orders, stockReservations } from "@/drizzle/schema";
+import {
+  orderItems,
+  orders,
+  stockReservations,
+  storeLocations,
+} from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import { commitHold } from "@/lib/inventory/reservations";
 import { emitEvent } from "@/lib/notifications/record";
+import { formatAddressLine } from "@/lib/locations/address";
+
+/**
+ * The shop an order is waiting at, returned alongside the claim itself.
+ *
+ * Both hand-over paths tell the customer something about WHERE, so both read
+ * it the same way — and reading it in the same statement that claims the row
+ * means the name can't be fetched for an order the claim didn't actually win.
+ */
+const pickupShopColumns = {
+  location_name: sql<string | null>`(
+    select l.name from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
+  location_address: sql<Record<string, unknown> | null>`(
+    select l.address from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
+};
 
 export interface PickupOrder {
   id: string;
@@ -139,7 +161,13 @@ export async function markCollected(
     return { error: "Invalid order." };
 
   let claimed:
-    | { id: string; order_ref: string | null; customer_id: string | null }
+    | {
+        id: string;
+        order_ref: string | null;
+        customer_id: string | null;
+        location_name: string | null;
+        location_address: Record<string, unknown> | null;
+      }
     | undefined;
   try {
     const rows = await withService((db) =>
@@ -174,6 +202,7 @@ export async function markCollected(
           id: orders.id,
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
+          ...pickupShopColumns,
         }),
     );
     claimed = rows[0];
@@ -218,6 +247,9 @@ export async function markCollected(
     actor: { type: "admin", id: op.staffId ?? null, label: op.name },
     subject: { type: "order", id: orderId, label: claimed.order_ref ?? "" },
     customerId: claimed.customer_id,
+    // Declared on this event too — an empty "Where" row on a thank-you is the
+    // same defect as an empty address on the ready notice.
+    payload: { pickupLocation: claimed.location_name ?? "" },
   });
 
   revalidatePath("/pos/pickups");
@@ -249,6 +281,7 @@ export async function markReadyForPickup(
           id: orders.id,
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
+          ...pickupShopColumns,
         }),
     );
     const row = rows[0];
@@ -261,6 +294,15 @@ export async function markReadyForPickup(
       actor: { type: "admin", id: op.staffId ?? null, label: op.name },
       subject: { type: "order", id: orderId, label: row.order_ref ?? "" },
       customerId: row.customer_id,
+      // ★ WITHOUT THESE THE EMAIL IS USELESS. "Ready to collect" that doesn't
+      // say WHERE is the one message in the pickup flow whose entire job is an
+      // address — and the template declares both tokens, so an emitter that
+      // doesn't supply them doesn't produce a shorter email, it produces
+      // "Pickup location" and "Pickup address" as empty labelled rows.
+      payload: {
+        pickupLocation: row.location_name ?? "",
+        pickupAddress: formatAddressLine(row.location_address),
+      },
     });
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't update the order.") };

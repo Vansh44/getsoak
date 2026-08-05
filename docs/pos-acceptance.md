@@ -568,6 +568,71 @@ Run the cron twice with an order 20 hours from expiry.
 **Expect:** exactly one reminder. The claim on `pickup_warned_at` is what
 guarantees it, not the schedule.
 
+**PS-8.20 ★ — The shopper can tell it's a collection**
+Place one delivery order and one pickup order, then open `/orders`.
+**Expect:** the pickup row carries a **Pickup** badge; the delivery row carries
+none. "Order placed" looks identical on both otherwise, and which one requires
+a car is exactly what a shopper needs to remember a week later.
+
+**PS-8.21 ★ — The tracker describes a collection, not a van**
+Open a pickup order at `/orders/{id}`.
+**Expect:** the steps read **Order placed → Being prepared → Ready to collect →
+Collected**. On the delivery track a pickup could never advance past step two,
+because nothing ever ships — the last two steps described a journey that was
+never going to happen.
+
+**PS-8.22 ★ — The order page keeps the promise checkout made**
+Set "Orders are ready for collection in" to **0** and place a pickup order.
+**Expect:** the order page says _"Ready for collection today"_, matching the
+"Available today" the shopper accepted at checkout. It must NOT say "we'll let
+you know as soon as it's ready" — that reads only `pickup_status`, which stays
+`awaiting` until someone at the till presses Ready, so a same-day store
+contradicted itself one screen later. Set it to 2 days and the same page quotes
+the date instead.
+
+**PS-8.24 ★ — "Ready to collect" says WHERE**
+Mark an order ready at `/pos/pickups` and read the customer's email.
+**Expect:** the shop's **name and full address** are filled in. This is the one
+message in the flow whose whole job is an address — and because the fact list
+is generated from the variable catalog, an emitter that supplies neither
+doesn't send a shorter email, it sends "Pickup location" and "Pickup address"
+as two empty labelled rows. Check the shop's **street line** is there, not just
+the city: a location stores `line1`, and reading it as `addressLine1` drops the
+street silently. The same address must appear on the order page's Collect from
+card.
+
+**PS-8.25 ★ — The confirmation says where to go**
+Place a pickup order and stay on the success page.
+**Expect:** the shop's name, its full address and the hold deadline, in the
+first paint — no flash of a bare order reference. This is the moment they most
+want all three, and the page used to show only the reference. Place a DELIVERY
+order: no collection card at all.
+
+**PS-8.26 ★ — The invoice doesn't ship a collection anywhere**
+Open the invoice for a pickup order (both `/dashboard/orders/[id]/invoice` and
+the customer's `/checkout/invoice/[orderId]`).
+**Expect:** "Collect From" naming the SHOP and its address — never "Ship To"
+with the customer's home address, which is an address the goods never went to
+on the document that is the record of the sale. Turn OFF "Show billing address"
+in Invoices & Billing: the customer party must STILL render, or the invoice
+names no buyer at all. A delivery invoice is unchanged.
+
+**PS-8.27 ★ — Office staff can see a collection**
+Open `/dashboard/orders` with a mix of both.
+**Expect:** the pickup rows carry a **Pickup** badge and their collection stage
+("To pack" / "Ready" / "Collected") under the status pill; payment reads "Pay at
+store", not the raw `pay_at_store`. Open one: the drawer leads with a
+**Collection** section — shop, address, ready date, hold deadline — and the
+customer block is labelled "Customer", not "Delivery", because their address is
+not a destination.
+
+**PS-8.23 — Collected orders finish cleanly**
+Hand a collection over, then open it at `/orders/{id}`.
+**Expect:** the badge reads **Collected** (not the raw `completed`), all four
+steps are filled, and there is no Cancel button — the goods are already with
+them. Let a different one expire: the badge reads **Not collected**, which says
+why, where "Cancelled" alone reads like the shop pulled the order.
+
 ---
 
 ## 9. Shifts & cash (`/pos/shift`)
@@ -1127,14 +1192,14 @@ Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                            | Status                                                                                                                                                                                             |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel doesn't offer a refund**                              | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
-| **The success page says nothing about collection**             | Right after paying — when they most want the address and the deadline — it shows only the order reference                                                                                          |
-| **The dashboard is blind to pickups**                          | The orders list and detail drawer have no pickup awareness: office staff can't see that an order is a collection, nor its status. Only `/pos/pickups` can                                          |
-| **The invoice shows a shipping address for a collected order** | `invoice-data.ts` and `InvoiceDocument` don't know `fulfilment_type`                                                                                                                               |
-| **Pickup has never been run end to end**                       | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                                                                      |
-| **`pos-pickup-actions.ts` has no test file**                   | Every other POS action has one                                                                                                                                                                     |
-| **Analytics has no location filter**                           | Store-wide figures only                                                                                                                                                                            |
-| **`order.pickup_expiring` email only**                         | No in-app pre-expiry banner                                                                                                                                                                        |
-| **Offline selling**                                            | The catalogue is cached; completing a sale needs the server                                                                                                                                        |
+| Gap                                                                | Status                                                                                                                                                                                             |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
+| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                       |
+| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                      |
+| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                              |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                                                                      |
+| **`pos-pickup-actions.ts` has no test file**                       | Every other POS action has one                                                                                                                                                                     |
+| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                            |
+| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                        |
+| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                        |

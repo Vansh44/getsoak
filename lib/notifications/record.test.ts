@@ -559,6 +559,9 @@ describe("recordEvent", () => {
       type: "order.placed",
       storeId: STORE,
       customerId: "cust-1",
+      // Named, so "Who" has something to say — an actorless event now drops
+      // the row rather than printing the label above nothing.
+      actor: { type: "customer", id: "cust-1", label: "Priya S." },
       subject: { type: "order", id: "o1", label: "ORD10010004" },
     });
 
@@ -575,6 +578,33 @@ describe("recordEvent", () => {
     // "Who" is operational detail the shopper doesn't need — they know.
     expect(customer.body).not.toContain("<strong>Who</strong>");
     expect(admin.body).toContain("<strong>Who</strong>");
+  });
+
+  // ★ A LABEL WITH NOTHING UNDER IT IS WORSE THAN NO ROW. The fact list is
+  // generated from the variable CATALOG, which declares everything an event
+  // COULD carry — so "Ready to collect" went out with "Pickup location" and
+  // "Pickup address" as two empty rows when the emitter supplied neither.
+  it("omits a fact the emitter didn't supply", async () => {
+    const mock = setupDb({
+      staff: [superadmin],
+      customerEmail: "priya@example.com",
+    });
+
+    await recordEvent({
+      type: "order.ready_for_pickup",
+      storeId: STORE,
+      customerId: "cust-1",
+      subject: { type: "order", id: "o1", label: "ORD10010004" },
+      payload: { pickupLocation: "Connaught Place" },
+    });
+
+    const mail = queuedEmails(mock).find(
+      (r: any) => r.recipientType === "customer",
+    );
+    expect(mail.body).toContain("<strong>Pickup location</strong>");
+    expect(mail.body).toContain("Connaught Place");
+    // Declared for this event, but not supplied here.
+    expect(mail.body).not.toContain("<strong>Pickup address</strong>");
   });
 
   it("falls back to built-in copy for a field the merchant left blank", async () => {

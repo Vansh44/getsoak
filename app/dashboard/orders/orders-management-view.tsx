@@ -9,6 +9,7 @@ import { ListPagination } from "@/app/dashboard/components/list-pagination";
 import type { OrderStatusCounts } from "@/app/actions/order-actions";
 import type { OrderRow } from "./page";
 import { OrderDetailDrawer } from "./order-detail-drawer";
+import { PickupBadge, isPickupOrder, pickupStageLabel } from "./pickup-badge";
 
 type Props = {
   orders: OrderRow[];
@@ -78,7 +79,13 @@ function initials(name: string): string {
 }
 
 function methodLabel(m: string): string {
-  return m === "cash_on_delivery" ? "COD" : m === "razorpay" ? "Online" : m;
+  if (m === "cash_on_delivery" || m === "cod") return "COD";
+  if (m === "razorpay") return "Online";
+  // Was falling through to the raw enum, so a collection order's payment read
+  // "pay_at_store" in the list.
+  if (m === "pay_at_store") return "Pay at store";
+  if (m === "store_credit") return "Store credit";
+  return m;
 }
 
 // Deterministic date for the SSR'd table: pin BOTH locale and timezone so the
@@ -318,7 +325,10 @@ export function OrdersManagementView({
                           className="font-mono text-sm font-semibold text-gray-900"
                           title={order.id}
                         >
-                          {order.order_ref}
+                          <div className="flex flex-col items-start gap-1">
+                            {order.order_ref}
+                            {isPickupOrder(order) && <PickupBadge />}
+                          </div>
                         </td>
                         <td>
                           <div className="flex items-center gap-2.5">
@@ -358,10 +368,19 @@ export function OrdersManagementView({
                           </div>
                         </td>
                         <td>
-                          <Pill
-                            value={order.status}
-                            tone={STATUS_TONE[order.status]}
-                          />
+                          <div className="flex flex-col items-start gap-0.5">
+                            <Pill
+                              value={order.status}
+                              tone={STATUS_TONE[order.status]}
+                            />
+                            {/* The collection stage, where "processing" alone
+                                doesn't say whether it's packed or gone. */}
+                            {isPickupOrder(order) && order.pickup_status && (
+                              <span className="text-[11px] text-[var(--dash-text-3)]">
+                                {pickupStageLabel(order.pickup_status)}
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

@@ -6,16 +6,19 @@ import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getMyOrder } from "@/app/actions/customer-order-actions";
 import { getStoreSetting } from "@/lib/settings/resolve";
 import { getReturnableOrder } from "@/app/actions/return-actions";
+import { locationAddressLines } from "@/lib/locations/address";
 import { CancelOrderButton } from "./cancel-order";
 import { ReturnRequest } from "./return-request";
 import styles from "../orders.module.css";
 import {
-  CUSTOMER_STATUS_LABEL,
-  ORDER_FLOW,
+  FulfilmentBadge,
   PAYMENT_LABEL,
   StatusPill,
   formatDate,
+  isPickup,
   money,
+  orderProgress,
+  pickupNote,
 } from "../order-status";
 
 export const dynamic = "force-dynamic";
@@ -76,9 +79,15 @@ export default async function MyOrderDetailPage({
   const returnView = returnsOn
     ? (await getReturnableOrder(order.id)).view
     : undefined;
-  const reachedIndex = ORDER_FLOW.indexOf(
-    order.status as (typeof ORDER_FLOW)[number],
-  );
+  // Pickup gets its own vocabulary — a collection order never "ships", so the
+  // delivery track could not advance past step two for the rest of its life.
+  const progress = orderProgress(order);
+  const pickup = isPickup(order);
+  // Nothing left to stop once the goods are physically with them.
+  const handedOver =
+    order.status === "delivered" ||
+    order.status === "completed" ||
+    order.pickup_status === "collected";
 
   return (
     <div className={styles.container}>
@@ -97,7 +106,10 @@ export default async function MyOrderDetailPage({
                 {PAYMENT_LABEL[order.payment_method] ?? order.payment_method}
               </p>
             </div>
-            <StatusPill status={order.status} />
+            <div className={styles.headerBadges}>
+              <FulfilmentBadge order={order} />
+              <StatusPill order={order} />
+            </div>
           </div>
         </header>
 
@@ -112,30 +124,33 @@ export default async function MyOrderDetailPage({
               <div className={styles.sectionTitle}>Progress</div>
               {cancelled ? (
                 <p className={styles.summary}>
-                  This order was cancelled. If you paid online, any refund goes
-                  back to your original payment method.
+                  {order.pickup_status === "expired"
+                    ? "This order wasn't collected in time, so it was cancelled and the items went back on the shelf."
+                    : "This order was cancelled."}{" "}
+                  If you paid online, any refund goes back to your original
+                  payment method.
                 </p>
               ) : (
                 <ol className={styles.track}>
-                  {ORDER_FLOW.map((step, i) => {
-                    const done = i <= reachedIndex;
+                  {progress.steps.map((label, i) => {
+                    const done = i <= progress.reached;
                     return (
                       <li
-                        key={step}
+                        key={label}
                         className={`${styles.trackStep} ${done ? styles.trackStepDone : ""}`}
                       >
                         <span className={styles.trackDot} />
-                        <span className={styles.trackLabel}>
-                          {CUSTOMER_STATUS_LABEL[step]}
-                        </span>
+                        <span className={styles.trackLabel}>{label}</span>
                       </li>
                     );
                   })}
                 </ol>
               )}
               {/* Not for an order already handed over: there is nothing left
-                  to stop, and at that point it's a return. */}
-              {selfCancel && !cancelled && order.status !== "delivered" && (
+                  to stop, and at that point it's a return. `completed` is what
+                  the till writes when a collection is picked up, so without it
+                  a collected order still offered to cancel itself. */}
+              {selfCancel && !cancelled && !handedOver && (
                 <CancelOrderButton orderId={order.id} />
               )}
             </div>
@@ -222,7 +237,7 @@ export default async function MyOrderDetailPage({
               </Link>
             </div>
 
-            {order.fulfilment_type === "pickup" && (
+            {pickup && (
               <div className={styles.card}>
                 <div className={styles.sectionTitle}>
                   {order.pickup_status === "collected"
@@ -233,25 +248,17 @@ export default async function MyOrderDetailPage({
                   <div>
                     <strong>{order.pickup_location_name ?? "Our shop"}</strong>
                   </div>
-                  {addressLines(order.pickup_location_address ?? {}).map(
+                  {/* A LOCATION address, not a customer one — different keys
+                      entirely (line1 vs addressLine1). Reading it with
+                      `addressLines` silently dropped every shop's street. */}
+                  {locationAddressLines(order.pickup_location_address).map(
                     (line, i) => (
                       <div key={i}>{line}</div>
                     ),
                   )}
                 </div>
                 <p className={styles.summary} style={{ marginTop: 14 }}>
-                  {order.pickup_status === "ready"
-                    ? "Packed and waiting for you."
-                    : order.pickup_status === "collected"
-                      ? "Handed over — thank you."
-                      : order.pickup_status === "expired"
-                        ? "This order wasn't collected in time and was cancelled."
-                        : "We'll let you know as soon as it's ready."}
-                  {order.pickup_expires_at &&
-                  order.pickup_status !== "collected" &&
-                  order.pickup_status !== "expired"
-                    ? ` Held until ${new Date(order.pickup_expires_at).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}.`
-                    : ""}
+                  {pickupNote(order)}
                 </p>
               </div>
             )}

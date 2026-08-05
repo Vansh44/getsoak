@@ -24,6 +24,9 @@ export interface OrderRow {
   payment_status: string;
   status: string;
   shipping_address: ShippingAddress | null;
+  /** 'delivery' for everything that isn't a collection. */
+  fulfilment_type: string;
+  pickup_status: string | null;
 }
 
 export default async function OrdersPage({
