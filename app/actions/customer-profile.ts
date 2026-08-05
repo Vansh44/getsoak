@@ -19,14 +19,35 @@ export interface MyCustomer {
 }
 
 /**
- * The signed-in customer's own profile row, for the storefront AuthProvider.
- * Replaces a browser-side `users` read (a "use client" provider cannot use the
- * server-only Drizzle layer). Own-row RLS under the customer's identity.
+ * WHY a status and not just a null: the AuthProvider has to tell three very
+ * different "no customer" cases apart, because only ONE of them is worth
+ * recovering from.
+ *
+ * - `no-session`  — the server saw nobody. For a browser that still holds a
+ *   live Firebase session that means the httpOnly `sm_session` cookie lapsed
+ *   (14 days; the client SDK's own persistence is indefinite), and the client
+ *   can mint a fresh one from its refresh token.
+ * - `no-row`      — a perfectly valid session with no `users` row. A store
+ *   admin browsing their own storefront is exactly this. Nothing to recover.
+ * - `unavailable` — the read failed. A new cookie fixes nothing, and treating
+ *   an outage as "not a customer" would sign people out for a DB blip.
  */
-export async function getMyCustomer(): Promise<MyCustomer | null> {
-  const user = await getServerUser();
-  if (!user) return null;
+export type MyCustomerSession =
+  | { status: "ok"; customer: MyCustomer }
+  | { status: "no-session"; customer: null }
+  | { status: "no-row"; customer: null }
+  | { status: "unavailable"; customer: null };
 
+/**
+ * The signed-in customer's own profile row *with the reason* when there isn't
+ * one. Replaces a browser-side `users` read (a "use client" provider cannot use
+ * the server-only Drizzle layer). Own-row RLS under the customer's identity.
+ */
+export async function getMyCustomerSession(): Promise<MyCustomerSession> {
+  const user = await getServerUser();
+  if (!user) return { status: "no-session", customer: null };
+
+  let readFailed = false;
   const rows = await withUser({ uid: user.id, email: user.email }, (db) =>
     db
       .select({
@@ -40,9 +61,21 @@ export async function getMyCustomer(): Promise<MyCustomer | null> {
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1),
-  ).catch(() => [] as MyCustomer[]);
+  ).catch(() => {
+    readFailed = true;
+    return [] as MyCustomer[];
+  });
 
-  return rows[0] ?? null;
+  if (readFailed) return { status: "unavailable", customer: null };
+  const row = rows[0];
+  return row
+    ? { status: "ok", customer: row }
+    : { status: "no-row", customer: null };
+}
+
+/** Just the row, for callers that have no use for the reason. */
+export async function getMyCustomer(): Promise<MyCustomer | null> {
+  return (await getMyCustomerSession()).customer;
 }
 
 export async function updateCustomerProfile(formData: FormData) {

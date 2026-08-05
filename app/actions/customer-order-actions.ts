@@ -43,6 +43,11 @@ export interface MyOrderRow {
   /** Up to three product images, so the list is scannable by sight rather than
    *  by reading order references. Nulls kept out — the UI shows a placeholder. */
   thumbnails: string[];
+  /** 'delivery' for everything that isn't a collection. The list needs it too:
+   *  "Order placed" looks the same whether a van is coming or the shopper has
+   *  to drive over, and the badge is the only thing that says which. */
+  fulfilment_type: string;
+  pickup_status: string | null;
 }
 
 export interface MyOrderItem {
@@ -65,9 +70,11 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
   applied_coupon_code: string | null;
   shipping_address: Record<string, unknown>;
   notes: string | null;
-  /** 'delivery' for everything that isn't a collection. */
-  fulfilment_type: string;
-  pickup_status: string | null;
+  /** When the shop said it would be ready — the date quoted at checkout. The
+   *  page needs it as well as `pickup_status`: the promise and "a human has
+   *  pressed ready" are two different facts, and reading only the second told
+   *  a same-day store's customers "we'll let you know when it's ready". */
+  pickup_ready_at: string | null;
   pickup_expires_at: string | null;
   pickup_location_name: string | null;
   pickup_location_address: Record<string, unknown> | null;
@@ -97,6 +104,8 @@ export async function getMyOrders(): Promise<{
             payment_method: orders.paymentMethod,
             total: orders.total,
             currency: orders.currency,
+            fulfilment_type: orders.fulfilmentType,
+            pickup_status: orders.pickupStatus,
           })
           .from(orders)
           .where(
@@ -197,6 +206,7 @@ export async function getMyOrder(
             notes: orders.notes,
             fulfilment_type: orders.fulfilmentType,
             pickup_status: orders.pickupStatus,
+            pickup_ready_at: orders.pickupReadyAt,
             pickup_expires_at: orders.pickupExpiresAt,
             pickup_location_name: sql<string | null>`(
               select l.name from ${storeLocations} l

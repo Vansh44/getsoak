@@ -89,11 +89,22 @@ export function formatMoney(value: number, currency = "INR"): string {
  * A timestamp a person would say out loud. The seconds and the am/pm noise in
  * "28/7/2026, 12:20:46 am" are machine detail nobody reading an order
  * confirmation needs.
+ *
+ * Takes an ISO string, because that is the only unambiguous one: a LOCALE
+ * string round-trips wrong (V8 reads "5/8/2026" as 8 May, not 5 August), which
+ * is what put the wrong date on every order confirmation.
+ *
+ * ★ The timezone is PINNED. Without it this renders in the system zone, which
+ * is UTC on Cloud Run — so an order placed at 3:12 pm was confirmed as
+ * "9:42 am", with no marker to say it wasn't local. Asia/Kolkata is the
+ * India-first default the dashboard tables already use, until per-store
+ * timezones exist.
  */
 export function formatDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "long",
     year: "numeric",

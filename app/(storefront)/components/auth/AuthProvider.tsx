@@ -9,8 +9,15 @@ import {
   type ReactNode,
 } from "react";
 import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
-import { getFirebaseAuth, endSession } from "@/lib/auth/firebase-client";
-import { getMyCustomer, type MyCustomer } from "@/app/actions/customer-profile";
+import {
+  getFirebaseAuth,
+  endSession,
+  establishSession,
+} from "@/lib/auth/firebase-client";
+import {
+  getMyCustomerSession,
+  type MyCustomer,
+} from "@/app/actions/customer-profile";
 
 type Customer = MyCustomer;
 
@@ -56,8 +63,34 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   // can't use the server-only Drizzle layer). Resolves identity server-side
   // from the session cookie, so no user id needs threading in.
   const fetchCustomer = useCallback(async () => {
-    const data = await getMyCustomer();
-    setCustomer(data);
+    try {
+      let res = await getMyCustomerSession();
+
+      // ★ SELF-HEAL A LAPSED SESSION COOKIE. `sm_session` lasts 14 days while
+      // the client SDK's own persistence is indefinite, so a shopper who comes
+      // back after a fortnight has a browser that is still signed in and a
+      // server that no longer agrees — and gets asked to sign in again, over a
+      // checkout they were part-way through. The refresh token is still valid,
+      // which is what "still signed in" MEANS, so mint a fresh cookie from it
+      // and retry ONCE.
+      //
+      // Only `no-session` qualifies: a store admin browsing their own
+      // storefront has a valid cookie and no `users` row (`no-row`), and an
+      // outage is `unavailable`. A new cookie fixes neither, so retrying on
+      // those would buy nothing and cost every page load a wasted round-trip.
+      if (res.status === "no-session" && getFirebaseAuth().currentUser) {
+        // forceRefresh, so a revoked or disabled account fails HERE rather than
+        // minting a session cookie from a stale cached token.
+        const err = await establishSession(true);
+        if (!err) res = await getMyCustomerSession();
+      }
+
+      setCustomer(res.customer);
+    } catch {
+      // A failed round-trip is not a sign-out — keep whatever row we already
+      // had rather than presenting a signed-in shopper as anonymous. `loading`
+      // still settles below, so nothing waits on it forever.
+    }
   }, []);
 
   // Resolve from the *live* Firebase session rather than the `user` React state.
@@ -84,11 +117,20 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       if (!active) return;
       setUser(toAuthUser(fbUser));
       if (fbUser) {
-        fetchCustomer();
+        // ★ `loading` clears only once the customer row has LANDED, not as soon
+        // as Firebase answers. Clearing it early leaves a window where the
+        // visitor is signed in but `customer` is still null — and every
+        // consumer reads that pair as "signed out". That window is what popped
+        // the auth modal over a signed-in checkout on every refresh (and
+        // flashed "sign in to review" on product pages): the modal opened
+        // before the fetch resolved, and nothing closes it afterwards.
+        fetchCustomer().finally(() => {
+          if (active) setLoading(false);
+        });
       } else {
         setCustomer(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => {

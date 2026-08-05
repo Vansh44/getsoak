@@ -21,6 +21,7 @@ import {
   orders,
   products,
   productVariants,
+  storeLocations,
 } from "@/drizzle/schema";
 import { releaseCancelledOrder } from "@/lib/orders/cancel";
 import {
@@ -159,6 +160,11 @@ const ORDER_LIST_COLUMNS = {
   payment_status: orders.paymentStatus,
   status: orders.status,
   shipping_address: orders.shippingAddress,
+  // Office staff could not tell a collection from a delivery here at all —
+  // only /pos/pickups knew. Two columns, no join: the badge needs the type and
+  // the stage, and the shop's name belongs in the drawer, not a list row.
+  fulfilment_type: orders.fulfilmentType,
+  pickup_status: orders.pickupStatus,
 };
 
 export interface OrdersResult {
@@ -440,6 +446,15 @@ export interface OrderDetail {
   billing_address: Record<string, unknown> | null;
   razorpay_payment_id: string | null;
   stock_status: string;
+  /** 'delivery' for everything that isn't a collection. */
+  fulfilment_type: string;
+  pickup_status: string | null;
+  pickup_ready_at: string | null;
+  pickup_expires_at: string | null;
+  pickup_location_name: string | null;
+  /** The SHOP's address — `line1`/`city`/…, NOT the customer address shape
+   *  (lib/locations/address.ts). */
+  pickup_location_address: Record<string, unknown> | null;
   items: OrderDetailItem[];
 }
 
@@ -465,6 +480,16 @@ const ORDER_DETAIL_COLUMNS = {
   billing_address: orders.billingAddress,
   razorpay_payment_id: orders.razorpayPaymentId,
   stock_status: orders.stockStatus,
+  fulfilment_type: orders.fulfilmentType,
+  pickup_status: orders.pickupStatus,
+  pickup_ready_at: orders.pickupReadyAt,
+  pickup_expires_at: orders.pickupExpiresAt,
+  pickup_location_name: sql<string | null>`(
+    select l.name from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
+  pickup_location_address: sql<Record<string, unknown> | null>`(
+    select l.address from ${storeLocations} l where l.id = ${orders.pickupLocationId}
+  )`,
 };
 
 /**

@@ -20,6 +20,7 @@ import {
   Loader2,
   MapPin,
   Package,
+  Store,
   Truck,
   X,
   XCircle,
@@ -30,7 +31,9 @@ import {
   updateOrderStatus,
   type OrderDetail,
 } from "@/app/actions/order-actions";
+import { locationAddressLines } from "@/lib/locations/address";
 import { RefundPanel } from "./refund-panel";
+import { PickupBadge, isPickupOrder, pickupStageLabel } from "./pickup-badge";
 
 const ORDER_STATUSES = [
   "pending",
@@ -78,6 +81,23 @@ function fmtDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * A collection date, day only — the hour a hold lapses is noise next to which
+ * day to chase it. Pinned locale AND timezone for the same reason `fmtListDate`
+ * is: this renders on the server (UTC on Cloud Run) and again in the browser,
+ * and a mismatch is a hydration error.
+ */
+function fmtPickupDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function readAddress(a: Record<string, unknown> | null) {
@@ -357,10 +377,55 @@ export function OrderDetailDrawer({
               <RefundPanel orderId={detail.id} onRefunded={reload} />
             </section>
 
-            {/* Delivery */}
+            {/* ★ Collection — where the goods are and who is coming for them.
+                Rendered ABOVE the contact block because for a pickup it is the
+                operative fact: the customer's own address is where nothing is
+                going. Staff previously had to open /pos/pickups to learn any
+                of this. */}
+            {isPickupOrder(detail) && (
+              <section>
+                <SectionTitle icon={<Store className="h-4 w-4" />}>
+                  Collection
+                </SectionTitle>
+                <div className="mt-2 rounded-lg border border-border p-3 text-sm">
+                  <div className="mb-2 flex items-center gap-2">
+                    <PickupBadge />
+                    {detail.pickup_status && (
+                      <span className="text-xs text-muted-foreground">
+                        {pickupStageLabel(detail.pickup_status)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="font-medium text-foreground">
+                    {detail.pickup_location_name ?? "Our shop"}
+                  </div>
+                  {locationAddressLines(detail.pickup_location_address).map(
+                    (line, i) => (
+                      <div key={i} className="text-muted-foreground">
+                        {line}
+                      </div>
+                    ),
+                  )}
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {detail.pickup_ready_at && (
+                      <div>Ready {fmtPickupDate(detail.pickup_ready_at)}</div>
+                    )}
+                    {detail.pickup_expires_at &&
+                      detail.pickup_status !== "collected" && (
+                        <div>
+                          Held until {fmtPickupDate(detail.pickup_expires_at)}
+                        </div>
+                      )}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Delivery — or, for a collection, the customer's contact details:
+                the address is theirs, not a destination. */}
             <section>
               <SectionTitle icon={<MapPin className="h-4 w-4" />}>
-                Delivery
+                {isPickupOrder(detail) ? "Customer" : "Delivery"}
               </SectionTitle>
               <div className="mt-2 rounded-lg border border-border p-3 text-sm">
                 {ship ? (
