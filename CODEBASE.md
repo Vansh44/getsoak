@@ -122,7 +122,29 @@ wholesip/
 │   │   │                      #   (uncached, admin-gated). Only INTERACTIVE routes above
 │   │   │                      #   stay in code + RESERVED (registry.ts + drift test).
 │   │   └── components/
-│   │       ├── auth/          # AuthModal + AuthProvider (customer auth context)
+│   │       ├── auth/          # AuthModal + AuthProvider (customer auth context).
+│   │       │                  # ★ `loading` means "we don't yet know who this
+│   │       │                  # is", so it clears only once the customer row has
+│   │       │                  # LANDED — not when Firebase answers. Clearing it
+│   │       │                  # early left a window of {loading:false, user:set,
+│   │       │                  # customer:null}, which every consumer reads as
+│   │       │                  # signed OUT: it popped the auth modal over a
+│   │       │                  # signed-in checkout on every refresh (nothing
+│   │       │                  # closes it once the row arrives) and flashed
+│   │       │                  # "sign in to review" on product pages.
+│   │       │                  # ★ It also SELF-HEALS a lapsed session cookie:
+│   │       │                  # `sm_session` is 14 days while the client SDK's
+│   │       │                  # persistence is indefinite, so a shopper back
+│   │       │                  # after a fortnight has a browser that is signed
+│   │       │                  # in and a server that disagrees. On `no-session`
+│   │       │                  # it re-mints via establishSession(forceRefresh)
+│   │       │                  # and retries ONCE. That is why
+│   │       │                  # getMyCustomerSession returns a STATUS, not a
+│   │       │                  # bare null — `no-row` (a store admin on their own
+│   │       │                  # storefront: valid cookie, no `users` row) and
+│   │       │                  # `unavailable` (a DB blip) must NOT re-mint, or
+│   │       │                  # every page load pays a wasted round-trip.
+│   │       │                  # getMyCustomer() still returns just the row.
 │   │       ├── cart/          # CartProvider, CartDrawer, CouponField
 │   │       ├── header/ footer/  # nav from store_menus via MenuProvider (§11 menu builder)
 │   │       ├── homepage/      # Shared per-section renderer (featured products,
