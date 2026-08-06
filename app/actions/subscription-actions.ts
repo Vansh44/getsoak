@@ -38,6 +38,7 @@ import {
   type BillingPeriod,
 } from "@/lib/payments/subscription";
 import {
+  billingMayApplyPlan,
   canUpdateSubscription,
   decidePlanChange,
   hasLiveMandate,
@@ -397,9 +398,10 @@ async function confirmSubscriptionForStore(
     ? new Date(currentEndUnix * 1000)
     : fallbackExpiry(period);
 
-  // Update the subscription row + activate the plan + audit, atomically.
+  // Update the subscription row + activate the plan, atomically.
+  let fromPlan: string | null = null;
   try {
-    await withService(async (db) => {
+    fromPlan = await withService(async (db) => {
       await db
         .update(storeSubscriptions)
         .set({
@@ -428,15 +430,7 @@ async function confirmSubscriptionForStore(
         })
         .where(eq(stores.id, storeId));
 
-      // Audit trail (best-effort, same txn).
-      await db.insert(planEvents).values({
-        storeId,
-        fromPlan: curRows[0]?.plan ?? null,
-        toPlan: plan,
-        source: "paid",
-        actor: "subscription",
-        note: `subscription ${subscriptionId} activated (${period})`,
-      });
+      return curRows[0]?.plan ?? null;
     });
   } catch (err) {
     console.error(
@@ -444,6 +438,27 @@ async function confirmSubscriptionForStore(
       err instanceof Error ? err.message : err,
     );
     return { error: "Payment succeeded but activating the plan failed." };
+  }
+
+  // Audit trail — best effort, and in its OWN transaction so it CANNOT roll
+  // back the activation. It used to sit in the txn above writing
+  // `source: "paid"`, which the plan_events CHECK (operator|billing|system)
+  // rejects: every confirm threw here and undid the plan the merchant had just
+  // been charged for, reporting "Payment succeeded but activating the plan
+  // failed."
+  try {
+    await withService((db) =>
+      db.insert(planEvents).values({
+        storeId,
+        fromPlan,
+        toPlan: plan,
+        source: "billing",
+        actor: "subscription",
+        note: `subscription ${subscriptionId} activated (${period})`,
+      }),
+    );
+  } catch (auditErr) {
+    logError("confirmSubscription (audit)", auditErr, { storeId, plan });
   }
 
   revalidateTag(STORE_TAG, "max");
@@ -695,9 +710,9 @@ export async function changePlan(
       ? new Date(res.data.current_end * 1000)
       : fallbackExpiry(targetPeriod);
 
-    let planActivated = false;
+    let applied: { from: string | null } | null = null;
     try {
-      planActivated = await withService(async (db) => {
+      applied = await withService(async (db) => {
         await db
           .update(storeSubscriptions)
           .set({
@@ -717,8 +732,12 @@ export async function changePlan(
           .where(eq(stores.id, storeId))
           .limit(1);
         const cur = curRows[0];
-        // An operator comp must never be overwritten by a billing change.
-        if (cur?.plan_source === "comp") return false;
+        // A comp is a floor billing may raise, never lower (see
+        // billingMayApplyPlan). An unconditional refusal here meant a comped
+        // store was charged the upgrade and kept its old plan.
+        if (!billingMayApplyPlan(cur?.plan, cur?.plan_source, targetPlan)) {
+          return null;
+        }
         await db
           .update(stores)
           .set({
@@ -727,20 +746,40 @@ export async function changePlan(
             planSource: "paid",
           })
           .where(eq(stores.id, storeId));
-        await db.insert(planEvents).values({
-          storeId,
-          fromPlan: cur?.plan ?? null,
-          toPlan: targetPlan,
-          source: "paid",
-          actor: "subscription",
-          note: `plan change (now, ${targetPeriod})`,
-        });
-        return true;
+        return { from: cur?.plan ?? null };
       });
     } catch (err) {
-      console.error("changePlan (persist now):", err);
+      logError("changePlan (persist now)", err, { storeId, targetPlan });
     }
-    if (planActivated) revalidateTag(STORE_TAG, "max");
+
+    // The money has already moved at Razorpay, so never report a bare success
+    // when the plan did not actually change — that is how a merchant is shown
+    // "You're now on the Pro plan" over a store still on basic.
+    if (!applied) {
+      return {
+        error:
+          "Your payment went through but the plan didn't switch over. Please contact support — you won't be charged again.",
+      };
+    }
+
+    revalidateTag(STORE_TAG, "max");
+
+    // Audit trail — own transaction, so it can't roll back the activation.
+    try {
+      await withService((db) =>
+        db.insert(planEvents).values({
+          storeId,
+          fromPlan: applied.from,
+          toPlan: targetPlan,
+          source: "billing",
+          actor: "subscription",
+          note: `plan change (now, ${targetPeriod})`,
+        }),
+      );
+    } catch (auditErr) {
+      logError("changePlan (audit)", auditErr, { storeId, targetPlan });
+    }
+
     return {
       success: true,
       message: decision.periodChanged

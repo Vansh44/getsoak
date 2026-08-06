@@ -12,6 +12,7 @@ import {
 } from "@/drizzle/schema";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { verifyWebhookSignature } from "@/lib/payments/razorpay";
+import { billingMayApplyPlan } from "@/lib/payments/plan-change";
 import { PLAN_META, normalizePlan } from "@/lib/plans";
 import { recordEvent } from "@/lib/notifications/record";
 import {
@@ -310,21 +311,24 @@ async function sendLifecycleEmail(
   }
 }
 
-// Set plan + expiry, UNLESS the store is on an operator comp plan — a comp
-// grant must never be overwritten by billing (CODEBASE §15).
+// Set plan + expiry. A comp grant is a FLOOR billing may raise but never lower
+// — see billingMayApplyPlan for why an unconditional refusal stranded a store
+// that had paid (CODEBASE §15).
 async function activatePlan(
   storeId: string,
   plan: string,
   expiresAt: Date,
 ): Promise<boolean> {
-  return withService(async (db) => {
+  const applied = await withService(async (db) => {
     const storeRows = await db
       .select({ plan: stores.plan, plan_source: stores.planSource })
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1);
     const store = storeRows[0];
-    if (store?.plan_source === "comp") return false;
+    if (!billingMayApplyPlan(store?.plan, store?.plan_source, plan)) {
+      return null;
+    }
 
     const from = store?.plan ?? null;
     await db
@@ -336,18 +340,34 @@ async function activatePlan(
       })
       .where(eq(stores.id, storeId));
 
-    if (from !== plan) {
-      await db.insert(planEvents).values({
-        storeId,
-        fromPlan: from,
-        toPlan: plan,
-        source: "paid",
-        actor: "subscription-webhook",
-        note: "renewal / activation",
-      });
-    }
-    return true;
+    return { from };
   });
+  if (!applied) return false;
+
+  // Audit trail — genuinely best-effort, in its OWN transaction. Inside the one
+  // above, an audit failure ROLLS BACK the activation the merchant paid for,
+  // which is exactly how `source: "paid"` (not a value the plan_events CHECK
+  // allows) turned a successful charge into a store stuck on its old plan.
+  if (applied.from !== plan) {
+    try {
+      await withService((db) =>
+        db.insert(planEvents).values({
+          storeId,
+          fromPlan: applied.from,
+          toPlan: plan,
+          source: "billing",
+          actor: "subscription-webhook",
+          note: "renewal / activation",
+        }),
+      );
+    } catch (auditErr) {
+      console.error(
+        "razorpay webhook (audit):",
+        auditErr instanceof Error ? auditErr.message : auditErr,
+      );
+    }
+  }
+  return true;
 }
 
 async function setExpiry(storeId: string, expiresAt: Date): Promise<boolean> {

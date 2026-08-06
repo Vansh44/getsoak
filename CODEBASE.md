@@ -1277,22 +1277,54 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     derives its pricing cards from `PLAN_META`/`PLAN_LIMITS` so it can never
     drift. `stores.plan` is CHECK-constrained to the three ids
     (`plans_02_basic_and_expiry.sql` renamed starter→basic) and paired with
-    `stores.plan_source` (`comp`/`paid`/`trial` — an operator comp must never
-    be overwritten by a future billing webhook); every change is recorded in
+    `stores.plan_source` (`comp`/`paid`/`trial`); every change is recorded in
     the append-only `plan_events` audit table (service-role only, like
     `store_counters`) — schema in `supabase/plans_01_schema.sql`.
-    **Timed plans:** `stores.plan_expires_at` (timestamptz, NULL = indefinite)
-    bounds an operator grant. Enforcement is two-layered: (1) read-time —
-    every gate resolves the plan via **`effectivePlan(store)`** (expired ⇒
-    free; threaded through `lib/ai/quota.ts`, `lib/settings/resolve.ts`,
-    `store-settings.ts`, checkout's gateway gate, credit purchases), and
-    (2) durable — `/api/cron/plan-expiry` (daily, vercel.json,
-    CRON_SECRET-protected) flips expired rows to free, clears the expiry,
-    writes a `plan_events` row (source `system`) and busts `STORE_TAG`.
-    The platform stores console sets plans via `setStorePlan`
-    (`app/actions/platform.ts`, superadmin-only, tested): **any plan, any
-    direction**, with a duration picker (1/3/6/12 months / custom date /
-    indefinite). Merchant-facing subscription billing is a later phase.
+    - **★ A COMP IS A FLOOR, NOT A CEILING** (`billingMayApplyPlan`,
+      `lib/payments/plan-change.ts`, pure + tested). The rule used to be "an
+      operator comp must never be overwritten by a billing webhook", and its
+      intent is right — a stale subscription renewing on basic must not strip a
+      store an operator gave Pro. But as an unconditional refusal it had **no
+      exit**: `setStorePlan` stamps `plan_source = 'comp'` on every operator
+      grant and never clears it, so a store an operator had ever touched could
+      never activate a plan it PAID for. Prod, 2026-08-06: `echos` was comped
+      basic in July, subscribed to Pro, was charged, and had all three Razorpay
+      webhooks (`activated`/`charged`/`authenticated`) arrive and be discarded.
+      Billing may now RAISE a plan above a comp and never lower it. Equal rank
+      is refused deliberately — a store comped Pro indefinitely that subscribes
+      to Pro would otherwise swap an open-ended grant for a `plan_expires_at`
+      tied to the card, and one failed charge would have the expiry cron take
+      away what an operator gave.
+    - **★★ `plan_events.source` IS NOT `stores.plan_source`.** The CHECK allows
+      `operator | billing | system`; the plan_source column allows
+      `comp | paid | trial`. All three billing writers reached for
+      `source: "paid"` — rejected by Postgres every time, and because each
+      insert sat in the SAME transaction as the `stores` update, the rejection
+      **rolled back the plan the merchant had just been charged for**, surfacing
+      as "Payment succeeded but activating the plan failed." It hid for months
+      because the symptom is an EMPTY audit log — which is the first place you
+      look to find out why a plan didn't change. `source` is plain `text`, so
+      TypeScript cannot catch it; `lib/plans-audit-coverage.test.ts` is the CI
+      guard. Every billing audit insert now runs in its OWN transaction, so an
+      audit failure can never undo an activation (the pattern `platform.ts` and
+      the plan-expiry cron already used).
+    - **★ NEVER REPORT A BARE SUCCESS WHEN THE PLAN DIDN'T MOVE.** `changePlan`
+      returned `{success: true, message: "You're now on the Pro plan."}`
+      regardless of whether the write landed — money has already moved at
+      Razorpay by that point, so a silent no-op is the worst possible outcome.
+      It now returns an error naming what happened.
+      **Timed plans:** `stores.plan_expires_at` (timestamptz, NULL = indefinite)
+      bounds an operator grant. Enforcement is two-layered: (1) read-time —
+      every gate resolves the plan via **`effectivePlan(store)`** (expired ⇒
+      free; threaded through `lib/ai/quota.ts`, `lib/settings/resolve.ts`,
+      `store-settings.ts`, checkout's gateway gate, credit purchases), and
+      (2) durable — `/api/cron/plan-expiry` (daily, vercel.json,
+      CRON_SECRET-protected) flips expired rows to free, clears the expiry,
+      writes a `plan_events` row (source `system`) and busts `STORE_TAG`.
+      The platform stores console sets plans via `setStorePlan`
+      (`app/actions/platform.ts`, superadmin-only, tested): **any plan, any
+      direction**, with a duration picker (1/3/6/12 months / custom date /
+      indefinite). Merchant-facing subscription billing is a later phase.
 
 15b. **Plan changes — direction decides timing, not the merchant**
 (`lib/payments/plan-change.ts`, pure + tested). A merchant can move tier,

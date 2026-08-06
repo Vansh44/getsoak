@@ -25,7 +25,43 @@
 // tier can still be an increase on what they actually pay today.
 // ---------------------------------------------------------------------------
 
+import { PLAN_RANK, normalizePlan } from "@/lib/plans";
+
 export type BillingPeriod = "monthly" | "yearly";
+
+// ---------------------------------------------------------------------------
+// May a billing event write over an operator comp?
+//
+// A COMP IS A FLOOR, NOT A CEILING. The original rule was "billing must never
+// overwrite a comp" (CODEBASE §15) and its intent is right: an operator gives a
+// store Pro for free, and a stale subscription renewing on basic must not take
+// that away. But as an unconditional refusal it has NO EXIT — `setStorePlan`
+// stamps `plan_source = 'comp'` on every operator grant and never clears it, so
+// a store an operator has ever touched can never activate a plan it PAYS for.
+//
+// That is not theoretical: the `echos` store was comped basic on 2026-07-09,
+// subscribed to Pro on 2026-08-06, was charged, and had all three Razorpay
+// webhooks (activated / charged / authenticated) arrive and be discarded here.
+// The subscription row said `pro`; the store row said `basic`.
+//
+// So billing may RAISE a plan above a comp and may never lower it. Equal rank is
+// refused too, deliberately: a store comped Pro indefinitely that subscribes to
+// Pro would otherwise trade its open-ended grant for a `plan_expires_at` tied to
+// the card — one failed charge and the expiry cron drops it to free, taking away
+// something an operator gave. Refusing costs that store nothing (it keeps Pro),
+// and an operator can settle the billing state deliberately.
+// ---------------------------------------------------------------------------
+export function billingMayApplyPlan(
+  currentPlan: string | null | undefined,
+  currentSource: string | null | undefined,
+  billingPlan: string,
+): boolean {
+  if ((currentSource ?? "") !== "comp") return true;
+  return (
+    PLAN_RANK[normalizePlan(billingPlan)] >
+    PLAN_RANK[normalizePlan(currentPlan)]
+  );
+}
 
 export interface PlanChangeRequest {
   currentPlan: string;

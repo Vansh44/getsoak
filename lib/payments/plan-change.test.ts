@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  billingMayApplyPlan,
   canUpdateSubscription,
   cancelsAtCycleEnd,
   decidePlanChange,
@@ -309,5 +310,40 @@ describe("★ describePlanChange — what changed decides the sentence", () => {
       "monthly",
     );
     expect(s).toContain("Nothing is charged today");
+  });
+});
+
+describe("billingMayApplyPlan", () => {
+  it("★ a paid upgrade beats a comp — the bug this exists for", () => {
+    // `echos` was comped basic, subscribed to Pro, was charged, and had all
+    // three Razorpay webhooks discarded by an unconditional comp refusal. The
+    // subscription row said pro; the store row said basic.
+    expect(billingMayApplyPlan("basic", "comp", "pro")).toBe(true);
+  });
+
+  it("★ never lowers a comp — the protection the guard was written for", () => {
+    // A store comped Pro must not be dropped to basic by a stale subscription
+    // renewing underneath it.
+    expect(billingMayApplyPlan("pro", "comp", "basic")).toBe(false);
+    expect(billingMayApplyPlan("pro", "comp", "free")).toBe(false);
+  });
+
+  it("refuses an equal-rank comp, so an open-ended grant keeps no expiry", () => {
+    // Applying it would swap an indefinite comp for a plan_expires_at tied to
+    // the card — one failed charge and the expiry cron takes Pro away.
+    expect(billingMayApplyPlan("pro", "comp", "pro")).toBe(false);
+  });
+
+  it("never blocks a store that isn't comped", () => {
+    expect(billingMayApplyPlan("pro", "paid", "basic")).toBe(true);
+    expect(billingMayApplyPlan("basic", "trial", "pro")).toBe(true);
+    expect(billingMayApplyPlan("free", null, "pro")).toBe(true);
+    expect(billingMayApplyPlan(null, undefined, "basic")).toBe(true);
+  });
+
+  it("treats the legacy `starter` id as basic", () => {
+    // plan_events still records the pre-rename id; normalizePlan aliases it.
+    expect(billingMayApplyPlan("starter", "comp", "pro")).toBe(true);
+    expect(billingMayApplyPlan("starter", "comp", "starter")).toBe(false);
   });
 });
