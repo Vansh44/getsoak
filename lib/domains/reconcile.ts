@@ -45,6 +45,7 @@ import {
 } from "./certificates";
 import { checkCnameTarget, checkDomainPointsTo } from "./dns";
 import { decideReissue, pendingDuration } from "./reissue";
+import { shouldHealthCheck, recordHealthResult } from "./health";
 import { ensureAuthorizedDomain } from "@/lib/auth/authorized-domains";
 
 export const UPGRADE_MESSAGE =
@@ -115,6 +116,11 @@ export interface DomainReconcileResult {
   waitingDays?: number;
   /** Hosts whose certificate this run reset to escape Google's backoff. */
   reissued?: string[];
+  /**
+   * This run un-verified a previously-live domain after sustained failure, so the
+   * store is back on its subdomain. The caller tells the merchant.
+   */
+  reverted?: boolean;
   /** What is still outstanding, phrased for the merchant. */
   error?: string;
 }
@@ -161,6 +167,24 @@ export async function reconcileDomainForStore(
     unknown
   >;
   const wasVerified = settings.custom_domain_verified === true;
+
+  // ★ A LIVE DOMAIN IS RE-CHECKED, BUT NOT ON EVERY SWEEP. Once the subdomain
+  // REDIRECTS to the custom domain, a merchant whose DNS later breaks has no
+  // route into their own dashboard — so health matters now in a way it did not
+  // before. Throttled hard: the checks cost Certificate Manager calls plus DNS
+  // lookups per domain, for something that changes maybe once a year.
+  const health = {
+    checkedAt: settings.domain_health_checked_at as string | undefined,
+    failures: (settings.domain_health_failures as number | undefined) ?? 0,
+  };
+  if (wasVerified && !shouldHealthCheck(health, Date.now())) {
+    return {
+      ...base,
+      domain,
+      verified: true,
+      certificateState: (settings.domain_cert_state as string) ?? null,
+    };
+  }
 
   // (1) + (3): certificate issued and attached to the load balancer's map.
   let prov = await ensureProvisioned(domain);
@@ -224,8 +248,42 @@ export async function reconcileDomainForStore(
     next.domain_extra_hosts = extraLive.map((h) => h.host);
   else delete next.domain_extra_hosts;
 
+  // ★ ONE HEALTH VERDICT, whatever brought us here. `healthy` is the AND of
+  // everything serving needs — certificate active AND attached, and DNS still
+  // pointing at the load balancer — so the accounting below does not care WHICH
+  // part failed, only that the domain is not usable end to end right now.
+  const dns = prov.ready
+    ? await checkDomainPointsTo(domain, cfg.loadBalancerIp)
+    : null;
+  const healthy = prov.ready && dns?.pointsToUs === true;
+
+  // Health accounting applies ONLY to a domain that was already live. For one
+  // still being set up, "not ready" is the normal state, not a fault to count.
+  let reverted = false;
+  if (wasVerified) {
+    const outcome = recordHealthResult(health, healthy);
+    next.domain_health_checked_at = new Date().toISOString();
+    next.domain_health_failures = outcome.failures;
+    if (outcome.revert) {
+      // Un-verify. storeOrigin() then returns the subdomain, which BOTH stops
+      // serving on the dead domain AND cancels the proxy redirect — so the
+      // merchant gets their dashboard back without anyone intervening. That
+      // single flag is why no separate "disable the redirect" step exists.
+      delete next.custom_domain_verified;
+      next.domain_health_failures = 0;
+      reverted = true;
+      logWarn("custom domain reverted to subdomain", {
+        storeId,
+        domain,
+        certificateState: prov.certificateState,
+        failureReason: prov.failureReason,
+      });
+    }
+  }
+
   if (!prov.ready) {
     await saveDomainSettings(storeId, next);
+    if (reverted) revalidateTag(STORE_TAG, "max");
     const waited = pendingDuration(
       pendingSince ?? (next.domain_pending_since as string),
       Date.now(),
@@ -249,21 +307,21 @@ export async function reconcileDomainForStore(
       failureReason: prov.failureReason,
       waitingDays: waited.days,
       reissued: reissued.length > 0 ? reissued : undefined,
+      reverted,
       error: await pendingMessage(domain, prov),
     };
   }
 
-  // (2): it actually points at us. Checked AFTER the certificate, because the
-  // certificate is the slow part and there is no sense reporting a routing
-  // problem the merchant would have to fix twice.
-  const dns = await checkDomainPointsTo(domain, cfg.loadBalancerIp);
-  if (!dns.pointsToUs) {
+  // (2) failed: the certificate is fine but the domain no longer resolves to us.
+  if (!healthy) {
     await saveDomainSettings(storeId, next);
+    if (reverted) revalidateTag(STORE_TAG, "max");
     return {
       ...base,
       domain,
       certificateState: prov.certificateState,
-      error: dns.error ?? "This domain doesn't point to us yet.",
+      reverted,
+      error: dns?.error ?? "This domain doesn't point to us yet.",
     };
   }
 
@@ -280,6 +338,10 @@ export async function reconcileDomainForStore(
   // inheriting a months-old "stuck" timestamp and alarming immediately.
   delete next.domain_pending_since;
   delete next.domain_reissued;
+  // A pass clears the failure count outright — a working domain is not "two
+  // failures away from working" (see recordHealthResult).
+  next.domain_health_checked_at = new Date().toISOString();
+  next.domain_health_failures = 0;
   await saveDomainSettings(storeId, next);
   revalidateTag(STORE_TAG, "max");
 
@@ -440,6 +502,7 @@ export async function sweepPendingDomains(): Promise<{
   pending: number;
   live: number;
   becameLive: DomainReconcileResult[];
+  reverted: DomainReconcileResult[];
   reissued: string[];
   failures: Array<{
     storeId: string;
@@ -449,7 +512,14 @@ export async function sweepPendingDomains(): Promise<{
   }>;
 }> {
   if (!getCertConfig()) {
-    return { pending: 0, live: 0, becameLive: [], reissued: [], failures: [] };
+    return {
+      pending: 0,
+      live: 0,
+      becameLive: [],
+      reverted: [],
+      reissued: [],
+      failures: [],
+    };
   }
 
   const rows = await withService((db) =>
@@ -462,18 +532,25 @@ export async function sweepPendingDomains(): Promise<{
     return [] as Array<{ id: string; settings: unknown }>;
   });
 
+  // ★ LIVE DOMAINS ARE IN SCOPE NOW TOO. The sweep used to skip anything already
+  // verified, which was fine while the subdomain stayed reachable — but with the
+  // subdomain redirecting, an unwatched broken domain is a lock-out. Every store
+  // with a domain is considered; `shouldHealthCheck` inside
+  // reconcileDomainForStore is what keeps the cost down, returning early for a
+  // live domain checked recently.
   const pending = rows.filter(
     (r) =>
       ((r.settings ?? {}) as Record<string, unknown>).custom_domain_verified !==
       true,
   );
+  const candidates = rows;
 
   const results: DomainReconcileResult[] = [];
   // Sequential on purpose. This is a background job with no one waiting, and
   // each store costs several Certificate Manager calls plus DNS lookups —
   // parallelising it buys nothing and risks the per-project API rate limit that
   // shows up as RATE_LIMITED on merchants' certificates.
-  for (const row of pending) {
+  for (const row of candidates) {
     results.push(
       await reconcileDomainForStore(row.id).catch(
         (err): DomainReconcileResult => {
@@ -495,6 +572,10 @@ export async function sweepPendingDomains(): Promise<{
     pending: pending.length,
     live: results.filter((r) => r.verified).length,
     becameLive: results.filter((r) => r.becameLive),
+    // Domains that FELL OVER: previously live, now un-verified after sustained
+    // failure. The caller notifies each merchant — a store's public address
+    // changing under them without a word would be indefensible.
+    reverted: results.filter((r) => r.reverted),
     // Every host reset this run, so a reissue loop would be visible in the cron
     // output rather than only in the logs.
     reissued: results.flatMap((r) => r.reissued ?? []),

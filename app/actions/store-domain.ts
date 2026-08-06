@@ -135,6 +135,10 @@ export async function updateCustomDomain(
   delete newSettings.domain_cert_state;
   delete newSettings.domain_cert_issue;
   delete newSettings.domain_extra_hosts;
+  delete newSettings.domain_health_checked_at;
+  delete newSettings.domain_health_failures;
+  delete newSettings.domain_reissued;
+  delete newSettings.domain_pending_since;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete newSettings[key];
 
   try {
@@ -450,6 +454,10 @@ export async function disconnectDomain(): Promise<DomainResult> {
   delete next.domain_cert_state;
   delete next.domain_cert_issue;
   delete next.domain_extra_hosts;
+  delete next.domain_health_checked_at;
+  delete next.domain_health_failures;
+  delete next.domain_reissued;
+  delete next.domain_pending_since;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete next[key];
 
   // Stop serving FIRST. If deprovisioning then fails we have a leftover

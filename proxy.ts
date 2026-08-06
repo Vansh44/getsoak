@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { parseHost, isHelpHost, isThemesHost } from "@/lib/store/host";
+import { canonicalHostForSlug } from "@/lib/store/canonical";
 import { logError } from "@/lib/observability/logger";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/auth/session-cookie";
 import {
@@ -66,6 +67,52 @@ export async function proxy(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = `/platform${pathname === "/" ? "" : pathname}`;
     return NextResponse.rewrite(url);
+  }
+
+  // --- One address per store: {slug}.storemink.com -> verified custom domain ---
+  //
+  // A store with a live custom domain should have ONE address, not two that both
+  // work: two hosts serving identical content split SEO signals, and a merchant
+  // who has told the world about xyz.com does not want half their links on
+  // xyz.storemink.com.
+  //
+  // 308, not 302: permanent AND method-preserving, so a POSTed form (checkout,
+  // a dashboard action) survives the hop instead of being silently downgraded to
+  // GET and losing its body.
+  //
+  // ★ THE GATE IS storeOrigin(), borrowed rather than reimplemented — see
+  // lib/store/canonical.ts. That means this redirect UNDOES ITSELF exactly when
+  // serving does: a lapsed Pro plan or an un-verified domain makes storeOrigin
+  // return the subdomain, so the store keeps working there with no extra logic.
+  // A failed lookup returns null and simply does not redirect.
+  //
+  // Applies to /dashboard and /pos too, deliberately (the merchant asked for one
+  // address). ⚠ POS device + operator cookies are host-only and SameSite=Strict
+  // by design, so every paired till must be re-authorised once after a domain
+  // goes live — there is no way to carry a host-scoped credential across origins.
+  const storeHost = parseHost(host);
+  // `*.localhost` is a store subdomain to parseHost, but redirecting local dev to
+  // a production custom domain would make that store impossible to work on.
+  const isLocal = (host ?? "").split(":")[0].endsWith(".localhost");
+  if (storeHost.type === "store-subdomain" && !isLocal) {
+    const canonical = await canonicalHostForSlug(storeHost.slug);
+    if (canonical) {
+      const url = request.nextUrl.clone();
+      url.host = canonical;
+      url.port = "";
+      url.protocol = "https:";
+      const res = NextResponse.redirect(url, 308);
+      // ★★ MUST NOT BE CACHED, and this is not a micro-optimisation — it is what
+      // keeps the auto-revert safety net working. A 308 is heuristically
+      // cacheable, and browsers cache it INDEFINITELY: without this header, a
+      // merchant whose domain later breaks would have the dead redirect pinned in
+      // their own browser, so reverting `custom_domain_verified` would restore
+      // the subdomain for the whole internet EXCEPT the one person who needs it.
+      // The status stays 308 so search engines still consolidate signals onto the
+      // custom domain; only client caching is suppressed.
+      res.headers.set("cache-control", "no-store");
+      return res;
+    }
   }
 
   // --- Store hosts ({slug}.storemink.com / custom domains) ---

@@ -398,6 +398,16 @@ export function renderNotification(
         url: str(p.store_url) || "/dashboard/settings/domain",
       };
 
+    case "store.domain_reverted":
+      return {
+        title: `${subject ?? "Your domain"} has stopped working`,
+        body:
+          str(p.reason) ||
+          "Your store is being served on its StoreMink address again.",
+        // Straight to the domain settings, where the outstanding records are.
+        url: "/dashboard/settings/domain",
+      };
+
     // ── Platform (operator console) ───────────────────────────────────────
     case "platform.store_created":
       return {

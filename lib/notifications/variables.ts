@@ -367,6 +367,23 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "www.acme.com",
     },
   ],
+  "store.domain_reverted": [
+    {
+      name: "domain",
+      description: "The domain that stopped working.",
+      sample: "acme.com",
+    },
+    {
+      name: "store_url",
+      description: "Where the store is served now.",
+      sample: "https://acme.storemink.com",
+    },
+    {
+      name: "reason",
+      description: "What failed, as far as we can tell.",
+      sample: "This domain no longer points to us.",
+    },
+  ],
   "platform.store_created": [
     { name: "slug", description: "The new store's subdomain.", sample: "acme" },
     { name: "plan", description: "The plan it signed up on.", sample: "free" },

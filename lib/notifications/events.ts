@@ -144,6 +144,7 @@ export const EVENT_KEYS = [
   "settings.changed",
   "store.created",
   "store.domain_live",
+  "store.domain_reverted",
   // ── Plan & billing ──────────────────────────────────────────────────────
   "plan.changed",
   "plan.expiring",
@@ -569,6 +570,22 @@ export const EVENTS: readonly EventDef[] = [
     // Not duplication: one is a merchant milestone, the other is console
     // telemetry, and they carry different copy to different inboxes.
     audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "store.domain_reverted",
+    label: "Custom domain stopped working",
+    description:
+      "A live custom domain failed repeated checks, so the store is back on its StoreMink address.",
+    group: "Team & security",
+    section: "settings",
+    severity: "warning",
+    // BOTH, and NOT configurable. The store's public address has just changed
+    // underneath the merchant — every link they have shared now redirects
+    // somewhere else. There is no version of "they opted out of hearing this"
+    // that is defensible, and email is the only channel that reaches someone who
+    // is not looking at the dashboard.
+    audiences: { "store-admins": BOTH },
+    configurable: false,
   },
   {
     key: "plan.changed",
