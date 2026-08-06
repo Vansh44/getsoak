@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
+  UserRound,
   MapPin,
   Plus,
   Pencil,
@@ -999,8 +1000,16 @@ export default function CheckoutPage() {
                       className={styles.primaryBtn}
                       disabled={savingAddr}
                     >
-                      <MapPin size={16} />
-                      {savingAddr ? "Saving…" : "Save & deliver here"}
+                      {fulfilment === "pickup" ? (
+                        <UserRound size={16} />
+                      ) : (
+                        <MapPin size={16} />
+                      )}
+                      {savingAddr
+                        ? "Saving…"
+                        : fulfilment === "pickup"
+                          ? "Save Contact Details"
+                          : "Save Delivery Address"}
                     </button>
                   </div>
                 </form>
