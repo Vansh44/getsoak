@@ -13,6 +13,13 @@ Cloud Scheduler jobs in **any** region — verified by sweeping every location.
 the box was never ticked. So for the whole period after the cutover, none of the
 three scheduled jobs ran.
 
+It happened a second time, quietly: the 2026-07-30 fix created the three jobs it
+knew about, `seo-refresh` was documented in this file as still to be created, and
+it then sat uncreated until **2026-08-06** — with its two required Google APIs
+never enabled either. A doc that says "must be created" is not a reminder anybody
+receives. If you add a job here, create it in the same sitting and record the
+verification below.
+
 **Measured blast radius at the time of fixing (prod, read-only queries): 2
 stores, 0 orders, 0 lapsed plans, 0 pending razorpay orders, 0 campaign
 recipients.** Nothing was lost, because production has no real traffic yet — but
@@ -24,6 +31,7 @@ each job is a landmine the moment it does:
 | `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only). |
 | `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                  |
 | `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.      |
+| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                      |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -51,6 +59,22 @@ properties for connected custom domains. It returns **503 on any partial
 failure**, so Scheduler retries are part of its reliability contract. Enable
 the Google Search Console + Site Verification APIs and configure the runtime
 service account first; see `docs/seo-indexing.md`.
+
+> **⚠ `Search Console rejected sitemap (403)` usually means the APIs are not
+> enabled — not a property-permission problem.** The message reads like the
+> service account lacks access to the property, which sends you into the Search
+> Console UI looking for a grant that is already there. On 2026-08-06 every root
+> and every store failed with this, and the entire cause was that
+> `searchconsole.googleapis.com` and `siteverification.googleapis.com` had never
+> been enabled in `storemink-prod` — a step `CODEBASE.md` §7 lists and that was
+> simply skipped. Check this FIRST:
+>
+> ```bash
+> gcloud services list --enabled --project=storemink-prod | grep -E "searchconsole|siteverification"
+> ```
+>
+> Enabling both turned the same request into `200 {"ok":true}` with no other
+> change. They are free; there is no reason for either to be off.
 
 > **⚠ `send-emails` must stay at 00:00 UTC.** `DAILY_DIGEST_HOUR_UTC` is 23:00
 > _because_ the heartbeat is 00:00 UTC (CODEBASE.md §24). Moving this schedule
@@ -118,8 +142,17 @@ gcloud scheduler jobs run storemink-plan-expiry --project=storemink-prod --locat
 gcloud logging read 'resource.type="cloud_run_revision" AND httpRequest.requestUrl=~"/api/cron/"' --project=storemink-prod --limit=10 --format="value(httpRequest.status,httpRequest.requestUrl)"
 ```
 
-The original three were verified this way on 2026-07-30. The SEO job is new and
-must be created and verified after this change reaches production.
+The original three were verified this way on 2026-07-30.
+
+`storemink-seo-refresh` was created and verified on **2026-08-06** — it had never
+existed, so sitemap submission had never run on a schedule. Verified by calling
+the endpoint directly (`200 {"ok":true}`, both roots registered, both eligible
+stores ready) after enabling the two APIs above.
+
+`storemink-domain-reconcile` was created on **2026-08-06** alongside the fix it
+backs. Its route ships in the same change, so verify its **response** once that
+reaches production — the job authenticates (its baked-in header matches the
+current `CRON_SECRET`) but will 404 until the deploy lands.
 
 ## Staging
 

@@ -233,6 +233,25 @@ export interface ManagedCert {
     state?: string;
     failureReason?: string;
     details?: string;
+    /**
+     * ★ WHEN Google last looked — and a FAILED attempt is very often STALE.
+     * It describes a check made BEFORE the merchant fixed their DNS, and it
+     * keeps saying FAILED until Google re-attempts on its own schedule. Without
+     * this in the logs, a fixed domain and a broken one are indistinguishable:
+     * wholesip.com sat reading `CONFIG / CNAME_MISMATCH` from an attempt 94
+     * minutes older than the correct records that were already published.
+     */
+    attemptTime?: string;
+    /**
+     * Richer than `failureReason`, and what the live API actually returns —
+     * `issues: ["CNAME_MISMATCH"]` plus the exact record Google wants. The REST
+     * reference documents `details` instead; this is present in practice, so
+     * both are declared and neither is relied on.
+     */
+    troubleshooting?: {
+      issues?: string[];
+      cname?: { name?: string; expectedData?: string };
+    };
   }>;
 }
 interface CertResource {
@@ -405,10 +424,21 @@ async function provisionHost(
     // domain sits broken for days with everybody thinking they are waiting.
     const why = explainCertificate(certRes.data.managed);
     if (why.failureReason) {
+      const attempt = certRes.data.managed?.authorizationAttemptInfo?.find(
+        (a) => a.state === "FAILED" || a.failureReason,
+      );
       logInfo("custom domain not issued", {
         host,
         certificateState: state,
         failureReason: why.failureReason,
+        // ★ attemptTime OR THE LINE IS UNREADABLE. Google re-attempts on its own
+        // schedule, so a FAILED attempt routinely predates the records that
+        // fixed it — without the timestamp there is no way to tell "still
+        // broken" from "fixed, not re-checked yet", and the two need opposite
+        // responses. `issues` names the specific fault (CNAME_MISMATCH) that the
+        // CONFIG enum flattens away.
+        attemptTime: attempt?.attemptTime,
+        issues: attempt?.troubleshooting?.issues?.join(","),
       });
     }
     return {
