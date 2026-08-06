@@ -26,6 +26,8 @@ import {
   UPGRADE_MESSAGE,
 } from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
+import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
+import { ROOT_DOMAIN } from "@/lib/store/host";
 import {
   ensureGoogleCoverageForStore,
   GOOGLE_INDEXING_SETTINGS_KEYS,
@@ -133,6 +135,10 @@ export async function updateCustomDomain(
   delete newSettings.domain_cert_state;
   delete newSettings.domain_cert_issue;
   delete newSettings.domain_extra_hosts;
+  delete newSettings.domain_health_checked_at;
+  delete newSettings.domain_health_failures;
+  delete newSettings.domain_reissued;
+  delete newSettings.domain_pending_since;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete newSettings[key];
 
   try {
@@ -168,6 +174,16 @@ export async function updateCustomDomain(
       const gone = await deprovision(previous);
       if (gone.error) {
         logError("updateCustomDomain (deprovision old)", gone.error, {
+          previous,
+        });
+      }
+      // Stop trusting it for Google sign-in too. Leaving it listed means a
+      // domain we no longer serve can still host a popup sign-in against our
+      // Identity Platform project — which is precisely what the authorized-domain
+      // check exists to prevent, and matters most if someone else later buys it.
+      const deauth = await removeAuthorizedDomain(previous, ROOT_DOMAIN);
+      if (deauth.error) {
+        logError("updateCustomDomain (deauthorize old)", deauth.error, {
           previous,
         });
       }
@@ -438,6 +454,10 @@ export async function disconnectDomain(): Promise<DomainResult> {
   delete next.domain_cert_state;
   delete next.domain_cert_issue;
   delete next.domain_extra_hosts;
+  delete next.domain_health_checked_at;
+  delete next.domain_health_failures;
+  delete next.domain_reissued;
+  delete next.domain_pending_since;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete next[key];
 
   // Stop serving FIRST. If deprovisioning then fails we have a leftover
@@ -459,5 +479,12 @@ export async function disconnectDomain(): Promise<DomainResult> {
   const gone = await deprovision(domain);
   if (gone.error)
     logError("disconnectDomain (deprovision)", gone.error, { domain });
+
+  // Same reasoning as a domain change: an entry for a host we no longer serve is
+  // standing permission we do not need. Guarded so it can never strip the
+  // platform's own entry (see planRemove).
+  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
+  if (deauth.error)
+    logError("disconnectDomain (deauthorize)", deauth.error, { domain });
   return { success: true };
 }

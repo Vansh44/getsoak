@@ -202,6 +202,12 @@ export interface HostProvision {
   diagnosis?: string;
   /** Google's machine-readable cause (CONFIG / CAA / RATE_LIMITED), for logs. */
   failureReason?: string;
+  /**
+   * When Google last attempted authorization. ISO, absent if it never has.
+   * Load-bearing for `decideReissue` — a FAILED verdict is only worth escaping
+   * if it predates the DNS fix, and without this there is no way to tell.
+   */
+  attemptTime?: string;
   error?: string;
 }
 
@@ -277,6 +283,7 @@ interface CertResource {
 export function explainCertificate(managed: ManagedCert | undefined): {
   diagnosis?: string;
   failureReason?: string;
+  attemptTime?: string;
 } {
   if (!managed) return {};
 
@@ -287,32 +294,40 @@ export function explainCertificate(managed: ManagedCert | undefined): {
   );
   const reason = failed?.failureReason ?? managed.provisioningIssue?.reason;
   const details = failed?.details ?? managed.provisioningIssue?.details;
+  // Carried on EVERY branch below, including the ones with no diagnosis: the
+  // reissue decision needs it precisely in the CONFIG case, which is the branch
+  // that deliberately says nothing to the merchant.
+  const attemptTime = failed?.attemptTime;
+  const withTime = (r: { diagnosis?: string; failureReason?: string }) => ({
+    ...r,
+    ...(attemptTime ? { attemptTime } : {}),
+  });
 
   switch (reason) {
     case "CAA":
-      return {
+      return withTime({
         failureReason: reason,
         // The one failure the DNS records on screen cannot fix.
         diagnosis:
           "This domain has a CAA record that doesn't permit Google to issue certificates. " +
           'Add a CAA record with the value 0 issue "pki.goog", or remove the existing CAA records, then check again.',
-      };
+      });
     case "RATE_LIMITED":
-      return {
+      return withTime({
         failureReason: reason,
         diagnosis:
           "Google has temporarily rate-limited certificate requests for this domain. " +
           "This clears by itself — try again in an hour. Nothing needs changing.",
-      };
+      });
     case "CONFIG":
     case "AUTHORIZATION_ISSUE":
       // The common case, and the one the caller's own CNAME check explains far
       // better (it names the record and what it currently points at), so no
       // diagnosis here — only the reason, for the logs.
-      return { failureReason: reason };
+      return withTime({ failureReason: reason });
     default:
       return reason
-        ? { failureReason: reason, diagnosis: details || undefined }
+        ? withTime({ failureReason: reason, diagnosis: details || undefined })
         : {};
   }
 }
@@ -511,6 +526,39 @@ export async function ensureProvisioned(
   // The primary decides. See ProvisionState.hosts for why www cannot gate.
   const primary = hosts[0]!;
   return { ...primary, hosts };
+}
+
+/**
+ * Delete ONE host's certificate so provisioning mints a fresh one.
+ *
+ * ★ THE AUTHORIZATION IS DELIBERATELY NOT TOUCHED. That resource holds the
+ * challenge token the merchant has already published in their DNS; deleting it
+ * would issue a NEW token and silently invalidate their record, turning a
+ * self-healing situation into "please go and edit your DNS again". Only the
+ * certificate — the thing carrying Google's stale verdict and its backoff timer
+ * — is removed. `ensureProvisioned` then recreates it under the identical
+ * deterministic name, referencing the same authorization.
+ *
+ * Guarded by assertManaged, so this can never reach `prod-apex` or
+ * `prod-wildcard`. Callers must consult `decideReissue` first — see reissue.ts
+ * for the rate-limit and CAA cases where doing this makes matters worse.
+ */
+export async function reissueCertificate(
+  host: string,
+): Promise<{ error?: string }> {
+  const cfg = getCertConfig();
+  if (!cfg) return { error: "Custom domains aren't configured." };
+
+  const target = `${parent(cfg)}/certificates/${resourceId("cert", host)}`;
+  assertManaged(target);
+  const res = await api(target, { method: "DELETE" });
+  // Already gone is success: the next provisioning pass creates it either way.
+  if (!res.ok && res.status !== 404) {
+    logError("reissueCertificate", res.error, { host });
+    return { error: "Couldn't reset the certificate." };
+  }
+  logInfo("custom domain certificate reset to escape backoff", { host });
+  return {};
 }
 
 /**

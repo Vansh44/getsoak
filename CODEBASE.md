@@ -3123,6 +3123,146 @@ group, span}` (span = columns of the 4-wide desktop grid),
       ownership was never on screen. `getEventually` retries 404 only (a 403
       on IAM must surface at once) and takes a `ready` predicate, because a
       DnsAuthorization is readable a beat before `dnsResourceRecord` is filled.
+    - **★★ IT SELF-HEALS A STALE VERDICT — the last step that needed a human**
+      (`lib/domains/reissue.ts`, pure + tested). A managed certificate records
+      the result of its LAST authorization attempt and then retries on Google's
+      own backoff, so a merchant who fixes their DNS is NOT re-checked promptly.
+      Observed in prod 2026-08-06: `wholesip.com` read
+      `CONFIG / CNAME_MISMATCH` from an attempt **59 minutes older** than the
+      correct records, with the apex fully down the whole time. Nothing was
+      broken and nothing was going to fix it — it was waiting on Google to
+      look again.
+      Deleting only the CERTIFICATE forces a fresh attempt; done by hand it went
+      ACTIVE in **80 seconds**. `reconcileDomainForStore` now does that itself.
+    - **The authorization is never touched** — it holds the challenge token
+      the merchant already published, so deleting it would mint a new one and
+      silently invalidate their record, turning self-healing into "go and edit
+      your DNS again". `reissueCertificate` removes the certificate alone,
+      under `assertManaged`, and provisioning recreates it under the identical
+      deterministic name against the same authorization.
+    - **★ NEVER ON `RATE_LIMITED`** — the failure IS that we asked too often,
+      so asking again is the one action guaranteed to prolong it, and the limit
+      is shared across every domain under that registrable name. Never on
+      `CAA` either: a fresh certificate hits the identical record.
+    - **★ OUR OWN DNS CHECK IS THE PRECONDITION.** A reissue is only justified
+      because we can see the cause is already gone; without it we would spend
+      the rate-limit budget relearning the same answer. Also refused on a
+      missing/unparseable `attemptTime` (acting blind could delete a
+      certificate Google is authorizing that second) and inside a 6-hour
+      per-host cooldown, persisted as `settings.domain_reissued` — a cooldown
+      that isn't written down is a reissue that happens every run.
+    - One extra provisioning pass per sweep, then stop: the new certificate
+      won't be ACTIVE for ~80s, so the NEXT run attaches it.
+    - **★ SILENCE IS NOT SUCCESS.** The sweep answers 200 while domains wait (a
+      merchant who hasn't added records is not an outage), so a domain stuck for
+      a week looked exactly like one stuck for a minute. `domain_pending_since`
+      plus `pendingDuration` give it a clock: `logWarn("custom domain stuck")` past
+      3 days for Error Reporting to alert on, and `waitingDays` in the cron
+      response. Both cleared on going live, so a later reconnect doesn't inherit
+      a months-old timestamp and alarm immediately.
+    - **★ ONE ADDRESS PER STORE: the subdomain REDIRECTS to a live custom
+      domain.** `proxy.ts` 308s `{slug}.storemink.com/*` → `xyz.com/*` —
+      storefront, `/dashboard` and `/pos` alike — so a store has one address
+      rather than two that both serve and split its SEO signals. The lookup is
+      `lib/store/canonical.ts`.
+    - **★ THE REDIRECT GATE IS `storeOrigin()`, BORROWED NOT REIMPLEMENTED.** It
+      already applies the two gates (verified + entitled) for canonical URLs,
+      sitemaps and robots, so the redirect cannot disagree with what we serve or
+      what we publish. It also means **the redirect undoes itself for free**: a
+      lapsed Pro plan or an un-verified domain makes `storeOrigin` return the
+      subdomain, so `xyz.com` stops resolving (`lookupStoreByHost` applies the
+      same two gates) and the subdomain works again with no extra code.
+    - **★★ `Cache-Control: no-store` ON THE 308, AND IT IS LOAD-BEARING.** A 308
+      is heuristically cacheable and browsers keep it INDEFINITELY. Without the
+      header, a merchant whose domain later breaks would have the dead redirect
+      pinned in their own browser — so reverting `custom_domain_verified` would
+      restore the subdomain for the whole internet EXCEPT the one person who
+      needs it. The status stays 308 so search engines still consolidate signals.
+    - The proxy cannot use `unstable_cache` (no render scope in middleware) and
+      the storefront path is deliberately free of per-request DB work, so the
+      mapping sits in a 60s per-instance TTL cache bounded at 1000 entries. A DB
+      error FAILS OPEN — null means no redirect, so the subdomain keeps working.
+      `*.localhost` is excluded, or local dev of a store with a custom domain
+      would redirect to production.
+    - ⚠ **Every paired POS till must be re-authorised once** after a domain goes
+      live: device + operator cookies are host-only and `SameSite=Strict` by
+      design (§22), and a host-scoped credential cannot cross origins. Dashboard
+      sessions likewise — a merchant signed in on the subdomain signs in again on
+      their own domain, once.
+    - **★ A LIVE DOMAIN IS HEALTH-CHECKED, AND REVERTS IF IT BREAKS**
+      (`lib/domains/health.ts`, pure + tested). The sweep used to skip anything
+      already verified, which was survivable while the subdomain stayed
+      reachable — but once it REDIRECTS, a merchant whose DNS later breaks
+      (nameservers moved, registrar lapsed, A record deleted) has no route into
+      their own dashboard. The redirect turns a cosmetic problem into a lock-out.
+    - **★ HYSTERESIS, NOT A SINGLE VERDICT.** `REVERT_AFTER_FAILURES = 3`
+      consecutive failures, and any single success clears the count outright — a
+      working domain is not "two failures away from working". Reverting on one
+      check would flap the store's canonical URL on a transient DNS hiccup, and
+      that URL is what Google indexes; oscillating is worse for a merchant than
+      being briefly down.
+    - **Asymmetric cadence**: a healthy domain is re-checked every 6h, a FAILING
+      one every 1h (≈3h to revert). Confirming a suspected failure is
+      time-critical because the merchant may be locked out; re-confirming health
+      is not. `shouldHealthCheck` is consulted BEFORE any work, so the hourly
+      sweep does almost nothing for a fleet of healthy domains.
+    - The revert is just `delete settings.custom_domain_verified`, which stops
+      serving AND cancels the redirect through the same `storeOrigin` rule. One
+      flag — which is why there is no separate "disable the redirect" step.
+    - **`store.domain_reverted`** tells the merchant (both channels,
+      `configurable: false`): their public address has just changed under them
+      and every link they shared now goes elsewhere, so there is no defensible
+      version of "they opted out of hearing this". Copy is BESPOKE and leads with
+      what still WORKS — a generated fact list would open with "Domain:
+      acme.com" and leave them to work out whether their shop is down, which is
+      their only question.
+    - **★ THE DASHBOARD IS SERVED ON THE CUSTOM DOMAIN TOO**, not only on the
+      `{slug}.storemink.com` subdomain. `proxy.ts` has ONE "store hosts" branch
+      covering storefront + `/dashboard` + `/auth` + `/pos`, and
+      `cookieDomainForHost` returns `undefined` for a custom domain, so
+      `sm_session` is set HOST-ONLY on it rather than scoped to
+      `.storemink.com`. Verified live: `wholesip.com/dashboard` → 307 →
+      `wholesip.com/auth/login` (staying on the custom domain), which renders.
+      ⚠ **Sessions therefore do NOT carry over** — different registrable domain,
+      different cookie jar — so a merchant signed in on the subdomain is signed
+      out on their own domain and must log in again. Cookies working correctly,
+      but it surprises people.
+    - **★ GOOGLE SIGN-IN NEEDS THE DOMAIN IN IDENTITY PLATFORM'S
+      `authorizedDomains`** (`lib/auth/authorized-domains.ts`, pure helpers +
+      18 tests). `signInWithPopup` refuses to run on an unlisted origin,
+      failing `auth/unauthorized-domain` before any popup opens — so on a
+      merchant's own domain that button was dead while email+password worked,
+      because password sign-in is a plain REST call and is not origin-gated.
+    - **★ ONE ENTRY COVERS EVERY SUBDOMAIN.** `matchDomain` in
+      `@firebase/auth` v12 builds
+      `^(.+\.<escaped>|<escaped>)$`, so a listed `storemink.com` authorises
+      `storemink.com` AND every `*.storemink.com`. **There is no bug on store
+      subdomains** — and the earlier §7 instruction to add `*.storemink.com`
+      was both unnecessary and impossible, since **Firebase rejects wildcards
+      in this list**. `entryCovers` mirrors that regex; keep it in step with
+      the SDK, because if the rule ever tightens this becomes an
+      over-estimate and `planAdd` would skip entries that are needed.
+    - The entry added is the **registrable** domain (`entryForDomain` via the
+      PSL), so apex + www + anything else the merchant points at us is covered
+      by one entry — listing `www.xyz.com` alone would leave the apex, the
+      commoner address, unauthorised.
+    - `ensureAuthorizedDomain` runs on the `becameLive` edge, **best effort**:
+      a failure leaves password sign-in working and the next reconcile
+      retries; it must never un-verify a live domain.
+      `removeAuthorizedDomain` runs on disconnect AND on a domain change —
+      an entry for a host we no longer serve is standing permission to run
+      popup sign-in against our project, which matters most if someone else
+      later buys that domain.
+    - **★ `planRemove` REMOVES BY EXACT ENTRY, NEVER BY COVERAGE, and refuses
+      protected entries.** Coverage-based removal is the trap: a
+      subdomain-shaped input would match and delete `storemink.com`, killing
+      Google sign-in for the platform and every store subdomain in one call.
+      Same class of guard as `assertManaged`.
+    - ⚠ Read-modify-write on a project-global list, so two domains verifying
+      in the same second can lose one update. Deliberately not locked — the
+      loser is retried, and the cost is one merchant briefly using a password.
+    - Needs `roles/firebaseauth.admin` on the runtime SA (it has it; the role
+      includes `firebaseauth.configs.get`/`.update`).
     - **⚠ THE INFRASTRUCTURE IS THE OTHER HALF, AND IT IS NOT IN CODE.** Four
       things must be true in GCP or every domain fails identically no matter
       what this code does: the runtime SA holds **`roles/certificatemanager.editor`**
@@ -3143,25 +3283,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
       and nothing else: `shop.acme.com` has no second form worth guessing at,
       and inventing hostnames costs a certificate plus a DNS record the merchant
       then has to be told about.
-      - **A FULL TRIPLE PER HOSTNAME**, not one certificate with two SANs.
-        `managed.domains` is IMMUTABLE, so widening an existing single-host
-        certificate is impossible — `createOrAdopt` would 409 and adopt the old
-        narrow one, and the www map entry would point at a certificate that does
-        not cover www. Per-host triples also keep every already-provisioned
-        resource byte-identical in name, so live domains kept their certificates
-        with nothing to migrate.
-      - **★ THE PRIMARY DECIDES.** `ProvisionState`'s top-level fields mirror
-        `hosts[0]` — the domain the merchant actually typed — and the companion
-        is strictly best-effort. Gating on both would mean someone who added one
-        A record instead of two has a working certificate for the address they
-        asked for and a store that still refuses to serve it: trading a real
-        outage for a cosmetic one. When the store is live and www is still
-        pending, its challenge record STAYS on screen under "Finish covering
-        www.…", named by the host rather than the raw `_acme-challenge` name.
-      - `deprovision` walks the same `domainHosts` list, so disconnecting can't
-        leave the www triple behind. Provisioning is sequential, primary first:
-        Certificate Manager rate-limits per project and a burst of parallel
-        creates is what later surfaces as RATE_LIMITED on a merchant's cert.
+    - **A FULL TRIPLE PER HOSTNAME**, not one certificate with two SANs.
+      `managed.domains` is IMMUTABLE, so widening an existing single-host
+      certificate is impossible — `createOrAdopt` would 409 and adopt the old
+      narrow one, and the www map entry would point at a certificate that does
+      not cover www. Per-host triples also keep every already-provisioned
+      resource byte-identical in name, so live domains kept their certificates
+      with nothing to migrate.
+    - **★ THE PRIMARY DECIDES.** `ProvisionState`'s top-level fields mirror
+      `hosts[0]` — the domain the merchant actually typed — and the companion
+      is strictly best-effort. Gating on both would mean someone who added one
+      A record instead of two has a working certificate for the address they
+      asked for and a store that still refuses to serve it: trading a real
+      outage for a cosmetic one. When the store is live and www is still
+      pending, its challenge record STAYS on screen under "Finish covering
+      www.…", named by the host rather than the raw `_acme-challenge` name.
+    - `deprovision` walks the same `domainHosts` list, so disconnecting can't
+      leave the www triple behind. Provisioning is sequential, primary first:
+      Certificate Manager rate-limits per project and a burst of parallel
+      creates is what later surfaces as RATE_LIMITED on a merchant's cert.
     - **★ CHANGING A DOMAIN RELEASES THE OLD ONE.** `deprovision` was wired only
       to `disconnectDomain`, so editing the domain silently orphaned the previous
       one's certificate, authorization and map entry. Two costs: a certificate
@@ -3260,8 +3400,14 @@ npm run format      # prettier --write
       the Google provider. Sign-in uses `signInWithPopup` (no callback route), so
       no app redirect URIs go into Google — only Firebase's own auth handler does.
     - **Authorized domains** (Authentication → Settings): list every host the app
-      runs on so popup + email-link work — `localhost`, `storemink.com`,
-      `*.storemink.com` (+ the staging equivalents). Unlike Supabase there is NO
+      runs on so popup + email-link work — `localhost` and `storemink.com` (+ the
+      staging equivalents). **ONE entry covers every subdomain**: the SDK matches
+      `^(.+\.<entry>|<entry>)$`, so `storemink.com` authorises every
+      `{slug}.storemink.com` and **`*.storemink.com` is neither needed nor
+      accepted — Firebase rejects wildcards here.** MERCHANT custom domains are
+      not covered by anything and are added automatically on verification (§30,
+      `lib/auth/authorized-domains.ts`); without that, "Continue with Google" is
+      dead on a merchant's own domain while email+password still works. Unlike Supabase there is NO
       per-path Redirect-URL matrix; popup / email-link just need the domain
       authorized. Cross-subdomain session cookies still span `.storemink.com`
       (set by `/api/auth/session`), so the signup→dashboard handoff works across

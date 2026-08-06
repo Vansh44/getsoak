@@ -18,11 +18,17 @@
 //
 // Runs HOURLY. Issuance is measured in tens of minutes and merchants edit DNS on
 // their own schedule, so a daily sweep would mean a domain connected at 09:05
-// waits a day to serve. Cheap: only unverified domains are touched.
+// waits a day to serve.
+//
+// It ALSO health-checks domains that are already live, because the store
+// subdomain now redirects to them — an unwatched broken domain is a lock-out, not
+// a cosmetic problem. Still cheap: shouldHealthCheck returns early for a live
+// domain checked in the last 6 hours, so the hourly run does almost nothing.
 // ---------------------------------------------------------------------------
 
 import { sweepPendingDomains } from "@/lib/domains/reconcile";
 import { recordEvent } from "@/lib/notifications/record";
+import { getStoreOriginById } from "@/lib/site";
 import { logError } from "@/lib/observability/logger";
 
 export const runtime = "nodejs";
@@ -77,6 +83,27 @@ async function handle(request: Request): Promise<Response> {
       });
     }
 
+    // A domain that FELL OVER. The store's public address just changed under the
+    // merchant and every link they have shared now goes somewhere else, so this
+    // is the one notification in the flow that must not be missable.
+    for (const store of result.reverted) {
+      await recordEvent({
+        type: "store.domain_reverted",
+        storeId: store.storeId,
+        actor: { type: "system" },
+        subject: {
+          type: "store",
+          id: store.storeId,
+          label: store.domain ?? "",
+        },
+        payload: {
+          domain: store.domain ?? "",
+          store_url: (await getStoreOriginById(store.storeId)) ?? "",
+          reason: store.error ?? "",
+        },
+      });
+    }
+
     // 200 even with failures still outstanding. Unlike seo-refresh — where a
     // failure means OUR configuration is broken and Cloud Scheduler's retries
     // are wanted — the overwhelmingly common "failure" here is a merchant who
@@ -87,6 +114,14 @@ async function handle(request: Request): Promise<Response> {
       pending: result.pending,
       live: result.live,
       becameLive: result.becameLive.map((s) => s.domain),
+      // Previously-live domains that failed repeated checks and were moved back
+      // to their subdomain. Should be rare; if it is not, look at the health
+      // thresholds in reissue/health.ts before assuming the domains are at fault.
+      reverted: result.reverted.map((s) => s.domain),
+      // Hosts whose certificate was reset to escape Google's retry backoff. If
+      // this is ever non-empty on consecutive runs for the same host, the
+      // cooldown in reissue.ts is not doing its job — look there first.
+      reissued: result.reissued,
       waiting: result.failures,
     });
   } catch (err) {

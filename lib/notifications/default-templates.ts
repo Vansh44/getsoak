@@ -159,6 +159,19 @@ const BESPOKE: Record<string, { subject: string; body: string }> = {
       "<p>Your original StoreMink address keeps working too, so any links you've already shared stay valid.</p>",
     ].join("\n"),
   },
+  // Bad news, and it has to lead with what is still WORKING. A generated fact
+  // list would open with "Domain: acme.com" and leave the merchant to work out
+  // whether their shop is down — which is the only question they have.
+  "store.domain_reverted": {
+    subject: "Action needed: {{domain}} has stopped working",
+    body: [
+      "<p><strong>Your store is still open.</strong> It's being served on your StoreMink address again:</p>",
+      '<p><a href="{{store_url}}">{{store_url}}</a></p>',
+      "<p>We checked <strong>{{domain}}</strong> several times over a few hours and couldn't reach it, so we moved your store back rather than leave it unreachable.</p>",
+      "<p>{{reason}}</p>",
+      "<p>This is almost always a DNS change at your domain provider. Open Settings → Domain in your dashboard to see the exact records to restore — your store will move back automatically once they're in place.</p>",
+    ].join("\n"),
+  },
 };
 
 /** Human label for a variable in the details list ("order_ref" → "Order ref"). */
