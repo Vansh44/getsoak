@@ -3123,6 +3123,42 @@ group, span}` (span = columns of the 4-wide desktop grid),
       ownership was never on screen. `getEventually` retries 404 only (a 403
       on IAM must surface at once) and takes a `ready` predicate, because a
       DnsAuthorization is readable a beat before `dnsResourceRecord` is filled.
+    - **★★ IT SELF-HEALS A STALE VERDICT — the last step that needed a human**
+      (`lib/domains/reissue.ts`, pure + tested). A managed certificate records
+      the result of its LAST authorization attempt and then retries on Google's
+      own backoff, so a merchant who fixes their DNS is NOT re-checked promptly.
+      Observed in prod 2026-08-06: `wholesip.com` read `CONFIG /
+CNAME_MISMATCH` from an attempt **59 minutes older** than the correct
+      records, with the apex fully down the whole time. Nothing was broken and
+      nothing was going to fix it — it was waiting on Google to look again.
+      Deleting only the CERTIFICATE forces a fresh attempt; done by hand it went
+      ACTIVE in **80 seconds**. `reconcileDomainForStore` now does that itself.
+      - **The authorization is never touched** — it holds the challenge token
+        the merchant already published, so deleting it would mint a new one and
+        silently invalidate their record, turning self-healing into "go and edit
+        your DNS again". `reissueCertificate` removes the certificate alone,
+        under `assertManaged`, and provisioning recreates it under the identical
+        deterministic name against the same authorization.
+      - **★ NEVER ON `RATE_LIMITED`** — the failure IS that we asked too often,
+        so asking again is the one action guaranteed to prolong it, and the limit
+        is shared across every domain under that registrable name. Never on
+        `CAA` either: a fresh certificate hits the identical record.
+      - **★ OUR OWN DNS CHECK IS THE PRECONDITION.** A reissue is only justified
+        because we can see the cause is already gone; without it we would spend
+        the rate-limit budget relearning the same answer. Also refused on a
+        missing/unparseable `attemptTime` (acting blind could delete a
+        certificate Google is authorizing that second) and inside a 6-hour
+        per-host cooldown, persisted as `settings.domain_reissued` — a cooldown
+        that isn't written down is a reissue that happens every run.
+      - One extra provisioning pass per sweep, then stop: the new certificate
+        won't be ACTIVE for ~80s, so the NEXT run attaches it.
+    - **★ SILENCE IS NOT SUCCESS.** The sweep answers 200 while domains wait (a
+      merchant who hasn't added records is not an outage), so a domain stuck for
+      a week looked exactly like one stuck for a minute. `domain_pending_since`
+      - `pendingDuration` give it a clock: `logWarn("custom domain stuck")` past
+        3 days for Error Reporting to alert on, and `waitingDays` in the cron
+        response. Both cleared on going live, so a later reconnect doesn't inherit
+        a months-old timestamp and alarm immediately.
     - **⚠ THE INFRASTRUCTURE IS THE OTHER HALF, AND IT IS NOT IN CODE.** Four
       things must be true in GCP or every domain fails identically no matter
       what this code does: the runtime SA holds **`roles/certificatemanager.editor`**

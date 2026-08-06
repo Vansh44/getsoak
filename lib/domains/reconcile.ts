@@ -35,10 +35,16 @@ import { withService } from "@/lib/db/client";
 import { stores } from "@/drizzle/schema";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { PLAN_LIMITS, effectivePlan, type Plan } from "@/lib/plans";
-import { logError, logInfo } from "@/lib/observability/logger";
+import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import { dnsRecordName } from "./domain";
-import { ensureProvisioned, getCertConfig } from "./certificates";
+import {
+  ensureProvisioned,
+  getCertConfig,
+  reissueCertificate,
+  type ProvisionState,
+} from "./certificates";
 import { checkCnameTarget, checkDomainPointsTo } from "./dns";
+import { decideReissue, pendingDuration } from "./reissue";
 
 export const UPGRADE_MESSAGE =
   "Connecting your own domain is part of the Pro plan. Upgrade to add one.";
@@ -104,6 +110,10 @@ export interface DomainReconcileResult {
   failureReason?: string;
   /** Companion hosts (the www/apex counterpart) that are also serving. */
   extraHosts?: string[];
+  /** Whole days this domain has been waiting. 0 once live. */
+  waitingDays?: number;
+  /** Hosts whose certificate this run reset to escape Google's backoff. */
+  reissued?: string[];
   /** What is still outstanding, phrased for the merchant. */
   error?: string;
 }
@@ -152,7 +162,22 @@ export async function reconcileDomainForStore(
   const wasVerified = settings.custom_domain_verified === true;
 
   // (1) + (3): certificate issued and attached to the load balancer's map.
-  const prov = await ensureProvisioned(domain);
+  let prov = await ensureProvisioned(domain);
+
+  // ★ SELF-HEAL A STALE VERDICT. Google records its LAST attempt and then backs
+  // off, so a merchant who fixes their DNS is not re-checked promptly — in prod
+  // an apex sat down for an hour on a verdict predating the correct records.
+  // Forcing a fresh attempt made it ACTIVE in 80 seconds. Every guard for when
+  // NOT to do this lives in decideReissue (rate limits, CAA, thrash).
+  const reissued = await maybeReissue(storeId, domain, prov, settings);
+  if (reissued.length > 0) {
+    // One extra pass, so the new certificate starts authorizing immediately
+    // rather than waiting for the next sweep. It will not be ACTIVE yet — that
+    // took ~80s — so this run still reports "provisioning" and the NEXT run (or
+    // the merchant's own page load) attaches it. Bounded at one retry: this is a
+    // background job, not a place to sit in a loop.
+    prov = await ensureProvisioned(domain);
+  }
 
   // Persist the challenge records even when we're not done, so the merchant can
   // see what to add without re-running provisioning to find out.
@@ -172,6 +197,25 @@ export async function reconcileDomainForStore(
   if (prov.failureReason) next.domain_cert_issue = prov.failureReason;
   else delete next.domain_cert_issue;
 
+  // The reissue cooldown, per host. A reissue whose timestamp is not persisted
+  // is a reissue that happens every single run — which is how an anti-thrash
+  // guard turns into the thrash it exists to prevent.
+  if (reissued.length > 0) {
+    const stamps = {
+      ...((settings.domain_reissued ?? {}) as Record<string, string>),
+    };
+    const at = new Date().toISOString();
+    for (const host of reissued) stamps[host] = at;
+    next.domain_reissued = stamps;
+  }
+
+  // When this domain started waiting, so "stuck for a week" is distinguishable
+  // from "stuck for a minute" — the sweep answers 200 either way, by design.
+  const pendingSince = (settings.domain_pending_since as string) ?? undefined;
+  if (!prov.ready && !pendingSince) {
+    next.domain_pending_since = new Date().toISOString();
+  }
+
   // Which companion hosts are serving, so the settings page can be honest about
   // www without re-querying Google on every page load.
   const extraLive = prov.hosts.slice(1).filter((h) => h.ready);
@@ -181,11 +225,29 @@ export async function reconcileDomainForStore(
 
   if (!prov.ready) {
     await saveDomainSettings(storeId, next);
+    const waited = pendingDuration(
+      pendingSince ?? (next.domain_pending_since as string),
+      Date.now(),
+    );
+    // ★ SILENCE IS NOT SUCCESS. The sweep deliberately answers 200 while
+    // domains wait, so nothing else would ever surface a domain that has been
+    // stuck for days. WARN so Cloud Logging / Error Reporting can alert on it.
+    if (waited.stuck) {
+      logWarn("custom domain stuck", {
+        storeId,
+        domain,
+        days: waited.days,
+        certificateState: prov.certificateState,
+        failureReason: prov.failureReason,
+      });
+    }
     return {
       ...base,
       domain,
       certificateState: prov.certificateState,
       failureReason: prov.failureReason,
+      waitingDays: waited.days,
+      reissued: reissued.length > 0 ? reissued : undefined,
       error: await pendingMessage(domain, prov),
     };
   }
@@ -212,6 +274,11 @@ export async function reconcileDomainForStore(
     delete next.domain_challenge;
     delete next.domain_challenges;
   }
+  // Live: clear the waiting clock and the cooldown stamps, so a domain that is
+  // later changed or breaks starts its next wait from zero rather than
+  // inheriting a months-old "stuck" timestamp and alarming immediately.
+  delete next.domain_pending_since;
+  delete next.domain_reissued;
   await saveDomainSettings(storeId, next);
   revalidateTag(STORE_TAG, "max");
 
@@ -226,6 +293,86 @@ export async function reconcileDomainForStore(
     certificateState: prov.certificateState,
     extraHosts: extraLive.map((h) => h.host),
   };
+}
+
+/**
+ * Force a fresh authorization attempt on any host stuck behind a stale verdict.
+ *
+ * Decides per host, because the apex and its www companion have independent
+ * certificates and can be stuck for different reasons at different times.
+ * Returns the hosts actually reset, so the caller can record the cooldown — a
+ * reissue whose timestamp is not persisted is a reissue that happens every run.
+ *
+ * Never throws: this is an optimisation on top of a flow that already works by
+ * waiting, so a failure here must degrade to "keep waiting", not break the sweep.
+ */
+async function maybeReissue(
+  storeId: string,
+  domain: string,
+  prov: ProvisionState,
+  settings: Record<string, unknown>,
+): Promise<string[]> {
+  const lastReissue = (settings.domain_reissued ?? {}) as Record<
+    string,
+    string
+  >;
+  const nowMs = Date.now();
+  const done: string[] = [];
+
+  for (const host of prov.hosts) {
+    // Cheap checks first — decideReissue rejects most cases without a DNS
+    // lookup, and the lookup is the only expensive part.
+    const dry = decideReissue({
+      ready: host.ready,
+      failureReason: host.failureReason,
+      attemptTime: host.attemptTime,
+      cnameCorrect: true, // provisional; confirmed below before acting
+      lastReissueAt: lastReissue[host.host],
+      nowMs,
+    });
+    if (!dry.reissue) continue;
+
+    // Only now pay for the DNS check, and re-decide with the real answer.
+    const cname = host.challenge
+      ? await checkCnameTarget(host.challenge.name, host.challenge.value)
+      : { matches: false, found: [] as string[] };
+
+    const decision = decideReissue({
+      ready: host.ready,
+      failureReason: host.failureReason,
+      attemptTime: host.attemptTime,
+      cnameCorrect: cname.matches,
+      lastReissueAt: lastReissue[host.host],
+      nowMs,
+    });
+    if (!decision.reissue) {
+      logInfo("custom domain reissue skipped", {
+        storeId,
+        host: host.host,
+        reason: decision.reason,
+      });
+      continue;
+    }
+
+    const res = await reissueCertificate(host.host).catch((err) => ({
+      error: err instanceof Error ? err.message : "reissue threw",
+    }));
+    if (res.error) {
+      logError("custom domain reissue failed", res.error, {
+        storeId,
+        host: host.host,
+      });
+      continue;
+    }
+    logWarn("custom domain certificate reissued", {
+      storeId,
+      domain,
+      host: host.host,
+      reason: decision.reason,
+    });
+    done.push(host.host);
+  }
+  return done;
 }
 
 /** The most actionable sentence available for a domain that isn't live yet. */
@@ -273,10 +420,16 @@ export async function sweepPendingDomains(): Promise<{
   pending: number;
   live: number;
   becameLive: DomainReconcileResult[];
-  failures: Array<{ storeId: string; domain: string | null; error?: string }>;
+  reissued: string[];
+  failures: Array<{
+    storeId: string;
+    domain: string | null;
+    waitingDays?: number;
+    error?: string;
+  }>;
 }> {
   if (!getCertConfig()) {
-    return { pending: 0, live: 0, becameLive: [], failures: [] };
+    return { pending: 0, live: 0, becameLive: [], reissued: [], failures: [] };
   }
 
   const rows = await withService((db) =>
@@ -322,8 +475,18 @@ export async function sweepPendingDomains(): Promise<{
     pending: pending.length,
     live: results.filter((r) => r.verified).length,
     becameLive: results.filter((r) => r.becameLive),
+    // Every host reset this run, so a reissue loop would be visible in the cron
+    // output rather than only in the logs.
+    reissued: results.flatMap((r) => r.reissued ?? []),
     failures: results
       .filter((r) => !r.verified)
-      .map((r) => ({ storeId: r.storeId, domain: r.domain, error: r.error })),
+      .map((r) => ({
+        storeId: r.storeId,
+        domain: r.domain,
+        // Days waited, so a domain nobody is fixing stands out from one
+        // connected five minutes ago.
+        waitingDays: r.waitingDays,
+        error: r.error,
+      })),
   };
 }

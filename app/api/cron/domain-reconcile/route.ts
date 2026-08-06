@@ -87,6 +87,10 @@ async function handle(request: Request): Promise<Response> {
       pending: result.pending,
       live: result.live,
       becameLive: result.becameLive.map((s) => s.domain),
+      // Hosts whose certificate was reset to escape Google's retry backoff. If
+      // this is ever non-empty on consecutive runs for the same host, the
+      // cooldown in reissue.ts is not doing its job — look there first.
+      reissued: result.reissued,
       waiting: result.failures,
     });
   } catch (err) {
