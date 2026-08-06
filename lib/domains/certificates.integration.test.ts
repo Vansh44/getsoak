@@ -20,7 +20,22 @@ const d = RUN ? describe : describe.skip;
 
 // A domain under one the owner controls. Nothing is served here; the resources
 // are torn down at the end.
+//
+// ⚠ REQUIRES APPLICATION DEFAULT CREDENTIALS, not just `gcloud auth login`.
+// GoogleAuth reads ADC, which is a separate credential file:
+//   gcloud auth application-default login
+// Without it every call fails `invalid_grant / invalid_rapt`, which looks like a
+// provisioning bug and is not one.
 const TEST_DOMAIN = process.env.DOMAIN_TEST_HOST ?? "cert-test.wholesip.com";
+
+// ★ A SUBDOMAIN HAS NO www COMPANION, so TEST_DOMAIN alone cannot exercise the
+// apex→www path at all — it would pass while that code was completely broken.
+// Opt-in with NO default, deliberately: pointing this at a live apex creates a
+// second certificate for it, and Certificate Manager rate-limits per top-level
+// private domain, so a careless default could throttle issuance for a REAL
+// merchant domain mid-setup.
+//   DOMAIN_TEST_APEX=example.com
+const TEST_APEX = process.env.DOMAIN_TEST_APEX ?? "";
 
 d("Certificate Manager provisioning (live)", () => {
   let mod: typeof import("./certificates");
@@ -70,6 +85,14 @@ d("Certificate Manager provisioning (live)", () => {
     console.log("  certificate state:", state.certificateState);
   }, 90_000);
 
+  it("invents no www companion for a subdomain", async () => {
+    // shop.acme.com has no second form worth guessing at, and a certificate for
+    // www.shop.acme.com would be a billable resource nobody asked for.
+    const state = await mod.ensureProvisioned(TEST_DOMAIN);
+    expect(state.hosts).toHaveLength(1);
+    expect(state.hosts[0]!.host).toBe(TEST_DOMAIN);
+  }, 90_000);
+
   it("running provisioning twice still creates nothing extra", async () => {
     const a = await mod.ensureProvisioned(TEST_DOMAIN);
     const b = await mod.ensureProvisioned(TEST_DOMAIN);
@@ -92,4 +115,53 @@ d("Certificate Manager provisioning (live)", () => {
     const again = await mod.deprovision(TEST_DOMAIN);
     expect(again.error).toBeUndefined();
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// The apex→www path. Separate block because it needs an apex domain nobody is
+// depending on; see TEST_APEX above for why there is no default.
+// ---------------------------------------------------------------------------
+const apex = RUN && TEST_APEX ? describe : describe.skip;
+
+apex("apex domains also cover www (live)", () => {
+  let mod: typeof import("./certificates");
+
+  beforeAll(async () => {
+    process.env.DOMAIN_ENV = "stg";
+    process.env.DOMAIN_GCP_PROJECT_ID ??= "storemink-prod";
+    process.env.DOMAIN_CERT_MAP ??= "prod-cert-map";
+    process.env.DOMAIN_LB_IP ??= "136.69.75.127";
+    mod = await import("./certificates");
+  });
+
+  it("provisions a full triple for BOTH the apex and its www form", async () => {
+    const state = await mod.ensureProvisioned(TEST_APEX);
+
+    expect(state.hosts).toHaveLength(2);
+    // Primary first — the top-level fields mirror it, and it is what gates going
+    // live. If this order ever flips, www failing would block the whole store.
+    expect(state.hosts[0]!.host).toBe(TEST_APEX);
+    expect(state.hosts[1]!.host).toBe(`www.${TEST_APEX}`);
+    expect(state.host).toBe(TEST_APEX);
+
+    // Each host gets its OWN challenge CNAME — a shared one would mean the
+    // merchant is shown half of what they have to add.
+    const names = state.hosts.map((h) => h.challenge?.name);
+    expect(names[0]).toBe(`_acme-challenge.${TEST_APEX}`);
+    expect(names[1]).toBe(`_acme-challenge.www.${TEST_APEX}`);
+    expect(state.hosts[0]!.challenge?.value).not.toBe(
+      state.hosts[1]!.challenge?.value,
+    );
+
+    for (const h of state.hosts) {
+      console.log(`  ${h.host}: ${h.challenge?.name} → ${h.challenge?.value}`);
+    }
+  }, 120_000);
+
+  it("cleans up BOTH hosts — an orphaned certificate keeps billing", async () => {
+    const res = await mod.deprovision(TEST_APEX);
+    expect(res.error).toBeUndefined();
+    const again = await mod.deprovision(TEST_APEX);
+    expect(again.error).toBeUndefined();
+  }, 120_000);
 });

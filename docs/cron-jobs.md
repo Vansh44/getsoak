@@ -23,6 +23,7 @@ each job is a landmine the moment it does:
 | `send-emails`             | Coupon email campaigns never send.                                                                                                              |
 | `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only). |
 | `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                  |
+| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.      |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -38,8 +39,9 @@ each job is a landmine the moment it does:
 | `storemink-plan-expiry`             | `15 0 * * *`   | `https://storemink.com/api/cron/plan-expiry`             |
 | `storemink-expire-pending-payments` | `30 1 * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
+| `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 
-All four: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+All five: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -83,6 +85,25 @@ gcloud scheduler jobs create http storemink-seo-refresh \
   --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
+
+The domain backstop is the one **hourly** job. Google's managed certificate takes
+up to ~30 minutes after the challenge CNAME resolves, and merchants edit DNS on
+their own schedule, so a daily sweep would leave a domain connected at 09:05
+waiting a full day to serve:
+
+```bash
+gcloud scheduler jobs create http storemink-domain-reconcile \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="10 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/domain-reconcile" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+Unlike `seo-refresh` it answers **200 even while domains are still waiting** — the
+common case is a merchant who hasn't added their records yet, which a retry
+within the hour cannot help, and a permanently-red job is one nobody reads. Its
+response body lists `waiting[]` with the reason per store.
 
 ## Verifying
 

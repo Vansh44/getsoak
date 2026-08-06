@@ -307,8 +307,9 @@ wholesip/
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
 │   │   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
 │   │   │                      # invoice settings. Gated on `billing`, revalidates TAGS.billing.
-│   │   ├── store-domain.ts    # Custom domain connect + Google Certificate Manager
-│   │                          # provisioning; shows zone-relative DNS names (so
+│   │   ├── store-domain.ts    # Custom domain connect (§30) — the GATE only; the
+│   │                          # work is lib/domains/reconcile.ts so the cron runs
+│   │                          # identical logic. Shows zone-relative DNS names (so
 │   │                          # registrar UIs do not duplicate the domain), checks
 │   │                          # the challenge CNAME, and requires the LB to be the
 │   │                          # domain's only A-record destination before serving;
@@ -369,6 +370,12 @@ wholesip/
 │       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help
 │       │                      # sitemaps + every launched store; custom-domain META
 │       │                      # verification/property creation; 503 triggers retries
+│       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
+│       │                      # whose certificate issued after the merchant closed
+│       │                      # the tab. Without it a domain only ever goes live if
+│       │                      # someone watches the settings page for ~30 minutes.
+│       │                      # 200 even while waiting — the usual "failure" is a
+│       │                      # merchant who hasn't added their DNS records yet
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -380,6 +387,20 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── domains/               # ★ §30 custom domains: domain.ts (PURE validation +
+│   │                          # normalisation + zone-relative record names),
+│   │                          # naming.ts (deterministic Certificate Manager ids +
+│   │                          # the delete guard that stops staging removing a prod
+│   │                          # entry from the SHARED cert map), certificates.ts
+│   │                          # (create-or-adopt the DnsAuthorization → Certificate
+│   │                          # → CertificateMapEntry; explainCertificate turns
+│   │                          # Google's CONFIG/CAA/RATE_LIMITED into an actionable
+│   │                          # sentence), dns.ts (public-resolver checks — the cert
+│   │                          # proves DNS control, NOT that the domain points here),
+│   │                          # reconcile.ts (the auth-free core + the cron sweep;
+│   │                          # NOT in the "use server" file, or the sweep would be
+│   │                          # a public unauthenticated endpoint). Tested, plus a
+│   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
 │   ├── credit/                # ★ §29: store credit — apply.ts (PURE: how much
 │   │                          # credit goes on an order, incl. the unpayable-
@@ -3050,6 +3071,119 @@ group, span}` (span = columns of the 4-wide desktop grid),
       `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
       needs no migration), a merchant grant UI (`issueCredit` takes
       `kind: 'grant'` and is ready), and split-tender refunds.
+
+30. **Custom domains & TLS — three conditions, and nobody is watching.**
+    `lib/domains/`, `/dashboard/settings/domain`, Pro-only. A domain is marked
+    `settings.custom_domain_verified` — the single flag `lookupStoreByHost` and
+    `storeOrigin()` read — only when ALL THREE hold: the managed certificate is
+    ACTIVE, the domain resolves publicly to `DOMAIN_LB_IP`, and the
+    CertificateMapEntry exists. Each alone is insufficient in a way that bites:
+    without the cert the TLS handshake fails before a request reaches the app;
+    without the DNS check we publish a host we don't serve in every canonical,
+    sitemap entry and `og:url`; without the entry the certificate is issued and
+    **nothing presents it**.
+    - **★★ THE FLOW HAD NO WAY TO FINISH** (found 2026-08-06). `verifyDomain`
+      had exactly ONE caller: the settings page, polling every 30s, capped at
+      ~10 minutes, and skipping every tick while the tab was backgrounded. But
+      the three steps cannot complete in one sitting — the merchant leaves to
+      add records at their registrar, and Google's managed certificate is
+      documented as taking up to ~30 minutes AFTER the challenge CNAME
+      resolves. So in the ordinary case the certificate reached ACTIVE at
+      Google and then nothing ever ran step 3 or set the flag. The domain
+      never served, the dashboard still said "waiting for your DNS records",
+      and the certificate everyone was waiting on had already been issued.
+      Fixed the way §18/§26 already do it: **reconcile-on-read plus a cron
+      backstop** — `/api/cron/domain-reconcile`, HOURLY (a daily sweep makes a
+      09:05 connection wait a day).
+    - **★ `lib/domains/reconcile.ts` HOLDS THE CORE, AND IT IS NOT A
+      `"use server"` FILE.** Everything exported from `app/actions/*` is a
+      publicly reachable endpoint, so an unauthenticated sweep over every store
+      exported from there would be the exact hazard the
+      `syncEmailDomainVerified` comment in that file warns about. The action is
+      the gate and delegates; the plan check stays in the core, because a
+      lapsed Pro plan must not be verified by a background job either.
+    - **★ THE FAILURE REASON WAS BEING THROWN AWAY.** `CertResource` declared
+      `provisioningIssue.reason` and nothing read it, and
+      `authorizationAttemptInfo` — the PER-DOMAIN cause, and the only field
+      that separates the three real failure modes — wasn't declared at all. So
+      a CAA record forbidding Google, a CA rate limit, and a genuinely missing
+      CNAME all produced the same sentence: "add the DNS records shown".
+      **Two of those three are not fixed by adding the records shown**, and
+      neither the merchant nor an operator reading the logs could tell which
+      they had. `explainCertificate` (pure, tested) maps them, and the enum is
+      persisted to `settings.domain_cert_issue` — the ENUM only, since
+      `stores.settings` is anon-readable (§9).
+    - **★ A CREATE IS AN LRO, SO READ-BACK MUST RETRY.** Certificate Manager
+      POSTs return an Operation and the resource is not queryable until it
+      completes, so the immediate GET could 404 — which surfaced as "Couldn't
+      start domain verification" on the FIRST attempt, persisted no
+      `domain_challenge`, and left the settings page listing the A record
+      ALONE. The merchant added it, saw nothing else to add, and left; the
+      certificate could never validate because the one record proving
+      ownership was never on screen. `getEventually` retries 404 only (a 403
+      on IAM must surface at once) and takes a `ready` predicate, because a
+      DnsAuthorization is readable a beat before `dnsResourceRecord` is filled.
+    - **⚠ THE INFRASTRUCTURE IS THE OTHER HALF, AND IT IS NOT IN CODE.** Four
+      things must be true in GCP or every domain fails identically no matter
+      what this code does: the runtime SA holds **`roles/certificatemanager.editor`**
+      (claimed in `naming.ts`'s comment but granted by NO provisioning doc —
+      `docs/gcp-migration-phase4-cloud-run.md` §78 lists four roles and this is
+      not one), `DOMAIN_CERT_MAP` exists, **that map is attached to the target
+      HTTPS proxy** (`--certificate-map`; if the proxy carries certs directly
+      instead, every merchant entry is inert and the LB serves the
+      `*.storemink.com` cert → name-mismatch in the browser while the app
+      reports ACTIVE), and `DOMAIN_LB_IP` is the IP the forwarding rule
+      actually holds.
+    - **★ APEX AND www ARE BOTH COVERED, AND www CANNOT GATE THE STORE.** A
+      certificate covers the EXACT hostnames it was issued for, so connecting
+      `acme.com` used to leave every visitor who typed `www.` — most of them,
+      and what older links and Google's index often carry — with a full-page
+      browser certificate warning, with no setting to fix it.
+      `companionHost`/`domainHosts` (pure, PSL-based, tested) pair apex ↔ www
+      and nothing else: `shop.acme.com` has no second form worth guessing at,
+      and inventing hostnames costs a certificate plus a DNS record the merchant
+      then has to be told about.
+      - **A FULL TRIPLE PER HOSTNAME**, not one certificate with two SANs.
+        `managed.domains` is IMMUTABLE, so widening an existing single-host
+        certificate is impossible — `createOrAdopt` would 409 and adopt the old
+        narrow one, and the www map entry would point at a certificate that does
+        not cover www. Per-host triples also keep every already-provisioned
+        resource byte-identical in name, so live domains kept their certificates
+        with nothing to migrate.
+      - **★ THE PRIMARY DECIDES.** `ProvisionState`'s top-level fields mirror
+        `hosts[0]` — the domain the merchant actually typed — and the companion
+        is strictly best-effort. Gating on both would mean someone who added one
+        A record instead of two has a working certificate for the address they
+        asked for and a store that still refuses to serve it: trading a real
+        outage for a cosmetic one. When the store is live and www is still
+        pending, its challenge record STAYS on screen under "Finish covering
+        www.…", named by the host rather than the raw `_acme-challenge` name.
+      - `deprovision` walks the same `domainHosts` list, so disconnecting can't
+        leave the www triple behind. Provisioning is sequential, primary first:
+        Certificate Manager rate-limits per project and a burst of parallel
+        creates is what later surfaces as RATE_LIMITED on a merchant's cert.
+    - **★ CHANGING A DOMAIN RELEASES THE OLD ONE.** `deprovision` was wired only
+      to `disconnectDomain`, so editing the domain silently orphaned the previous
+      one's certificate, authorization and map entry. Two costs: a certificate
+      nothing references keeps billing and only surfaces on an invoice, and the
+      stale map entry leaves the load balancer still terminating TLS for a
+      hostname the store no longer claims — it resolves, handshakes, then 404s as
+      an unknown store. (This is where the orphaned `www.wholesip.com` resources
+      in prod came from.) Runs in `after()` and best-effort: the new domain is
+      already saved, and a cleanup failure must not fail the change requested.
+    - **★ THE MERCHANT IS TOLD WHEN IT GOES LIVE.** `store.domain_live`
+      (`store-admins`, in-app + email) is the merchant milestone;
+      `platform.domain_verified` remains the operators' console line for the same
+      moment — the `store.created` / `platform.store_created` precedent, not
+      duplication. EMAIL is the whole point: the flow finishes in the background,
+      so without a mail nobody is told the thing they waited days for happened
+      and they must keep revisiting the settings page to guess. The **cron** path
+      is the one that matters — the action only fires for someone who happened to
+      be on the page at the finishing moment. Copy is BESPOKE (§24's rule): as a
+      generated fact list it would read like a status row rather than an answer,
+      and the notification links to the DOMAIN, not `/dashboard`, because the one
+      thing anyone wants on being told this is to click through and see their own
+      shop answer on it.
 
 ## 6. Commands
 

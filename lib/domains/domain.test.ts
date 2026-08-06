@@ -4,6 +4,8 @@ import {
   normalizeDomain,
   validateDomain,
   routingRecords,
+  companionHost,
+  domainHosts,
 } from "./domain";
 
 describe("normalizeDomain", () => {
@@ -96,13 +98,73 @@ describe("validateDomain", () => {
   });
 });
 
+describe("companionHost", () => {
+  // A certificate covers the EXACT hostnames it was issued for, so connecting
+  // the apex alone left every visitor who typed www with a browser warning.
+  it("pairs an apex with its www form", () => {
+    expect(companionHost("acme.com")).toBe("www.acme.com");
+  });
+
+  it("pairs a www host back to its apex", () => {
+    expect(companionHost("www.acme.com")).toBe("acme.com");
+  });
+
+  it("uses the Public Suffix List, not label counting", () => {
+    // acme.co.uk is an APEX with three labels; shop.acme.com is a SUBDOMAIN
+    // with three. Counting labels gets both wrong.
+    expect(companionHost("acme.co.uk")).toBe("www.acme.co.uk");
+    expect(companionHost("www.acme.co.uk")).toBe("acme.co.uk");
+  });
+
+  it("invents nothing for an arbitrary subdomain", () => {
+    // www.shop.acme.com is not an address anyone uses, and guessing it would
+    // cost a certificate plus a DNS record the merchant has to be told about.
+    expect(companionHost("shop.acme.com")).toBeNull();
+    expect(companionHost("www.shop.acme.com")).toBeNull();
+  });
+
+  it("returns null for a single-label host with no registrable domain", () => {
+    // validateDomain rejects these long before provisioning, so this is only
+    // about companionHost never producing a nonsense hostname of its own.
+    expect(companionHost("localhost")).toBeNull();
+    expect(companionHost("")).toBeNull();
+  });
+
+  it("refuses a companion that would exceed the hostname limit", () => {
+    // Prepending "www." to a near-maximal name yields an illegal hostname; ask
+    // for no certificate rather than one for a host that cannot exist.
+    const label = "a".repeat(60);
+    const long = `${[label, label, label, label].join(".")}.com`;
+    expect(long.length).toBeGreaterThan(243);
+    expect(companionHost(long)).toBeNull();
+  });
+});
+
+describe("domainHosts", () => {
+  it("puts the primary first — it is what gates going live", () => {
+    expect(domainHosts("acme.com")).toEqual(["acme.com", "www.acme.com"]);
+    expect(domainHosts("www.acme.com")).toEqual(["www.acme.com", "acme.com"]);
+  });
+
+  it("is a single host when there is no companion", () => {
+    expect(domainHosts("shop.acme.com")).toEqual(["shop.acme.com"]);
+  });
+});
+
 describe("routingRecords", () => {
-  it("uses @ for a two-label domain", () => {
+  it("uses @ for a two-label domain, and covers www alongside it", () => {
     expect(routingRecords("acme.com", "203.0.113.10")).toEqual([
       {
         type: "A",
         name: "@",
         fqdn: "acme.com",
+        value: "203.0.113.10",
+        purpose: "routing",
+      },
+      {
+        type: "A",
+        name: "www",
+        fqdn: "www.acme.com",
         value: "203.0.113.10",
         purpose: "routing",
       },
@@ -115,11 +177,10 @@ describe("routingRecords", () => {
     });
   });
 
-  it("uses the leading label for a subdomain", () => {
-    expect(routingRecords("shop.acme.com", "203.0.113.10")[0]).toMatchObject({
-      name: "shop",
-      type: "A",
-    });
+  it("uses the leading label for a subdomain, and adds nothing else", () => {
+    const records = routingRecords("shop.acme.com", "203.0.113.10");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ name: "shop", type: "A" });
   });
 
   it("is an A record either way", () => {

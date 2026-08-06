@@ -385,6 +385,19 @@ export function renderNotification(
         url: "/dashboard",
       };
 
+    // The merchant milestone. platform.domain_verified below is the operators'
+    // copy of the same moment, with the store named rather than addressed.
+    case "store.domain_live":
+      return {
+        title: `${subject ?? "Your domain"} is live`,
+        body: str(p.extra_hosts)
+          ? `Also serving ${str(p.extra_hosts)}`
+          : "Your store is now open on your own domain.",
+        // The DOMAIN, not /dashboard: the one thing anyone wants on being told
+        // this is to click through and see their own shop answer on it.
+        url: str(p.store_url) || "/dashboard/settings/domain",
+      };
+
     // ── Platform (operator console) ───────────────────────────────────────
     case "platform.store_created":
       return {

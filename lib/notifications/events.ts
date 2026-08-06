@@ -143,6 +143,7 @@ export const EVENT_KEYS = [
   "security.password_changed",
   "settings.changed",
   "store.created",
+  "store.domain_live",
   // ── Plan & billing ──────────────────────────────────────────────────────
   "plan.changed",
   "plan.expiring",
@@ -549,6 +550,25 @@ export const EVENTS: readonly EventDef[] = [
     // Not switchable: a merchant cannot have turned this off before they had
     // an account to turn it off in.
     configurable: false,
+  },
+  {
+    key: "store.domain_live",
+    label: "Custom domain live",
+    description: "This store is now being served on its own domain.",
+    group: "Team & security",
+    section: "settings",
+    severity: "success",
+    // BOTH, and EMAIL is the point. Connecting a domain finishes in the
+    // background — the certificate routinely issues long after the merchant has
+    // closed the dashboard (CODEBASE.md §30) — so without a mail nobody is told
+    // the thing they were waiting for happened. They would have to keep going
+    // back to the settings page to guess.
+    //
+    // The operator-facing `platform.domain_verified` is the SAME moment for a
+    // different audience, exactly as store.created / platform.store_created are.
+    // Not duplication: one is a merchant milestone, the other is console
+    // telemetry, and they carry different copy to different inboxes.
+    audiences: { "store-admins": BOTH },
   },
   {
     key: "plan.changed",

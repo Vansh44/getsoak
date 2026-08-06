@@ -350,6 +350,23 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "free",
     },
   ],
+  "store.domain_live": [
+    {
+      name: "domain",
+      description: "The domain now serving the store.",
+      sample: "acme.com",
+    },
+    {
+      name: "store_url",
+      description: "The store's address on that domain.",
+      sample: "https://acme.com",
+    },
+    {
+      name: "extra_hosts",
+      description: "Other hostnames also covered, such as the www form.",
+      sample: "www.acme.com",
+    },
+  ],
   "platform.store_created": [
     { name: "slug", description: "The new store's subdomain.", sample: "acme" },
     { name: "plan", description: "The plan it signed up on.", sample: "free" },

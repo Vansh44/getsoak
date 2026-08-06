@@ -182,14 +182,54 @@ export function dnsRecordName(fqdn: string, connectedDomain: string): string {
   return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
 }
 
+/**
+ * The other form of the same address: apex ↔ www. Null when there isn't one.
+ *
+ * ★ WHY THIS EXISTS. A certificate covers the EXACT hostnames it was issued for.
+ * Connecting `acme.com` provisioned nothing for `www.acme.com`, so every visitor
+ * who typed the `www` form — which is most of them, and it is what older links,
+ * business cards and Google's own index often carry — got a full-page browser
+ * certificate warning. The merchant had done nothing wrong and there was no
+ * setting to fix it.
+ *
+ * Only apex ↔ www, deliberately. `shop.acme.com` has no second form worth
+ * guessing at (`www.shop.acme.com` is not an address anyone uses), and inventing
+ * hostnames costs a certificate and a DNS record the merchant then has to be
+ * told about.
+ *
+ * The Public Suffix List is required, not label counting: `acme.co.uk` is an
+ * apex with three labels and `shop.acme.com` is a subdomain with three.
+ */
+export function companionHost(domain: string): string | null {
+  const name = domain.toLowerCase().replace(/\.+$/, "");
+  const zone = getDomain(name);
+  // No registrable domain (an unknown TLD, an internal name) — don't guess.
+  if (!zone) return null;
+
+  const companion =
+    name === zone ? `www.${zone}` : name === `www.${zone}` ? zone : null;
+  if (!companion) return null;
+  // A 250-character apex would produce an illegal companion; skip rather than
+  // request a certificate for a hostname that cannot exist.
+  return companion.length <= MAX_HOSTNAME ? companion : null;
+}
+
+/** Primary first, then its companion if there is one. The order is load-bearing:
+ *  the primary is what the merchant asked for and what gates going live. */
+export function domainHosts(domain: string): string[] {
+  const companion = companionHost(domain);
+  return companion ? [domain, companion] : [domain];
+}
+
 export function routingRecords(domain: string, lbIp: string): DnsRecord[] {
-  return [
-    {
-      type: "A",
-      name: dnsRecordName(domain, domain),
-      fqdn: domain,
-      value: lbIp,
-      purpose: "routing",
-    },
-  ];
+  // One A record per host we will serve. The companion's record is genuinely
+  // optional — the store goes live on the primary either way — but it has to be
+  // SHOWN, or "www doesn't work" becomes a support ticket nobody can act on.
+  return domainHosts(domain).map((host) => ({
+    type: "A" as const,
+    name: dnsRecordName(host, domain),
+    fqdn: host,
+    value: lbIp,
+    purpose: "routing" as const,
+  }));
 }

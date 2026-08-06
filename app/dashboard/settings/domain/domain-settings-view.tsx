@@ -12,9 +12,13 @@ import {
   type DomainConnectionState,
 } from "@/app/actions/store-domain";
 
-/** Poll while issuance is in flight, but bounded — each check costs API calls. */
+// Poll while the merchant is actually looking, bounded — each check costs API
+// calls. This is a CONVENIENCE, not the mechanism: issuance regularly outlives
+// any tab, so `/api/cron/domain-reconcile` is what finishes the job. Before that
+// cron existed this poll WAS the only path, which is why a domain that issued
+// after the merchant closed the page never went live (CODEBASE.md §30).
 const POLL_MS = 30_000;
-const MAX_POLLS = 20; // ~10 minutes, which covers normal issuance
+const MAX_POLLS = 20; // ~10 minutes of attentive waiting
 
 export function DomainSettingsView({
   initial,
@@ -162,6 +166,11 @@ export function DomainSettingsView({
 
   // ---- Live ---------------------------------------------------------------
   if (state.verified && state.domain) {
+    // The store is up on the domain they asked for, but the www/apex companion
+    // validates separately and may still be outstanding. Showing "Live and
+    // secured with HTTPS" and nothing else is how "www gives a security warning"
+    // becomes a support ticket for a fix that was one DNS record away.
+    const pending = state.records.filter((r) => r.purpose === "certificate");
     return (
       <Shell>
         <Card>
@@ -173,7 +182,10 @@ export function DomainSettingsView({
                   {state.domain}
                 </p>
                 <p className="text-sm text-[#5b6472]">
-                  Live and secured with HTTPS.
+                  Live and secured with HTTPS
+                  {state.extraHosts.length > 0
+                    ? `, along with ${state.extraHosts.join(" and ")}.`
+                    : "."}
                 </p>
               </div>
             </div>
@@ -187,6 +199,26 @@ export function DomainSettingsView({
             </button>
           </div>
         </Card>
+
+        {pending.length > 0 && (
+          <Card>
+            <div className="border-b border-[rgba(17,24,39,0.08)] p-6">
+              <h2 className="text-base font-semibold text-[#111827]">
+                Finish covering {pending.map((r) => hostOf(r.fqdn)).join(", ")}
+              </h2>
+              <p className="mt-1 text-sm text-[#5b6472]">
+                Your store is live. Add the record below and visitors who type
+                the other form of your address get HTTPS too — until then their
+                browser shows a security warning.
+              </p>
+            </div>
+            <div className="divide-y divide-[rgba(17,24,39,0.08)]">
+              {pending.map((r) => (
+                <RecordRow key={`${r.type}-${r.name}`} record={r} />
+              ))}
+            </div>
+          </Card>
+        )}
       </Shell>
     );
   }
@@ -204,8 +236,15 @@ export function DomainSettingsView({
                   {state.domain}
                 </p>
                 <p className="text-sm text-[#5b6472]">
-                  Waiting for your DNS records. This usually takes a few
-                  minutes.
+                  {/* Say they can leave. The certificate routinely takes longer
+                      than anyone waits on a settings page, and the hourly sweep
+                      now finishes it — a merchant who believes they must watch
+                      will sit here and then assume it failed. Deliberately does
+                      NOT promise an email: platform.domain_verified is
+                      operators-only/in-app, so there is nothing to send yet. */}
+                  Waiting on DNS and your certificate. You can safely close this
+                  page — setup finishes on its own, usually within an hour of
+                  your records going live.
                 </p>
               </div>
             </div>
@@ -295,6 +334,13 @@ export function DomainSettingsView({
       </Card>
     </Shell>
   );
+}
+
+/** `_acme-challenge.www.acme.com` → `www.acme.com`: the host the record is FOR,
+ *  which is what the merchant recognises. The raw challenge name means nothing
+ *  to them and reads like a typo. */
+function hostOf(challengeFqdn: string): string {
+  return challengeFqdn.replace(/^_acme-challenge\./, "");
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
