@@ -220,14 +220,34 @@ export async function proxy(request: NextRequest) {
       if (user.claims.forcePasswordReset)
         return redirectTo("/auth/set-password");
 
-      // --- Gate 3: Role-based access for restricted dashboard routes ---
-      if (
-        (pathname.startsWith("/dashboard/users") ||
-          pathname.startsWith("/dashboard/media")) &&
-        user.claims.role !== "superadmin"
-      ) {
-        return redirectTo("/dashboard");
-      }
+      // ★★ THE SUPERADMIN-ONLY GATE ON /dashboard/users + /dashboard/media IS
+      // GONE, and it was breaking Customers for EVERY store owner.
+      //
+      // Three things were wrong with it.
+      //
+      // (1) It read `role` from the SESSION COOKIE, and `createStore` never sets
+      // that claim. Signup writes `role: "superadmin"` to the `admins` TABLE
+      // (store-signup.ts) but never calls setUserClaims, so a wizard-created
+      // owner has NO role claim at all. The dashboard renders their "Superadmin"
+      // badge and the Customers link from the DATABASE, then this gate bounced
+      // the click straight back to /dashboard — a visible link that silently
+      // refused to open, for every store created through signup.
+      //
+      // (2) It was STALE. `/dashboard/users` used to be staff management; it was
+      // repurposed into the SHOPPER list (see permissions.ts: "Was 'Users',
+      // which read as staff. This is the SHOPPER list"). Locking the customer
+      // list to the owner contradicts the `users` section existing with
+      // view/manage actions precisely so a merchant can delegate it.
+      //
+      // (3) It was redundant. Both pages already call requireSectionAccess()
+      // server-side (`users` / `media`), so the permission system is the gate and
+      // removing this loses no protection — it removes a SECOND, disagreeing one.
+      //
+      // ⚠ Note the asymmetry that hid this: every other claim check here is an
+      // ALLOWLIST (`role === "cashier"` → send to /pos), which passes safely when
+      // the claim is missing. This was the only DENYLIST, so it was the only one
+      // that failed closed on an absent claim. Don't reintroduce that shape —
+      // gate on the permission sections, which read the database.
     }
 
     // --- Gate for the "authenticated, but not yet allowed onward" screens ---

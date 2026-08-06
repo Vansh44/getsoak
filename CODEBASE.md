@@ -48,16 +48,33 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 
 `proxy.ts` also gates auth: `/dashboard` requires a valid **Firebase session
 cookie** (`sm_session`; redirect to `/auth/login`), enforces
-`force_password_reset` → `/auth/set-password`, and restricts `/dashboard/users`
+`force_password_reset` → `/auth/set-password`, and sends POS staff
+(`role === "cashier" | "manager"`) to `/pos`. The `role`/`force_password_reset`
+custom claims + the uid are read straight from the verified session cookie (no
+DB query). Next.js 16 `proxy.ts` runs on the **Node runtime** by default, so it
+verifies the cookie with `firebase-admin` directly (no edge/`jose` workaround).
+Storefront paths skip the session check entirely (anonymous + cache-friendly).
+Paths with a file extension (public/ assets like `/themes/...webp`) pass
+through untouched on EVERY host — the platform/help rewrites would otherwise
+404 them.
 
-- `/dashboard/media` to role `superadmin`. The `role`/`force_password_reset`
-  custom claims + the uid are read straight from the verified session cookie (no
-  DB query). Next.js 16 `proxy.ts` runs on the **Node runtime** by default, so it
-  verifies the cookie with `firebase-admin` directly (no edge/`jose` workaround).
-  Storefront paths skip the session check entirely (anonymous + cache-friendly).
-  Paths with a file extension (public/ assets like `/themes/...webp`) pass
-  through untouched on EVERY host — the platform/help rewrites would otherwise
-  404 them.
+**★★ IT NO LONGER RESTRICTS `/dashboard/users` + `/dashboard/media` TO
+`superadmin`, and that gate was breaking Customers for every store owner.**
+It compared the SESSION COOKIE's `role` claim — but `createStore` writes
+`role: "superadmin"` to the `admins` TABLE and never calls `setUserClaims`, so a
+wizard-created owner has no role claim at all. The dashboard rendered their
+"Superadmin" badge and the Customers link from the DATABASE, then the proxy
+bounced the click back to `/dashboard`: a visible link that silently refused to
+open. The gate was also STALE — `/dashboard/users` was repurposed from staff
+management into the SHOPPER list, so locking it to the owner contradicted the
+`users` section existing with view/manage actions for delegation — and
+REDUNDANT, since both pages already call `requireSectionAccess()`. Authorisation
+now happens in one place, against the database.
+**⚠ Note the asymmetry that hid this for so long:** every other claim check in
+`proxy.ts` is an ALLOWLIST (`role === "cashier"` → send to `/pos`), which passes
+safely when the claim is absent. This was the only DENYLIST, so it was the only
+one that failed closed on a missing claim. Don't reintroduce that shape; gate on
+permission sections, which read the database. Pinned by `proxy.test.ts`.
 
 ### Tenant resolution — `lib/store/`
 

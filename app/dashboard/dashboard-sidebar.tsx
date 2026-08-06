@@ -33,6 +33,41 @@ function matches(pathname: string, href: string): boolean {
   );
 }
 
+/**
+ * Which top-level section owns this path — i.e. whose sub-nav panel to show.
+ *
+ * ★ THE PANEL FOLLOWS THE OWNING SECTION, NOT A URL PREFIX. `items` is
+ * TOP-LEVEL only: `foldNestedSections` turns a section declaring a `parent`
+ * (Staff, Roles, Billing, Channels, Inventory, Categories, Colours, Groups,
+ * Coupons — twelve of them) into a CHILD of that parent, so it is absent here.
+ *
+ * This used to try a direct href match and then fall straight back to
+ * `/dashboard`, so navigating Settings → Staff matched no top-level item and
+ * landed on HOME: the Settings sub-nav was replaced by the root nav mid-journey,
+ * the section just opened wasn't highlighted, and the only route back to its
+ * siblings was the browser's Back button. It affected every nested section, not
+ * just Settings.
+ *
+ * Nesting is precisely where a URL prefix cannot help — `/dashboard/admins` is a
+ * child of Settings but lives at a top-level path, so `startsWith` will never
+ * relate the two. The parent has to be found through the tree.
+ *
+ * Pure and exported so the precedence is testable without mounting the sidebar.
+ */
+export function resolveActiveSection<
+  T extends { href: string; children?: { href: string }[] },
+>(items: T[], pathname: string): T | undefined {
+  return (
+    // A DIRECT match wins first, and that order is load-bearing:
+    // `/dashboard/users` must open the Customers panel rather than being claimed
+    // by some parent that happens to list a child beneath that path.
+    items.find((it) => matches(pathname, it.href)) ??
+    items.find((it) => it.children?.some((c) => matches(pathname, c.href))) ??
+    items.find((it) => it.href === "/dashboard") ??
+    items[0]
+  );
+}
+
 export function DashboardSidebar({ groups }: { groups?: Group[] }) {
   const pathname = usePathname();
   const { open, setOpen } = useMobileNav();
@@ -84,11 +119,7 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
     };
   }, [isResizing]);
 
-  const activeSection =
-    allItems.find((it) => matches(pathname, it.href)) ??
-    allItems.find((it) => it.href === "/dashboard") ??
-    allItems[0];
-
+  const activeSection = resolveActiveSection(allItems, pathname);
   const showPanel = !!activeSection?.children?.length;
 
   useEffect(() => {
