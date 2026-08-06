@@ -3081,145 +3081,166 @@ group, span}` (span = columns of the 4-wide desktop grid),
     without the cert the TLS handshake fails before a request reaches the app;
     without the DNS check we publish a host we don't serve in every canonical,
     sitemap entry and `og:url`; without the entry the certificate is issued and
-    **nothing presents it**.
-    - **★★ THE FLOW HAD NO WAY TO FINISH** (found 2026-08-06). `verifyDomain`
-      had exactly ONE caller: the settings page, polling every 30s, capped at
-      ~10 minutes, and skipping every tick while the tab was backgrounded. But
-      the three steps cannot complete in one sitting — the merchant leaves to
-      add records at their registrar, and Google's managed certificate is
-      documented as taking up to ~30 minutes AFTER the challenge CNAME
-      resolves. So in the ordinary case the certificate reached ACTIVE at
-      Google and then nothing ever ran step 3 or set the flag. The domain
-      never served, the dashboard still said "waiting for your DNS records",
-      and the certificate everyone was waiting on had already been issued.
-      Fixed the way §18/§26 already do it: **reconcile-on-read plus a cron
-      backstop** — `/api/cron/domain-reconcile`, HOURLY (a daily sweep makes a
-      09:05 connection wait a day).
-    - **★ `lib/domains/reconcile.ts` HOLDS THE CORE, AND IT IS NOT A
-      `"use server"` FILE.** Everything exported from `app/actions/*` is a
-      publicly reachable endpoint, so an unauthenticated sweep over every store
-      exported from there would be the exact hazard the
-      `syncEmailDomainVerified` comment in that file warns about. The action is
-      the gate and delegates; the plan check stays in the core, because a
-      lapsed Pro plan must not be verified by a background job either.
-    - **★ THE FAILURE REASON WAS BEING THROWN AWAY.** `CertResource` declared
-      `provisioningIssue.reason` and nothing read it, and
-      `authorizationAttemptInfo` — the PER-DOMAIN cause, and the only field
-      that separates the three real failure modes — wasn't declared at all. So
-      a CAA record forbidding Google, a CA rate limit, and a genuinely missing
-      CNAME all produced the same sentence: "add the DNS records shown".
-      **Two of those three are not fixed by adding the records shown**, and
-      neither the merchant nor an operator reading the logs could tell which
-      they had. `explainCertificate` (pure, tested) maps them, and the enum is
-      persisted to `settings.domain_cert_issue` — the ENUM only, since
-      `stores.settings` is anon-readable (§9).
-    - **★ A CREATE IS AN LRO, SO READ-BACK MUST RETRY.** Certificate Manager
-      POSTs return an Operation and the resource is not queryable until it
-      completes, so the immediate GET could 404 — which surfaced as "Couldn't
-      start domain verification" on the FIRST attempt, persisted no
-      `domain_challenge`, and left the settings page listing the A record
-      ALONE. The merchant added it, saw nothing else to add, and left; the
-      certificate could never validate because the one record proving
-      ownership was never on screen. `getEventually` retries 404 only (a 403
-      on IAM must surface at once) and takes a `ready` predicate, because a
-      DnsAuthorization is readable a beat before `dnsResourceRecord` is filled.
-    - **★★ IT SELF-HEALS A STALE VERDICT — the last step that needed a human**
-      (`lib/domains/reissue.ts`, pure + tested). A managed certificate records
-      the result of its LAST authorization attempt and then retries on Google's
-      own backoff, so a merchant who fixes their DNS is NOT re-checked promptly.
-      Observed in prod 2026-08-06: `wholesip.com` read `CONFIG /
+    **nothing presents it**. - **★★ THE FLOW HAD NO WAY TO FINISH** (found 2026-08-06). `verifyDomain`
+    had exactly ONE caller: the settings page, polling every 30s, capped at
+    ~10 minutes, and skipping every tick while the tab was backgrounded. But
+    the three steps cannot complete in one sitting — the merchant leaves to
+    add records at their registrar, and Google's managed certificate is
+    documented as taking up to ~30 minutes AFTER the challenge CNAME
+    resolves. So in the ordinary case the certificate reached ACTIVE at
+    Google and then nothing ever ran step 3 or set the flag. The domain
+    never served, the dashboard still said "waiting for your DNS records",
+    and the certificate everyone was waiting on had already been issued.
+    Fixed the way §18/§26 already do it: **reconcile-on-read plus a cron
+    backstop** — `/api/cron/domain-reconcile`, HOURLY (a daily sweep makes a
+    09:05 connection wait a day). - **★ `lib/domains/reconcile.ts` HOLDS THE CORE, AND IT IS NOT A
+    `"use server"` FILE.** Everything exported from `app/actions/*` is a
+    publicly reachable endpoint, so an unauthenticated sweep over every store
+    exported from there would be the exact hazard the
+    `syncEmailDomainVerified` comment in that file warns about. The action is
+    the gate and delegates; the plan check stays in the core, because a
+    lapsed Pro plan must not be verified by a background job either. - **★ THE FAILURE REASON WAS BEING THROWN AWAY.** `CertResource` declared
+    `provisioningIssue.reason` and nothing read it, and
+    `authorizationAttemptInfo` — the PER-DOMAIN cause, and the only field
+    that separates the three real failure modes — wasn't declared at all. So
+    a CAA record forbidding Google, a CA rate limit, and a genuinely missing
+    CNAME all produced the same sentence: "add the DNS records shown".
+    **Two of those three are not fixed by adding the records shown**, and
+    neither the merchant nor an operator reading the logs could tell which
+    they had. `explainCertificate` (pure, tested) maps them, and the enum is
+    persisted to `settings.domain_cert_issue` — the ENUM only, since
+    `stores.settings` is anon-readable (§9). - **★ A CREATE IS AN LRO, SO READ-BACK MUST RETRY.** Certificate Manager
+    POSTs return an Operation and the resource is not queryable until it
+    completes, so the immediate GET could 404 — which surfaced as "Couldn't
+    start domain verification" on the FIRST attempt, persisted no
+    `domain_challenge`, and left the settings page listing the A record
+    ALONE. The merchant added it, saw nothing else to add, and left; the
+    certificate could never validate because the one record proving
+    ownership was never on screen. `getEventually` retries 404 only (a 403
+    on IAM must surface at once) and takes a `ready` predicate, because a
+    DnsAuthorization is readable a beat before `dnsResourceRecord` is filled. - **★★ IT SELF-HEALS A STALE VERDICT — the last step that needed a human**
+    (`lib/domains/reissue.ts`, pure + tested). A managed certificate records
+    the result of its LAST authorization attempt and then retries on Google's
+    own backoff, so a merchant who fixes their DNS is NOT re-checked promptly.
+    Observed in prod 2026-08-06: `wholesip.com` read `CONFIG /
 CNAME_MISMATCH` from an attempt **59 minutes older** than the correct
-      records, with the apex fully down the whole time. Nothing was broken and
-      nothing was going to fix it — it was waiting on Google to look again.
-      Deleting only the CERTIFICATE forces a fresh attempt; done by hand it went
-      ACTIVE in **80 seconds**. `reconcileDomainForStore` now does that itself.
-      - **The authorization is never touched** — it holds the challenge token
-        the merchant already published, so deleting it would mint a new one and
-        silently invalidate their record, turning self-healing into "go and edit
-        your DNS again". `reissueCertificate` removes the certificate alone,
-        under `assertManaged`, and provisioning recreates it under the identical
-        deterministic name against the same authorization.
-      - **★ NEVER ON `RATE_LIMITED`** — the failure IS that we asked too often,
-        so asking again is the one action guaranteed to prolong it, and the limit
-        is shared across every domain under that registrable name. Never on
-        `CAA` either: a fresh certificate hits the identical record.
-      - **★ OUR OWN DNS CHECK IS THE PRECONDITION.** A reissue is only justified
-        because we can see the cause is already gone; without it we would spend
-        the rate-limit budget relearning the same answer. Also refused on a
-        missing/unparseable `attemptTime` (acting blind could delete a
-        certificate Google is authorizing that second) and inside a 6-hour
-        per-host cooldown, persisted as `settings.domain_reissued` — a cooldown
-        that isn't written down is a reissue that happens every run.
-      - One extra provisioning pass per sweep, then stop: the new certificate
-        won't be ACTIVE for ~80s, so the NEXT run attaches it.
-    - **★ SILENCE IS NOT SUCCESS.** The sweep answers 200 while domains wait (a
-      merchant who hasn't added records is not an outage), so a domain stuck for
-      a week looked exactly like one stuck for a minute. `domain_pending_since`
-      - `pendingDuration` give it a clock: `logWarn("custom domain stuck")` past
-        3 days for Error Reporting to alert on, and `waitingDays` in the cron
-        response. Both cleared on going live, so a later reconnect doesn't inherit
-        a months-old timestamp and alarm immediately.
-    - **⚠ THE INFRASTRUCTURE IS THE OTHER HALF, AND IT IS NOT IN CODE.** Four
-      things must be true in GCP or every domain fails identically no matter
-      what this code does: the runtime SA holds **`roles/certificatemanager.editor`**
-      (claimed in `naming.ts`'s comment but granted by NO provisioning doc —
-      `docs/gcp-migration-phase4-cloud-run.md` §78 lists four roles and this is
-      not one), `DOMAIN_CERT_MAP` exists, **that map is attached to the target
-      HTTPS proxy** (`--certificate-map`; if the proxy carries certs directly
-      instead, every merchant entry is inert and the LB serves the
-      `*.storemink.com` cert → name-mismatch in the browser while the app
-      reports ACTIVE), and `DOMAIN_LB_IP` is the IP the forwarding rule
-      actually holds.
-    - **★ APEX AND www ARE BOTH COVERED, AND www CANNOT GATE THE STORE.** A
-      certificate covers the EXACT hostnames it was issued for, so connecting
-      `acme.com` used to leave every visitor who typed `www.` — most of them,
-      and what older links and Google's index often carry — with a full-page
-      browser certificate warning, with no setting to fix it.
-      `companionHost`/`domainHosts` (pure, PSL-based, tested) pair apex ↔ www
-      and nothing else: `shop.acme.com` has no second form worth guessing at,
-      and inventing hostnames costs a certificate plus a DNS record the merchant
-      then has to be told about.
-      - **A FULL TRIPLE PER HOSTNAME**, not one certificate with two SANs.
-        `managed.domains` is IMMUTABLE, so widening an existing single-host
-        certificate is impossible — `createOrAdopt` would 409 and adopt the old
-        narrow one, and the www map entry would point at a certificate that does
-        not cover www. Per-host triples also keep every already-provisioned
-        resource byte-identical in name, so live domains kept their certificates
-        with nothing to migrate.
-      - **★ THE PRIMARY DECIDES.** `ProvisionState`'s top-level fields mirror
-        `hosts[0]` — the domain the merchant actually typed — and the companion
-        is strictly best-effort. Gating on both would mean someone who added one
-        A record instead of two has a working certificate for the address they
-        asked for and a store that still refuses to serve it: trading a real
-        outage for a cosmetic one. When the store is live and www is still
-        pending, its challenge record STAYS on screen under "Finish covering
-        www.…", named by the host rather than the raw `_acme-challenge` name.
-      - `deprovision` walks the same `domainHosts` list, so disconnecting can't
-        leave the www triple behind. Provisioning is sequential, primary first:
-        Certificate Manager rate-limits per project and a burst of parallel
-        creates is what later surfaces as RATE_LIMITED on a merchant's cert.
-    - **★ CHANGING A DOMAIN RELEASES THE OLD ONE.** `deprovision` was wired only
-      to `disconnectDomain`, so editing the domain silently orphaned the previous
-      one's certificate, authorization and map entry. Two costs: a certificate
-      nothing references keeps billing and only surfaces on an invoice, and the
-      stale map entry leaves the load balancer still terminating TLS for a
-      hostname the store no longer claims — it resolves, handshakes, then 404s as
-      an unknown store. (This is where the orphaned `www.wholesip.com` resources
-      in prod came from.) Runs in `after()` and best-effort: the new domain is
-      already saved, and a cleanup failure must not fail the change requested.
-    - **★ THE MERCHANT IS TOLD WHEN IT GOES LIVE.** `store.domain_live`
-      (`store-admins`, in-app + email) is the merchant milestone;
-      `platform.domain_verified` remains the operators' console line for the same
-      moment — the `store.created` / `platform.store_created` precedent, not
-      duplication. EMAIL is the whole point: the flow finishes in the background,
-      so without a mail nobody is told the thing they waited days for happened
-      and they must keep revisiting the settings page to guess. The **cron** path
-      is the one that matters — the action only fires for someone who happened to
-      be on the page at the finishing moment. Copy is BESPOKE (§24's rule): as a
-      generated fact list it would read like a status row rather than an answer,
-      and the notification links to the DOMAIN, not `/dashboard`, because the one
-      thing anyone wants on being told this is to click through and see their own
-      shop answer on it.
+    records, with the apex fully down the whole time. Nothing was broken and
+    nothing was going to fix it — it was waiting on Google to look again.
+    Deleting only the CERTIFICATE forces a fresh attempt; done by hand it went
+    ACTIVE in **80 seconds**. `reconcileDomainForStore` now does that itself. - **The authorization is never touched** — it holds the challenge token
+    the merchant already published, so deleting it would mint a new one and
+    silently invalidate their record, turning self-healing into "go and edit
+    your DNS again". `reissueCertificate` removes the certificate alone,
+    under `assertManaged`, and provisioning recreates it under the identical
+    deterministic name against the same authorization. - **★ NEVER ON `RATE_LIMITED`** — the failure IS that we asked too often,
+    so asking again is the one action guaranteed to prolong it, and the limit
+    is shared across every domain under that registrable name. Never on
+    `CAA` either: a fresh certificate hits the identical record. - **★ OUR OWN DNS CHECK IS THE PRECONDITION.** A reissue is only justified
+    because we can see the cause is already gone; without it we would spend
+    the rate-limit budget relearning the same answer. Also refused on a
+    missing/unparseable `attemptTime` (acting blind could delete a
+    certificate Google is authorizing that second) and inside a 6-hour
+    per-host cooldown, persisted as `settings.domain_reissued` — a cooldown
+    that isn't written down is a reissue that happens every run. - One extra provisioning pass per sweep, then stop: the new certificate
+    won't be ACTIVE for ~80s, so the NEXT run attaches it. - **★ SILENCE IS NOT SUCCESS.** The sweep answers 200 while domains wait (a
+    merchant who hasn't added records is not an outage), so a domain stuck for
+    a week looked exactly like one stuck for a minute. `domain_pending_since` - `pendingDuration` give it a clock: `logWarn("custom domain stuck")` past
+    3 days for Error Reporting to alert on, and `waitingDays` in the cron
+    response. Both cleared on going live, so a later reconnect doesn't inherit
+    a months-old timestamp and alarm immediately. - **★ THE DASHBOARD IS SERVED ON THE CUSTOM DOMAIN TOO**, not only on the
+    `{slug}.storemink.com` subdomain. `proxy.ts` has ONE "store hosts" branch
+    covering storefront + `/dashboard` + `/auth` + `/pos`, and
+    `cookieDomainForHost` returns `undefined` for a custom domain, so
+    `sm_session` is set HOST-ONLY on it rather than scoped to
+    `.storemink.com`. Verified live: `wholesip.com/dashboard` → 307 →
+    `wholesip.com/auth/login` (staying on the custom domain), which renders.
+    ⚠ **Sessions therefore do NOT carry over** — different registrable domain,
+    different cookie jar — so a merchant signed in on the subdomain is signed
+    out on their own domain and must log in again. Cookies working correctly,
+    but it surprises people. - **★ GOOGLE SIGN-IN NEEDS THE DOMAIN IN IDENTITY PLATFORM'S
+    `authorizedDomains`** (`lib/auth/authorized-domains.ts`, pure helpers +
+    18 tests). `signInWithPopup` refuses to run on an unlisted origin,
+    failing `auth/unauthorized-domain` before any popup opens — so on a
+    merchant's own domain that button was dead while email+password worked,
+    because password sign-in is a plain REST call and is not origin-gated. - **★ ONE ENTRY COVERS EVERY SUBDOMAIN.** `matchDomain` in
+    `@firebase/auth` v12 builds
+    `^(.+\.<escaped>|<escaped>)$`, so a listed `storemink.com` authorises
+    `storemink.com` AND every `*.storemink.com`. **There is no bug on store
+    subdomains** — and the earlier §7 instruction to add `*.storemink.com`
+    was both unnecessary and impossible, since **Firebase rejects wildcards
+    in this list**. `entryCovers` mirrors that regex; keep it in step with
+    the SDK, because if the rule ever tightens this becomes an
+    over-estimate and `planAdd` would skip entries that are needed. - The entry added is the **registrable** domain (`entryForDomain` via the
+    PSL), so apex + www + anything else the merchant points at us is covered
+    by one entry — listing `www.xyz.com` alone would leave the apex, the
+    commoner address, unauthorised. - `ensureAuthorizedDomain` runs on the `becameLive` edge, **best effort**:
+    a failure leaves password sign-in working and the next reconcile
+    retries; it must never un-verify a live domain.
+    `removeAuthorizedDomain` runs on disconnect AND on a domain change —
+    an entry for a host we no longer serve is standing permission to run
+    popup sign-in against our project, which matters most if someone else
+    later buys that domain. - **★ `planRemove` REMOVES BY EXACT ENTRY, NEVER BY COVERAGE, and refuses
+    protected entries.** Coverage-based removal is the trap: a
+    subdomain-shaped input would match and delete `storemink.com`, killing
+    Google sign-in for the platform and every store subdomain in one call.
+    Same class of guard as `assertManaged`. - ⚠ Read-modify-write on a project-global list, so two domains verifying
+    in the same second can lose one update. Deliberately not locked — the
+    loser is retried, and the cost is one merchant briefly using a password. - Needs `roles/firebaseauth.admin` on the runtime SA (it has it; the role
+    includes `firebaseauth.configs.get`/`.update`). - **⚠ THE INFRASTRUCTURE IS THE OTHER HALF, AND IT IS NOT IN CODE.** Four
+    things must be true in GCP or every domain fails identically no matter
+    what this code does: the runtime SA holds **`roles/certificatemanager.editor`**
+    (claimed in `naming.ts`'s comment but granted by NO provisioning doc —
+    `docs/gcp-migration-phase4-cloud-run.md` §78 lists four roles and this is
+    not one), `DOMAIN_CERT_MAP` exists, **that map is attached to the target
+    HTTPS proxy** (`--certificate-map`; if the proxy carries certs directly
+    instead, every merchant entry is inert and the LB serves the
+    `*.storemink.com` cert → name-mismatch in the browser while the app
+    reports ACTIVE), and `DOMAIN_LB_IP` is the IP the forwarding rule
+    actually holds. - **★ APEX AND www ARE BOTH COVERED, AND www CANNOT GATE THE STORE.** A
+    certificate covers the EXACT hostnames it was issued for, so connecting
+    `acme.com` used to leave every visitor who typed `www.` — most of them,
+    and what older links and Google's index often carry — with a full-page
+    browser certificate warning, with no setting to fix it.
+    `companionHost`/`domainHosts` (pure, PSL-based, tested) pair apex ↔ www
+    and nothing else: `shop.acme.com` has no second form worth guessing at,
+    and inventing hostnames costs a certificate plus a DNS record the merchant
+    then has to be told about. - **A FULL TRIPLE PER HOSTNAME**, not one certificate with two SANs.
+    `managed.domains` is IMMUTABLE, so widening an existing single-host
+    certificate is impossible — `createOrAdopt` would 409 and adopt the old
+    narrow one, and the www map entry would point at a certificate that does
+    not cover www. Per-host triples also keep every already-provisioned
+    resource byte-identical in name, so live domains kept their certificates
+    with nothing to migrate. - **★ THE PRIMARY DECIDES.** `ProvisionState`'s top-level fields mirror
+    `hosts[0]` — the domain the merchant actually typed — and the companion
+    is strictly best-effort. Gating on both would mean someone who added one
+    A record instead of two has a working certificate for the address they
+    asked for and a store that still refuses to serve it: trading a real
+    outage for a cosmetic one. When the store is live and www is still
+    pending, its challenge record STAYS on screen under "Finish covering
+    www.…", named by the host rather than the raw `_acme-challenge` name. - `deprovision` walks the same `domainHosts` list, so disconnecting can't
+    leave the www triple behind. Provisioning is sequential, primary first:
+    Certificate Manager rate-limits per project and a burst of parallel
+    creates is what later surfaces as RATE_LIMITED on a merchant's cert. - **★ CHANGING A DOMAIN RELEASES THE OLD ONE.** `deprovision` was wired only
+    to `disconnectDomain`, so editing the domain silently orphaned the previous
+    one's certificate, authorization and map entry. Two costs: a certificate
+    nothing references keeps billing and only surfaces on an invoice, and the
+    stale map entry leaves the load balancer still terminating TLS for a
+    hostname the store no longer claims — it resolves, handshakes, then 404s as
+    an unknown store. (This is where the orphaned `www.wholesip.com` resources
+    in prod came from.) Runs in `after()` and best-effort: the new domain is
+    already saved, and a cleanup failure must not fail the change requested. - **★ THE MERCHANT IS TOLD WHEN IT GOES LIVE.** `store.domain_live`
+    (`store-admins`, in-app + email) is the merchant milestone;
+    `platform.domain_verified` remains the operators' console line for the same
+    moment — the `store.created` / `platform.store_created` precedent, not
+    duplication. EMAIL is the whole point: the flow finishes in the background,
+    so without a mail nobody is told the thing they waited days for happened
+    and they must keep revisiting the settings page to guess. The **cron** path
+    is the one that matters — the action only fires for someone who happened to
+    be on the page at the finishing moment. Copy is BESPOKE (§24's rule): as a
+    generated fact list it would read like a status row rather than an answer,
+    and the notification links to the DOMAIN, not `/dashboard`, because the one
+    thing anyone wants on being told this is to click through and see their own
+    shop answer on it.
 
 ## 6. Commands
 
@@ -3296,8 +3317,14 @@ npm run format      # prettier --write
       the Google provider. Sign-in uses `signInWithPopup` (no callback route), so
       no app redirect URIs go into Google — only Firebase's own auth handler does.
     - **Authorized domains** (Authentication → Settings): list every host the app
-      runs on so popup + email-link work — `localhost`, `storemink.com`,
-      `*.storemink.com` (+ the staging equivalents). Unlike Supabase there is NO
+      runs on so popup + email-link work — `localhost` and `storemink.com` (+ the
+      staging equivalents). **ONE entry covers every subdomain**: the SDK matches
+      `^(.+\.<entry>|<entry>)$`, so `storemink.com` authorises every
+      `{slug}.storemink.com` and **`*.storemink.com` is neither needed nor
+      accepted — Firebase rejects wildcards here.** MERCHANT custom domains are
+      not covered by anything and are added automatically on verification (§30,
+      `lib/auth/authorized-domains.ts`); without that, "Continue with Google" is
+      dead on a merchant's own domain while email+password still works. Unlike Supabase there is NO
       per-path Redirect-URL matrix; popup / email-link just need the domain
       authorized. Cross-subdomain session cookies still span `.storemink.com`
       (set by `/api/auth/session`), so the signup→dashboard handoff works across

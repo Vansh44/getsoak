@@ -26,6 +26,8 @@ import {
   UPGRADE_MESSAGE,
 } from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
+import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
+import { ROOT_DOMAIN } from "@/lib/store/host";
 import {
   ensureGoogleCoverageForStore,
   GOOGLE_INDEXING_SETTINGS_KEYS,
@@ -168,6 +170,16 @@ export async function updateCustomDomain(
       const gone = await deprovision(previous);
       if (gone.error) {
         logError("updateCustomDomain (deprovision old)", gone.error, {
+          previous,
+        });
+      }
+      // Stop trusting it for Google sign-in too. Leaving it listed means a
+      // domain we no longer serve can still host a popup sign-in against our
+      // Identity Platform project — which is precisely what the authorized-domain
+      // check exists to prevent, and matters most if someone else later buys it.
+      const deauth = await removeAuthorizedDomain(previous, ROOT_DOMAIN);
+      if (deauth.error) {
+        logError("updateCustomDomain (deauthorize old)", deauth.error, {
           previous,
         });
       }
@@ -459,5 +471,12 @@ export async function disconnectDomain(): Promise<DomainResult> {
   const gone = await deprovision(domain);
   if (gone.error)
     logError("disconnectDomain (deprovision)", gone.error, { domain });
+
+  // Same reasoning as a domain change: an entry for a host we no longer serve is
+  // standing permission we do not need. Guarded so it can never strip the
+  // platform's own entry (see planRemove).
+  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
+  if (deauth.error)
+    logError("disconnectDomain (deauthorize)", deauth.error, { domain });
   return { success: true };
 }

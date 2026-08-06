@@ -45,6 +45,7 @@ import {
 } from "./certificates";
 import { checkCnameTarget, checkDomainPointsTo } from "./dns";
 import { decideReissue, pendingDuration } from "./reissue";
+import { ensureAuthorizedDomain } from "@/lib/auth/authorized-domains";
 
 export const UPGRADE_MESSAGE =
   "Connecting your own domain is part of the Pro plan. Upgrade to add one.";
@@ -282,7 +283,26 @@ export async function reconcileDomainForStore(
   await saveDomainSettings(storeId, next);
   revalidateTag(STORE_TAG, "max");
 
+  // ★ AUTHORISE THE DOMAIN FOR GOOGLE SIGN-IN. `/dashboard` and `/auth` are
+  // served on the custom domain too, but `signInWithPopup` refuses to run on an
+  // origin missing from Identity Platform's authorizedDomains — so "Continue
+  // with Google" was dead there while email+password worked, because password
+  // sign-in is a plain REST call and is not origin-gated. Firebase accepts no
+  // wildcard, so the list has to be maintained per domain, here.
+  //
+  // Best effort by design: a failure leaves the merchant with password sign-in
+  // and the next reconcile retries. It must never un-verify a live domain.
   if (!wasVerified) {
+    const authz = await ensureAuthorizedDomain(domain).catch((err) => ({
+      error: err instanceof Error ? err.message : "authorize threw",
+    }));
+    if (authz.error) {
+      logWarn("custom domain live but Google sign-in not authorised", {
+        storeId,
+        domain,
+        error: authz.error,
+      });
+    }
     logInfo("custom domain live", { storeId, domain });
   }
   return {
