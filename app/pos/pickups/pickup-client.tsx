@@ -7,7 +7,14 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Loader2, PackageCheck, Search } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Loader2,
+  PackageCheck,
+  Search,
+  Wallet,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   getPickupQueue,
@@ -15,6 +22,8 @@ import {
   markReadyForPickup,
   type PickupOrder,
 } from "@/app/actions/pos-pickup-actions";
+import type { PosTender } from "@/app/actions/pos-sale-actions";
+import { TenderPanel } from "../sell/tender-panel";
 
 function money(n: number) {
   return `₹${n.toFixed(2)}`;
@@ -42,6 +51,7 @@ export function PickupQueue({
   const [orders, setOrders] = useState(initial);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [tendering, setTendering] = useState<PickupOrder | null>(null);
   const [pending, start] = useTransition();
 
   const refresh = (q = query) => {
@@ -52,10 +62,15 @@ export function PickupQueue({
     });
   };
 
+  const done = (id: string, message: string) => {
+    toast.success(message);
+    setOrders((cur) => cur.filter((o) => o.id !== id));
+  };
+
   const act = async (
     id: string,
     fn: (id: string) => Promise<{ success?: boolean; error?: string }>,
-    done: string,
+    message: string,
   ) => {
     setBusy(id);
     const res = await fn(id);
@@ -66,8 +81,39 @@ export function PickupQueue({
       refresh();
       return;
     }
-    toast.success(done);
-    setOrders((cur) => cur.filter((o) => o.id !== id));
+    done(id, message);
+  };
+
+  /** Nothing owed hands over straight away; money due opens the tender pad. */
+  const handOver = (o: PickupOrder) => {
+    if (o.amountDue > 0) {
+      setTendering(o);
+      return;
+    }
+    void act(o.id, markCollected, "Handed over.");
+  };
+
+  const takePayment = async (tenders: PosTender[]) => {
+    const o = tendering;
+    if (!o) return {};
+    const res = await markCollected(o.id, tenders);
+    if (res.error) {
+      // The panel stays open — the customer is standing there and the cashier
+      // needs to see why, and to retry, without re-entering the tender. But the
+      // list behind it may be the reason it failed (someone else got to the
+      // order), so re-read it rather than leaving a queue that disagrees with
+      // the server.
+      refresh();
+      return { error: res.error };
+    }
+    setTendering(null);
+    done(
+      o.id,
+      res.changeDue
+        ? `Handed over. Change ₹${res.changeDue.toLocaleString("en-IN")}.`
+        : "Paid and handed over.",
+    );
+    return {};
   };
 
   return (
@@ -130,6 +176,13 @@ export function PickupQueue({
                     Ready
                   </span>
                 )}
+                {/* Whether to ask for money is the first thing the cashier
+                    needs to know — before they open the order, not after. */}
+                {o.amountDue > 0 && (
+                  <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+                    {money(o.amountDue)} to pay
+                  </span>
+                )}
                 <span className="ml-auto text-base font-semibold">
                   {money(o.total)}
                 </span>
@@ -157,15 +210,17 @@ export function PickupQueue({
                 <button
                   type="button"
                   disabled={busy === o.id}
-                  onClick={() => act(o.id, markCollected, "Handed over.")}
+                  onClick={() => handOver(o)}
                   className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {busy === o.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : o.amountDue > 0 ? (
+                    <Wallet className="h-4 w-4" />
                   ) : (
                     <Check className="h-4 w-4" />
                   )}
-                  Hand over
+                  {o.amountDue > 0 ? "Take payment" : "Hand over"}
                 </button>
               </div>
             </li>
@@ -176,6 +231,16 @@ export function PickupQueue({
           <p className="mt-4 text-center text-sm text-white/40">Refreshing…</p>
         )}
       </div>
+
+      {tendering && (
+        <TenderPanel
+          total={tendering.amountDue}
+          title={`Collect ${tendering.orderRef}`}
+          confirmLabel="Take payment & hand over"
+          onCancel={() => setTendering(null)}
+          onComplete={takePayment}
+        />
+      )}
     </div>
   );
 }

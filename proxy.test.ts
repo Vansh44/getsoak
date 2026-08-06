@@ -60,18 +60,47 @@ describe("proxy — store-host session gate", () => {
     expect(loc(res)).toContain("/auth/set-password");
   });
 
-  it("blocks a non-superadmin from /dashboard/users", async () => {
+  // ★ The proxy no longer gates /dashboard/users or /dashboard/media on a role
+  // CLAIM. It used to demand `role === "superadmin"`, but `createStore` writes
+  // that role to the `admins` TABLE and never mints the claim — so every
+  // wizard-created owner was bounced off their own Customers page while the
+  // sidebar (which reads the database) happily showed the link. The route had
+  // also been repurposed from staff management to the SHOPPER list, so locking it
+  // to the owner contradicted the `users` permission existing at all.
+  //
+  // Both pages call requireSectionAccess() server-side, so authorisation still
+  // happens — in one place, against the database, instead of two that disagreed.
+  it("does not gate /dashboard/users on a role claim", async () => {
     signedIn({ role: "member" });
     const res = await proxy(req("https://shop.storemink.com/dashboard/users"));
-    expect(res.status).toBe(307);
-    expect(loc(res)).toContain("/dashboard");
-    expect(loc(res)).not.toContain("/users");
+    expect(loc(res)).toBeNull();
   });
 
-  it("allows a superadmin into /dashboard/users", async () => {
-    signedIn({ role: "superadmin" });
+  it("does not gate /dashboard/media on a role claim", async () => {
+    // The same gate covered media, so an owner could not open it either.
+    signedIn({ role: "member" });
+    const res = await proxy(req("https://shop.storemink.com/dashboard/media"));
+    expect(loc(res)).toBeNull();
+  });
+
+  it("lets an owner with NO role claim reach Customers — the reported bug", async () => {
+    // Exactly the signup-created owner: superadmin in the database, no claim in
+    // the session cookie.
+    signedIn({});
     const res = await proxy(req("https://shop.storemink.com/dashboard/users"));
     expect(loc(res)).toBeNull();
+  });
+
+  it("still keeps POS staff out of the dashboard entirely", async () => {
+    // The remaining claim checks are ALLOWLISTS, which is why they survive an
+    // absent claim safely. This one must keep working.
+    for (const role of ["cashier", "manager"]) {
+      signedIn({ role });
+      const res = await proxy(
+        req("https://shop.storemink.com/dashboard/users"),
+      );
+      expect(loc(res), role).toContain("/pos");
+    }
   });
 
   it("bounces a signed-in user away from /auth/login", async () => {
