@@ -546,6 +546,42 @@ Collect a pay-at-store order at `/pos/pickups`.
 **Expect:** payment_status flips pending → paid. An order already paid online is
 untouched, and a failed payment is not marked paid by a hand-over.
 
+**PS-8.28 ★★ — The money taken at the counter reaches the drawer**
+Open a shift with a ₹2,000 float, collect a ₹340 pay-at-store order taking
+cash, then close and count ₹2,340.
+**Expect:** the drawer **balances**. Until 2026-08-06 the hand-over wrote no
+`order_payments` row and no `orders.shift_id`, so the notes were physically in
+the till and contributed **0** to expected cash — every shift reported OVER by
+the full value of every collection it took, and those sales were missing from
+the Z-report's count and gross as well. Check the Z-report: the order is counted
+and its total is in gross.
+
+**PS-8.29 ★★ — `pay_at_store` is NOT assumed to be cash**
+Collect a pay-at-store order and pay by **card** at the counter.
+**Expect:** the tender pad offers Cash / Card / UPI and the row records **card**.
+It must not be booked as cash — the checkout copy is "Pay at the counter",
+deliberately silent on the instrument (COD's, beside it, does say cash), so
+assuming it would put card money into expected cash and report the drawer SHORT.
+That is the same bug as PS-8.28 pointed the other way, and worse: "over on cash,
+short on card" cannot be attributed to anything. Split it card + cash and check
+change comes only off the cash row.
+
+**PS-8.30 ★ — A short payment is refused BEFORE the goods move**
+Enter less than the amount owed.
+**Expect:** refused, and the order is **still in the queue**. Claiming first and
+then refusing the money is the one outcome with no recovery — the order reads as
+collected and nothing was ever taken. Then tap "Take payment & hand over" twice
+in quick succession: exactly one payment row, because the claim is what matched.
+
+**PS-8.31 ★ — No open shift**
+With `pos.requireOpenShift` ON and no shift open, collect a pay-at-store order.
+**Expect:** refused — "Open a shift before taking payment at the counter". The
+goods stay held; nothing is lost. Turn the setting OFF: the collection completes
+and the payment is recorded **unattributed**, exactly where a counter sale's
+money goes under the same setting. A **prepaid** collection is unaffected either
+way — no money changes hands, so blocking it would refuse a customer their own
+paid-for goods.
+
 **PS-8.18 ★ — The hold starts when it's READY**
 Set ready = 3 days, hold = 5 days, place a pickup order.
 **Expect:** `pickup_expires_at` is 8 days out, not 5. Otherwise a slow shop eats
@@ -669,6 +705,17 @@ Edit an order that was in a closed shift, then re-open the Z-report.
 **PS-9.7 — A cashier can't declare the drawer**
 As a cashier.
 **Expect:** can sell into the drawer, cannot open/close or bank cash.
+
+**PS-9.8 ★★ — Every way money enters the drawer is counted**
+In one shift: ring a cash sale, collect a pay-at-store order for cash (§8), take
+a cash refund, and bank a drop. Close and count.
+**Expect:** expected cash = float + both takings − the refund − the drop, and the
+drawer balances. The collection is the one that was missing: cash is read as
+`order_payments` INNER JOIN orders ON `shift_id`, so a payment written without
+the stamp — or never written at all — is invisible no matter how much of it is
+in the till. A collection that was **paid online** must NOT appear in gross: it
+never touched this drawer, and stamping it would report takings the till never
+took.
 
 ---
 
@@ -1198,8 +1245,10 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                       |
 | ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                      |
 | ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                              |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.20. Nothing blocks it now — the migrations are applied                                                                                                      |
-| **`pos-pickup-actions.ts` has no test file**                       | Every other POS action has one                                                                                                                                                                     |
+| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections   |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                      |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                             |
+| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery        |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                            |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                        |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                        |

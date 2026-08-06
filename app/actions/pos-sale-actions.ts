@@ -61,11 +61,12 @@ import {
   POS_SECRET_MISSING_ERROR,
 } from "@/lib/pos/session";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
+import { posTotals } from "@/lib/pos/totals";
 import {
-  posTotals,
-  coversTotal,
-  changeDue as posChangeDue,
-} from "@/lib/pos/totals";
+  settleTenders,
+  validateTenderShape,
+  type PosTender,
+} from "@/lib/pos/tenders";
 import { isIntraState, isValidGstinFormat, splitGst } from "@/lib/billing/gst";
 import { rowToBillingSettings, rowToTaxClass } from "@/lib/billing/types";
 import { getStoreSettings } from "@/lib/settings/resolve";
@@ -76,7 +77,6 @@ import { getStoreBrandById } from "@/lib/store/brand";
 // Bounds on client-supplied cart data (mirrors checkout-actions).
 const MAX_LINE_ITEMS = 200;
 const MAX_QTY_PER_LINE = 1000;
-const MAX_TENDERS = 6;
 
 export interface PosCartLine {
   productId: string;
@@ -88,21 +88,11 @@ export interface PosCartLine {
   priceOverride?: number | null;
 }
 
-export type PosTenderMethod =
-  | "cash"
-  | "card"
-  | "upi"
-  | "gift_card"
-  | "store_credit"
-  | "razorpay";
-
-export interface PosTender {
-  method: PosTenderMethod;
-  amount: number;
-  /** Cash handed over — change is derived, never trusted from the client. */
-  tendered?: number;
-  reference?: string;
-}
+// The tender vocabulary, the allowlist and the coverage math moved to
+// lib/pos/tenders.ts when the collection counter became a second place money is
+// taken (§23). Re-exported so importers are unchanged — types are erased, so a
+// type re-export from a "use server" file is not an endpoint.
+export type { PosTender, PosTenderMethod } from "@/lib/pos/tenders";
 
 export interface PosSaleResult {
   success?: boolean;
@@ -114,24 +104,6 @@ export interface PosSaleResult {
   orderRef?: string;
   changeDue?: number;
 }
-
-/**
- * What the till may actually be paid with TODAY.
- *
- * ★ `gift_card` and `store_credit` are deliberately absent even though
- * PosTenderMethod declares them: neither feature is built, so there is no
- * balance to check a tender against. Accepting one would mark a sale paid in
- * full, and let the goods leave the shelf, against money that never existed.
- *
- * The register only offers cash/card/upi — but `placePosSale` is a server
- * action, so the register's own JavaScript is not its only caller. That is
- * exactly how the `managerApproved` boolean was bypassable (§22); the lesson
- * is that a list the SERVER accepts must never be wider than what the system
- * can actually settle.
- *
- * Add them back in the same commit that builds the ledger behind them.
- */
-const TENDER_METHODS: PosTenderMethod[] = ["cash", "card", "upi", "razorpay"];
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -719,18 +691,11 @@ export async function placePosSale(
       return { error: "Invalid quantity." };
     }
   }
-  if (!Array.isArray(tenders) || tenders.length === 0) {
-    return { error: "Take a payment to complete the sale." };
-  }
-  if (tenders.length > MAX_TENDERS) return { error: "Too many payments." };
-  for (const t of tenders) {
-    if (!TENDER_METHODS.includes(t?.method)) {
-      return { error: "Invalid payment method." };
-    }
-    if (!Number.isFinite(t.amount) || t.amount <= 0) {
-      return { error: "Invalid payment amount." };
-    }
-  }
+  const badTender = validateTenderShape(
+    tenders,
+    "Take a payment to complete the sale.",
+  );
+  if (badTender) return { error: badTender };
 
   // A GSTIN prints on the customer's invoice, so it is validated rather than
   // trusted: normalised, format-checked, and length-capped.
@@ -1037,17 +1002,9 @@ export async function placePosSale(
   const total = totals.total;
 
   // 7. Tenders must cover the total. Change is derived server-side.
-  const paid = tenders.reduce((s, t) => s + t.amount, 0);
-  if (!coversTotal(paid, total)) {
-    return {
-      error: `The payment doesn't cover the total of ₹${total.toLocaleString("en-IN")}.`,
-    };
-  }
-  const cashTender = tenders.find((t) => t.method === "cash");
-  const changeDue = posChangeDue(paid, total);
-  if (changeDue > 0 && !cashTender) {
-    return { error: "Only a cash payment can produce change." };
-  }
+  const settled = settleTenders(tenders, total);
+  if ("error" in settled) return { error: settled.error };
+  const changeDue = settled.change;
 
   // 8. Allocate a per-location receipt number.
   let receiptNo: string | null = null;

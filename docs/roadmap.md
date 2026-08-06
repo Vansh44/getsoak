@@ -58,22 +58,25 @@ real copy for the four pickup emails. `locations_10` also closes the new-store
 stock gap: an auto-created Main location now explicitly fulfils online orders,
 so seeded inventory contributes to storefront `online_stock` immediately.
 
+**Also done:** pickup on the success page (PS-8.25), in the dashboard list and
+drawer (PS-8.27) and on the invoice (PS-8.26) — the three places a collection
+showed up as a delivery, or not at all.
+
+**✅ The money at the counter (2026-08-06).** `markCollected` settled a
+`pay_at_store` order's `payment_status` and recorded **nothing else** — no
+`order_payments` row, no `orders.shift_id` — and shift reconciliation reads cash
+through exactly that join. So the notes were in the drawer and counted for zero:
+every shift reported OVER by the value of every collection it took, and the
+Z-report's count and gross missed them. The hand-over now CAPTURES the tender
+(`pay_at_store` is a promise, not a payment method — the customer may pay by
+card) and stamps the drawer. CODEBASE §23; PS-8.28–8.31, PS-9.8.
+
 **Still open:**
 
-1. **Pickup on the success page.** Right after paying is when someone most
-   wants the address and the date; it shows only the order reference.
-2. **Pickup in the dashboard.** The orders list and detail drawer have zero
-   pickup awareness, so office staff can't see that an order is a collection
-   or what state it's in. Only the till can. **The biggest of these** — it is
-   the merchant's own view of their orders.
-3. **The invoice knows it was collected.** `invoice-data.ts` and
-   `InvoiceDocument` don't read `fulfilment_type`, so an invoice prints a
-   shipping address for an order nobody shipped.
-4. **Tests for `pos-pickup-actions.ts`.** Every other POS action has a
-   co-located test; this one shipped without.
-5. **Run PS-8.1 – PS-8.20 in a browser.** The pickup flow has never been
-   exercised end to end. Nothing blocks it now.
-6. **Location filter on analytics.** The one item unrelated to pickup.
+1. **Run PS-8.1 – PS-8.31 in a browser.** The pickup flow has never been
+   exercised end to end. Nothing blocks it now — and the counter-payment path
+   above is the part most worth watching a real drawer through.
+2. **Location filter on analytics.** The one item unrelated to pickup.
 
 **Done when:** the acceptance doc's Known gaps table loses those rows, and its
 section 8 has been run for real.

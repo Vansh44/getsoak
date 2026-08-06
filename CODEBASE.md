@@ -1779,7 +1779,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
       recomputed, stock reserved atomically **at the register's location**
       (`reserve_stock_at`), service-role writes last, and a reverse rollback
       chain on any failure. `getRegisterConfig` opens the register;
-      `placePosSale` rings it; `getPosReceipt` re-renders one.
+      `placePosSale` rings it; `getPosReceipt` re-renders one. The tender
+      vocabulary, its **allowlist** and the coverage/change math live in
+      `lib/pos/tenders.ts` — shared with the collection counter, which is the
+      second place money is taken (§23).
       - **★ ONLY THE SUPERADMIN MAY GIVE MONEY AWAY** (`pos.ownerOnlyDiscounts`,
         default **on**). A discount is the till's one irreversible act that
         leaves NOTHING missing from the shelf to count afterwards — no physical
@@ -2217,6 +2220,59 @@ group, span}` (span = columns of the 4-wide desktop grid),
         confirmation tells them where to go instead of quoting a delivery
         address they never gave. Delivery orders are untouched — the pickup
         variables are only added when there IS a pickup.
+      - **★★ THE COUNTER IS ALSO WHERE THE MONEY ARRIVES, AND IT WAS
+        INVISIBLE** (fixed 2026-08-06). `markCollected` flipped
+        `payment_status` pending → paid for a `pay_at_store` order and wrote
+        **no `order_payments` row and no `orders.shift_id`**. Shift
+        reconciliation reads cash as `order_payments` INNER JOIN orders ON
+        `shift_id` (only `placePosSale` ever inserted one), so the notes were
+        physically in the drawer and contributed **0** to `expectedCash`: every
+        drawer reported OVER by the full value of every collection it took,
+        every shift, and the same join left those sales out of the Z-report's
+        count and gross. It is the mirror of the two bugs `lib/pos/shifts.ts`
+        already guards — double-counted change and cash refunds — which both
+        reported SHORT.
+      - **★ `pay_at_store` IS NOT A TENDER, so the tender is CAPTURED, never
+        assumed** (`lib/pos/pickup-payment.ts`, pure + tested). It is a promise
+        recorded at checkout, and the checkout copy says exactly that — "Pay at
+        the counter when you collect your order" — deliberately silent on the
+        instrument where COD's, beside it, says cash. The customer may well
+        hand over a card. Booking every collection as cash would put card money
+        into expected cash and report the drawer SHORT: the same defect pointed
+        the other way, and worse, because "over on cash, short on card" cannot
+        be attributed to anything. `/pos/pickups` shows the amount owed on the
+        row and opens the register's own `TenderPanel` (cash/card/UPI, split
+        tenders, change) before handing over. It is the rule §26 and §28
+        already state for refunds, read backwards: **the tender decides where
+        the money goes.**
+      - **★ COVERAGE IS CHECKED BEFORE THE CLAIM.** Claiming
+        awaiting/ready → collected and THEN refusing the payment is the one
+        outcome with no recovery — the order reads as collected and nothing was
+        ever taken — so `markCollected` reads what is owed first, settles the
+        tenders against it, and only then claims. The claim still decides
+        exactly-once: a second tap matches zero rows, so it cannot write a
+        second payment for money handed over once. Tenders on an order that
+        owes nothing are REFUSED, not ignored — recording them would inflate
+        expected cash with money nobody handed over.
+      - **★ THE SHIFT STAMP IS ONLY FOR MONEY TAKEN HERE.** An order paid
+        online weeks ago that happens to be collected during this shift never
+        touched this drawer, and stamping it would pull its whole total into
+        the Z-report's gross as takings the till never took. With no shift
+        open, the SAME `pos.requireOpenShift` rule the sell path applies —
+        taking payment at a counter IS selling, so the money gets exactly the
+        home a counter sale's money gets (refused, or unattributed, per the
+        merchant's own setting). Inventing a third policy here is how the two
+        counters drift apart. A prepaid collection never consults it: no money
+        changes hands, and blocking it would refuse a customer their own
+        paid-for goods.
+      - `lib/pos/tenders.ts` holds the tender vocabulary, the
+        **allowlist** and the coverage/change math, extracted from
+        pos-sale-actions.ts once a second counter took money. The allowlist is a
+        SECURITY boundary (it is why `gift_card`/`store_credit` are refused —
+        there is no ledger behind them), and a second hand-written copy is how
+        an unsettleable tender gets accepted at the one counter nobody audited.
+        It lives in `lib/` because a `"use server"` file may only export async
+        functions, and everything it exports is a public endpoint.
       - **Expiry cancels, it does not refund.** `sweepExpiredPickups` claims
         awaiting/ready → expired per order, then releases the holds (that
         order, so a hand-over racing the sweep can't lose). Refunds wait for

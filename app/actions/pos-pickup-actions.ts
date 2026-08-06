@@ -9,6 +9,16 @@
 // Everything is scoped to the OPERATOR's location. A cashier at Delhi hands over
 // Delhi's orders; naming another shop is not possible because the location is
 // never taken from the client.
+//
+// ★ A `pay_at_store` collection is also where MONEY changes hands, and until
+// 2026-08-06 none of it was recorded: the hand-over flipped payment_status to
+// 'paid' and wrote no `order_payments` row and no `orders.shift_id`. Shift
+// reconciliation reads cash as `order_payments` joined to orders ON shift_id,
+// so the notes were physically in the drawer and contributed 0 to expectedCash
+// — every drawer reported OVER by the full value of every collection it took,
+// every shift, and those sales were missing from the Z-report's count and gross
+// as well. That is the mirror of the two bugs lib/pos/shifts.ts already guards
+// (double-counted change, cash refunds), which both reported SHORT.
 
 import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -16,6 +26,7 @@ import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
   orderItems,
+  orderPayments,
   orders,
   stockReservations,
   storeLocations,
@@ -25,6 +36,14 @@ import { posCan } from "@/lib/pos/permissions";
 import { commitHold } from "@/lib/inventory/reservations";
 import { emitEvent } from "@/lib/notifications/record";
 import { formatAddressLine } from "@/lib/locations/address";
+import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
+import {
+  settleTenders,
+  validateTenderShape,
+  type PosTender,
+} from "@/lib/pos/tenders";
+import { currentShiftIdFor } from "./pos-shift-actions";
+import { getStoreSettings } from "@/lib/settings/resolve";
 
 /**
  * The shop an order is waiting at, returned alongside the claim itself.
@@ -48,6 +67,9 @@ export interface PickupOrder {
   customerName: string | null;
   itemCount: number;
   total: number;
+  /** Still owed at the counter — 0 when it was paid online. Drives whether the
+   *  queue takes a payment before handing over. */
+  amountDue: number;
   placedAt: string;
   expiresAt: string | null;
   status: string;
@@ -75,6 +97,8 @@ export async function getPickupQueue(
           order_ref: orders.orderRef,
           shipping_address: orders.shippingAddress,
           total: orders.total,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
           created_at: orders.createdAt,
           expires_at: orders.pickupExpiresAt,
           status: orders.pickupStatus,
@@ -132,6 +156,13 @@ export async function getPickupQueue(
           customerName: name,
           itemCount: counts.get(r.id) ?? 0,
           total: Number(r.total) || 0,
+          // The SAME helper markCollected charges with, so the counter can
+          // never quote one figure and take another.
+          amountDue: amountDueAtCollection({
+            paymentMethod: r.payment_method,
+            paymentStatus: r.payment_status,
+            total: r.total,
+          }),
           placedAt: r.created_at,
           expiresAt: r.expires_at,
           status: r.status ?? "awaiting",
@@ -143,8 +174,11 @@ export async function getPickupQueue(
   }
 }
 
+const NOT_WAITING =
+  "That order isn't waiting for collection here. It may already have been collected.";
+
 /**
- * Hand the order over.
+ * Hand the order over, taking the money if any is still owed.
  *
  * Claims awaiting/ready → collected CONDITIONALLY, so two staff scanning the
  * same order at once hand it over once. Only then are the holds committed —
@@ -153,12 +187,107 @@ export async function getPickupQueue(
  */
 export async function markCollected(
   orderId: string,
-): Promise<{ success?: boolean; error?: string }> {
+  /** What the customer handed over at the counter. Empty for an order already
+   *  paid online, which is most of them. */
+  tenders: PosTender[] = [],
+): Promise<{ success?: boolean; error?: string; changeDue?: number }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid order." };
+
+  // ── What does this order still owe? ──────────────────────────────────────
+  // Read BEFORE the claim. A tender that doesn't cover the total has to be
+  // refused while the goods are still on the shelf: claiming first and then
+  // refusing the payment is the one outcome with no recovery, because the order
+  // reads as collected and the money was never taken.
+  let owed:
+    | {
+        total: unknown;
+        payment_method: string | null;
+        payment_status: string | null;
+      }
+    | undefined;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          total: orders.total,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, op.storeId),
+            eq(orders.pickupLocationId, op.locationId),
+            or(
+              eq(orders.pickupStatus, "awaiting"),
+              eq(orders.pickupStatus, "ready"),
+            ),
+          ),
+        )
+        .limit(1),
+    );
+    owed = rows[0];
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't read the order.") };
+  }
+  if (!owed) return { error: NOT_WAITING };
+
+  const due = amountDueAtCollection({
+    paymentMethod: owed.payment_method,
+    paymentStatus: owed.payment_status,
+    total: owed.total as number | string | null,
+  });
+
+  let shiftId: string | null = null;
+  let change = 0;
+  if (due > 0) {
+    const bad = validateTenderShape(
+      tenders,
+      `Take the ₹${due.toLocaleString("en-IN")} owed on this order before handing it over.`,
+    );
+    if (bad) return { error: bad };
+    const settled = settleTenders(tenders, due);
+    if ("error" in settled) return { error: settled.error };
+    change = settled.change;
+
+    // Which drawer this money belongs to. Stamped on the order in the SAME
+    // statement as the claim, so a collection cannot be recorded without its
+    // cash landing somewhere — the gap this whole change exists to close.
+    shiftId = await currentShiftIdFor(op.locationId);
+    if (!shiftId) {
+      // The SAME rule the sell path applies, deliberately: taking payment at a
+      // counter IS selling, so the money gets exactly the home a counter sale's
+      // money gets. With the setting on, the hand-over waits for a drawer —
+      // nothing is lost, the goods stay held. With it off it goes unattributed,
+      // which reconciliation surfaces rather than hides (currentShiftIdFor).
+      // Inventing a third policy here is how the two counters drift apart.
+      let requireShift = false;
+      try {
+        requireShift =
+          (await getStoreSettings())["pos.requireOpenShift"] === true;
+      } catch {
+        // A settings read failure must not refuse a customer standing at the
+        // counter — the same posture getCurrentShift takes.
+        requireShift = false;
+      }
+      if (requireShift) {
+        return {
+          error: "Open a shift before taking payment at the counter.",
+        };
+      }
+    }
+  } else if (Array.isArray(tenders) && tenders.length > 0) {
+    // Refused, not ignored. Recording tenders against an order that owes
+    // nothing would inflate the drawer's expected cash with money that was
+    // never handed over, reporting it SHORT — the very failure being fixed,
+    // pointed the other way.
+    return { error: "This order is already paid — no payment is due here." };
+  }
 
   let claimed:
     | {
@@ -185,6 +314,11 @@ export async function markCollected(
           paymentStatus: sql`case when ${orders.paymentMethod} = 'pay_at_store'
                                   and ${orders.paymentStatus} = 'pending'
                              then 'paid' else ${orders.paymentStatus} end`,
+          // ONLY when money was taken here. An order paid online weeks ago that
+          // happens to be collected during this shift never touched this
+          // drawer, and stamping it would pull its whole total into the
+          // Z-report's gross as takings the till never took.
+          ...(due > 0 && shiftId ? { shiftId } : {}),
         })
         .where(
           and(
@@ -210,11 +344,34 @@ export async function markCollected(
     return { error: dbErrorMessage(err, "Couldn't complete the collection.") };
   }
 
-  if (!claimed) {
-    return {
-      error:
-        "That order isn't waiting for collection here. It may already have been collected.",
-    };
+  if (!claimed) return { error: NOT_WAITING };
+
+  // Record the tender. AFTER the claim, so a second tap — which matches zero
+  // rows — cannot write a second payment for money handed over once.
+  if (due > 0) {
+    try {
+      await withService((db) =>
+        db.insert(orderPayments).values(
+          tenders.map((t) => ({
+            orderId,
+            storeId: op.storeId,
+            method: t.method,
+            amount: t.amount,
+            tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
+            // Change is a property of the COLLECTION, replicated onto each cash
+            // row exactly as placePosSale does — netCashFromSales groups by
+            // order and takes the max, so it is subtracted once.
+            changeDue: t.method === "cash" ? change : null,
+            reference: t.reference?.slice(0, 120) ?? null,
+          })),
+        ),
+      );
+    } catch (err) {
+      // The customer has paid and is holding the goods; the collection is NOT
+      // undone. Log loudly — this is the one path that can still leave cash
+      // unrecorded, and it is now an error rather than the design.
+      console.error("markCollected (payments):", err);
+    }
   }
 
   // Turn every hold for this order into a real sale. commitHold is idempotent,
@@ -253,7 +410,7 @@ export async function markCollected(
   });
 
   revalidatePath("/pos/pickups");
-  return { success: true };
+  return { success: true, changeDue: change };
 }
 
 /** Tell the shopper it's packed and waiting. */

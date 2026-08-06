@@ -33,11 +33,17 @@ function quickCash(total: number): number[] {
 
 export function TenderPanel({
   total,
+  title = "Take payment",
+  confirmLabel = "Complete sale",
   onCancel,
   onComplete,
   onVerifyManager,
 }: {
   total: number;
+  /** The collection counter is settling an order bought weeks ago, not ringing
+   *  a sale, so it says so. */
+  title?: string;
+  confirmLabel?: string;
   onCancel: () => void;
   onComplete: (
     tenders: PosTender[],
@@ -46,7 +52,10 @@ export function TenderPanel({
      *  minted. */
     approvalToken?: string,
   ) => Promise<{ error?: string; needsApproval?: boolean }>;
-  onVerifyManager: (
+  /** Absent where nothing can need approval — a collection is priced at
+   *  checkout, so there is no discount to authorise. The PIN branch is then
+   *  unreachable rather than merely unused. */
+  onVerifyManager?: (
     pin: string,
   ) => Promise<{ approved?: boolean; token?: string; error?: string }>;
 }) {
@@ -85,7 +94,10 @@ export function TenderPanel({
     setError(null);
     const res = await onComplete(taken, approvalToken);
     setBusy(false);
-    if (res.needsApproval) {
+    // Only open the PIN pad where a manager could actually approve. Without the
+    // guard a caller with no approval path would show a keypad that can never
+    // succeed, in front of a customer.
+    if (res.needsApproval && onVerifyManager) {
       setManagerPin("");
       setError(res.error ?? "A manager's approval is needed.");
       return;
@@ -94,6 +106,7 @@ export function TenderPanel({
   };
 
   const approveAndFinish = async () => {
+    if (!onVerifyManager) return;
     setBusy(true);
     setError(null);
     const v = await onVerifyManager(pin);
@@ -117,7 +130,7 @@ export function TenderPanel({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#12171f] p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold">Take payment</h2>
+          <h2 className="text-lg font-bold">{title}</h2>
           <button
             type="button"
             onClick={onCancel}
@@ -294,7 +307,7 @@ export function TenderPanel({
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Complete sale
+              {confirmLabel}
             </button>
           </>
         )}
