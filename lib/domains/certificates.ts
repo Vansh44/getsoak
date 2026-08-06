@@ -31,6 +31,7 @@ import "server-only";
 import { GoogleAuth } from "google-auth-library";
 import { logError, logInfo } from "@/lib/observability/logger";
 import { resourceId, assertManaged } from "./naming";
+import { domainHosts } from "./domain";
 
 const API = "https://certificatemanager.googleapis.com/v1";
 const LOCATION = "global";
@@ -113,33 +114,68 @@ async function api<T>(
 const parent = (cfg: CertConfig) =>
   `projects/${cfg.projectId}/locations/${LOCATION}`;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * GET a resource that was just created and may not be readable yet.
+ *
+ * ★ Certificate Manager creates are LONG-RUNNING OPERATIONS. The POST returns an
+ * Operation, not the resource, and the resource is not queryable until that
+ * operation completes — so an immediate GET can legitimately 404. This module
+ * used to read straight back and treat that 404 as a hard failure, which had a
+ * specific and bad consequence: `ensureDnsAuthorization` returned "Couldn't
+ * start domain verification" on the FIRST attempt, so nothing persisted
+ * `domain_challenge`, so the settings page listed the A record ALONE. The
+ * merchant added it, saw no other record to add, and left — and the certificate
+ * could never validate, because the one record that proves ownership was never
+ * put on screen.
+ *
+ * `ready` exists for the same reason: a DnsAuthorization can be readable a beat
+ * before `dnsResourceRecord` is populated, and a resource without the challenge
+ * record in it is no more use to the caller than a 404.
+ *
+ * Bounded deliberately (~2.8s worst case). This runs inside a merchant's
+ * request, and the caller polls anyway — this only has to cover the sub-second
+ * window that made the FIRST attempt fail.
+ */
+async function getEventually<T>(
+  path: string,
+  ready?: (data: T) => boolean,
+  attempts = 4,
+): Promise<ApiResult<T>> {
+  let last: ApiResult<T> = { ok: false, error: "resource was never read" };
+  for (let i = 0; i < attempts; i++) {
+    last = await api<T>(path);
+    // A real error (403 on IAM, 400 on a bad body) must surface immediately —
+    // retrying it just makes the merchant wait longer for the same answer.
+    if (!last.ok && last.status !== 404) return last;
+    if (last.ok && (!ready || (last.data && ready(last.data)))) return last;
+    if (i < attempts - 1) await sleep(400 * (i + 1));
+  }
+  return last;
+}
+
 /**
  * Create, or adopt if it already exists.
  *
  * This is the idempotency primitive the whole module rests on. 409 is not an
- * error — it is the expected result of the second run — so it falls through to
- * a GET of the same name. Anything else is a real failure.
- *
- * Note the create is fire-and-read rather than awaiting the long-running
- * operation: Certificate Manager creates are LROs, but the resource exists as
- * soon as the call is accepted, and every caller here polls state separately.
+ * error — it is the expected result of the second run — so both the created and
+ * the already-there case fall through to the same read. Anything else is a real
+ * failure.
  */
 async function createOrAdopt<T>(
   collection: string,
   id: string,
   body: unknown,
   idParam: string,
+  ready?: (data: T) => boolean,
 ): Promise<ApiResult<T>> {
   const created = await api<T>(`${collection}?${idParam}=${id}`, {
     method: "POST",
     body,
   });
-  if (created.ok) {
-    return api<T>(`${collection}/${id}`);
-  }
-  if (created.status === 409) {
-    // Already provisioned — the retry case, and the normal one.
-    return api<T>(`${collection}/${id}`);
+  if (created.ok || created.status === 409) {
+    return getEventually<T>(`${collection}/${id}`, ready);
   }
   return created;
 }
@@ -151,25 +187,115 @@ export interface DnsChallenge {
   value: string;
 }
 
-export interface ProvisionState {
-  /** All three resources exist and the certificate is serving. */
+/** How far one hostname got. A domain has one of these per host it serves. */
+export interface HostProvision {
+  host: string;
+  /** All three resources exist and this hostname is serving. */
   ready: boolean;
-  /** The CNAME the merchant still has to add (null once issued). */
+  /** The CNAME the merchant still has to add for THIS host (null once issued). */
   challenge: DnsChallenge | null;
   /** Raw certificate provisioning state, for display + debugging. */
   certificateState: string | null;
   /** True once the map entry exists — nothing serves the cert before that. */
   attached: boolean;
+  /** Why issuance hasn't finished, in words the merchant can act on. */
+  diagnosis?: string;
+  /** Google's machine-readable cause (CONFIG / CAA / RATE_LIMITED), for logs. */
+  failureReason?: string;
   error?: string;
+}
+
+export interface ProvisionState extends HostProvision {
+  /**
+   * Every host, PRIMARY FIRST.
+   *
+   * ★ The top-level fields mirror the PRIMARY host, and that is the whole
+   * contract: the domain the merchant typed is what gates going live, and its
+   * apex/www companion is strictly best-effort. Gating on both would mean a
+   * merchant who added one A record instead of two has a working certificate for
+   * the address they asked for and a store that still refuses to serve it —
+   * trading a real outage for a cosmetic one.
+   */
+  hosts: HostProvision[];
 }
 
 interface DnsAuthResource {
   name?: string;
   dnsResourceRecord?: { name?: string; type?: string; data?: string };
 }
+
+/** The subset of the managed-certificate resource we act on. */
+export interface ManagedCert {
+  state?: string;
+  provisioningIssue?: { reason?: string; details?: string };
+  authorizationAttemptInfo?: Array<{
+    domain?: string;
+    state?: string;
+    failureReason?: string;
+    details?: string;
+  }>;
+}
 interface CertResource {
   name?: string;
-  managed?: { state?: string; provisioningIssue?: { reason?: string } };
+  managed?: ManagedCert;
+}
+
+/**
+ * Turn Google's provisioning fields into something a merchant can act on.
+ *
+ * ★ THIS IS THE FIELD THAT WAS BEING THROWN AWAY. The interface declared
+ * `provisioningIssue.reason` and nothing ever read it, and
+ * `authorizationAttemptInfo` — the PER-DOMAIN cause, which is the only field
+ * that distinguishes the three real failure modes — wasn't declared at all. So
+ * every stalled domain produced the same sentence ("Certificate isn't issued
+ * yet. Add the DNS records shown…") whether the CNAME was genuinely missing, or
+ * a CAA record was forbidding Google outright, or the domain had hit a CA rate
+ * limit. Two of those three are NOT fixed by adding the records shown, and the
+ * merchant had no way to find that out — nor did an operator reading the logs.
+ *
+ * Pure, so each mapping is testable without touching GCP.
+ */
+export function explainCertificate(managed: ManagedCert | undefined): {
+  diagnosis?: string;
+  failureReason?: string;
+} {
+  if (!managed) return {};
+
+  // Prefer the per-domain attempt: it carries the specific cause. The
+  // top-level provisioningIssue only ever says "AUTHORIZATION_ISSUE".
+  const failed = managed.authorizationAttemptInfo?.find(
+    (a) => a.state === "FAILED" || a.failureReason,
+  );
+  const reason = failed?.failureReason ?? managed.provisioningIssue?.reason;
+  const details = failed?.details ?? managed.provisioningIssue?.details;
+
+  switch (reason) {
+    case "CAA":
+      return {
+        failureReason: reason,
+        // The one failure the DNS records on screen cannot fix.
+        diagnosis:
+          "This domain has a CAA record that doesn't permit Google to issue certificates. " +
+          'Add a CAA record with the value 0 issue "pki.goog", or remove the existing CAA records, then check again.',
+      };
+    case "RATE_LIMITED":
+      return {
+        failureReason: reason,
+        diagnosis:
+          "Google has temporarily rate-limited certificate requests for this domain. " +
+          "This clears by itself — try again in an hour. Nothing needs changing.",
+      };
+    case "CONFIG":
+    case "AUTHORIZATION_ISSUE":
+      // The common case, and the one the caller's own CNAME check explains far
+      // better (it names the record and what it currently points at), so no
+      // diagnosis here — only the reason, for the logs.
+      return { failureReason: reason };
+    default:
+      return reason
+        ? { failureReason: reason, diagnosis: details || undefined }
+        : {};
+  }
 }
 
 /**
@@ -191,9 +317,16 @@ export async function ensureDnsAuthorization(
     id,
     { domain },
     "dnsAuthorizationId",
+    // Not readable-yet is not good enough: without the challenge record in hand
+    // there is nothing to show the merchant, which is the whole point of this
+    // call. Wait the extra beat rather than reporting a false failure.
+    (d) => !!d.dnsResourceRecord?.name && !!d.dnsResourceRecord?.data,
   );
   if (!res.ok || !res.data) {
-    logError("ensureDnsAuthorization", res.error, { domain });
+    logError("ensureDnsAuthorization", res.error, {
+      domain,
+      status: res.status,
+    });
     return { error: "Couldn't start domain verification. Please try again." };
   }
 
@@ -207,60 +340,58 @@ export async function ensureDnsAuthorization(
 }
 
 /**
- * Drive the domain toward "serving", and report exactly how far it got.
+ * Drive ONE hostname through all three steps, and report exactly how far it got.
  *
- * Safe to call repeatedly — that is the point. It is the single entry point for
- * both the merchant pressing Verify and any background retry, and it makes at
- * most one step of forward progress per call, so calling it in a loop converges
- * rather than thrashing.
+ * Safe to call repeatedly — that is the point. Every step adopts what is already
+ * there, so it makes at most one step of forward progress per call and calling it
+ * in a loop converges rather than thrashing.
+ *
+ * ★ A FULL TRIPLE PER HOSTNAME, not one certificate with two SANs. A managed
+ * certificate's `domains` list is IMMUTABLE, so widening an existing single-host
+ * certificate is impossible — `createOrAdopt` would 409 and adopt the old
+ * narrow one, and the www map entry would then point at a certificate that does
+ * not cover www. Per-host triples keep every already-provisioned resource
+ * byte-identical in name (nothing to migrate, live domains keep their
+ * certificates) and let each host validate independently, which is what makes
+ * the primary able to go live while www is still waiting.
  */
-export async function ensureProvisioned(
-  domain: string,
-): Promise<ProvisionState> {
-  const cfg = getCertConfig();
-  if (!cfg) {
-    return {
-      ready: false,
-      challenge: null,
-      certificateState: null,
-      attached: false,
-      error: "Custom domains aren't configured.",
-    };
-  }
+async function provisionHost(
+  cfg: CertConfig,
+  host: string,
+): Promise<HostProvision> {
+  const base = {
+    host,
+    ready: false,
+    challenge: null,
+    certificateState: null,
+    attached: false,
+  };
 
   // 1. Authorization (idempotent) — also the ownership proof.
-  const authRes = await ensureDnsAuthorization(domain);
+  const authRes = await ensureDnsAuthorization(host);
   if (authRes.error || !authRes.challenge) {
-    return {
-      ready: false,
-      challenge: null,
-      certificateState: null,
-      attached: false,
-      error: authRes.error,
-    };
+    return { ...base, error: authRes.error };
   }
-  const authId = resourceId("auth", domain);
+  const authId = resourceId("auth", host);
 
   // 2. Certificate (idempotent), referencing the authorization by name.
-  const certId = resourceId("cert", domain);
+  const certId = resourceId("cert", host);
   const certRes = await createOrAdopt<CertResource>(
     `${parent(cfg)}/certificates`,
     certId,
     {
       managed: {
-        domains: [domain],
+        domains: [host],
         dnsAuthorizations: [`${parent(cfg)}/dnsAuthorizations/${authId}`],
       },
     },
     "certificateId",
   );
   if (!certRes.ok || !certRes.data) {
-    logError("ensureProvisioned (certificate)", certRes.error, { domain });
+    logError("provisionHost (certificate)", certRes.error, { host });
     return {
-      ready: false,
+      ...base,
       challenge: authRes.challenge,
-      certificateState: null,
-      attached: false,
       error: "Couldn't request a certificate. Please try again.",
     };
   }
@@ -268,45 +399,88 @@ export async function ensureProvisioned(
   const state = certRes.data.managed?.state ?? null;
   if (state !== "ACTIVE") {
     // Still waiting on the merchant's CNAME (or on issuance). Keep showing the
-    // record — that is the action they need to take.
+    // record — that is usually the action they need to take. But say so only
+    // when it IS the cause: a CAA block or a rate limit is not fixed by adding
+    // the records on screen, and telling someone to add them again is how a
+    // domain sits broken for days with everybody thinking they are waiting.
+    const why = explainCertificate(certRes.data.managed);
+    if (why.failureReason) {
+      logInfo("custom domain not issued", {
+        host,
+        certificateState: state,
+        failureReason: why.failureReason,
+      });
+    }
     return {
-      ready: false,
+      ...base,
       challenge: authRes.challenge,
       certificateState: state,
-      attached: false,
+      ...why,
     };
   }
 
   // 3. Map entry (idempotent). Only now — an entry pointing at a certificate
   // that isn't ACTIVE would attach a hostname the load balancer cannot serve.
-  const entryId = resourceId("entry", domain);
+  const entryId = resourceId("entry", host);
   const entryRes = await createOrAdopt<{ name?: string }>(
     `${parent(cfg)}/certificateMaps/${cfg.certificateMap}/certificateMapEntries`,
     entryId,
     {
-      hostname: domain,
+      hostname: host,
       certificates: [`${parent(cfg)}/certificates/${certId}`],
     },
     "certificateMapEntryId",
   );
   if (!entryRes.ok) {
-    logError("ensureProvisioned (map entry)", entryRes.error, { domain });
+    logError("provisionHost (map entry)", entryRes.error, { host });
     return {
-      ready: false,
-      challenge: null,
+      ...base,
       certificateState: state,
-      attached: false,
       error: "Certificate issued, but attaching it failed. Please try again.",
     };
   }
 
-  logInfo("custom domain provisioned", { domain, certificateState: state });
+  logInfo("custom domain host provisioned", { host, certificateState: state });
   return {
+    host,
     ready: true,
     challenge: null,
     certificateState: state,
     attached: true,
   };
+}
+
+/**
+ * Provision every hostname this domain should serve — the domain itself plus its
+ * apex/www companion — and report the primary's state at the top level.
+ */
+export async function ensureProvisioned(
+  domain: string,
+): Promise<ProvisionState> {
+  const cfg = getCertConfig();
+  if (!cfg) {
+    const unavailable = {
+      host: domain,
+      ready: false,
+      challenge: null,
+      certificateState: null,
+      attached: false,
+      error: "Custom domains aren't configured.",
+    };
+    return { ...unavailable, hosts: [unavailable] };
+  }
+
+  // Sequential, primary first. Certificate Manager rate-limits per project and a
+  // burst of parallel creates is exactly what surfaces later as RATE_LIMITED on
+  // a merchant's certificate — there is nobody waiting on the extra second.
+  const hosts: HostProvision[] = [];
+  for (const host of domainHosts(domain)) {
+    hosts.push(await provisionHost(cfg, host));
+  }
+
+  // The primary decides. See ProvisionState.hosts for why www cannot gate.
+  const primary = hosts[0]!;
+  return { ...primary, hosts };
 }
 
 /**
@@ -323,11 +497,15 @@ export async function deprovision(domain: string): Promise<{ error?: string }> {
   const cfg = getCertConfig();
   if (!cfg) return {};
 
-  const targets = [
-    `${parent(cfg)}/certificateMaps/${cfg.certificateMap}/certificateMapEntries/${resourceId("entry", domain)}`,
-    `${parent(cfg)}/certificates/${resourceId("cert", domain)}`,
-    `${parent(cfg)}/dnsAuthorizations/${resourceId("auth", domain)}`,
-  ];
+  // EVERY host, not just the primary — the www triple is billable too, and a
+  // certificate nothing references is the kind of leak that only shows up on an
+  // invoice. `domainHosts` is the same list provisioning used, so the two cannot
+  // drift; a host that was never provisioned just 404s, which counts as success.
+  const targets = domainHosts(domain).flatMap((host) => [
+    `${parent(cfg)}/certificateMaps/${cfg.certificateMap}/certificateMapEntries/${resourceId("entry", host)}`,
+    `${parent(cfg)}/certificates/${resourceId("cert", host)}`,
+    `${parent(cfg)}/dnsAuthorizations/${resourceId("auth", host)}`,
+  ]);
 
   let failed = false;
   for (const target of targets) {

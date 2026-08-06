@@ -146,6 +146,19 @@ const BESPOKE: Record<string, { subject: string; body: string }> = {
       "<p>Everything is editable later, including the store name and address.</p>",
     ].join("\n"),
   },
+  // A milestone the merchant has usually been waiting days for, and the reason
+  // they can walk away from the settings page at all. As a generated fact list
+  // ("Domain / Store url / When") it would read like a status row rather than
+  // the answer to "did it work?".
+  "store.domain_live": {
+    subject: "{{domain}} is live",
+    body: [
+      "<p>Your store is now open on your own domain:</p>",
+      '<p><a href="{{store_url}}">{{store_url}}</a></p>',
+      "<p>HTTPS is set up and renews on its own — there's nothing for you to maintain.</p>",
+      "<p>Your original StoreMink address keeps working too, so any links you've already shared stay valid.</p>",
+    ].join("\n"),
+  },
 };
 
 /** Human label for a variable in the details list ("order_ref" → "Order ref"). */

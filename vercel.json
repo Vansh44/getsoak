@@ -17,6 +17,10 @@
     {
       "path": "/api/cron/seo-refresh",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/domain-reconcile",
+      "schedule": "10 * * * *"
     }
   ]
 }

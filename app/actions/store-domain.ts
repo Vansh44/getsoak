@@ -13,18 +13,18 @@ import {
 } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
-import { PLAN_LIMITS, effectivePlan, type Plan } from "@/lib/plans";
 import {
   validateDomain,
   routingRecords,
   dnsRecordName,
 } from "@/lib/domains/domain";
+import { deprovision, getCertConfig } from "@/lib/domains/certificates";
 import {
-  ensureProvisioned,
-  deprovision,
-  getCertConfig,
-} from "@/lib/domains/certificates";
-import { checkCnameTarget, checkDomainPointsTo } from "@/lib/domains/dns";
+  reconcileDomainForStore,
+  readStoreDomainRow,
+  storeAllowsCustomDomain,
+  UPGRADE_MESSAGE,
+} from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
 import {
   ensureGoogleCoverageForStore,
@@ -65,49 +65,6 @@ function getResend(): Resend | null {
 function clean(v: string | null | undefined): string | null {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s ? s : null;
-}
-
-/**
- * Is this store entitled to a custom domain right now?
- *
- * Read from the EFFECTIVE plan, so a lapsed timed plan is treated as free —
- * the same rule lookupStoreByHost applies when deciding whether to serve. The
- * two must agree: a dashboard that lets you connect a domain the router will
- * refuse to serve is worse than one that says no up front.
- */
-async function storeAllowsCustomDomain(
-  storeId: string,
-): Promise<{ allowed: boolean; plan: Plan }> {
-  const rows = await withService((db) =>
-    db
-      .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1),
-  ).catch(() => []);
-  // Fail CLOSED. Unlike the serving path — where a hiccup must not take a live
-  // shop offline — the cost here is a merchant retrying a form, and the cost of
-  // failing open is handing out a paid feature on a database error.
-  const plan = effectivePlan(rows[0] ?? { plan: "free" });
-  return { allowed: PLAN_LIMITS[plan].customDomain, plan };
-}
-
-const UPGRADE_MESSAGE =
-  "Connecting your own domain is part of the Pro plan. Upgrade to add one.";
-
-// The acting store's domain fields.
-async function readStoreDomainRow(storeId: string) {
-  const rows = await withService((db) =>
-    db
-      .select({
-        custom_domain: stores.customDomain,
-        settings: stores.settings,
-      })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1),
-  );
-  return rows[0];
 }
 
 /**
@@ -172,7 +129,10 @@ export async function updateCustomDomain(
   delete newSettings.custom_domain_verified;
   delete newSettings.resend_domain_verified;
   delete newSettings.domain_challenge;
+  delete newSettings.domain_challenges;
   delete newSettings.domain_cert_state;
+  delete newSettings.domain_cert_issue;
+  delete newSettings.domain_extra_hosts;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete newSettings[key];
 
   try {
@@ -191,6 +151,28 @@ export async function updateCustomDomain(
   }
 
   revalidateTag(STORE_TAG, "max");
+
+  // ★ RELEASE THE DOMAIN THEY JUST REPLACED. `deprovision` was wired only to
+  // disconnectDomain, so CHANGING a domain silently orphaned the old one's
+  // certificate, authorization and map entry. Two costs: a certificate nothing
+  // references keeps billing (and only shows up on an invoice), and the stale map
+  // entry leaves the load balancer still terminating TLS for a hostname this
+  // store no longer claims — so it resolves, handshakes, and then 404s as an
+  // unknown store. This is how the orphaned www.wholesip.com resources appeared.
+  //
+  // AFTER the write and best-effort: the merchant's new domain is already saved,
+  // and a cleanup failure must not fail the change they asked for.
+  const previous = store?.custom_domain ?? null;
+  if (previous && previous !== cleanDomain) {
+    after(async () => {
+      const gone = await deprovision(previous);
+      if (gone.error) {
+        logError("updateCustomDomain (deprovision old)", gone.error, {
+          previous,
+        });
+      }
+    });
+  }
   return { success: true };
 }
 
@@ -311,6 +293,8 @@ export interface DomainConnectionState {
     purpose: string;
   }>;
   certificateState: string | null;
+  /** Companion hosts also serving (the www/apex counterpart). */
+  extraHosts: string[];
   message?: string;
 }
 
@@ -330,6 +314,7 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     available: !!cfg,
     records: [],
     certificateState: null,
+    extraHosts: [],
   };
   if (!access?.can(DOMAIN_SECTION, "view")) return empty;
 
@@ -351,10 +336,17 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     value: r.value,
     purpose: r.purpose as string,
   }));
-  const challenge = settings.domain_challenge as
-    | { name: string; value: string }
-    | undefined;
-  if (challenge?.name && !verified) {
+  // One challenge CNAME PER HOST — the www certificate is validated separately,
+  // so a single record would silently be half the instructions. `domain_challenges`
+  // is the current shape; `domain_challenge` is the pre-www single-record form,
+  // still read so a store written by the previous deploy keeps showing its record.
+  const challenges = Array.isArray(settings.domain_challenges)
+    ? (settings.domain_challenges as Array<{ name?: string; value?: string }>)
+    : [settings.domain_challenge as { name?: string; value?: string }].filter(
+        Boolean,
+      );
+  for (const challenge of challenges) {
+    if (!challenge?.name || !challenge.value) continue;
     records.push({
       type: "CNAME",
       name: dnsRecordName(challenge.name, domain),
@@ -371,16 +363,20 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     available: true,
     records,
     certificateState: (settings.domain_cert_state as string) ?? null,
+    extraHosts: Array.isArray(settings.domain_extra_hosts)
+      ? (settings.domain_extra_hosts as string[])
+      : [],
   };
 }
 
 /**
  * Advance the domain toward serving, and report what is still outstanding.
  *
- * Idempotent end to end: provisioning adopts existing resources, the DNS check
- * is a read, and the settings write is a no-op when nothing changed. Calling
- * this twice concurrently costs two API round-trips and converges on the same
- * state — which is what makes it safe for a retrying background job.
+ * A thin gate now: the work lives in `reconcileDomainForStore` so the cron
+ * backstop (`/api/cron/domain-reconcile`) runs the IDENTICAL logic. It has to be
+ * shared rather than reimplemented — the previous single-caller design is what
+ * made every domain depend on the merchant keeping this tab open, and a second
+ * hand-written copy would drift the moment one of the three conditions changed.
  */
 export async function verifyDomain(): Promise<DomainResult> {
   if (!(await getManagerUserId(DOMAIN_SECTION))) {
@@ -388,89 +384,36 @@ export async function verifyDomain(): Promise<DomainResult> {
   }
 
   const storeId = await getActingStoreId();
-  const { allowed } = await storeAllowsCustomDomain(storeId);
-  if (!allowed) return { error: UPGRADE_MESSAGE };
+  const res = await reconcileDomainForStore(storeId);
+  if (!res.verified)
+    return { error: res.error ?? "This domain isn't live yet." };
 
-  const cfg = getCertConfig();
-  if (!cfg) return { error: "Custom domains aren't configured." };
-
-  const row = await readStoreDomainRow(storeId).catch(() => undefined);
-  const domain = row?.custom_domain;
-  if (!domain) return { error: "Add a domain first." };
-
-  const settings = ((row?.settings as Record<string, unknown>) ?? {}) as Record<
-    string,
-    unknown
-  >;
-
-  // (1) + (3): certificate issued and attached. Idempotent.
-  const prov = await ensureProvisioned(domain);
-
-  // Persist the challenge record even when we're not done, so the merchant can
-  // see what to add without re-running provisioning to find out.
-  const next: Record<string, unknown> = { ...settings };
-  if (prov.challenge) next.domain_challenge = prov.challenge;
-  next.domain_cert_state = prov.certificateState;
-
-  if (!prov.ready) {
-    await saveDomainSettings(storeId, next);
-
-    // Certificate Manager's PROVISIONING state does not explain a misplaced
-    // record. Check the exact name so registrar UIs that append the zone (for
-    // example GoDaddy) get an immediately actionable correction.
-    if (!prov.error && prov.challenge) {
-      const cname = await checkCnameTarget(
-        prov.challenge.name,
-        prov.challenge.value,
-      );
-      if (!cname.matches) {
-        const relativeName = dnsRecordName(prov.challenge.name, domain);
-        return {
-          error:
-            cname.found.length > 0
-              ? `${cname.error} Update it to ${prov.challenge.value}.`
-              : `We couldn't find the certificate CNAME at ${prov.challenge.name}. In your DNS provider, enter ${relativeName} as the Name (not the full domain) and ${prov.challenge.value} as the Value.`,
-        };
-      }
-    }
-
-    return {
-      error:
-        prov.error ??
-        "Certificate isn't issued yet. Add the DNS records shown, then check again — this usually takes a few minutes.",
-    };
-  }
-
-  // (2): it actually points at us. Checked AFTER the certificate, because the
-  // certificate is the slow part and there is no sense reporting a routing
-  // problem the merchant would have to fix twice.
-  const dns = await checkDomainPointsTo(domain, cfg.loadBalancerIp);
-  if (!dns.pointsToUs) {
-    await saveDomainSettings(storeId, next);
-    return { error: dns.error ?? "This domain doesn't point to us yet." };
-  }
-
-  // All three hold.
-  next.custom_domain_verified = true;
-  delete next.domain_challenge;
-  await saveDomainSettings(storeId, next);
-
-  if (settings.custom_domain_verified !== true) {
+  if (res.becameLive) {
+    // TWO events, one moment: the merchant milestone and the operator console
+    // line. Same precedent as store.created / platform.store_created.
+    emitEvent({
+      type: "store.domain_live",
+      storeId,
+      actor: { type: "system" },
+      subject: { type: "store", id: storeId, label: res.domain ?? "" },
+      payload: {
+        domain: res.domain ?? "",
+        store_url: `https://${res.domain ?? ""}`,
+        extra_hosts: (res.extraHosts ?? []).join(", "),
+      },
+    });
     emitEvent({
       type: "platform.domain_verified",
       storeId,
       actor: { type: "system" },
-      subject: { type: "store", id: storeId, label: domain },
-      payload: { domain },
+      subject: { type: "store", id: storeId, label: res.domain ?? "" },
+      payload: { domain: res.domain ?? "" },
     });
+    // Ownership verification and sitemap registration are slower, independent
+    // Google API calls. Start them now without holding the merchant's DNS check
+    // open; the daily seo-refresh job retries every incomplete attempt.
+    after(() => ensureGoogleCoverageForStore(storeId));
   }
-
-  // Ownership verification and sitemap registration are slower, independent
-  // Google API calls. Start them now without holding the merchant's DNS check
-  // open; the daily seo-refresh job retries every incomplete attempt.
-  after(() => ensureGoogleCoverageForStore(storeId));
-
-  revalidateTag(STORE_TAG, "max");
   return { success: true };
 }
 
@@ -491,7 +434,10 @@ export async function disconnectDomain(): Promise<DomainResult> {
   const next = { ...settings };
   delete next.custom_domain_verified;
   delete next.domain_challenge;
+  delete next.domain_challenges;
   delete next.domain_cert_state;
+  delete next.domain_cert_issue;
+  delete next.domain_extra_hosts;
   for (const key of GOOGLE_INDEXING_SETTINGS_KEYS) delete next[key];
 
   // Stop serving FIRST. If deprovisioning then fails we have a leftover
@@ -514,13 +460,4 @@ export async function disconnectDomain(): Promise<DomainResult> {
   if (gone.error)
     logError("disconnectDomain (deprovision)", gone.error, { domain });
   return { success: true };
-}
-
-async function saveDomainSettings(
-  storeId: string,
-  settings: Record<string, unknown>,
-): Promise<void> {
-  await withService((db) =>
-    db.update(stores).set({ settings }).where(eq(stores.id, storeId)),
-  ).catch((err) => logError("saveDomainSettings", err, { storeId }));
 }
