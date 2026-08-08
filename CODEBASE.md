@@ -878,6 +878,37 @@ wholesip/
 6. **Styling**: Tailwind v4 + CSS modules for scoped styles + a few plain `.css`
    files per area (`dashboard.css`, `storefront-theme.css`, `platform.css`).
    Per-store theming = CSS variables injected by `brand-provider.tsx`.
+   - **★★ `.dashboard-shell` IS A SCOPE; `.dashboard-frame` IS THE PAGE.** The
+     scope class carries the `--dash-*` tokens and every `.dash-*` component
+     rule. The frame class carries the things only a whole-page wrapper should
+     have — `height: 100vh`, `overflow: hidden`, the page background — and is
+     applied ALONGSIDE the scope in `app/dashboard/layout.tsx` and the platform
+     console layout. **Keep them apart.** They were one class, and that is why
+     nothing in `dashboard.css` reached a dialog: a Radix `DialogContent`
+     portals into `document.body`, outside the shell element, so every
+     `var(--dash-*)` resolved to nothing and every `.dash-*` rule failed to
+     match. Not subtle — Tailwind's `border` utility sets a width and leaves the
+     colour to `var(--dash-border)`, and an invalid custom property falls back to
+     `currentColor`, so every panel in every dashboard dialog drew a hard BLACK
+     hairline; buttons lost `inline-flex` (icons stacked above their labels) and
+     `cursor: pointer`; cards lost surface, radius and shadow. The fix is that
+     the four portalled primitives (`dialog`, `dropdown-menu`, `sheet`,
+     `select` in `components/ui/`) each wear `dashboard-shell`, which is only
+     safe because the frame no longer rides along — it was already giving the
+     notification recipient picker, which opts into the scope for its tokens, a
+     100vh height and an `overflow: hidden` that beat its own `overflow-y-auto`.
+     **Rewriting the ~414 selectors instead was the obvious move and the wrong
+     one**: it fixes dialogs only, and dropdowns/sheets/selects portal too.
+     Adding a class is safe because no rule in the file is a bare element
+     selector — they are all `.dash-*`, so scoping an overlay cannot restyle its
+     internals by accident. Keep it that way.
+   - **⚠ `dashboard.css` IS UNLAYERED, so it beats every Tailwind utility**
+     regardless of specificity (utilities live in `@layer utilities`). That is
+     fine for rules that predate the utilities at a call site, but a NEW base
+     style must go in `@layer components` or it silently defeats them — which is
+     where `.dash-input` lives, because two Razorpay credential fields pass
+     `font-mono` and the media library passes `px-2 text-xs`. `globals.css`
+     documents the same hazard from the other direction.
 7. **Next.js 16 caution**: APIs may differ from training data — check
    `node_modules/next/dist/docs/` before using unfamiliar APIs (AGENTS.md rule).
 8. **Tests**: `npm run test` (vitest, coverage). CI also runs `lint`, `typecheck`,
