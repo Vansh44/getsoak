@@ -6,6 +6,7 @@ import Link from "next/link";
 import { RotateCcw, Search, Settings, ShoppingBag } from "lucide-react";
 import { formatPrice } from "@/lib/pricing";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
+import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
 import type { OrderStatusCounts } from "@/app/actions/order-actions";
 import type { OrderRow } from "./page";
 import { OrderDetailDrawer } from "./order-detail-drawer";
@@ -189,6 +190,9 @@ export function OrdersManagementView({
               <p>View and manage all customer orders</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              {/* Export only — orders can never be imported. See the note on
+                  ORDER_COLUMNS in lib/import-export/resources.ts. */}
+              <ImportExportMenu resource="orders" filters={{ status }} />
               <Link
                 href="/dashboard/orders/returns"
                 className="dash-btn dash-btn-ghost"

@@ -12,6 +12,8 @@ import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Mail, Search, X } from "lucide-react";
 import { MAILERS, mailerLabel } from "@/lib/email/mailers";
+// Pinned locale + zone — an unpinned formatter here hydrates wrong (lib/dates.ts).
+import { formatWhen } from "@/lib/dates";
 import { ListPagination } from "../../components/list-pagination";
 import type { EmailLogRow } from "@/app/actions/email-log-actions";
 import { EmailLogDetail } from "./email-log-detail";
@@ -34,19 +36,6 @@ const STATUS_DOT: Record<string, string> = {
   failed: "bg-red-500",
   skipped: "bg-amber-500",
 };
-
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
 
 export function EmailLogsView({
   rows,

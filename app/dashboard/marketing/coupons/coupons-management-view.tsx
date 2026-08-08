@@ -37,6 +37,7 @@ import {
   toggleCouponVisibility,
 } from "@/app/actions/coupon-actions";
 import { saveStoreSettings } from "@/app/actions/store-settings";
+import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
 import type { Coupon, CouponGroup } from "./page";
 
 const BASE = "/dashboard/marketing/coupons";
@@ -161,6 +162,7 @@ export function CouponsManagementView({
               Show all on storefront
             </label>
           )}
+          <ImportExportMenu resource="coupons" canImport={canManage} />
           {canManage && (
             <Link href={`${BASE}/new`} className="dash-btn dash-btn-primary">
               <Plus className="h-4 w-4" />

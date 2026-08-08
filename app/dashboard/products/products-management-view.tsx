@@ -49,6 +49,7 @@ import {
   SelectAllCheckbox,
 } from "@/app/dashboard/components/bulk-actions";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
+import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
 import { effectivePricing, formatPrice } from "@/lib/pricing";
 import type {
   Product,
@@ -194,15 +195,28 @@ export function ProductsManagementView({
           <h1>Products</h1>
           <p>Add and manage products across your categories</p>
         </div>
-        {canManage && (
-          <button
-            className="dash-btn dash-btn-primary shrink-0"
-            onClick={openCreate}
-          >
-            <Plus className="h-4 w-4" />
-            New product
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Exports carry the list's own filters, so "export what I'm
+              looking at" is what actually happens. */}
+          <ImportExportMenu
+            resource="products"
+            canImport={canManage}
+            filters={{
+              status:
+                filter === "drafts"
+                  ? "draft"
+                  : filter === "published"
+                    ? "published"
+                    : undefined,
+            }}
+          />
+          {canManage && (
+            <button className="dash-btn dash-btn-primary" onClick={openCreate}>
+              <Plus className="h-4 w-4" />
+              New product
+            </button>
+          )}
+        </div>
       </header>
 
       {categories.length === 0 && (

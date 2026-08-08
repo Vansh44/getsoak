@@ -42,6 +42,13 @@ export default async function PlatformDashboardLayout({
       group: "WORKSPACE" as SectionGroup,
       items: [
         { href: "/dashboard", label: "Stores", icon: "dashboard" as const },
+        {
+          // Cross-store failures. Workspace rather than Administration: it is
+          // something an operator watches, not something they configure.
+          href: "/dashboard/failures",
+          label: "Failures",
+          icon: "activity" as const,
+        },
       ],
     },
     {

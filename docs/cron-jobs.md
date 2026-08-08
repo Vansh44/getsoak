@@ -48,8 +48,9 @@ each job is a landmine the moment it does:
 | `storemink-expire-pending-payments` | `30 1 * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
+| `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 
-All five: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+All six: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -129,6 +130,81 @@ common case is a merchant who hasn't added their records yet, which a retry
 within the hour cannot help, and a permanently-red job is one nobody reads. Its
 response body lists `waiting[]` with the reason per store.
 
+Log retention runs last, at 03:00, after every other job has written whatever it
+was going to write:
+
+```bash
+gcloud scheduler jobs create http storemink-prune-logs \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="0 3 * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/prune-logs" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+### What `prune-logs` closes
+
+Three tables grew without bound because their retention policy was written down
+and never wired to anything:
+
+| Table             | Window   | Why                                                                                                  |
+| ----------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `notifications`   | 90 days  | A read inbox row is history.                                                                         |
+| `activity_events` | 365 days | The audit trail, so it gets the longest life.                                                        |
+| `email_logs`      | 90 days  | Holds rendered message BODIES, so it is much the heaviest of the three and gets the shortest window. |
+
+`supabase/email_logs.sql` documented the 90-day intent and even carries an
+`email_logs_created_idx` built "for retention sweeps". `pruneNotifications` had
+the right windows and a docstring saying it was "called by the daily cron".
+**Nothing called it** — a grep returned the definition and nothing else. So
+every one of these tables had grown unbounded since the day it was created.
+
+That function has been deleted, not wired up, because it was also a live
+security hole: it sat in `app/actions/notification-actions.ts`, a `"use server"`
+file where **every export is a publicly reachable endpoint**, with no gate of
+any kind, running under `withService` (which bypasses RLS), taking its retention
+windows as _parameters_. An unauthenticated caller passing zeroes would have
+deleted every notification, every email log and the whole of `activity_events`
+— the append-only audit trail — for every store on the platform. The windows and
+the sweep now live in `lib/retention/prune.ts`, which is not a `"use server"`
+file, and the cron route is the gate (CODEBASE.md §30 applies the same rule to
+`lib/domains/reconcile.ts`).
+
+Behaviour worth knowing before you read a response:
+
+- **It deletes in batches of 1000, each its own transaction**, so it never holds
+  one enormous lock and a run that dies half way is resumable — the committed
+  batches stay deleted and the next night carries on.
+- **It stops itself** at 50,000 rows per table or 240 seconds, whichever comes
+  first, and reports `stop` per table (`drained` / `cap` / `budget` / `error`).
+  A first sweep over a long backlog will legitimately report `cap` for a few
+  nights; `incomplete: true` in the body says so.
+- **`incomplete` is a 200, a failed table is a 503.** A draining backlog is
+  normal and must not turn the job permanently red (the `domain-reconcile`
+  lesson); an actual failure should engage Scheduler's retries (the
+  `seo-refresh` contract). One table failing never stops the next.
+- Pruning `activity_events` cascades to any surviving `notifications`
+  (`notifications.event_id` is `ON DELETE CASCADE`), which is why notifications
+  are swept first and at the shorter window. **Financial records — orders,
+  refunds, credit notes — live in their own tables and are never touched.**
+
+> **⚠ `data_jobs` and `data_job_issues` are NOT yet swept, and they belong
+> here.** They have the same shape and the same unbounded growth — `ISSUE_CAP`
+> bounds issues per job, but nothing bounds the number of jobs. The sweep was
+> written on `main`, where those tables do not exist; on this branch they do, so
+> the blocker is gone. Adding them is two entries in `RETENTION_POLICIES`
+> (`lib/retention/prune.ts`), **issues before jobs** — `data_job_issues.job_id`
+> is `ON DELETE CASCADE` from `data_jobs`, the same shape as
+> notifications→events.
+>
+> ⚠ Both tables carry only `(store_id, created_at)` composite indexes. A
+> retention sweep filters on `created_at` **alone**, which cannot use a
+> composite whose leading column is `store_id`, so each also wants a plain
+> `created_at` index in `supabase/import_export_01_jobs.sql` — added as a
+> separate `CREATE INDEX IF NOT EXISTS` so re-running the file stays idempotent.
+> Without it the sweep works but seq-scans, which is precisely the cost that
+> matters once the table is big enough to need pruning.
+
 ## Verifying
 
 Trigger one by hand and confirm Cloud Run answered 200 — a job can be `ENABLED`
@@ -154,6 +230,14 @@ backs. Its route ships in the same change, so verify its **response** once that
 reaches production — the job authenticates (its baked-in header matches the
 current `CRON_SECRET`) but will 404 until the deploy lands.
 
+> **⚠ `storemink-prune-logs` HAS NOT BEEN CREATED.** The route ships in this
+> change; the Cloud Scheduler job does not exist yet, and until someone runs the
+> `gcloud` command above **no retention runs at all** — which is exactly the
+> state this change set out to fix, and exactly the failure this file has now
+> recorded three times. Create it, then verify the response and record the date
+> here. Expect `{"ok":true,...}` with a large first `deleted` count and possibly
+> `"incomplete":true` for the first few nights while the backlog drains.
+
 ## Staging
 
 Staging has no scheduled jobs, deliberately — `SEARCH_INDEXABLE` keeps it out of
@@ -164,7 +248,7 @@ environment's `CRON_SECRET`.
 ## If you rotate `CRON_SECRET`
 
 The header is baked into each job at creation. Rotating the secret without
-updating the jobs makes all four start returning 401 — silently, because a
+updating the jobs makes all six start returning 401 — silently, because a
 failing cron looks identical to one that had nothing to do. Update them with
 `gcloud scheduler jobs update http <name> --headers=...`, then re-verify with the
 logging query above.
