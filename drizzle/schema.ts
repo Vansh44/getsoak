@@ -4075,8 +4075,82 @@ export const orderRefunds = pgTable("order_refunds", {
   }),
   status: text().notNull(),
   actor: text(),
+  // `supabase/pos_12_returns.sql` declares this `timestamptz NOT NULL DEFAULT
+  // now()` and that migration has run, so the column is non-null in every
+  // environment. The introspected type was missing `.notNull()` — drift, not a
+  // real nullable — which made every reader carry a null branch that cannot
+  // happen.
   createdAt: timestamp("created_at", {
     withTimezone: true,
     mode: "string",
-  }).defaultNow(),
+  })
+    .defaultNow()
+    .notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// CSV import/export jobs + their per-row error log
+// (supabase/import_export_01_jobs.sql, CODEBASE.md §31).
+//
+// Service-role only, like email_logs: the rows quote raw cells from the
+// merchant's file, and for an orders export that means customer names and
+// addresses. Reads are gated at the app layer on the `activity` section.
+// ---------------------------------------------------------------------------
+
+export const dataJobs = pgTable("data_jobs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  /** 'import' | 'export'. */
+  kind: text().notNull(),
+  /** A lib/import-export/resources.ts id. Free text so an old row keeps its
+   *  meaning after a resource is renamed. */
+  resource: text().notNull(),
+  /** pending | running | completed | partial | failed | cancelled. `partial`
+   *  is a real outcome, not a failure — see the SQL header. */
+  status: text().default("pending").notNull(),
+  filename: text(),
+  totalRows: integer("total_rows").default(0).notNull(),
+  processedRows: integer("processed_rows").default(0).notNull(),
+  createdCount: integer("created_count").default(0).notNull(),
+  updatedCount: integer("updated_count").default(0).notNull(),
+  skippedCount: integer("skipped_count").default(0).notNull(),
+  failedCount: integer("failed_count").default(0).notNull(),
+  warningCount: integer("warning_count").default(0).notNull(),
+  /** Issues NOT written because the per-job cap was hit. Without this the log
+   *  silently looks complete. */
+  droppedIssues: integer("dropped_issues").default(0).notNull(),
+  /** The failure that killed the WHOLE job, as opposed to the per-row issues. */
+  error: text(),
+  options: jsonb().default({}).notNull(),
+  /** Firebase uid — TEXT, not UUID (phase6_01_uid_columns_to_text.sql). */
+  createdBy: text("created_by"),
+  actorEmail: text("actor_email"),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  finishedAt: timestamp("finished_at", { withTimezone: true, mode: "string" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const dataJobIssues = pgTable("data_job_issues", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  jobId: uuid("job_id").notNull(),
+  /** Denormalised from the job so a read is store-scoped without a join. */
+  storeId: uuid("store_id").notNull(),
+  /** 1-based line in the merchant's ORIGINAL file. 0 = a problem with the file
+   *  itself (a missing column) rather than any one row. */
+  line: integer().default(0).notNull(),
+  /** `column` is reserved in SQL — this is the CSV header involved. */
+  columnName: text("column_name"),
+  code: text().notNull(),
+  /** 'error' skips the row; 'warning' imports it and says what was assumed. */
+  severity: text().notNull(),
+  message: text().notNull(),
+  value: text(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
 });

@@ -151,6 +151,9 @@ export const EVENT_KEYS = [
   "subscription.payment_failed",
   "ai.credits_low",
   "ai.credits_purchased",
+  // ── Data (CSV import/export) ────────────────────────────────────────────
+  "data.imported",
+  "data.exported",
   // ── Platform (store_id IS NULL — StoreMink operators) ───────────────────
   "platform.store_created",
   "platform.store_suspended",
@@ -640,6 +643,42 @@ export const EVENTS: readonly EventDef[] = [
     group: "Plan & billing",
     section: "ai",
     severity: "success",
+    audiences: { "store-admins": IN_APP },
+  },
+
+  // ── Data (CSV import/export) ─────────────────────────────────────────────
+  //
+  // ★ ONE EVENT PER JOB, NOT PER ROW. A 2,000-product import emits ONE
+  // `data.imported`, because the alternative is 2,000 activity rows burying
+  // every other thing that happened that day and 2,000 chances to page the
+  // team. The per-row detail already has a better home: the job's own error
+  // log, which is searchable and doesn't expire.
+  {
+    key: "data.imported",
+    label: "Import finished",
+    description:
+      "A CSV import finished. Says what was created, updated and rejected.",
+    group: "Catalog",
+    // Not `products`: an import can touch coupons or stock, and the person who
+    // should hear about a bulk change to the shop's data is whoever watches
+    // its audit trail.
+    section: "activity",
+    severity: "info",
+    audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "data.exported",
+    label: "Data exported",
+    description:
+      "Someone downloaded a CSV of your store's data. Recorded for audit.",
+    group: "Catalog",
+    section: "activity",
+    severity: "info",
+    // In-app only, deliberately. An export is worth RECORDING — an orders file
+    // carries every customer's name, address and phone number, and "who took a
+    // copy of that, and when" is a question you only get to ask afterwards if
+    // someone wrote it down. But it is a routine action a merchant may do
+    // weekly, so emailing about it would train them to ignore the log.
     audiences: { "store-admins": IN_APP },
   },
 

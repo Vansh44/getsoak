@@ -1,0 +1,74 @@
+// The log-type rail — the one list of what "Logs" contains.
+//
+// A registry rather than markup in the layout, because three things have to
+// agree on this list: the rail itself, the hub's empty/landing copy, and the
+// sidebar entry. Adding a log type should be one entry here.
+//
+// Client-safe: labels, hrefs and icon names only, no server imports.
+
+export interface LogType {
+  key: string;
+  label: string;
+  href: string;
+  /** lucide-react icon name, resolved in logs-rail.tsx. */
+  icon: "activity" | "mail" | "download" | "upload" | "alert";
+  /** One line under the heading, so a rail entry explains itself. */
+  blurb: string;
+}
+
+export const LOG_TYPES: LogType[] = [
+  {
+    key: "activity",
+    label: "Activity",
+    href: "/dashboard/activity",
+    icon: "activity",
+    blurb: "Everything that happened in this store.",
+  },
+  {
+    key: "email",
+    label: "Email logs",
+    href: "/dashboard/activity/email-logs",
+    icon: "mail",
+    blurb: "Every message sent, and what was in it.",
+  },
+  {
+    // Import and Export are ONE page filtered two ways — `data_jobs.kind`
+    // already separates them, so this costs a query param rather than a route.
+    key: "imports",
+    label: "Import logs",
+    href: "/dashboard/activity/import-export?kind=import",
+    icon: "download",
+    blurb: "Files brought in, and what they changed.",
+  },
+  {
+    key: "exports",
+    label: "Export logs",
+    href: "/dashboard/activity/import-export?kind=export",
+    icon: "upload",
+    blurb: "Files taken out.",
+  },
+  {
+    key: "failures",
+    label: "Failures",
+    href: "/dashboard/activity/failures",
+    icon: "alert",
+    blurb: "Everything that didn't work, in one place.",
+  },
+];
+
+/**
+ * Which rail entry is active for a given path + `kind`.
+ *
+ * Import and Export share a pathname, so the query string is part of the
+ * answer: without it both rail entries light up on either page. An unknown
+ * `kind` on that path resolves to Imports, matching what the page shows when
+ * the param is absent or invalid.
+ */
+export function activeLogKey(pathname: string, kind?: string): string {
+  if (pathname.startsWith("/dashboard/activity/import-export")) {
+    return kind === "export" ? "exports" : "imports";
+  }
+  if (pathname.startsWith("/dashboard/activity/email-logs")) return "email";
+  if (pathname.startsWith("/dashboard/activity/failures")) return "failures";
+  return "activity";
+}

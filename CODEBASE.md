@@ -99,7 +99,7 @@ wholesip/
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
-│                              # and daily seo-refresh (docs/cron-jobs.md)
+│                              # daily seo-refresh and prune-logs (docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -276,9 +276,17 @@ wholesip/
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
-│   │   ├── activity/          # ★ Activity & audit trail (§22): the store's
-│   │   │                      # activity_events feed — filters by category/date,
-│   │   │                      # day-grouped. Fills the long-dead `activity` nav link
+│   │   ├── activity/          # ★ THE LOGS HUB (§33). layout.tsx + logs-rail.tsx
+│   │   │                      # give every log one left rail (log-types.ts is the
+│   │   │                      # registry); the sidebar has NO children anymore, or
+│   │   │                      # there'd be two navigations for the same five pages.
+│   │   │                      # page.tsx = activity_events audit feed (§22, day-
+│   │   │                      # grouped); email-logs/ = what was SENT (§24);
+│   │   │                      # ★ import-export/ = CSV job history + [jobId] per-ROW
+│   │   │                      # error log (§31), split into Import/Export by ?kind=;
+│   │   │                      # ★ failures/ = everything that DIDN'T work, read
+│   │   │                      # across the other tables (§33). FIVE logs, ONE
+│   │   │                      # `activity` permission
 │   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
@@ -295,6 +303,8 @@ wholesip/
 │   │   │                      # route), phone via signInWithPhoneNumber.
 │   │   ├── login/             # Platform-operator login — Firebase email-LINK sign-in
 │   │   └── dashboard/         # Platform-admin console: stores-console, operators-console
+│   │                          # + ★ failures/ = the SAME feed as a store's, scoped
+│   │                          # { kind: "platform" } across every store (§33)
 │   │                          # (guarded by supabase/multitenant_07_platform_admins.sql)
 │   │                          # (the OAuth callback route was removed in Phase 6 —
 │   │                          # Google now uses signInWithPopup)
@@ -354,6 +364,12 @@ wholesip/
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── import-export-actions.ts # ★ §31 CSV import trust boundary: previewImport
+│   │   │                      # (which match keys exist — all the browser can't know),
+│   │   │                      # startImport → importChunk × N → finishImport, plus the
+│   │   │                      # log readers. Chunked (body cap + request timeout),
+│   │   │                      # re-parses every chunk server-side, row-atomic. Gated on
+│   │   │                      # the RESOURCE's own section, never a key of its own. Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
 │   │   │                      # getMyOrders/getMyOrder. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
@@ -393,6 +409,16 @@ wholesip/
 │       │                      # someone watches the settings page for ~30 minutes.
 │       │                      # 200 even while waiting — the usual "failure" is a
 │       │                      # merchant who hasn't added their DNS records yet
+│       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
+│       │                      # lib/retention/prune.ts. notifications 90d,
+│       │                      # activity_events 365d, email_logs 90d — windows
+│       │                      # that were documented for months and enforced by
+│       │                      # nothing. 503 on a failed table (seo-refresh
+│       │                      # contract), 200 while a backlog drains
+│       ├── dashboard/export/  # ★ §31 CSV export — a ROUTE, not an action, so it
+│       │                      # STREAMS (keyset-paged, one page in memory) with
+│       │                      # Content-Disposition. ?template=1 = blank template.
+│       │                      # Gated on `view` of the resource's own section
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -404,6 +430,22 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
+│   │                          # quoted fields w/ embedded delimiters+newlines, quote-
+│   │                          # aware delimiter sniffing for Excel's semicolons, ragged
+│   │                          # rows, ORIGINAL-file line numbers) + serialize.ts
+│   │                          # (guardFormula — CSV injection, exempting plain numbers
+│   │                          # so the round trip survives). Shared by browser + server
+│   ├── import-export/         # ★ §31 THE REGISTRY: resources.ts (products/categories/
+│   │                          # inventory/orders/coupons + their columns, aliases,
+│   │                          # toCells), coerce.ts (one cell → one typed value; ISO
+│   │                          # dates only), parse.ts (header mapping + Shopify handle
+│   │                          # grouping), types.ts, limits.ts (in lib/ because a
+│   │                          # "use server" file may only export async functions),
+│   │                          # exporters.ts (async generators, keyset-paged),
+│   │                          # jobs.ts (server-only job + ISSUE_CAP'd error log),
+│   │                          # importers/{categories,products,inventory,coupons}.ts
+│   │                          # (row-atomic, never throw, one outcome per row). Tested
 │   ├── domains/               # ★ §30 custom domains: domain.ts (PURE validation +
 │   │                          # normalisation + zone-relative record names),
 │   │                          # naming.ts (deterministic Certificate Manager ids +
@@ -460,6 +502,23 @@ wholesip/
 │   │                          # {{token}} copy, validated at save). Tested,
 │   │                          # incl. coverage.test.ts — the CI guard that FAILS
 │   │                          # if a registry event has no emitter anywhere.
+│   ├── logs/                  # ★ §33: the Failures feed. failure-types.ts is the
+│   │                          # CLIENT-safe half (shapes + FAILURE_SOURCE_META for
+│   │                          # the filter chips); failures.ts is the server half —
+│   │                          # FAILURE_SOURCES, one entry per table it reads. The
+│   │                          # split is load-bearing: failures.ts imports the db
+│   │                          # client, so a client component importing it drags
+│   │                          # `pg` (and `fs`) into the browser bundle and FAILS
+│   │                          # the build. Same rule as themes/meta.ts. Tested,
+│   │                          # incl. a guard that the two catalogs stay in step
+│   ├── retention/             # ★ §32: prune.ts — the log-retention sweep.
+│   │                          # RETENTION_POLICIES is the registry (add a table
+│   │                          # = add an entry); batches are 1000 rows, EACH ITS
+│   │                          # OWN withService transaction. NOT a "use server"
+│   │                          # file, deliberately — the version that lived in
+│   │                          # app/actions was an ungated public endpoint that
+│   │                          # could wipe the audit trail. Tested (the stopping
+│   │                          # rules; deleteBatch is injected)
 │   ├── inventory/             # status.ts (the display-status source of truth, §13)
 │   │                          # + ★ alerts.ts (§22: stockAlertFor — the pure
 │   │                          # crossing rule behind inventory.low_stock/
@@ -675,6 +734,12 @@ wholesip/
 │   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
 │   │                          # (platform rows = store_id NULL). Service-role
 │   │                          # only; bodies redacted for credential mailers
+│   ├── import_export_01_jobs.sql # ★ §31: data_jobs (one row per CSV import or
+│   │                          # export; `partial` is a real status) + data_job_issues
+│   │                          # (one row per PROBLEM, carrying the ORIGINAL file
+│   │                          # line — the error log). Service-role only, the
+│   │                          # email_logs pattern: the rows quote raw cells, which
+│   │                          # for an orders export means customer addresses
 │   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
 │   │                          # — 'store' (default) | 'event_location'
 │   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
@@ -3429,6 +3494,246 @@ group, span}` (span = columns of the 4-wide desktop grid),
       and the notification links to the DOMAIN, not `/dashboard`, because the one
       thing anyone wants on being told this is to click through and see their own
       shop answer on it.
+
+31. **CSV import & export — a registry, and a log that names the row.**
+    Products, Categories, Inventory and Coupons import + export; **Orders
+    export ONLY**. Shopify's shape, because that is the file merchants already
+    have. Import/Export lives in a menu on each resource's OWN list page; the
+    HISTORY lives at `/dashboard/activity/import-export`, beside Activity and
+    Email logs.
+    - **★ A REGISTRY, NOT FIVE IMPORT SCREENS** (`lib/import-export/`). The
+      alternative is header matching, coercion, validation, error reporting and
+      the template file reimplemented per resource, diverging immediately, with
+      a sixth resource costing a week. Same trade `lib/settings/registry.ts` and
+      `lib/notifications/events.ts` make. `resources.ts` holds the columns;
+      adding a resource is a `ResourceDef` plus one importer function.
+    - **★ THE PURE CORE IS SHARED BY THE BROWSER AND THE SERVER.** `lib/csv/`
+      (RFC 4180 parse + serialize) and `lib/import-export/{coerce,parse}.ts`
+      have no server imports, so the browser parses the merchant's file to
+      build an instant preview and the server re-parses the SAME bytes before
+      writing. Two parsers would be the bug: the preview would promise one
+      thing and the import would do another. The preview is a COURTESY — every
+      coercion, length cap, URL-scheme check and enum check runs again server-
+      side, or the whole validation layer is a suggestion.
+    - **★ ROW-ATOMIC, NOT FILE-ATOMIC.** Each row is its own transaction, so
+      row 12 failing says nothing about row 13. A 500-row file with 3 bad rows
+      imports 497 and reports 3. Wrapping the chunk in one transaction is
+      simpler and means one bad cell discards 199 good rows — after which the
+      merchant, unable to tell which, re-uploads and duplicates everything that
+      did work. Hence `partial` is a first-class job status, and the job page
+      says so in words, because the instinct on reading "failed" is to
+      re-upload.
+    - **★ IT IS CHUNKED BECAUSE OF TWO HARD LIMITS.** A server action has a
+      body cap and Cloud Run has a request timeout; a 20,000-row product CSV
+      breaks both, and both failures land AFTER a long wait with the import
+      half-applied and no record of where it stopped. So the browser posts rows
+      in chunks of `IMPORT_CHUNK_ROWS` against a job id, each chunk commits
+      what it did, and the job row is the memory between them. A dropped
+      connection loses the REST of the file, not the part that worked.
+      `serverActions.bodySizeLimit` was raised to 4mb for headroom, but the
+      CHUNK SIZE is what actually bounds a request.
+    - **★ AN ABSENT CELL MEANS "LEAVE THIS ALONE", NEVER "SET TO NULL"** — what
+      makes a two-column file (Handle + Selling Price) a safe way to change only
+      prices.
+    - **★ THE GATE IS THE RESOURCE'S OWN PERMISSION SECTION**, deliberately not
+      an `import_export` key of its own — that would be a way to grant write
+      access to the whole catalogue without granting Products, a grant that
+      looks narrow and is the widest in the system. Import needs `manage`,
+      export needs `view` (downloading is a read). Inventory additionally needs
+      `products` (`alsoRequires`) because resolving a SKU is a product read.
+      Inventory import also respects `admin_locations` scope — the file names
+      locations by TEXT, so without it a location-bound manager could type
+      another branch's name.
+    - **★ ORDERS ARE EXPORT-ONLY, AND THAT IS A DECISION.** An imported order
+      would carry an `order_ref` this store never issued, reserve no stock, take
+      no money, and land in revenue reports as a sale that never happened. Every
+      order column is `readOnly`; a CI test asserts it has no writable column.
+    - **★ COLUMN DRIFT IS IMPOSSIBLE BY CONSTRUCTION.** Exporters yield records
+      KEYED BY FIELD and `toCells` lays them out in registry order. Positional
+      arrays had to be kept in step by hand, and the failure is silent and
+      total: add a column, forget one exporter, and every cell after it shifts —
+      prices land in the stock column and the file still looks plausible enough
+      to reimport. `EXPORT_FIELDS` + two tests pin it both ways (no phantom
+      field, no always-blank column).
+    - **★ THE EXPORT STREAMS, AND ITS STATUS CODE IS COMMITTED FIRST.** A route
+      (`/api/dashboard/export`), not an action: an action builds the whole file
+      in memory twice on a fixed-memory container while the merchant watches a
+      dead page. Keyset paging (`id > cursor`), not OFFSET, because OFFSET skips
+      and repeats rows when the catalogue is edited mid-export — the POS
+      catalogue snapshot pages this way for the same reason. Once headers are
+      sent a mid-stream failure CANNOT become a 500, so it is recorded on the
+      job and the stream ends with a visible marker row: a silently truncated
+      CSV is one a merchant reimports believing it complete.
+    - **★ CSV FORMULA INJECTION IS GUARDED ON WRITE** (`guardFormula`). A cell
+      beginning `=`, `+`, `-`, `@`, tab or CR executes when the file is opened,
+      and the export carries customer-supplied text — a crafted name on an order
+      reaches the merchant's spreadsheet, so the attacker needs no account here.
+      **A plain number is exempt**, or the guard mangles every negative price
+      and breaks the round trip it exists inside.
+    - **★ DATES ARE ISO-ONLY, REFUSED OTHERWISE.** `05/08/2026` is 5 August to
+      the merchant and 8 May to V8's parser, and nothing in the string
+      distinguishes them. §24 already paid for that once; a coupon silently
+      starting three months early is the same bug with money attached.
+    - **★ STOCK NEVER MOVES THROUGH A PRODUCT IMPORT.** `products.stock` is a
+      trigger-maintained aggregate of `inventory_levels`, so a direct write is
+      reverted by the next sale. It is accepted on CREATE only, where the
+      pos_01 seed trigger carries it onto the default location's shelf. The
+      Inventory import applies counts as a DELTA through `adjust_stock_at`:
+      atomic, and it leaves the `stock_movements` ledger row without which a
+      stocktake is indistinguishable from stock going missing. It feeds
+      `reportStockChanges`, so a correction to zero still fires the low-stock
+      crossing.
+    - **★ VARIANTS ABSENT FROM THE FILE ARE LEFT ALONE, NEVER DELETED.** The
+      editor deletes them because it shows the complete set and a human is
+      looking at it; a CSV is routinely partial, and deleting the rest would
+      destroy stock, order links and system SKUs that can never be reissued.
+    - **A missing CATEGORY is created and named in the log; a missing TAX CLASS
+      is not.** They look alike and are not: a category is navigation a merchant
+      renames in ten seconds, while a tax class carries a RATE, and inventing
+      "GST 12%" means guessing 12 — a filing problem found by an auditor, not by
+      looking at the shop.
+    - **★ ONE EVENT PER JOB, NOT PER ROW.** `data.imported` (both channels) and
+      `data.exported` (in-app only — an orders file carries every customer's
+      address and "who took a copy, when" is only answerable afterwards if
+      someone wrote it down, but it is routine enough that emailing would train
+      people to ignore it). 2,000 per-row events would bury every other thing
+      that happened that day.
+    - **The error log is `data_job_issues`** (`supabase/import_export_01_jobs.sql`,
+      service-role only, the email_logs pattern — the rows quote raw cells,
+      which for an orders export means customer addresses). Issues carry the
+      **1-based ORIGINAL FILE LINE**, not the row index: blank lines and
+      newlines inside quoted fields make the two diverge, and "row 40 is broken"
+      pointing at line 47 is worse than no number. Capped at `ISSUE_CAP` per job
+      with the overflow COUNTED (`dropped_issues`) — a log that looks complete
+      when it isn't is worse than a truncated one that says so.
+    - **Not built:** customers (blocked by design — `users.id` IS the Firebase
+      uid and `(phone, store_id)` is unique, so an imported row collides with
+      that person's later signup; it needs the same claim/merge story the POS
+      lacks), scheduled/recurring imports, and import from a URL.
+
+32. **Log retention — the policy that was written down three times and enforced
+    nowhere.** `lib/retention/prune.ts`, driven daily by
+    `/api/cron/prune-logs` (03:00 UTC). Windows: `notifications` 90 days,
+    `activity_events` 365, `email_logs` 90. Full operational detail —
+    the schedule, the `gcloud` command, how to read a response — is in
+    `docs/cron-jobs.md`.
+    - **★ IT WAS DOCUMENTED, INDEXED, AND DEAD.** `supabase/email_logs.sql`
+      states the 90-day intent and ships `email_logs_created_idx` built "for
+      retention sweeps"; `pruneNotifications` had the right windows and a
+      docstring saying it was "called by the daily cron". **Nothing called it.**
+      A comment asserting that something runs is not a thing that runs — the
+      same failure `docs/cron-jobs.md` records for the jobs that were documented
+      but never created. This is why the guard is a real endpoint on a real
+      schedule and not a comment.
+    - **★★ AND IT WAS AN UNGATED PUBLIC ENDPOINT.** `pruneNotifications` was
+      exported from `app/actions/notification-actions.ts`, a `"use server"` file
+      — where every export is a publicly reachable endpoint — with no gate of
+      any kind, running under `withService` (which bypasses RLS), taking its
+      retention windows as **parameters**. An unauthenticated caller passing
+      zeroes would have deleted every notification, every email log and the
+      whole of `activity_events` — the append-only audit trail — for every store
+      on the platform. Destroying the audit log is precisely what an attacker
+      does to cover their tracks. The function is **deleted**, not wired up. The
+      core lives in `lib/` and the cron route is the gate, which is the identical
+      resolution §30 gives for `lib/domains/reconcile.ts`; the same rule, for the
+      same reason, is why `lib/pos/tenders.ts` is not a `"use server"` file
+      either. **Do not put a prune back in `app/actions/`.**
+    - **★ EACH BATCH IS ITS OWN TRANSACTION.** `withService` wraps its callback
+      in one BEGIN/COMMIT, so looping batches inside a single call would be one
+      enormous transaction — exactly what batching exists to avoid. The loop
+      calls `withService` per batch: locks release between batches, WAL stays
+      bounded, and a run killed half way is resumable because the committed
+      batches stay committed. The sweep is idempotent; the next night carries on.
+    - **★ ORDER IS LOAD-BEARING.** `notifications.event_id` references
+      `activity_events` **ON DELETE CASCADE**, so pruning events destroys their
+      notifications too. Notifications are swept FIRST and at the shorter
+      window, leaving the event sweep far less to cascade through.
+    - **★ A DRAINING BACKLOG IS NOT A FAILURE.** It stops at 50,000 rows per
+      table or 240 seconds and reports `stop` per table
+      (`drained`/`cap`/`budget`/`error`). `incomplete` returns **200** — a first
+      sweep over years of rows legitimately hits its cap, and a permanently-red
+      job is one nobody reads (the `domain-reconcile` lesson). A failed table
+      returns **503** so Scheduler's retries engage (the `seo-refresh`
+      contract), and one table failing never stops the next.
+    - **Financial records are never touched** — orders, refunds and credit notes
+      live in their own tables. This sweep only ever deletes the inbox, the
+      activity feed and the mail log.
+    - **⚠ §31's `data_jobs` / `data_job_issues` are NOT swept yet, and they
+      should be.** `ISSUE_CAP` bounds issues per job, but nothing bounds the
+      number of jobs. The sweep was written on `main`, where those tables do
+      not exist; on this branch they do, so the blocker is gone. Adding them is
+      two `RETENTION_POLICIES` entries — **issues before jobs**, because
+      `data_job_issues.job_id` is `ON DELETE CASCADE` from `data_jobs`, the
+      same shape as notifications→events. ⚠ They also carry only
+      `(store_id, created_at)` composite indexes, which a sweep filtering on
+      `created_at` ALONE cannot use, so each also wants a plain `created_at`
+      index in `supabase/import_export_01_jobs.sql` — a separate
+      `CREATE INDEX IF NOT EXISTS`, so re-running the file stays idempotent.
+    - **⚠ The Cloud Scheduler job did not exist when this shipped.** Until it is
+      created, none of the above runs. See the warning in `docs/cron-jobs.md`.
+
+33. **Logs — five of them, one hub, one permission.** `/dashboard/activity`,
+    with `lib/logs/` behind the newest of them.
+    - **★ THE CAPABILITY WAS THERE; THE IA WASN'T.** Activity, Email, Import
+      and Export logs all existed, and the Email table already carried To /
+      From / Type / Provider / Status / Sent at. What was missing was a place
+      they lived together: `activity` sat under Settings with `parent` set, so
+      the logs were a third-level nav item, and its `children` duplicated the
+      rail. The section is now top-level, its children are GONE, and
+      `logs-rail.tsx` (driven by `log-types.ts`) is the one navigation between
+      logs.
+    - **★ THE PERMISSION KEY IS STILL `activity`.** Roles store the key, so
+      renaming it to `logs` would silently revoke every grant already saved —
+      the same reason `navigation` kept its key when it folded into the
+      builder. Only the LABEL changed.
+    - **Import and Export are one page filtered two ways.** `data_jobs.kind`
+      already separates them and the page already read `?kind=`, so the split
+      the merchant sees costs two rail entries and no route.
+    - **★ FAILURES READS EXISTING TABLES; IT DOES NOT ADD ONE.** Every failure
+      is already recorded — a bounced email is an `email_logs` row, a dead
+      refund is `order_refunds.status = 'failed'`, a broken import is a
+      `data_jobs` row. A `failures` table would be a second copy of facts we
+      hold, a write to forget on every new failure path, and a row that can
+      disagree with the thing it describes. So `FAILURE_SOURCES` is a registry
+      of READS (email, notification, refund, import, payment) — add a source =
+      add an entry — and there is nothing to migrate, backfill, or prune (§32
+      already prunes the underlying tables).
+    - **★ SCOPE IS A DISCRIMINATED UNION, NOT AN OPTIONAL `storeId`.** These
+      queries run under `withService`, which BYPASSES RLS, so tenant scoping is
+      the caller's job (convention #2). An optional field would make "every
+      store on the platform" the value you get by FORGETTING an argument — the
+      worst available default. `{ kind: "platform" }` cannot be produced by
+      omission, and it is constructed in exactly one file, the operator page.
+    - **★ A PARTIAL ANSWER IS NEVER SHOWN AS A CLEAN ONE.** One source erroring
+      must not blank the page — this view is read precisely when things are
+      broken — so a failed source is caught, NAMED in `failedSources`, and
+      rendered as a banner. A short list that looks healthy is the one wrong
+      answer this feature must not give.
+    - **Merging cannot paginate exactly**, so it takes the most recent 100 per
+      source, merges, sorts and caps. Ties break on id, because the common case
+      is a batch that failed together sharing one timestamp — without it the
+      order shuffles between refreshes. Past that depth you are auditing, not
+      triaging, and the individual logs are where that belongs.
+    - **★ THE CLIENT/SERVER SPLIT IS LOAD-BEARING.** `failures.ts` imports the
+      db client, which pulls in `pg`, which needs `fs` — so a client component
+      importing the source catalog from it fails the BUILD (typecheck passes
+      happily). The filter chips therefore read `FAILURE_SOURCE_META` from
+      `failure-types.ts`, the same split `lib/themes/meta.ts` makes, with a test
+      asserting the two catalogs stay in step.
+    - **The operator view is the same feed unscoped**, at
+      `/dashboard/failures` on the platform host, gated by the console's
+      `getServerUser` + `getPlatformViewer` pair. ⚠ It shows only
+      MERCHANT-READABLE failures. Stack traces and platform internals stay in
+      Cloud Logging / Error Reporting, which already group and alert on them;
+      copying them into a table would be a worse duplicate that nobody prunes.
+    - **⚠ SMS and Push are NOT here**, and can't be: both are marked
+      `available: false` in `lib/notifications/channels.ts` with no provider
+      connected. A log of sends that never happen is an empty table. They need
+      a provider (Twilio/MSG91, FCM) first — the log is the last 10% of that
+      work.
+    - **⚠ The activity feed is still day-grouped CARDS** while the other four
+      are tables. Left alone deliberately: it is working UI, and a
+      chronological event stream reads better as cards than as rows.
 
 ## 6. Commands
 

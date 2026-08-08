@@ -43,6 +43,13 @@ const nextConfig: NextConfig = {
       "@tiptap/react",
       "@tiptap/starter-kit",
     ],
+    // CSV import posts rows to a server action in chunks (CODEBASE §31). The
+    // 1 MB default is comfortably enough for the 200-row chunks the importer
+    // sends, but a product row carries a full description, so a chunk of long
+    // ones can approach it — and the failure mode is an opaque request error
+    // mid-import. Raised to leave real headroom; the chunk size, not this, is
+    // what actually bounds a request.
+    serverActions: { bodySizeLimit: "4mb" },
   },
   // Non-production environments serve `X-Robots-Tag: noindex` on EVERY response.
   //

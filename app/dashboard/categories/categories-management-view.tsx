@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { deleteCategory } from "@/app/actions/category-actions";
+import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
 import { CategoryEditorDialog } from "./category-editor-dialog";
 import type { Category } from "./page";
 
@@ -94,15 +95,18 @@ export function CategoriesManagementView({
           <h1>Categories</h1>
           <p>Organize your storefront catalog into categories</p>
         </div>
-        {canManage && (
-          <button
-            className="dash-btn dash-btn-primary shrink-0"
-            onClick={() => openEditor()}
-          >
-            <Plus className="h-4 w-4" />
-            New category
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          <ImportExportMenu resource="categories" canImport={canManage} />
+          {canManage && (
+            <button
+              className="dash-btn dash-btn-primary"
+              onClick={() => openEditor()}
+            >
+              <Plus className="h-4 w-4" />
+              New category
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="dash-card flex flex-col">
