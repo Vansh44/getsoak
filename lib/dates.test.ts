@@ -85,9 +85,9 @@ describe("formatDay", () => {
   });
 
   it("puts a late-evening UTC timestamp on the following Indian day", () => {
-    expect(withTz("UTC", () => formatDay("2026-08-06T19:00:00.000Z"))).toContain(
-      "7 August",
-    );
+    expect(
+      withTz("UTC", () => formatDay("2026-08-06T19:00:00.000Z")),
+    ).toContain("7 August");
   });
 
   it("returns empty for missing input", () => {
