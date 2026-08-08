@@ -79,6 +79,37 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+
+  // The logs hub moved from /dashboard/activity to /dashboard/logs — one name
+  // for a section that holds five logs, only one of which is the activity feed.
+  //
+  // ★ THE OLD PATHS MUST KEEP WORKING, and not merely as a courtesy to
+  // bookmarks: every notification email ALREADY SENT carries an absolute
+  // /dashboard/activity link (lib/email/notification-emails.ts), and those are
+  // sitting in inboxes we cannot edit. Without this the "view in dashboard"
+  // button on months of mail 404s.
+  //
+  // 307, not 308: temporary, so no browser pins it forever. This is an internal
+  // admin path behind a login — there are no SEO signals to consolidate, and a
+  // permanent redirect cached indefinitely is the trap `proxy.ts` already had to
+  // work around with `Cache-Control: no-store` on the custom-domain hop.
+  //
+  // The query string is preserved automatically, so
+  // /dashboard/activity/import-export?kind=export lands correctly.
+  async redirects() {
+    return [
+      {
+        source: "/dashboard/activity",
+        destination: "/dashboard/logs",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/activity/:path*",
+        destination: "/dashboard/logs/:path*",
+        permanent: false,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -269,6 +269,24 @@ export async function startImport(
       options: { ...options, header: input.header },
       actor: { uid: admin.uid, email: admin.email },
     });
+
+    // ★ A SECOND EVENT FOR THE SAME IMPORT, DELIBERATELY. The rows are posted
+    // in chunks by the browser while the merchant is free to navigate away, so
+    // between here and `data.imported` there is a window — minutes, on a big
+    // file — in which the only record of the import is a job row nobody has a
+    // link to. This is that link. In-app only; see the registry entry.
+    emitEvent({
+      type: "data.import_started",
+      storeId,
+      actor: { type: "admin", id: admin.uid, label: admin.email },
+      subject: { type: "product", id: jobId, label: resource.label },
+      payload: {
+        resource: resource.label,
+        rows: input.totalRows,
+        ...(input.filename ? { file: input.filename } : {}),
+      },
+    });
+
     return { success: true, data: { jobId } };
   } catch (error) {
     logError("import: could not start", error, { resource: resource.id });

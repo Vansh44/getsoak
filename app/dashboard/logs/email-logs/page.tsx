@@ -7,7 +7,7 @@ import { EmailLogsView } from "./email-logs-view";
 //
 // Sits under Activity because that's what it is: an audit trail, gated on the
 // same `activity` section rather than a second permission for the same class of
-// data. The sibling to /dashboard/activity, which logs what HAPPENED; this logs
+// data. The sibling to /dashboard/logs, which logs what HAPPENED; this logs
 // what was SENT about it.
 export default async function EmailLogsPage({
   searchParams,

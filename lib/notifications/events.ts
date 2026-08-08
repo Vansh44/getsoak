@@ -6,7 +6,7 @@
 // every activity" survivable:
 //
 //   • EVERY event in this catalog is RECORDED in activity_events. That is the
-//     audit trail (/dashboard/activity) — complete by construction.
+//     audit trail (/dashboard/logs) — complete by construction.
 //   • Only events with a non-empty `audiences` entry are FANNED OUT into
 //     someone's inbox. An event with `audiences: {}` is audit-only: visible in
 //     the feed, silent in the bell. That is how a busy store gets a full
@@ -152,6 +152,7 @@ export const EVENT_KEYS = [
   "ai.credits_low",
   "ai.credits_purchased",
   // ── Data (CSV import/export) ────────────────────────────────────────────
+  "data.import_started",
   "data.imported",
   "data.exported",
   // ── Platform (store_id IS NULL — StoreMink operators) ───────────────────
@@ -653,6 +654,26 @@ export const EVENTS: readonly EventDef[] = [
   // every other thing that happened that day and 2,000 chances to page the
   // team. The per-row detail already has a better home: the job's own error
   // log, which is searchable and doesn't expire.
+  {
+    key: "data.import_started",
+    label: "Import started",
+    description:
+      "A CSV import began. Links straight to its log, which fills in as it runs.",
+    group: "Catalog",
+    section: "activity",
+    severity: "info",
+    // ★ IN-APP ONLY, AND NOT CONFIGURABLE OFF THE EMAIL — there is no email to
+    // turn off. Mailing "your import started" and then "your import finished"
+    // is the pattern §24 says trains people to ignore a channel: two messages
+    // for one action, the first of which is obsolete by the time it arrives.
+    //
+    // It exists at all because an import now runs in the BACKGROUND: the
+    // merchant is redirected to its log, but they are free to navigate away,
+    // and without a record there would be nothing to click to get back. The
+    // finish event alone can't do that — it doesn't exist yet while they're
+    // wondering where their import went.
+    audiences: { "store-admins": IN_APP },
+  },
   {
     key: "data.imported",
     label: "Import finished",

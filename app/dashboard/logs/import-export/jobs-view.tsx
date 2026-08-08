@@ -93,7 +93,7 @@ export function JobsView({
     else params.delete(key);
     if (key !== "page") params.delete("page");
     startTransition(() => {
-      router.push(`/dashboard/activity/import-export?${params.toString()}`);
+      router.push(`/dashboard/logs/import-export?${params.toString()}`);
     });
   };
 
@@ -148,7 +148,7 @@ export function JobsView({
                 className="dash-btn dash-btn-ghost dash-btn-sm"
                 onClick={() =>
                   startTransition(() => {
-                    router.push("/dashboard/activity/import-export");
+                    router.push("/dashboard/logs/import-export");
                   })
                 }
               >
@@ -203,7 +203,7 @@ export function JobsView({
                       <tr key={job.id}>
                         <td>
                           <Link
-                            href={`/dashboard/activity/import-export/${job.id}`}
+                            href={`/dashboard/logs/import-export/${job.id}`}
                             className="flex items-center gap-2 font-medium hover:underline"
                           >
                             {job.kind === "import" ? (

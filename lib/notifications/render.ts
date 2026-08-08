@@ -408,6 +408,53 @@ export function renderNotification(
         url: "/dashboard/settings/domain",
       };
 
+    // ── Data (CSV import/export) ──────────────────────────────────────────
+    //
+    // ★ THESE CARRY A URL NOW. All three used to fall through to the default,
+    // which renders the event's label and NO link — so "Import finished" sat in
+    // the bell as a dead end, next to an import whose whole point is the row-by-
+    // row log one click away. `subjectId` is the job id (see the emit sites).
+    case "data.import_started":
+      return {
+        title: `Importing ${subject ?? "data"}…`,
+        body: str(p.file) ?? "Running in the background.",
+        url: event.subjectId
+          ? `/dashboard/logs/import-export/${event.subjectId}`
+          : "/dashboard/logs/import-export?kind=import",
+      };
+
+    case "data.imported": {
+      // Lead with what went wrong when something did — that is the reason
+      // anyone opens this — and stay quiet about zeroes otherwise.
+      const failed = Number(p.failed ?? 0);
+      const changed = Number(p.created ?? 0) + Number(p.updated ?? 0);
+      return {
+        title: failed > 0 ? "Import finished with errors" : "Import finished",
+        body:
+          [
+            subject,
+            `${changed.toLocaleString("en-IN")} row${changed === 1 ? "" : "s"}`,
+            failed > 0
+              ? `${failed.toLocaleString("en-IN")} couldn't be imported`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || null,
+        url: event.subjectId
+          ? `/dashboard/logs/import-export/${event.subjectId}`
+          : "/dashboard/logs/import-export?kind=import",
+      };
+    }
+
+    case "data.exported":
+      return {
+        title: `Exported ${subject ?? "data"}`,
+        body: [actor && `By ${actor}`, str(p.file)].filter(Boolean).join(" · "),
+        url: event.subjectId
+          ? `/dashboard/logs/import-export/${event.subjectId}`
+          : "/dashboard/logs/import-export?kind=export",
+      };
+
     // ── Platform (operator console) ───────────────────────────────────────
     case "platform.store_created":
       return {

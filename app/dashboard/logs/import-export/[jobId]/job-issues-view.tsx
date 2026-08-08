@@ -1,9 +1,14 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, Loader2 } from "lucide-react";
 import type { JobIssueRow, JobRow } from "@/lib/import-export/jobs";
+
+/** How often a live job re-reads itself. Slow enough to be cheap, fast enough
+ *  that the counts visibly move — this is now the page a merchant is SENT to
+ *  the moment an import starts, so a frozen screen reads as a stuck import. */
+const POLL_MS = 2000;
 
 const STATUS_NOTE: Record<string, string> = {
   completed: "Everything in the file was applied.",
@@ -39,13 +44,25 @@ export function JobIssuesView({
     else params.delete("severity");
     startTransition(() => {
       router.push(
-        `/dashboard/activity/import-export/${job.id}?${params.toString()}`,
+        `/dashboard/logs/import-export/${job.id}?${params.toString()}`,
       );
     });
   };
 
   const errors = issues.filter((i) => i.severity === "error");
   const isImport = job.kind === "import";
+  const live = job.status === "running" || job.status === "pending";
+
+  // ★ A LIVE JOB REFRESHES ITSELF. The import runs in the layout and writes its
+  // progress server-side chunk by chunk, so without this the merchant lands on
+  // a page showing zeroes and has to guess whether to reload. It stops the
+  // moment the job does — polling a finished job forever is how a background
+  // tab quietly costs a merchant a request every two seconds all afternoon.
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => router.refresh(), POLL_MS);
+    return () => clearInterval(id);
+  }, [live, router]);
 
   return (
     <>
@@ -73,14 +90,42 @@ export function JobIssuesView({
             )}
           </div>
 
-          <p className="flex items-start gap-2 text-[13px] text-[var(--dash-text-2)]">
-            {job.status === "completed" ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-            ) : (
-              <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-3)]" />
-            )}
-            <span>{STATUS_NOTE[job.status] ?? job.status}</span>
-          </p>
+          {live ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="flex items-center gap-2 font-medium text-[var(--dash-text)]">
+                  <Loader2 className="h-4 w-4 animate-spin text-[var(--dash-accent)]" />
+                  Importing…
+                </span>
+                <span className="text-[var(--dash-text-3)] tabular-nums">
+                  {job.processedRows.toLocaleString("en-IN")} of{" "}
+                  {job.totalRows.toLocaleString("en-IN")} rows
+                </span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-[var(--dash-surface-2)]">
+                <div
+                  className="h-full rounded-full bg-[var(--dash-accent)] transition-[width] duration-300"
+                  style={{
+                    width: `${job.totalRows > 0 ? Math.min(100, Math.round((job.processedRows / job.totalRows) * 100)) : 0}%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-[var(--dash-text-3)]">
+                This page updates itself. You can leave it open or go elsewhere
+                in the dashboard — the import keeps running either way. Closing
+                the tab stops it.
+              </p>
+            </div>
+          ) : (
+            <p className="flex items-start gap-2 text-[13px] text-[var(--dash-text-2)]">
+              {job.status === "completed" ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              ) : (
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--dash-text-3)]" />
+              )}
+              <span>{STATUS_NOTE[job.status] ?? job.status}</span>
+            </p>
+          )}
 
           {job.error ? (
             <p className="flex items-start gap-2 rounded-md bg-red-50 px-3 py-2 text-[13px] text-red-800 dark:bg-red-950/40 dark:text-red-300">

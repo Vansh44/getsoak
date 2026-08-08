@@ -393,7 +393,7 @@ it, and a failed read degrades to everything rather than an empty screen.
 
 **PS-7.13 ★ — A register sale emits like a sale**
 Complete a sale that empties a SKU.
-**Expect:** an entry in `/dashboard/activity`, the team notification fires, and
+**Expect:** an entry in `/dashboard/logs`, the team notification fires, and
 the low/out-of-stock alert fires. An in-store sale is a sale.
 
 **PS-7.14 ★ — Cancelling a POS sale restocks at ITS OWN shop**
@@ -895,7 +895,7 @@ Switch customer cancellations OFF, then call `cancelMyOrder` directly.
 **Expect:** refused. A hidden button is not a permission.
 
 **PS-12.12 — The team hears about it**
-**Expect:** an `order.refund_issued` entry in `/dashboard/activity` and the
+**Expect:** an `order.refund_issued` entry in `/dashboard/logs` and the
 customer notified — the same event the till emits.
 
 ## 10d. Returns requested online (CODEBASE §28)

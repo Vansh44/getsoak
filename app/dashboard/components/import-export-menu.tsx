@@ -10,6 +10,8 @@
 // exports — because that is a question about the past, not an action.
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Download, MoreHorizontal, Upload } from "lucide-react";
 import {
   DropdownMenu,
@@ -48,7 +50,30 @@ export function ImportExportMenu({
   locations,
 }: ImportExportMenuProps) {
   const [importOpen, setImportOpen] = useState(false);
+  const router = useRouter();
   const resource = getResource(resourceId);
+
+  /**
+   * Start an export and take the merchant to the export log.
+   *
+   * ★ THE DOWNLOAD AND THE NAVIGATION DON'T FIGHT. Setting `location.href` to a
+   * `Content-Disposition: attachment` response makes the browser save the file
+   * WITHOUT unloading the page, so a client-side route change straight
+   * afterwards is safe — the save dialog and the new page coexist.
+   *
+   * ⚠ It goes to the LIST, not to that job's own page, and that is a real
+   * limitation rather than a preference: the job row is created by the route
+   * as it starts streaming, so the id does not exist on this side of the call.
+   * The export just started is the newest row, which is the top of the list.
+   */
+  function startExport(href: string, label: string) {
+    window.location.href = href;
+    toast.success(`Exporting ${label}…`, {
+      description: "Your download will start in a moment.",
+    });
+    router.push("/dashboard/logs/import-export?kind=export");
+  }
+
   if (!resource) return null;
 
   const params = new URLSearchParams({ resource: resource.id });
@@ -95,7 +120,7 @@ export function ImportExportMenu({
               streaming route exists to avoid. */}
           <DropdownMenuItem
             className="cursor-pointer"
-            onClick={() => download(exportHref)}
+            onClick={() => startExport(exportHref, resource.noun)}
           >
             <Download className="mr-2 h-4 w-4" />
             Export {resource.noun}

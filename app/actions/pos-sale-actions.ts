@@ -1166,7 +1166,7 @@ export async function placePosSale(
   }
 
   // An in-store sale is a sale. Without this it existed only in the orders
-  // table: absent from /dashboard/activity, absent from the team's "new order"
+  // table: absent from /dashboard/logs, absent from the team's "new order"
   // alert, and — because reserve_stock_at bypassed the checkout path — it could
   // empty a shelf without ever tripping the low-stock warning. The register was
   // the one channel the store couldn't see happening.

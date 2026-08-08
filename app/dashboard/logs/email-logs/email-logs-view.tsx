@@ -73,7 +73,7 @@ export function EmailLogsView({
     // Any filter change invalidates the current page number.
     if (key !== "page") params.delete("page");
     startTransition(() => {
-      router.push(`/dashboard/activity/email-logs?${params.toString()}`);
+      router.push(`/dashboard/logs/email-logs?${params.toString()}`);
     });
   };
 
@@ -162,7 +162,7 @@ export function EmailLogsView({
                 onClick={() => {
                   setSearch("");
                   startTransition(() => {
-                    router.push("/dashboard/activity/email-logs");
+                    router.push("/dashboard/logs/email-logs");
                   });
                 }}
               >

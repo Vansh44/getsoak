@@ -44,7 +44,7 @@ export default async function ImportExportJobPage({
       <header className="dash-page-header row">
         <div>
           <Link
-            href="/dashboard/activity/import-export"
+            href="/dashboard/logs/import-export"
             className="mb-1 inline-flex items-center gap-1 text-[13px] text-[var(--dash-text-3)] hover:underline"
           >
             <ArrowLeft className="h-3.5 w-3.5" />

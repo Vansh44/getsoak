@@ -2079,7 +2079,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       - **A register sale is a SALE — it emits like one.** `placePosSale` ends
         with `emitEvent("order.placed")` + `reportStockChanges` (§22
         notifications). Without them an in-store sale wrote an `orders` row and
-        nothing else: no `/dashboard/activity` entry, no team alert, and no
+        nothing else: no `/dashboard/logs` entry, no team alert, and no
         low/out-of-stock warning even when it emptied the shelf — the one
         channel physically in front of the merchant was the one they couldn't
         see. `customerId` is null for a walk-in, which the fan-out reads as "no
@@ -2460,7 +2460,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
     decision lives, how to add one, troubleshooting). This section restores the
     summary the POS merge overwrote.
     - **EVERY action emits an EVENT** into append-only `activity_events` — the
-      audit trail, complete by construction, rendered at `/dashboard/activity`.
+      audit trail, complete by construction, rendered at `/dashboard/logs`.
       Only events with a non-empty `audiences` entry FAN OUT into per-recipient
       `notifications` rows; `audiences: {}` is audit-only, which is how a busy
       store gets full history without 400 badges a day.
@@ -2556,7 +2556,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       to `https://staging.storemink.com`, telling another environment to drain a
       queue that wasn't ours. `PLATFORM_URL` remains the fallback for callers
       with no request scope (the cron chaining itself).
-    - **EMAIL LOGS** at `/dashboard/activity/email-logs` (a child of Activity
+    - **EMAIL LOGS** at `/dashboard/logs/email-logs` (a child of Activity
       Logs, same `activity` permission): To / From / Type / Provider / Status /
       Sent at, filterable, with the body in a **sandboxed iframe** (no
       `allow-same-origin`, no `allow-scripts`). `supabase/email_logs.sql`,
@@ -3537,7 +3537,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
     Products, Categories, Inventory and Coupons import + export; **Orders
     export ONLY**. Shopify's shape, because that is the file merchants already
     have. Import/Export lives in a menu on each resource's OWN list page; the
-    HISTORY lives at `/dashboard/activity/import-export`, beside Activity and
+    HISTORY lives at `/dashboard/logs/import-export`, beside Activity and
     Email logs.
     - **★ A REGISTRY, NOT FIVE IMPORT SCREENS** (`lib/import-export/`). The
       alternative is header matching, coercion, validation, error reporting and
@@ -3570,6 +3570,47 @@ group, span}` (span = columns of the 4-wide desktop grid),
       connection loses the REST of the file, not the part that worked.
       `serverActions.bodySizeLimit` was raised to 4mb for headroom, but the
       CHUNK SIZE is what actually bounds a request.
+    - **★★ THE CHUNK LOOP LIVES IN THE DASHBOARD LAYOUT, NOT THE DIALOG**
+      (`app/dashboard/components/import-runner.tsx`). A loop belongs to whatever
+      component owns it, so while it ran inside the import dialog the import
+      could only live as long as that modal: the merchant had to sit and watch a
+      progress bar, and navigating anywhere killed it half-done. The runner is a
+      provider mounted ONCE in the layout, so the loop survives route changes —
+      which is what lets the dialog hand the rows over, close, and send the
+      merchant to the job's log while it fills in. A fixed progress chip follows
+      them around the dashboard, and `beforeunload` guards the tab.
+      **⚠ IT IS STILL NOT A BACKGROUND JOB.** The loop runs in THAT TAB, so
+      closing it stops the import exactly as before — the chip and the copy on
+      the job page both say so. What is already imported stays imported (every
+      chunk commits on its own) and the log records where it stopped. Making
+      this genuinely server-side needs the file stored somewhere plus a worker,
+      which is a different feature; this one had to stop being modal first.
+    - **★ THE JOB PAGE POLLS ITSELF WHILE THE JOB IS LIVE** (2s, `router.refresh`,
+      stopping the moment the status leaves running/pending). It is now the page
+      a merchant is SENT to at the START of an import, so a frozen screen of
+      zeroes reads as a stuck import. Polling a FINISHED job forever is how a
+      forgotten background tab quietly costs a request every two seconds all
+      afternoon, which is why the interval is torn down on status rather than on
+      unmount alone.
+    - **★ `data.import_started` IS A SECOND EVENT FOR ONE IMPORT, DELIBERATELY.**
+      Between `startImport` and `data.imported` there is a window — minutes, on
+      a big file — where the only record is a job row nobody has a link to. The
+      merchant is redirected to that log, but they are free to navigate away, and
+      the finish event cannot help them: it does not exist yet while they are
+      wondering where their import went. **IN-APP ONLY**; mailing "started" and
+      then "finished" is the two-messages-for-one-action pattern §24 says trains
+      people to ignore a channel.
+    - **★ ALL THREE DATA EVENTS CARRY A URL NOW.** They fell through to
+      `render.ts`'s default, which renders the event label and NO link — so
+      "Import finished" sat in the bell as a dead end, next to an import whose
+      entire value is the row-by-row log one click away. `subjectId` is the job
+      id at every emit site.
+    - **An EXPORT redirects to the export LIST, not to its own job page**, and
+      that is a limitation rather than a preference: the job row is created by
+      the streaming route as it starts, so the id does not exist on the client
+      side of the call. The export just started is the newest row. The download
+      itself is a `Content-Disposition: attachment` navigation, which does NOT
+      unload the page, so the redirect and the save coexist.
     - **★ AN ABSENT CELL MEANS "LEAVE THIS ALONE", NEVER "SET TO NULL"** — what
       makes a two-column file (Handle + Selling Price) a safe way to change only
       prices.
@@ -3710,7 +3751,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **⚠ The Cloud Scheduler job did not exist when this shipped.** Until it is
       created, none of the above runs. See the warning in `docs/cron-jobs.md`.
 
-33. **Logs — five of them, one hub, one permission.** `/dashboard/activity`,
+33. **Logs — five of them, one hub, one permission.** `/dashboard/logs`,
     with `lib/logs/` behind the newest of them.
     - **★ THE CAPABILITY WAS THERE; THE IA WASN'T.** Activity, Email, Import
       and Export logs all existed, and the Email table already carried To /
@@ -3723,7 +3764,31 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **★ THE PERMISSION KEY IS STILL `activity`.** Roles store the key, so
       renaming it to `logs` would silently revoke every grant already saved —
       the same reason `navigation` kept its key when it folded into the
-      builder. Only the LABEL changed.
+      builder. Only the LABEL and the URL changed.
+    - **★ THE ROUTES ARE `/dashboard/logs/*`** (was `/dashboard/activity/*`).
+      The old path named ONE of the five logs after the section holding all of
+      them, so the URL contradicted the nav the moment you opened Email logs.
+      **The old paths still resolve** — a 307 pair in `next.config.ts`, query
+      string preserved. Not a courtesy to bookmarks: every notification email
+      ALREADY SENT carries an absolute `/dashboard/activity` link
+      (`lib/email/notification-emails.ts`) and those are in inboxes nobody can
+      edit. TEMPORARY (307), not permanent: this is an internal admin path
+      behind a login, so there are no SEO signals to consolidate, and a 308 is
+      cached indefinitely by browsers — the trap `proxy.ts` already had to work
+      around with `Cache-Control: no-store` (§30).
+    - **★ THE RAIL IS THE SIDEBAR NOW, NOT A SECOND COLUMN.** It rendered
+      beside the content, which put THREE navigations on screen at once: the
+      dashboard's own nav, the rail, and the page's filters. The dashboard
+      already had the right pattern — the sub-nav panel that swaps the main nav
+      for Back + the section's pages (Settings, Blogs, POS) — so
+      `dashboard-sidebar.tsx` branches on the logs path and renders `LogsRail`
+      in that slot, and `logs/layout.tsx` renders nothing but its children.
+      ⚠ It stays a COMPONENT driven by `LOG_TYPES` rather than becoming
+      `children` on the permission section, which would have been the obvious
+      tidy-up: Import and Export share a pathname and differ only by `?kind=`,
+      and the sidebar's generic child matcher compares hrefs while ignoring the
+      query string — so it would light up both entries on either page.
+      `activeLogKey` is the thing that knows better.
     - **Import and Export are one page filtered two ways.** `data_jobs.kind`
       already separates them and the page already read `?kind=`, so the split
       the merchant sees costs two rail entries and no route.

@@ -14,6 +14,7 @@ import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
+import { ImportRunnerProvider } from "./components/import-runner";
 import {
   SECTIONS,
   SECTION_GROUPS,
@@ -222,34 +223,39 @@ export default async function DashboardLayout({
     <div
       className={`dashboard-shell ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
-      <ChatProvider>
-        <MobileNavProvider>
-          <DashboardTopbar
-            email={profile.email}
-            role={profile.role ?? ""}
-            firstName={profile.first_name}
-            lastName={profile.last_name}
-            storeName={store.name}
-            planId={planId}
-            planName={planName}
-          />
-          <div className="flex flex-1 overflow-hidden">
-            <DashboardSidebar groups={nav} />
+      {/* Wraps everything so a running import survives route changes — the
+          chunk loop belongs to whatever component owns it, and in the dialog
+          that meant the import died the moment the merchant navigated. */}
+      <ImportRunnerProvider>
+        <ChatProvider>
+          <MobileNavProvider>
+            <DashboardTopbar
+              email={profile.email}
+              role={profile.role ?? ""}
+              firstName={profile.first_name}
+              lastName={profile.last_name}
+              storeName={store.name}
+              planId={planId}
+              planName={planName}
+            />
+            <div className="flex flex-1 overflow-hidden">
+              <DashboardSidebar groups={nav} />
 
-            <div className="dash-main rounded-none md:rounded-tl-[16px] shadow-sm border-l-0 md:border-l border-t-0 md:border-t border-[#e5e5e5] overflow-hidden flex-1 relative flex flex-col mt-0 md:mt-2 ml-0 md:ml-2 mb-0 md:mb-2 mr-0 md:mr-2">
-              <div className="dash-content flex-1 overflow-y-auto relative z-10">
-                {children}
-              </div>
-              {/* Full-view Mink AI takeover — overlays the content region only,
+              <div className="dash-main rounded-none md:rounded-tl-[16px] shadow-sm border-l-0 md:border-l border-t-0 md:border-t border-[#e5e5e5] overflow-hidden flex-1 relative flex flex-col mt-0 md:mt-2 ml-0 md:ml-2 mb-0 md:mb-2 mr-0 md:mr-2">
+                <div className="dash-content flex-1 overflow-y-auto relative z-10">
+                  {children}
+                </div>
+                {/* Full-view Mink AI takeover — overlays the content region only,
                   leaving the topbar + left nav visible (Shopify Sidekick). */}
-              <DashboardChat variant="overlay" />
-            </div>
+                <DashboardChat variant="overlay" />
+              </div>
 
-            {/* Narrow side-panel Mink AI (topbar button). */}
-            <DashboardChat variant="panel" />
-          </div>
-        </MobileNavProvider>
-      </ChatProvider>
+              {/* Narrow side-panel Mink AI (topbar button). */}
+              <DashboardChat variant="panel" />
+            </div>
+          </MobileNavProvider>
+        </ChatProvider>
+      </ImportRunnerProvider>
 
       <Toaster richColors />
     </div>

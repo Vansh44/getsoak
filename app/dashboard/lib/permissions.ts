@@ -410,13 +410,13 @@ export const SECTIONS: DashboardSection[] = [
     // — the reason `navigation` kept its key when it folded into the builder.
     key: "activity",
     label: "Logs",
-    href: "/dashboard/activity",
+    href: "/dashboard/logs",
     icon: "activity",
     group: "Settings",
     actions: ["view"],
     // ★ NO `children`, DELIBERATELY. It used to carry one per log type, which
     // became two competing navigations for the same destinations once the hub
-    // grew its own rail (app/dashboard/activity/logs-rail.tsx). The sidebar
+    // grew its own rail (app/dashboard/logs/logs-rail.tsx). The sidebar
     // links to the hub; the rail moves between logs.
     //
     // Every log stays on ONE permission: "what happened", "what we sent",
