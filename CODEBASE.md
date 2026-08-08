@@ -3348,6 +3348,44 @@ group, span}` (span = columns of the 4-wide desktop grid),
       pinned in their own browser — so reverting `custom_domain_verified` would
       restore the subdomain for the whole internet EXCEPT the one person who
       needs it. The status stays 308 so search engines still consolidate signals.
+    - **★★ THE REDIRECT IS PRODUCTION-ONLY (`IS_PRODUCTION_PLATFORM`), AND THAT
+      IS CORRECTNESS, NOT CAUTION.** A custom domain has ONE A record → ONE load
+      balancer, and `cloudbuild.yaml` gives staging the SAME `_DOMAIN_LB_IP` and
+      `_DOMAIN_CERT_MAP` as prod (one HTTPS proxy holds one map). The URL map has
+      exactly one host rule — `staging.storemink.com` + `*.staging.storemink.com`
+      → the staging backend — so **every merchant domain falls to `defaultService`,
+      the PRODUCTION backend**. Staging can therefore never serve a custom domain.
+      But `custom_domain_verified` is per-DATABASE and staging has its own, so
+      staging would redirect to a host only prod can answer: the store lands on a
+      different database (where it may not exist) or, if DNS is incomplete,
+      nowhere.
+      Observed 2026-08-08: `echos.staging.storemink.com` 308'd to `storiq.in`,
+      whose zone holds only NS + SOA — storefront, `/dashboard` and `/pos` gone
+      together, with no way back in. **And it could not self-heal**: the health
+      check that reverts a dead domain (3 consecutive failures) runs only from
+      `/api/cron/domain-reconcile`, and every Cloud Scheduler job targets
+      `https://storemink.com` (`docs/cron-jobs.md`) — the affected row had
+      `domain_health_checked_at = null`, never checked once. Off prod the safety
+      net this redirect leans on does not exist, so the redirect must not run
+      there. This SUBSUMES the older `*.localhost` check, which excluded local dev
+      for the identical reason. `IS_PRODUCTION_PLATFORM` lives in
+      `lib/store/host.ts` and `SEARCH_INDEXABLE` now derives from it — split apart
+      deliberately, since `NEXT_PUBLIC_NOINDEX` is an indexing kill-switch and
+      must not change the answer to "which environment am I?". Pinned by
+      `proxy.test.ts`.
+    - **★ PROVISIONING IS GATED THE SAME WAY, IN `reconcileDomainForStore`** —
+      the one place BOTH the merchant's Verify click and the cron sweep pass
+      through, so neither can provision behind the other's back
+      (`ensureProvisioned` has no other caller). Without it staging still wrote
+      real `sm-domain-stg-*` certificates, authorizations and entries into the
+      SHARED prod map: billable, and an entry makes the LB terminate TLS for a
+      host the prod backend then 404s as an unknown store. Five such resources
+      for one staging test domain were deleted by hand on 2026-08-08. The check
+      sits BEFORE the plan check deliberately — this is "this cannot work", not
+      "you may not", and reporting it as an upgrade prompt would send someone to
+      buy Pro to fix an environment. **Deprovisioning is deliberately NOT gated**:
+      `disconnectDomain` does not route through here, so a store that already has
+      a domain set off prod can still tidy up. Pinned by `reconcile.test.ts`.
     - The proxy cannot use `unstable_cache` (no render scope in middleware) and
       the storefront path is deliberately free of per-request DB work, so the
       mapping sits in a 60s per-instance TTL cache bounded at 1000 entries. A DB

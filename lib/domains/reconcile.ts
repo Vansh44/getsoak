@@ -47,9 +47,22 @@ import { checkCnameTarget, checkDomainPointsTo } from "./dns";
 import { decideReissue, pendingDuration } from "./reissue";
 import { shouldHealthCheck, recordHealthResult } from "./health";
 import { ensureAuthorizedDomain } from "@/lib/auth/authorized-domains";
+import { IS_PRODUCTION_PLATFORM } from "@/lib/store/host";
 
 export const UPGRADE_MESSAGE =
   "Connecting your own domain is part of the Pro plan. Upgrade to add one.";
+
+/**
+ * Shown off production, where a custom domain cannot work no matter what we do.
+ *
+ * Aimed at whoever is testing rather than a merchant: nobody outside the team
+ * ever sees it, and "it isn't broken, this environment just can't do it" is the
+ * only useful thing to say.
+ */
+export const NON_PRODUCTION_MESSAGE =
+  "Custom domains can only be connected on production — this environment's " +
+  "load balancer routes them to the production backend, so the domain would " +
+  "never reach this store.";
 
 /**
  * Is this store entitled to a custom domain right now?
@@ -145,6 +158,28 @@ export async function reconcileDomainForStore(
     becameLive: false,
     certificateState: null as string | null,
   };
+
+  // ★★ PRODUCTION ONLY, and it belongs HERE — the one place both the merchant's
+  // "Verify" click and the cron sweep pass through, so neither can provision
+  // behind the other's back.
+  //
+  // Staging shares production's certificate map AND its load balancer, and the
+  // LB's url-map has a single host rule (staging.storemink.com + its wildcard);
+  // every merchant domain therefore falls to the default backend, which is
+  // PRODUCTION. So a domain connected off prod can never reach the store that
+  // connected it — it only ever creates real, billable Certificate Manager
+  // resources in the shared map, and a map entry makes the LB terminate TLS for
+  // a hostname the prod backend then 404s as an unknown store. (Five such
+  // resources for one staging test domain were cleaned up by hand on
+  // 2026-08-08.)
+  //
+  // Placed BEFORE the plan check deliberately: this is not "you may not", it is
+  // "this cannot work", and it should not be reported as an upgrade prompt.
+  // Deprovisioning is untouched — disconnectDomain() does not come through here,
+  // so a store that already has a domain set off prod can still tidy up.
+  if (!IS_PRODUCTION_PLATFORM) {
+    return { ...base, domain: null, error: NON_PRODUCTION_MESSAGE };
+  }
 
   const cfg = getCertConfig();
   if (!cfg) {
