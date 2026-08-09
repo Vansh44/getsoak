@@ -27,8 +27,9 @@ export default async function OrderSettingsPage() {
           canManage={access.can("orders", "manage")}
         />
         <p className="mt-3 text-sm text-muted-foreground">
-          Cancelling always returns the stock. It never moves money — a refund
-          stays yours to approve from the order itself.
+          Requests wait in <strong>Orders → Cancellations</strong> unless you
+          switch approval to automatic. When you approve one you choose where
+          the money goes — nothing is refunded without you saying so.
         </p>
       </div>
     </div>

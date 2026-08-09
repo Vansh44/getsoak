@@ -864,3 +864,59 @@ a.card:hover {
   color: inherit;
   max-width: 100%;
 }
+
+/* Cancellation confirmation (roadmap Step 2).
+   An inline step rather than window.confirm: the shopper has to be told this
+   cancels the WHOLE order and that the store reviews it, and a native dialog
+   can carry neither. */
+.cancelPanel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.12));
+  border-radius: var(--sm-radius-card, 12px);
+  background: var(--sm-surface, #fafafa);
+}
+
+.cancelPanelTitle {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--sm-ink, #111);
+}
+
+.cancelReasonInput {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--sm-ink, #111);
+  background: var(--sm-surface, #fff);
+  border: 1px solid var(--sm-border, rgba(0, 0, 0, 0.14));
+  border-radius: var(--sm-radius-control, 8px);
+  resize: vertical;
+}
+
+.cancelActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cancelConfirmBtn {
+  appearance: none;
+  border: 1px solid var(--sm-error, #b3261e);
+  background: var(--sm-error, #b3261e);
+  color: var(--sm-on-accent, #fff);
+  border-radius: var(--sm-radius-control, 8px);
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cancelConfirmBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

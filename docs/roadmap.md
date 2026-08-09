@@ -25,24 +25,24 @@ sequence AND the spec for everything still to build.
 
 ## Status at a glance
 
-| #      | Step                                                           | Size | State   |
-| ------ | -------------------------------------------------------------- | ---- | ------- |
-| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock    | —    | ✅ done |
-| —      | LOC A–F: capabilities, scope, routing, reservations, pickup    | —    | ✅ done |
-| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
-| —      | Store credit                                                   | —    | ✅ done |
-| —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
-| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
-| **2**  | **Cancellation & refund flow** — server done, UI remaining     | M    | ◐ part  |
-| **3**  | Pickup end to end: collection code, QR, manager/cashier split  | L    | ⏳      |
-| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
-| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
-| **6**  | Channel stock policy (LOC H)                                   | M    | ⏳      |
-| **7**  | Transfer lifecycle (LOC I)                                     | M    | ⏳      |
-| **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
-| **9**  | Gift cards                                                     | M    | ⏳      |
-| **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
-| **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
+| #      | Step                                                              | Size | State   |
+| ------ | ----------------------------------------------------------------- | ---- | ------- |
+| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock       | —    | ✅ done |
+| —      | LOC A–F: capabilities, scope, routing, reservations, pickup       | —    | ✅ done |
+| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes    | —    | ✅ done |
+| —      | Store credit                                                      | —    | ✅ done |
+| —      | Metered extra-location billing (POS 7)                            | —    | ✅ done |
+| **1**  | Checkout payment defaults + pickup payment policy                 | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                        | M    | ✅ done |
+| **3**  | **Pickup end to end: collection code, QR, manager/cashier split** | L    | ⏭ next |
+| **4**  | POS customer capture (Shopify parity) + claim/merge               | L    | ⏳      |
+| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                       | M    | ⏳      |
+| **6**  | Channel stock policy (LOC H)                                      | M    | ⏳      |
+| **7**  | Transfer lifecycle (LOC I)                                        | M    | ⏳      |
+| **8**  | More routing strategies (LOC J)                                   | M    | ⏳      |
+| **9**  | Gift cards                                                        | M    | ⏳      |
+| **10** | Offline outbox (POS 9)                                            | XL   | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                                  | XL   | ⏳      |
 
 **Where we actually are.** Everything in the top block works. **Pickup is the
 outlier**: every piece exists — holds, routing, the collection queue, tender
@@ -137,7 +137,7 @@ sentence pointing at Channels.
 
 ---
 
-## Step 2 — Cancellation & refund flow ◐ SERVER DONE, UI REMAINING
+## Step 2 — Cancellation & refund flow ✅ DONE
 
 **Owner spec, 2026-08-09.** It supersedes the earlier draft below in two ways
 worth stating plainly: there is **no per-product `cancellable` control** (the
@@ -159,9 +159,17 @@ the refund DESTINATION is chosen and confirmed, Shopify's model.
   `cancelOrder` and `declineCancellation` on the merchant side; the
   `order.cancellation_declined` event.
 
-**⏳ Remaining:** the storefront confirmation step, the dashboard request queue
-and cancel panel, and the settings UI rendering (the registry drives it, but the
-Orders settings page needs the new selects laid out).
+**✅ Shipped (UI):** the storefront confirmation step (a real panel, not
+`window.confirm` — it has to say this cancels the ENTIRE order and that the
+store decides, and take the reason that makes the merchant's decision an
+informed one), the dashboard queue at `/dashboard/orders/cancellations` with
+approve/decline, and the settings selects (registry-driven, so the page needed
+only its now-wrong footnote corrected — it claimed cancelling "never moves
+money").
+
+**Acceptance:** PS-D.1–D.13. **⚠ Not verified in a browser** — the Cloud SQL
+proxy needs `gcloud auth application-default login`, and the migration is not
+applied.
 
 **★ ASKING IS NOT CANCELLING.** A customer raises a request; a human approves
 it. Money and stock move on APPROVAL. Before this, an eligible order was

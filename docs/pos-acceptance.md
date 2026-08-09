@@ -619,6 +619,88 @@ nobody chose must never be imposed by a typo (invariant 6).
 
 ---
 
+## 7c. Cancellation & refund flow (roadmap Step 2)
+
+⚠ Needs `supabase/orders_01_cancellation.sql` applied. PS-D.6–D.9 move real
+money — use a **test-mode** gateway.
+
+**PS-D.1 — The merchant sets the rules**
+Orders → Settings. Turn **Let customers cancel their own orders** on.
+**Expect:** a **Cancellation window** select (No cancellations / Until fulfilled
+/ 1 hour / 24 hours / Custom hours) and a **Cancellation approval** select,
+defaulting to **Require my approval**.
+
+**PS-D.2 — Asking is not cancelling**
+As a customer, open a pending order → **Cancel order** → confirm.
+**Expect:** the panel says it cancels **the entire order** and that the store
+reviews it. After submitting: "Cancellation request submitted." **The order is
+still active** — status unchanged, stock not returned, no money moved.
+**Was:** it cancelled outright the moment the button was pressed.
+
+**PS-D.3 ★ — One request, and a decline sticks**
+Submit a second request on the same order.
+**Expect:** refused ("already asked"). Have the merchant decline it, then try
+again: refused, quoting the decline. A decline that can be reopened by asking
+again means nothing.
+
+**PS-D.4 ★ — The window is enforced server-side**
+Set the window to 1 hour. On an order placed two hours ago, call `cancelMyOrder`
+directly.
+**Expect:** refused — "within 1 hour". A window enforced only in the browser is
+not enforced (invariant 5).
+
+**PS-D.5 ★ — "Until fulfilled" is not a duration**
+Set the window to **Until fulfilled**. Request cancellation on an order placed
+three months ago that nobody has fulfilled.
+**Expect:** accepted. Then mark an order shipped and try: refused, and pointed
+at returns.
+
+**PS-D.6 — Approving cancels the whole order**
+Orders → Cancellations → **Approve & cancel**. Choose a refund destination, a
+reason, leave Restock and Notify ON, add a staff note.
+**Expect:** order cancelled, stock returned, customer notified. The staff note
+appears **nowhere** the customer can see.
+
+**PS-D.7 — Refund to store credit uses the existing balance**
+Approve with **Store credit** on a ₹2,000 paid order.
+**Expect:** ₹2,000 on the customer's balance, AND an `order_refunds` row — the
+refund goes through `issueRefund`, not a separate credit path, so the order's
+refund cap and payment status stay correct.
+
+**PS-D.8 ★★ — A failed refund is never reported as success**
+Break the gateway (wrong key) and approve with **Original payment method**.
+**Expect:** "Order cancelled, but the refund failed: …". The order IS cancelled
+— that claim already committed — but nobody is told they were refunded when
+they were not.
+
+**PS-D.9 ★★ — An unknown gateway answer is not a failure**
+Force a timeout on the refund call.
+**Expect:** "the refund is in flight — don't send it again." NOT an error.
+Reporting this as failed is how a customer gets paid twice (CODEBASE §26).
+
+**PS-D.10 — Declining requires a reason, and the customer reads it**
+Decline a request with the reason box empty.
+**Expect:** refused. With a reason: the order stays **active** and the customer
+is notified with those exact words.
+
+**PS-D.11 — Automatic approval, off by default**
+Confirm a request waits by default. Switch approval to **Approve
+automatically**, then request again.
+**Expect:** the order cancels immediately. **Watch for:** it must still restock
+and notify.
+
+**PS-D.12 ★ — Only honourable refund destinations are offered**
+Open a request for a COD order.
+**Expect:** no "Original payment method" option. For a walk-in with no account:
+no "Store credit". A control that always fails is worse than no control.
+
+**PS-D.13 — Nothing is item-level**
+Look at every screen in this flow.
+**Expect:** no per-item cancel, approve, decline or refund anywhere. Whole-order
+only, by design — it needs partial fulfilment, which this system does not have.
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**
