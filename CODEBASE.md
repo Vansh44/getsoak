@@ -1750,8 +1750,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
     An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
     SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
-    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
-    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered
+    billing is BUILT (Phase 7, see below); the v1 hard gate at 2 is gone**.
+    Work on branch `pos`. **Phase 0 (done) = the inventory
     location foundation, with ZERO changes to existing inventory/checkout code:**
     - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
       every store auto-gets one `is_default` "Main" location) +
@@ -1851,7 +1852,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
            per location — enforced in `registerDevice` (the choke point both
            authorization paths funnel through) and pre-checked in
            `createPairingCode` so an admin isn't handed an unusable code.
-        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): every operator's
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`, mounted ONCE in
+           `app/pos/layout.tsx`): every operator's
            register locks after `pos.idleLockMinutes` of inactivity (registry
            setting, default 10, edited at `/dashboard/pos/settings`) with a
            **2-minute** countdown, capped at half the idle window so a
@@ -1869,6 +1871,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
            measure, NOT an authorization boundary (a client bypass keeps the
            cookie until it expires); the server boundary remains the device gate
            - per-request `pos_staff` re-validation.
+             **★★ IT IS MOUNTED IN THE LAYOUT, AND THAT IS THE WHOLE FIX.** It was
+             per-page opt-in, and **five of the seven POS screens never opted in** —
+             `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups` and
+             `/pos/sales`. Only `/pos` and `/pos/sell` ever locked, so the till sat
+             unlocked indefinitely on the three screens where walking away costs
+             MOST: returns issues refunds, inventory adjusts stock, shift moves
+             cash. A control every new page has to remember is one the next page
+             will forget. The layout renders it for any non-exempt operator and
+             nothing for `/pos/login|register|reset` (no operator ⇒ nothing to
+             lock, and a timer that redirects to the login page FROM the login page
+             is a loop). Pinned by `app/pos/idle-lock-coverage.test.ts`, which
+             fails in BOTH directions — the layout losing it (every screen stops
+             locking) and a page re-adding its own (two timers, two banners, two
+             racing `posLock()` calls). ⚠ `resolvePosOperator` is now wrapped in
+             React `cache()` so the layout's resolve is free: `/pos/sell` was
+             already resolving the operator three or four times per render (page
+             gate + `getRegisterConfig` + `lookupProducts`), and this dedupes them
+             within the request without touching the ACROSS-request re-validation
+             that makes deactivation immediate.
       - **Device authorization is the security boundary** (a cashier must not be
         able to sell from their personal phone). A browser becomes an authorized
         POS device when the **owner** either taps "Authorize this device" while
@@ -1945,7 +1966,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
           "tidied up" into symmetry. `pairDevice` is unchanged: the code is the
           authorization, redeemed on the device by whoever holds it.
         - **The idle lock now exempts ONLY the superadmin**
-          (`isIdleLockExempt`, used by `/pos` and `/pos/sell`). Not a
+          (`isIdleLockExempt`, applied once in `app/pos/layout.tsx` — see
+          Phase 1 §5 for why it is no longer per-page). Not a
           capability — it isn't something you may DO, it's whose screen may be
           left unattended — and a delegated admin at a shared counter is the
           same walked-away-from-an-open-till risk as any operator, with a
@@ -1977,6 +1999,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
           needs a manager's PIN above the cap, and for an override), which now asks
           `posCan(role, "discount_over_cap")` rather than an inline
           `role === "cashier"` that could drift from the capability table.
+          **★ A CAP OF 0 IS A REAL SETTING AND MUST SURVIVE THE FALLBACK.** The
+          cap was read as `Number(settings[…]) || 10`, which looks like a NaN
+          guard and is really a `0` eater: the registry declares `min: 0`, so 0
+          is legal and MEANS "a cashier needs approval for ANY discount" — and
+          the merchant who locked it down hardest silently got the 10% default,
+          handing cashiers exactly the authority they had withheld. It reads
+          `typeof === "number"` now, since `resolveStoreSettings` already
+          guarantees a number clamped to `[min, max]` and the fallback is only
+          for a structurally impossible value. Same rule as
+          `products.return_window_days` (§28): a real 0 is not an absent value.
+          Both directions are regression-tested — 0 must stop a 5% discount, and
+          must not refuse a sale carrying no discount at all.
       - **★ A MANAGER'S APPROVAL IS A SIGNED GRANT, NOT A CLIENT FLAG**
         (`lib/pos/approval.ts`). `verifyManagerPin` returned `{approved: true}`
         and `placePosSale` trusted an `opts.managerApproved` boolean that came
@@ -2488,9 +2522,85 @@ group, span}` (span = columns of the 4-wide desktop grid),
         Reminders run AFTER the expiry sweep: an order that just lapsed is no
         longer awaiting collection, and telling someone to hurry and collect
         something already cancelled is worse than saying nothing.
-    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
-      metered extra-location billing (7), omnichannel/BOPIS (8), offline
-      outbox (9). See `docs/pos-plan.md`.
+    - **★ METERED EXTRA LOCATIONS (Phase 7, done).** Pro includes 2; more are
+      ₹1,000/mo (₹10,000/yr) by default, and **a platform operator sets the
+      live price from the console** — `plan_prices`, key `extra_location`
+      (`supabase/plans_05_extra_location_price.sql`), edited in the same
+      Pricing panel as the tiers. `EXTRA_LOCATION_PRICE` in `lib/plans.ts` is
+      only the fallback until one is set, the way `PLAN_META` is for tiers.
+      **★ IT IS PRICED LIKE A TIER BUT IS NOT ONE.** `resolvePricing` keys off
+      `PLAN_IDS` and so ignores this row — which is what stops it rendering as
+      a fourth card on the public pricing page that somebody could try to
+      subscribe to. `resolveExtraLocationPricing` reads it instead, and the two
+      share one query. Widening `resolvePricing` to accept arbitrary keys is
+      exactly the change that would break this; there is a test pinning it.
+      The add-on has no `base_*` price because it has no card to strike
+      through — `savePlanPricing` forces those null rather than storing a
+      number nobody can ever see. **Charging reads LIVE**
+      (`getExtraLocationPricingLive`), never the cached loader: a location is
+      bought against an already-authorised mandate, so quoting from a cache a
+      reprice has not reached would debit the old amount.
+      **⚠ `EXTRA_LOCATION_KEY` LIVES IN `lib/plans.ts`, NOT `lib/plans/pricing.ts`.**
+      That module is `server-only` — it pulls in the db client, and therefore
+      `pg` and `fs` — while the operator's Pricing panel is a CLIENT component
+      that needs the key at runtime to tell the add-on row from a tier. Defining
+      it there fails the BUILD while typecheck passes happily, which is what
+      makes it worth writing down. The TYPES may still come from `pricing.ts`;
+      those are erased. Same split as `lib/logs/failure-types.ts` and
+      `lib/themes/meta.ts`.
+      - **★★ AN EXTRA LOCATION IS A PRICE RISE ON THE SAME SUBSCRIPTION, NOT A
+        SECOND ONE** (`lib/plans/location-billing.ts`, pure + tested). A second
+        mandate would make the merchant authorise autopay twice and then let one
+        succeed while the other halts; per-cycle add-ons would need a charge
+        added at every renewal forever. Folding the cost into the plan AMOUNT
+        means the existing machinery already covers it: `razorpay_plans` is
+        keyed on **(plan, period, amount)**, so a different location count
+        resolves to a different cached plan id with NO new table;
+        `planForRzpPlan` still maps it back to (tier, period) for the webhook,
+        because neither changed; and `decidePlanChange`'s rule applies
+        unaltered — **buying prorates now, releasing waits for the cycle end** —
+        which keeps refunds out of the system (§15b's reasoning, reused).
+      - **★ `store_subscriptions.billed_locations` IS ADDITIVE, NEVER A TOTAL**
+        (`supabase/subscriptions_03_billed_locations.sql` — its OWN file, per
+        §15b's never-edit-an-applied-`CREATE TABLE IF NOT EXISTS` rule). The
+        allowance is `included + billed`, so if Pro's included count ever rises,
+        a merchant paying for one gains headroom rather than being billed for
+        what became free. Backfilled 0, which is the honest value: nobody has
+        ever been able to buy one (invariant 1).
+      - **★ THE COUNT IS ABSOLUTE, NEVER A DELTA.** Two tabs each pressing "add
+        one" against a delta buys two, and the merchant finds out on their card.
+        An absolute target is idempotent — the second request no-ops.
+      - **★ IT IS WRITTEN ONLY WHEN THE CHANGE IS LIVE.** Persisting a scheduled
+        RELEASE immediately would drop the allowance while they are still paying
+        for that location, refusing them a shop they own until the cycle ends.
+      - **★ `changePlan` CARRIES THE COUNT THROUGH.** Resolving a tier change
+        without it would silently drop the merchant to the bare plan price while
+        they keep every shop — a leak invisible from both sides. It is zeroed
+        only when the TARGET tier has no POS (charging for something the plan
+        cannot use is indefensible), and the stored count is deliberately NOT
+        written back, so returning to Pro resumes billing for the shops they
+        still hold rather than handing them over free.
+      - **★ THE MANDATE CEILING IS CHECKED BEFORE THE GATEWAY.** It was fixed
+        when autopay was authorised and cannot be raised without the merchant
+        re-authorising; Razorpay would accept the plan change and then fail the
+        DEBIT weeks later, surfacing as a halted subscription rather than as
+        "you can't buy this". `mandateMaxPaise` now carries room for
+        `MANDATE_LOCATION_ALLOWANCE` (10) locations — well below
+        `MAX_EXTRA_LOCATIONS` (50) on purpose, because this number is shown to
+        the merchant on the mandate screen and quoting a ₹6 lakh ceiling for a
+        ₹5,000/month plan loses the signup.
+      - **Refused, not clamped, in both directions.** Silently raising a request
+        charges for a number nobody chose; silently lowering one leaves them
+        paying for a release they believed went through. Releasing below the
+        locations in USE is refused outright — soft-on-downgrade means never
+        deleting a shop on the merchant's behalf.
+      - Merchants buy and release on `/dashboard/locations`
+        (`location-billing-card.tsx`); `getLocationBillingState` feeds it and
+        explains WHY the controls are absent when they are (a comped Pro store
+        has no mandate to raise, so it is told plainly rather than shown a
+        button that fails at the gateway).
+    - **Not yet built:** Twilio receipts (Phase 6), omnichannel/BOPIS (8),
+      offline outbox (9). See `docs/pos-plan.md` and `docs/roadmap.md`.
 
 24. **Notifications & email — one event log, registry-driven fan-out, one way
     out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each

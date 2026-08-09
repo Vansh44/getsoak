@@ -11,6 +11,7 @@
 // an unauthorized device (their personal phone) resolves to null → /pos/login.
 
 import { and, eq } from "drizzle-orm";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { withService } from "@/lib/db/client";
 import { admins, posStaff, posStaffLocations } from "@/drizzle/schema";
@@ -41,89 +42,105 @@ export interface PosOperator {
   deviceAuthorized: boolean;
 }
 
-export async function resolvePosOperator(): Promise<PosOperator | null> {
-  const storeId = await getCurrentStoreId();
-  const device = await getAuthorizedDevice(storeId);
+/**
+ * Request-scoped, the same idiom `getViewerContext` uses in dashboard/lib/access.ts.
+ *
+ * A single POS page render resolves the operator several times over — the layout
+ * (for the idle lock), the page's own gate, and every action it calls to fill the
+ * screen: `/pos/sell` alone did it three or four times, each costing a device
+ * lookup plus a `pos_staff` join. `cache` dedupes those within one request and
+ * changes nothing across requests, so the per-request re-validation that makes
+ * deactivation immediate is untouched — every new request still re-reads the row.
+ */
+export const resolvePosOperator = cache(
+  async function resolvePosOperator(): Promise<PosOperator | null> {
+    const storeId = await getCurrentStoreId();
+    const device = await getAuthorizedDevice(storeId);
 
-  // 1. Owner — a dashboard admin with POS access. NOT device-restricted.
-  //
-  // Resolved as "superadmin" when they actually are one, because the two differ
-  // for the money-losing capabilities (permissions.ts SUPERADMIN_ONLY): a
-  // delegated admin may run the till but not discount or reprice. Everything
-  // else treats them alike via `isPosOwnerRole`.
-  const ownerIdentity = await getManagerIdentity("pos");
-  if (ownerIdentity) {
-    const locationId =
-      device?.locationId ?? (await getDefaultLocationId(storeId));
-    if (locationId) {
-      return {
-        role: (await isStoreSuperadmin()) ? "superadmin" : "owner",
-        storeId,
-        locationId,
-        staffId: null,
-        name: await ownerDisplayName(
-          ownerIdentity.uid,
+    // 1. Owner — a dashboard admin with POS access. NOT device-restricted.
+    //
+    // Resolved as "superadmin" when they actually are one, because the two differ
+    // for the money-losing capabilities (permissions.ts SUPERADMIN_ONLY): a
+    // delegated admin may run the till but not discount or reprice. Everything
+    // else treats them alike via `isPosOwnerRole`.
+    const ownerIdentity = await getManagerIdentity("pos");
+    if (ownerIdentity) {
+      const locationId =
+        device?.locationId ?? (await getDefaultLocationId(storeId));
+      if (locationId) {
+        return {
+          role: (await isStoreSuperadmin()) ? "superadmin" : "owner",
           storeId,
-          ownerIdentity.email,
-        ),
-        source: "owner",
-        deviceAuthorized: !!device,
-      };
+          locationId,
+          staffId: null,
+          name: await ownerDisplayName(
+            ownerIdentity.uid,
+            storeId,
+            ownerIdentity.email,
+          ),
+          source: "owner",
+          deviceAuthorized: !!device,
+        };
+      }
     }
-  }
 
-  // Staff are device-locked: no authorized device ⇒ not an operator here.
-  if (!device) return null;
+    // Staff are device-locked: no authorized device ⇒ not an operator here.
+    if (!device) return null;
 
-  // 2. Staff via a PIN-minted operator cookie (must match THIS device).
-  //
-  // The cookie's claims are NOT trusted for authorisation: role, name and even
-  // continued employment are re-read from pos_staff on every resolve. Trusting
-  // the token would let a cashier you deactivated (or demoted) keep selling
-  // with their old rights until it expired — offboarding has to be immediate.
-  const op = verifyOperatorToken(
-    (await cookies()).get(POS_OPERATOR_COOKIE)?.value,
-  );
-  if (op && op.storeId === storeId && op.deviceId === device.deviceId) {
-    const staff = await loadActiveStaff(storeId, op.staffId, device.locationId);
-    if (staff) {
-      return {
-        role: staff.role,
-        storeId,
-        locationId: device.locationId,
-        staffId: staff.id,
-        name: staff.name,
-        source: "operator",
-        deviceAuthorized: true,
-      };
-    }
-    // Deactivated, deleted, demoted out of POS, or unassigned from this
-    // location → the session is void; fall through to the signed-out state.
-  }
-
-  // 3. Staff via their own Firebase session (password login).
-  const user = await getServerUser();
-  if (user) {
-    const staff = await loadActiveStaff(
-      storeId,
-      { userId: user.id },
-      device.locationId,
+    // 2. Staff via a PIN-minted operator cookie (must match THIS device).
+    //
+    // The cookie's claims are NOT trusted for authorisation: role, name and even
+    // continued employment are re-read from pos_staff on every resolve. Trusting
+    // the token would let a cashier you deactivated (or demoted) keep selling
+    // with their old rights until it expired — offboarding has to be immediate.
+    const op = verifyOperatorToken(
+      (await cookies()).get(POS_OPERATOR_COOKIE)?.value,
     );
-    if (staff) {
-      return {
-        role: staff.role,
+    if (op && op.storeId === storeId && op.deviceId === device.deviceId) {
+      const staff = await loadActiveStaff(
         storeId,
-        locationId: device.locationId,
-        staffId: staff.id,
-        name: staff.name,
-        source: "operator",
-        deviceAuthorized: true,
-      };
+        op.staffId,
+        device.locationId,
+      );
+      if (staff) {
+        return {
+          role: staff.role,
+          storeId,
+          locationId: device.locationId,
+          staffId: staff.id,
+          name: staff.name,
+          source: "operator",
+          deviceAuthorized: true,
+        };
+      }
+      // Deactivated, deleted, demoted out of POS, or unassigned from this
+      // location → the session is void; fall through to the signed-out state.
     }
-  }
 
-  return null;
-}
+    // 3. Staff via their own Firebase session (password login).
+    const user = await getServerUser();
+    if (user) {
+      const staff = await loadActiveStaff(
+        storeId,
+        { userId: user.id },
+        device.locationId,
+      );
+      if (staff) {
+        return {
+          role: staff.role,
+          storeId,
+          locationId: device.locationId,
+          staffId: staff.id,
+          name: staff.name,
+          source: "operator",
+          deviceAuthorized: true,
+        };
+      }
+    }
+
+    return null;
+  },
+);
 
 /**
  * A human name for the owner, for receipts, shift records and the "opened by"

@@ -52,6 +52,83 @@ Fresh Pro store with one location and POS off.
 **Expect:** no Locations entry in the sidebar. It appears once the store has 2+
 locations or POS is on.
 
+### Metered extra locations (roadmap Step 5)
+
+⚠ These move real money on the platform's Razorpay account. Run them against a
+**test-mode** account first; PS-1.9 in particular cannot be undone by clicking.
+
+**PS-1.5 — At the included cap, the merchant is offered a location, not a wall**
+Pro store with 2 locations, autopay active. Open `/dashboard/locations`.
+**Expect:** "2 of 2 locations used", and an **Add a location · ₹1,000/month**
+button. **Was:** "additional locations are ₹1,000/mo (coming soon)" and a
+disabled button — the only item on the roadmap actively refusing money.
+
+**PS-1.6 ★ — Buying charges now and lifts the cap in the same breath**
+Press it and confirm.
+**Expect:** the toast says you'll be charged the difference for the rest of the
+cycle; the card reads "2 of 3"; **Add location** is enabled; the Razorpay
+subscription moves to a plan at ₹5,000 + ₹1,000. Create the third location — it
+saves. A merchant charged for a location the cap still refuses is the failure
+this whole step exists to avoid.
+
+**PS-1.7 ★ — Releasing waits for the cycle end**
+With 3 locations paid for and only 2 in use, press **Release 1 unused**.
+**Expect:** "You keep them until the end of this billing cycle. Nothing is
+charged today." No refund is issued — that is deliberate (Step 2's rule: nobody
+loses money, they keep what they bought until it runs out).
+
+**PS-1.8 ★ — You cannot stop paying for a shop you are using**
+With 3 locations, all 3 in use, try to release one.
+**Expect:** refused — "You're using 1 extra location. Delete or deactivate it
+before you stop paying for it." Refused, not silently clamped: a clamp leaves
+them paying for a release they believed went through, and they find out on their
+card.
+
+**PS-1.9 ★★ — A plan change keeps billing for the shops they keep**
+On a store paying for 1 extra location, switch monthly → yearly.
+**Expect:** the new subscription amount is ₹50,000 + ₹10,000, not ₹50,000. The
+location is priced at the YEARLY rate. **Watch for:** dropping to the bare plan
+price while the merchant keeps every shop — a revenue leak invisible from both
+sides, and the reason `changePlan` threads the count through.
+
+**PS-1.10 — A comped Pro store is told why, not shown a broken button**
+Operator-comp a store to Pro (no Razorpay mandate). Open Locations.
+**Expect:** "Extra locations are billed through your subscription. Set up
+autopay to add more shops." No buy button.
+
+**PS-1.11 ★ — The cap is server-side**
+Call `createLocation` directly while at the allowance.
+**Expect:** refused. A count the client could name would be a free location
+(invariant 5 — a disabled control is not a permission).
+
+**PS-1.13 ★ — The price comes from the operator console, not the code**
+As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There
+is an **Extra POS location** row with Charged/month and Charged/year (the "Was"
+columns show `—`: the add-on has no pricing card, so a strike-through has
+nowhere to render). Set it to ₹1,500/month and save.
+**Expect:** `/dashboard/locations` on a Pro store immediately offers "Add a
+location · ₹1,500/month", and buying one charges ₹1,500. Nothing needs a deploy.
+
+**PS-1.14 ★★ — Repricing never touches a live subscription**
+With a merchant already paying for one extra location at ₹1,000, change the
+console price to ₹1,500.
+**Expect:** their subscription still bills the old amount. `razorpay_plans` is
+keyed on (plan, period, amount), so a new price mints a NEW Razorpay plan and
+grandfathers everyone already on the old one — the same rule tier repricing
+follows. They move to the new price only when they next change something.
+
+**PS-1.15 ★ — The add-on never becomes a pricing card**
+After setting a price, open the public pricing page.
+**Expect:** three plan cards, exactly as before. `resolvePricing` keys off
+`PLAN_IDS` and ignores this row — widening it to accept arbitrary keys is the
+change that would put "Extra location" on the page as a plan someone could try
+to sign up to.
+
+**PS-1.12 — Downgrading never deletes a shop**
+Store with 4 locations (2 paid) → downgrade to Basic.
+**Expect:** all 4 locations still exist and POS stops working. No new ones can
+be created. Soft-on-downgrade, invariant 1.
+
 ---
 
 ## 2. Locations & capabilities
@@ -276,6 +353,26 @@ Set `pos.idleLockMinutes` to 1 (its minimum) and leave the till.
 capped at half the window, so a short setting doesn't put it on screen
 permanently.
 
+**PS-6.13 ★★ — EVERY screen locks, not just the two that asked**
+Set `pos.idleLockMinutes` to 1. As a cashier, go to each of `/pos`,
+`/pos/sell`, `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups`
+and `/pos/sales` in turn and leave the till alone on each.
+**Expect:** all seven warn and then lock to `/pos/login`.
+**Was:** only `/pos` and `/pos/sell` locked. The other five never did — so the
+till sat unlocked indefinitely on the screens that issue refunds, adjust stock
+and move cash, which are the ones where walking away costs most.
+
+**PS-6.14 — One timer, not two**
+On `/pos` and `/pos/sell` (the two that used to mount their own), let the
+warning appear.
+**Expect:** exactly ONE amber banner, and one lock. Two mounts would run two
+countdowns and fire two `posLock()` calls.
+
+**PS-6.15 — The login screen doesn't lock itself**
+Sit on `/pos/login`, `/pos/register` and `/pos/reset` past the idle window.
+**Expect:** nothing happens. No operator means nothing to lock, and a timer
+redirecting to the login page FROM the login page is a loop.
+
 ---
 
 ## 7. The register (`/pos/sell`)
@@ -448,6 +545,20 @@ out of the way whenever an editable element has focus.
 Open "Add customer" (or the tender panel) and type.
 **Expect:** the field keeps focus. The register never pulls focus back to the
 scan box while an overlay owns the screen.
+
+**PS-7.24 ★★ — A 0% discount cap means ZERO, not the default**
+Turn OFF `pos.ownerOnlyDiscounts`, turn ON
+`pos.requireManagerForDiscount`, and set `pos.maxDiscountPercent` to **0** (the
+registry allows it: `min: 0`). As a cashier, ring a ₹100 sale and apply a ₹5
+discount.
+**Expect:** "A manager's PIN is needed to approve this (over 0%)." A cap of 0
+is the merchant saying a cashier may discount NOTHING unaided.
+**Was:** allowed. The cap was read as `Number(…) || 10`, so a deliberate 0
+became the 10% default and handed cashiers exactly the authority the merchant
+had withheld — the strictest setting behaving as the most permissive.
+
+Then ring the same ₹100 sale with **no** discount.
+**Expect:** it goes through. A 0 cap must not become "refuse everything".
 
 ---
 
@@ -1239,16 +1350,18 @@ Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                                | Status                                                                                                                                                                                             |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
-| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                       |
-| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                      |
-| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                              |
-| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections   |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                      |
-| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                             |
-| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery        |
-| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                            |
-| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                        |
-| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                        |
+| Gap                                                                | Status                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                   |
+| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                         |
+| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                        |
+| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                |
+| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                     |
+| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second |
+| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                               |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
+| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
+| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
+| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
+| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |

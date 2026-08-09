@@ -21,7 +21,13 @@ import "server-only";
 import { unstable_cache, revalidateTag } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { planPrices } from "@/drizzle/schema";
-import { PLAN_IDS, PLAN_META, type Plan } from "@/lib/plans";
+import {
+  EXTRA_LOCATION_KEY,
+  EXTRA_LOCATION_PRICE,
+  PLAN_IDS,
+  PLAN_META,
+  type Plan,
+} from "@/lib/plans";
 import { logError } from "@/lib/observability/logger";
 
 /** Cache tag — bust it whenever an operator saves a price. */
@@ -38,6 +44,18 @@ export interface PlanPrice {
 }
 
 export type PlanPricing = Record<Plan, PlanPrice>;
+
+// The key the add-on is stored under. DEFINED in lib/plans.ts, because that
+// module is client-safe and the operator's Pricing panel needs it at runtime —
+// this one is `server-only`. Re-exported so server callers have one import.
+export { EXTRA_LOCATION_KEY };
+
+/** What one extra POS location costs. No `base_*`: the add-on has no pricing
+ *  card, so there is nothing to strike through. */
+export interface ExtraLocationPricing {
+  monthlyInr: number;
+  yearlyInr: number;
+}
 
 /** What the constants say, before any operator override. */
 export function defaultPricing(): PlanPricing {
@@ -86,7 +104,32 @@ export function resolvePricing(rows: readonly PriceRow[]): PlanPricing {
   return out;
 }
 
-async function readPricing(): Promise<PlanPricing> {
+/**
+ * Fold stored rows onto the code default for the extra-location add-on.
+ *
+ * Separate from `resolvePricing` on purpose — see the note there. A missing
+ * row means no operator has ever set a price, which is a valid state: the
+ * constant in lib/plans.ts is the price until one does.
+ */
+export function resolveExtraLocationPricing(
+  rows: readonly PriceRow[],
+): ExtraLocationPricing {
+  const row = rows.find((r) => r.plan === EXTRA_LOCATION_KEY);
+  if (!row) return { ...EXTRA_LOCATION_PRICE };
+  return {
+    monthlyInr: Number(row.monthly_inr),
+    yearlyInr: Number(row.yearly_inr),
+  };
+}
+
+/**
+ * One read for both. Returns [] on failure so every resolver above FAILS TO THE
+ * CONSTANTS: a pricing page that renders nothing — or worse, a signup that
+ * cannot quote a price — is a far worse outcome than showing the compiled-in
+ * defaults for a few minutes. The table is an override, so its absence is a
+ * valid state, not an error.
+ */
+async function readPriceRows(): Promise<PriceRow[]> {
   try {
     const rows = await withService((db) =>
       db
@@ -99,15 +142,19 @@ async function readPricing(): Promise<PlanPricing> {
         })
         .from(planPrices),
     );
-    return resolvePricing(rows as PriceRow[]);
+    return rows as PriceRow[];
   } catch (error) {
-    // FAIL TO THE CONSTANTS. A pricing page that renders no prices — or worse,
-    // a signup that cannot quote one — is a far worse outcome than showing the
-    // compiled-in defaults for a few minutes. The table is an override, so its
-    // absence is a valid state, not an error.
     logError("plan pricing: read failed, using code defaults", error);
-    return defaultPricing();
+    return [];
   }
+}
+
+async function readPricing(): Promise<PlanPricing> {
+  return resolvePricing(await readPriceRows());
+}
+
+async function readExtraLocationPricing(): Promise<ExtraLocationPricing> {
+  return resolveExtraLocationPricing(await readPriceRows());
 }
 
 /**
@@ -124,6 +171,21 @@ export const getPlanPricing = unstable_cache(readPricing, ["plan-pricing"], {
  * must never quote a price from a cache that a reprice has not yet reached.
  */
 export const getPlanPricingLive = readPricing;
+
+/** Cached, for anywhere the add-on price is only being DISPLAYED. */
+export const getExtraLocationPricing = unstable_cache(
+  readExtraLocationPricing,
+  ["extra-location-pricing"],
+  { tags: [PLAN_PRICING_TAG], revalidate: 300 },
+);
+
+/**
+ * Uncached. Use wherever this number decides what someone is CHARGED — the same
+ * rule `getPlanPricingLive` follows, and it matters more here: a location is
+ * bought against a live mandate, so quoting from a cache a reprice has not
+ * reached would debit the old amount.
+ */
+export const getExtraLocationPricingLive = readExtraLocationPricing;
 
 export function bustPlanPricing() {
   // Next 16 requires the cache profile — `revalidateTag(tag)` alone no longer

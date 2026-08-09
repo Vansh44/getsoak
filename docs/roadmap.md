@@ -35,7 +35,7 @@ the sequence; those are the specifications.**
 | **2**  | **Refunds & cancellation** — the money-out path                     | ✅ done |
 | **3**  | Returns, exchanges & BORIS                                          | ✅ done |
 | **4**  | Store credit ✅ — gift cards left                                   | ◐ part  |
-| **5**  | Metered extra-location billing (POS 7)                              | ⏳      |
+| **5**  | Metered extra-location billing (POS 7)                              | ✅ done |
 | **6**  | Channel stock policy (LOC H)                                        | ⏳      |
 | **7**  | Transfer lifecycle (LOC I)                                          | ⏳      |
 | **8**  | More routing strategies (LOC J)                                     | ⏳      |
@@ -218,15 +218,63 @@ exact problem in this codebase.
 
 ---
 
-## Step 5 — Metered extra-location billing _(POS 7)_
+## Step 5 — Metered extra-location billing ✅ DONE _(POS 7)_
 
-₹1,000/mo beyond the 2 included. Currently `PLAN_LIMITS.posLocationsIncluded`
-hard-gates at 2, so a merchant who wants a third **cannot buy one** — this is
-revenue sitting behind a check.
+₹1,000/mo (₹10,000/yr) beyond the 2 included. `PLAN_LIMITS.posLocationsIncluded`
+hard-gated at 2, so a merchant who wanted a third **could not buy one** — this
+was revenue sitting behind a check, and the only item on the whole roadmap that
+was actively refusing money.
 
-**Ships:** metered subscription line on the existing Razorpay autopay mandate,
-a location count that bills, and soft-on-downgrade behaviour (never delete a
-location; block creating new ones).
+**★ AN EXTRA LOCATION IS A PRICE RISE ON THE SAME SUBSCRIPTION, NOT A SECOND
+ONE.** That is the decision everything else falls out of. The alternatives were
+a second mandate (the merchant authorises autopay twice, and can then have one
+succeed while the other halts — two states to reconcile, two failure emails,
+one shop) or per-cycle Razorpay add-ons (a charge someone or something has to
+remember to add at every renewal, forever). Folding the cost into the plan
+amount means the existing machinery already covers it:
+
+- `razorpay_plans` is keyed on **(plan, period, amount)**, so a different
+  location count resolves to a different cached plan id with **no new table**;
+- `planForRzpPlan` still maps that id back to (tier, period) for the webhook,
+  because neither of those changed;
+- `decidePlanChange`'s rule applies unaltered — **buying is dearer so it
+  prorates now, releasing is cheaper so it waits for the cycle end**, which
+  keeps refunds out of the system entirely (Step 2's reasoning, reused);
+- the mandate ceiling already carried headroom, so no re-authorisation.
+
+**Shipped:** operator-set pricing through the existing console Pricing panel
+(`plan_prices`, key `extra_location`, `supabase/plans_05_extra_location_price.sql`;
+`EXTRA_LOCATION_PRICE` in `lib/plans.ts` is the fallback until one is set),
+`lib/plans/location-billing.ts` (pure + tested —
+the allowance, the cap, the refusals, the copy),
+`supabase/subscriptions_03_billed_locations.sql` (its own file, per §15b),
+`resolveRazorpayPlanId(plan, period, extraLocations)`,
+`changeBilledLocations` + `getLocationBillingState` in `subscription-actions.ts`,
+the `createLocation` cap, and the buy/release card on `/dashboard/locations`.
+
+**Watch for, if this is ever extended:**
+
+- **The count is ABSOLUTE, never a delta.** Two tabs each pressing "add one"
+  against a delta buys two, and the merchant finds out on their card.
+- **`billed_locations` is ADDITIVE to the plan's allowance, not a total.** If
+  Pro's included count ever rises, a merchant paying for one gains headroom
+  rather than being billed for what became free.
+- **It is written only when the change is LIVE.** Persisting a scheduled
+  release immediately would drop the allowance while they are still paying for
+  that location, refusing them a shop they own until the cycle ends.
+- **`changePlan` carries the count through.** Resolving a tier change without
+  it would silently drop the merchant back to the bare plan price while they
+  keep every shop — a revenue leak invisible from both sides.
+- **The mandate ceiling is checked before the gateway.** Razorpay accepts the
+  plan change and then fails the DEBIT weeks later, which surfaces as a halted
+  subscription rather than as "you can't buy this".
+- **The add-on is priced like a tier but is NOT one.** `resolvePricing` ignores
+  its row, which is what keeps it off the public pricing page as a fourth card.
+  Charging reads the price LIVE; only display reads the cached loader.
+
+**Not built:** an operator-side grant for comped stores (a comped Pro store has
+no mandate to raise, so it is told plainly rather than shown a button that
+fails), and per-location proration finer than Razorpay's own.
 
 ---
 

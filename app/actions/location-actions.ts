@@ -24,6 +24,7 @@ import {
   inventoryLevels,
   storeFulfilmentRules,
   storeLocations,
+  storeSubscriptions,
   stores,
 } from "@/drizzle/schema";
 import {
@@ -33,6 +34,11 @@ import {
 import { STORE_TAG } from "@/lib/store/resolve";
 import { FEATURES_KEY } from "@/lib/settings/registry";
 import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
+import { getExtraLocationPricing } from "@/lib/plans/pricing";
+import {
+  canAddLocation,
+  locationAllowance,
+} from "@/lib/plans/location-billing";
 import { getStoreLocations, type StoreLocation } from "@/lib/pos/locations";
 import { DEFAULT_STRATEGY_ID, getStrategy } from "@/lib/fulfilment/strategies";
 import {
@@ -196,23 +202,50 @@ export async function createLocation(
   const data = sanitizeInput(input);
   if (!data.name) return { error: "Give the location a name." };
 
-  // Location cap: included locations per plan (extra locations are a paid
-  // add-on, not yet available — see docs/pos-plan.md Phase 7).
+  // Location cap: what the plan includes, PLUS the extra locations the store is
+  // paying for (roadmap Step 5). `billed_locations` is additive, so a merchant
+  // who has bought two shops has an allowance of four on Pro.
+  //
+  // Read from the subscription row rather than passed in: this is the server
+  // boundary for a paid limit, and a count the client could name is a free
+  // location (invariant 5 — a disabled control is not a permission).
   let existing = 0;
+  let billed = 0;
   try {
-    const rows = await withService((db) =>
-      db
-        .select({ n: count() })
-        .from(storeLocations)
-        .where(eq(storeLocations.storeId, storeId)),
-    );
-    existing = rows[0]?.n ?? 0;
+    const [locRows, subRows] = await Promise.all([
+      withService((db) =>
+        db
+          .select({ n: count() })
+          .from(storeLocations)
+          .where(eq(storeLocations.storeId, storeId)),
+      ),
+      withService((db) =>
+        db
+          .select({ billed_locations: storeSubscriptions.billedLocations })
+          .from(storeSubscriptions)
+          .where(eq(storeSubscriptions.storeId, storeId))
+          .limit(1),
+      ).catch(() => [] as { billed_locations: number }[]),
+    ]);
+    existing = locRows[0]?.n ?? 0;
+    billed = subRows[0]?.billed_locations ?? 0;
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't add the location.") };
   }
-  if (existing >= guard.limits.posLocationsIncluded) {
+
+  if (!canAddLocation(guard.plan, billed, existing)) {
+    const allowance = locationAllowance(guard.plan, billed);
+    // The operator-set price, so this sentence can never quote a figure the
+    // billing card beside it contradicts. Cached: it is being DISPLAYED here,
+    // not charged.
+    const price = (await getExtraLocationPricing()).monthlyInr.toLocaleString(
+      "en-IN",
+    );
     return {
-      error: `Your plan includes ${guard.limits.posLocationsIncluded} locations. Additional locations are ₹1,000/month — coming soon.`,
+      error:
+        billed > 0
+          ? `You're using all ${allowance} of your locations. Add another for ₹${price}/month from Locations → Billing.`
+          : `Your plan includes ${allowance} locations. Additional locations are ₹${price}/month — add one from Locations → Billing.`,
     };
   }
 

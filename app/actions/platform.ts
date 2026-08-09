@@ -35,8 +35,11 @@ import { applyTheme } from "@/lib/themes/apply";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 import {
+  EXTRA_LOCATION_KEY,
   bustPlanPricing,
+  getExtraLocationPricingLive,
   getPlanPricingLive,
+  type ExtraLocationPricing,
   type PlanPricing,
 } from "@/lib/plans/pricing";
 import { currentPeriod } from "@/lib/ai/quota";
@@ -815,13 +818,18 @@ export interface PlanPriceInput {
 }
 
 export async function getPlanPricingForConsole(): Promise<
-  { pricing: PlanPricing } | { error: string }
+  | { pricing: PlanPricing; extraLocation: ExtraLocationPricing }
+  | { error: string }
 > {
   const viewer = await getPlatformViewer();
   if (!viewer) return { error: "Not authorized." };
   // Live, not cached: an operator editing prices must see what is stored, not
   // what the public page happens to be serving.
-  return { pricing: await getPlanPricingLive() };
+  const [pricing, extraLocation] = await Promise.all([
+    getPlanPricingLive(),
+    getExtraLocationPricingLive(),
+  ]);
+  return { pricing, extraLocation };
 }
 
 export async function savePlanPricing(
@@ -845,7 +853,12 @@ export async function savePlanPricing(
   }[] = [];
 
   for (const p of input) {
-    if (!(PLAN_IDS as readonly string[]).includes(p.plan)) {
+    // The metered-location add-on is priced through this same panel (roadmap
+    // Step 5). It is a legal key here but NOT a tier — lib/plans/pricing.ts
+    // keeps it out of the tier map so it can never render as a fourth pricing
+    // card, and it has no struck-through price because it has no card.
+    const isAddon = p.plan === EXTRA_LOCATION_KEY;
+    if (!isAddon && !(PLAN_IDS as readonly string[]).includes(p.plan)) {
       return { error: `Unknown plan: ${p.plan}` };
     }
     const num = (v: unknown, label: string): number | { error: string } => {
@@ -863,13 +876,17 @@ export async function savePlanPricing(
     if (typeof yearly !== "number") return yearly;
 
     // A blank or zero base means "no offer running" — not a free list price.
-    const baseM =
-      p.baseMonthlyInr === null || Number(p.baseMonthlyInr) === 0
+    // Forced null for the add-on: a strike-through with nothing to render it on
+    // is a stored value that can only ever mislead whoever reads the table next.
+    const baseM = isAddon
+      ? null
+      : p.baseMonthlyInr === null || Number(p.baseMonthlyInr) === 0
         ? null
         : num(p.baseMonthlyInr, `${p.plan} base monthly price`);
     if (baseM !== null && typeof baseM !== "number") return baseM;
-    const baseY =
-      p.baseYearlyInr === null || Number(p.baseYearlyInr) === 0
+    const baseY = isAddon
+      ? null
+      : p.baseYearlyInr === null || Number(p.baseYearlyInr) === 0
         ? null
         : num(p.baseYearlyInr, `${p.plan} base yearly price`);
     if (baseY !== null && typeof baseY !== "number") return baseY;

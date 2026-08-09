@@ -427,9 +427,11 @@ needs a small `type: "enum"` addition to `SettingDef`), `pos.receiptWidth`
 - `PLAN_LIMITS.posLocationsIncluded`: pro `2` (others `0`).
 - `pos.enabled` is `minPlan: 'pro'` → `resolveStoreSettings` forces it to `false`
   on free/basic even if the row says otherwise (expiry-aware via `effectivePlan`).
-- Adding a location beyond `posLocationsIncluded` is **blocked** in
-  `pos-location-actions.ts` with an upgrade/contact message until Phase 7 wires
-  the ₹1,000/mo charge.
+- Adding a location beyond `posLocationsIncluded` is allowed once it is PAID
+  for: the cap in `location-actions.ts` is
+  `posLocationsIncluded + store_subscriptions.billed_locations` (Phase 7, done).
+  A store with no live mandate is told to set up autopay rather than shown a
+  button that fails at the gateway.
 
 ### 9.3 Sidebar "POS" section (`/dashboard/pos`)
 
@@ -547,10 +549,17 @@ store-credit accounts + ledger, gift-card issue/redeem tender.
 `twilio|meta`), Twilio integration + templates, `pos.receiptChannel` wiring.
 Meta slots in later behind the same interface.
 
-### Phase 7 — Metered extra-location billing (₹1,000/mo)
+### Phase 7 — Metered extra-location billing (₹1,000/mo) — **DONE**
 
-Charge additional locations on the existing Pro Razorpay subscription (add-ons /
-quantity + webhook reconciliation); lift the Phase 0 hard cap into a paid path.
+Shipped as a **price rise on the existing subscription**, not as add-ons or a
+second mandate — the cost folds into the plan amount, and `razorpay_plans` is
+already keyed on the amount, so a location count resolves to its own cached plan
+id with no new table and no re-authorisation. Buying prorates immediately;
+releasing waits for the paid cycle to end. The Phase 0 hard cap is gone: the
+allowance is `posLocationsIncluded + store_subscriptions.billed_locations`.
+
+See `docs/roadmap.md` Step 5 and CODEBASE §22 for the reasoning and the traps;
+`lib/plans/location-billing.ts` holds the rules, pure and tested.
 
 ### Phase 8 — Omnichannel (BOPIS, ship-from-store, routing, inter-state IGST)
 

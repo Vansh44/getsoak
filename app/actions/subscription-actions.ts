@@ -6,20 +6,30 @@
 // webhooks. Billing runs on the PLATFORM's Razorpay account (revenue is
 // StoreMink's), never a store's BYO checkout gateway.
 
-import { and, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 import { revalidateTag } from "next/cache";
 import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
 import {
   admins,
   planEvents,
+  storeLocations,
   storeSubscriptions,
   stores,
 } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
-import { STORE_TAG } from "@/lib/store/resolve";
+import { STORE_TAG, getCurrentStore } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
-import { PLAN_META, type Plan } from "@/lib/plans";
+import { PLAN_META, effectivePlan, limitsFor, type Plan } from "@/lib/plans";
+import { getExtraLocationPricingLive } from "@/lib/plans/pricing";
+import {
+  describeLocationChange,
+  locationAllowance,
+  releasableLocations,
+  requiredBilledLocations,
+  subscriptionTotalPaise,
+  validateBilledLocations,
+} from "@/lib/plans/location-billing";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import { logError } from "@/lib/observability/logger";
 import {
@@ -641,6 +651,7 @@ export async function changePlan(
         period: storeSubscriptions.period,
         status: storeSubscriptions.status,
         mandate_max_paise: storeSubscriptions.mandateMaxPaise,
+        billed_locations: storeSubscriptions.billedLocations,
       })
       .from(storeSubscriptions)
       .where(eq(storeSubscriptions.storeId, storeId))
@@ -667,7 +678,26 @@ export async function changePlan(
   const currentAmountPaise =
     (await amountForRzpPlan(row.rzp_plan_id)) ??
     (await planAmountPaise(row.plan as Plan, currentPeriod));
-  const targetAmountPaise = await planAmountPaise(targetPlan, targetPeriod);
+
+  // ★ METERED LOCATIONS RIDE ALONG (roadmap Step 5). Their cost is folded into
+  // the subscription amount, so resolving the target plan WITHOUT them would
+  // quietly drop the merchant back to the bare tier price while they keep every
+  // shop — a revenue leak invisible on both sides, and one that would surface
+  // months later as "why is my invoice smaller than my location list".
+  //
+  // Zero when the TARGET tier has no POS: leaving Pro means the locations stop
+  // working, and charging for something the plan cannot use is indefensible.
+  // The stored count is deliberately NOT written back here — it records what
+  // the store has bought, so returning to Pro resumes billing for the shops it
+  // still holds rather than handing them over free.
+  const targetHasPos = limitsFor(targetPlan).posLocationsIncluded > 0;
+  const billedLocations = targetHasPos ? (row.billed_locations ?? 0) : 0;
+  const targetAmountPaise = subscriptionTotalPaise(
+    await planAmountPaise(targetPlan, targetPeriod),
+    billedLocations,
+    targetPeriod,
+    await getExtraLocationPricingLive(),
+  );
 
   const decision = decidePlanChange({
     currentPlan: row.plan,
@@ -689,7 +719,11 @@ export async function changePlan(
     };
   }
 
-  const resolved = await resolveRazorpayPlanId(targetPlan, targetPeriod);
+  const resolved = await resolveRazorpayPlanId(
+    targetPlan,
+    targetPeriod,
+    billedLocations,
+  );
   if (!resolved)
     return { error: "Couldn't set up the plan. Please try again." };
 
@@ -805,5 +839,282 @@ export async function changePlan(
     message: decision.periodChanged
       ? `${targetName} billed ${targetPeriod} starts at your next renewal. Nothing is charged today.`
       : `${targetName} will start at your next renewal. Nothing is charged today.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Metered extra POS locations (roadmap Step 5 / POS Phase 7).
+//
+// An extra location is a PRICE RISE ON THE SAME SUBSCRIPTION, not a second one
+// — see lib/plans/location-billing.ts for why. That means this reuses
+// `changePlan`'s whole apparatus: the same mandate, the same
+// dearer-now/cheaper-at-cycle-end rule, the same updatable-state check.
+// ---------------------------------------------------------------------------
+
+export interface LocationBillingState {
+  /** Locations the plan includes at no extra cost. */
+  included: number;
+  /** Extra locations currently paid for. */
+  billed: number;
+  /** Locations that exist right now. */
+  existing: number;
+  /** included + billed — the ceiling createLocation enforces. */
+  allowance: number;
+  /** Extra locations that MUST stay paid for, given what exists. */
+  required: number;
+  /** Paid slots sitting unused, which could be released. */
+  releasable: number;
+  pricePerPeriodInr: number;
+  period: BillingPeriod;
+  /** Can the merchant buy one right now? False when there is no live mandate. */
+  canBuy: boolean;
+  /** Why not, when canBuy is false. */
+  blockedReason?: string;
+}
+
+/**
+ * What the Locations page needs to render the billing card. Read-only, so it is
+ * gated on VIEW of the section the merchant is looking at rather than on
+ * billing permissions.
+ */
+export async function getLocationBillingState(): Promise<LocationBillingState | null> {
+  const userId = await getManagerUserId("locations");
+  if (!userId) return null;
+  const storeId = await getActingStoreId();
+
+  const [store, subRows, locRows, locationPrice] = await Promise.all([
+    getCurrentStore(),
+    withService((db) =>
+      db
+        .select({
+          status: storeSubscriptions.status,
+          period: storeSubscriptions.period,
+          billed_locations: storeSubscriptions.billedLocations,
+          mandate_max_paise: storeSubscriptions.mandateMaxPaise,
+        })
+        .from(storeSubscriptions)
+        .where(eq(storeSubscriptions.storeId, storeId))
+        .limit(1),
+    ).catch(() => []),
+    withService((db) =>
+      db
+        .select({ n: count() })
+        .from(storeLocations)
+        .where(eq(storeLocations.storeId, storeId)),
+    ).catch(() => [{ n: 0 }]),
+    getExtraLocationPricingLive(),
+  ]);
+
+  const plan = effectivePlan(store);
+  const sub = subRows[0];
+  const billed = sub?.billed_locations ?? 0;
+  const existing = locRows[0]?.n ?? 0;
+  const period: BillingPeriod = sub?.period === "yearly" ? "yearly" : "monthly";
+
+  // Buying folds the cost into the subscription, so there has to BE one. A
+  // comped Pro store has no mandate to raise — telling them plainly beats a
+  // button that fails at the gateway.
+  let blockedReason: string | undefined;
+  if (limitsFor(plan).posLocationsIncluded <= 0) {
+    blockedReason = "Extra locations are part of the Pro plan.";
+  } else if (!hasLiveMandate(sub?.status)) {
+    blockedReason =
+      "Extra locations are billed through your subscription. Set up autopay to add more shops.";
+  } else if (!canUpdateSubscription(sub?.status).ok) {
+    blockedReason = canUpdateSubscription(sub?.status).reason;
+  }
+
+  return {
+    included: limitsFor(plan).posLocationsIncluded,
+    billed,
+    existing,
+    allowance: locationAllowance(plan, billed),
+    required: requiredBilledLocations(plan, existing),
+    releasable: releasableLocations(plan, billed, existing),
+    // The operator-set price (plan_prices, key `extra_location`), falling back
+    // to the code constant when none has been set. Cached is right here — this
+    // number is DISPLAYED; the charge re-reads it live.
+    pricePerPeriodInr:
+      period === "yearly" ? locationPrice.yearlyInr : locationPrice.monthlyInr,
+    period,
+    canBuy: !blockedReason,
+    blockedReason,
+  };
+}
+
+/**
+ * Set how many EXTRA locations the store pays for.
+ *
+ * Absolute, not a delta: two tabs each pressing "add one" against a delta would
+ * buy two, and the merchant would find out on their card. An absolute target is
+ * idempotent — the second request resolves to the same number and no-ops.
+ */
+export async function changeBilledLocations(
+  requested: number,
+): Promise<SubscriptionActionResult> {
+  // Buying a location spends money, so it is the same gate the rest of billing
+  // uses, not the `locations` section that merely manages shops.
+  const userId = await getManagerUserId("ai");
+  if (!userId) return { error: "You don't have permission to do this." };
+
+  const creds = getPlatformRazorpayCreds();
+  if (!creds) return { error: "Subscriptions aren't available right now." };
+
+  const storeId = await getActingStoreId();
+  const store = await getCurrentStore();
+  const plan = effectivePlan(store);
+
+  const [subRows, locRows] = await Promise.all([
+    withService((db) =>
+      db
+        .select({
+          rzp_subscription_id: storeSubscriptions.rzpSubscriptionId,
+          rzp_plan_id: storeSubscriptions.rzpPlanId,
+          plan: storeSubscriptions.plan,
+          period: storeSubscriptions.period,
+          status: storeSubscriptions.status,
+          mandate_max_paise: storeSubscriptions.mandateMaxPaise,
+          billed_locations: storeSubscriptions.billedLocations,
+        })
+        .from(storeSubscriptions)
+        .where(eq(storeSubscriptions.storeId, storeId))
+        .limit(1),
+    ).catch(() => []),
+    withService((db) =>
+      db
+        .select({ n: count() })
+        .from(storeLocations)
+        .where(eq(storeLocations.storeId, storeId)),
+    ).catch(() => [{ n: 0 }]),
+  ]);
+
+  const row = subRows[0];
+  if (!row?.rzp_subscription_id) {
+    return {
+      error:
+        "Extra locations are billed through your subscription. Set up autopay first.",
+    };
+  }
+  const usable = canUpdateSubscription(row.status);
+  if (!usable.ok) return { error: usable.reason! };
+
+  const existing = locRows[0]?.n ?? 0;
+  const check = validateBilledLocations(plan, requested, existing);
+  if (!check.ok) return { error: check.reason };
+
+  const current = row.billed_locations ?? 0;
+  if (check.count === current) {
+    return { error: "That's already how many extra locations you have." };
+  }
+
+  const period: BillingPeriod = row.period === "yearly" ? "yearly" : "monthly";
+  const planPaise = await planAmountPaise(row.plan as Plan, period);
+  // LIVE — this decides what is debited from a mandate that is already
+  // authorised, so it must never come from a cache a reprice has not reached.
+  const locationPrice = await getExtraLocationPricingLive();
+  const targetAmountPaise = subscriptionTotalPaise(
+    planPaise,
+    check.count,
+    period,
+    locationPrice,
+  );
+  // The FALLBACK is priced at today's rate too, but only as a last resort:
+  // amountForRzpPlan reports what this subscriber actually pays, which may be a
+  // grandfathered rate from before an operator repriced.
+  const currentAmountPaise =
+    (await amountForRzpPlan(row.rzp_plan_id)) ??
+    subscriptionTotalPaise(planPaise, current, period, locationPrice);
+
+  // Same rule as a tier change, and for the same reason: buying is dearer so it
+  // prorates now; releasing is cheaper so it waits for the cycle they already
+  // paid for. Nobody is refunded, so no refund can go wrong.
+  const immediate = targetAmountPaise > currentAmountPaise;
+
+  // ★ CHECKED BEFORE THE GATEWAY, because the mandate ceiling was fixed when the
+  // merchant authorised autopay and cannot be raised without them re-authorising.
+  // Razorpay would accept the plan change and then fail the DEBIT weeks later,
+  // which surfaces as a halted subscription rather than as "you can't buy this".
+  const mandateMax = row.mandate_max_paise ?? 0;
+  if (immediate && mandateMax > 0 && targetAmountPaise > mandateMax) {
+    return {
+      error:
+        "That's more than your autopay limit allows. Cancel your subscription and subscribe again to authorise a higher amount.",
+    };
+  }
+
+  const resolved = await resolveRazorpayPlanId(
+    row.plan as Plan,
+    period,
+    check.count,
+  );
+  if (!resolved) {
+    return { error: "Couldn't price the change. Please try again." };
+  }
+
+  const res = await rzpUpdateSubscription(creds, row.rzp_subscription_id, {
+    planId: resolved.rzpPlanId,
+    scheduleChangeAt: immediate ? "now" : "cycle_end",
+  });
+  if (!res.ok) {
+    logError("changeBilledLocations (gateway)", res.error, {
+      storeId,
+      requested: check.count,
+    });
+    return { error: "Couldn't update your subscription. Please try again." };
+  }
+
+  // ★ THE COUNT IS ONLY WRITTEN WHEN IT IS LIVE. Persisting a scheduled RELEASE
+  // now would drop the allowance immediately, and a store sitting exactly on its
+  // ceiling would find it could no longer create the location it is still paying
+  // for until the end of the cycle. The webhook resolves the tier from the plan
+  // id Razorpay actually bills; this column follows on the same edge.
+  if (immediate) {
+    try {
+      await withService((db) =>
+        db
+          .update(storeSubscriptions)
+          .set({
+            billedLocations: check.count,
+            rzpPlanId: resolved.rzpPlanId,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(storeSubscriptions.storeId, storeId)),
+      );
+    } catch (err) {
+      // The gateway has already been told, and on an increase the merchant has
+      // been charged. Never report a bare success when the record did not move
+      // — that is how someone pays for a location the cap still refuses them
+      // (the §15b "never report a bare success" rule).
+      logError("changeBilledLocations (persist)", err, {
+        storeId,
+        requested: check.count,
+      });
+      return {
+        error:
+          "Your payment went through but we couldn't finish setting up the location. Contact support and we'll sort it out — don't try again.",
+      };
+    }
+    revalidateTag(STORE_TAG, "max");
+  }
+
+  emitEvent({
+    type: "plan.changed",
+    storeId,
+    actor: { type: "admin", id: userId, label: null },
+    subject: { type: "store", id: storeId, label: null },
+    payload: {
+      extraLocations: check.count,
+      previousExtraLocations: current,
+    },
+  });
+
+  return {
+    success: true,
+    message: describeLocationChange(
+      current,
+      check.count,
+      period,
+      locationPrice,
+    ),
   };
 }
