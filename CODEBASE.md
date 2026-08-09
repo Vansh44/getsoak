@@ -466,6 +466,19 @@ wholesip/
 │   │                          # remainder gap below the gateway minimum) +
 │   │                          # store-credit.ts (the ONE way credit moves —
 │   │                          # issue/spend/reinstate, all via the RPCs)
+│   ├── fulfilment/            # ★ §23: resolve.ts (which location serves an online
+│   │                          # order) + strategies.ts (the routing REGISTRY) +
+│   │                          # pickup.ts (is pickup on, hold/ready days, the
+│   │                          # collection-payment policy reader) +
+│   │                          # ★ payment-policy.ts (PURE: which payment methods
+│   │                          # checkout may offer, and whether the one that came
+│   │                          # back is allowed — ONE rule asked by both the picker
+│   │                          # and placeOrder, so the UI can never offer what the
+│   │                          # server refuses. ⚠ NOT lib/pos/pickup-payment.ts,
+│   │                          # which answers a different question: what a
+│   │                          # collection still OWES at the counter. Renamed off
+│   │                          # that basename precisely so the two can't be
+│   │                          # imported for each other)
 │   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
 │   │                          # refundRouteFor: the TENDER decides where money goes,
 │   │                          # and a sale rung HERE is always returnable here),
@@ -932,6 +945,17 @@ wholesip/
    (in the action), not just in the UI. If RLS blocks a setting-dependent write
    (e.g. customers may only insert `pending_review` blogs), do the privileged
    step with the service-role client AFTER checking the setting — see
+   **★ THREE TYPES: `boolean`, `number` and `select`.** `select` carries
+   `options` — and that list IS the validation, not a UI hint:
+   `resolveStoreSettings` refuses a stored value that is not in it and falls
+   back to the default, so a retired option stops applying the moment it is
+   removed rather than lingering in a jsonb blob nobody reads.
+   `saveStoreSettings` re-checks it server-side (invariant 5 — the dropdown is
+   not the boundary) and now validates EVERY type before writing, where it used
+   to store whatever arrived on the reasoning that the read side rejects a
+   wrong-typed value. True, but it left the stored blob full of values that do
+   nothing, which is what makes a settings bug impossible to diagnose from the
+   database. First consumer: `fulfilment.pickupPayment` (§23).
    direct-publish in `blog-actions.ts`. First consumers:
    `blogs.customerSubmissions`, `blogs.requireApproval` (rendered at
    `/dashboard/blogs/settings`) and `pages.customCode` (rendered at
@@ -2400,6 +2424,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         count and gross. It is the mirror of the two bugs `lib/pos/shifts.ts`
         already guards — double-counted change and cash refunds — which both
         reported SHORT.
+      - **★ WHO PAYS WHEN IS THE MERCHANT'S CHOICE** — `fulfilment.pickupPayment`
+        (`customer_choice` | `prepaid` | `at_store`, defaulting to the first
+        because that is today's behaviour, invariant 1). The rule lives in
+        `lib/fulfilment/payment-policy.ts`, pure and tested, and **the same
+        function answers for the picker and for `placeOrder`** — the checkout
+        screen asks it which controls to render, the server asks it whether the
+        method that came back is allowed, so the UI can never offer something
+        the server then refuses in front of a customer (the
+        `RegisterConfig.canDiscount` rule from §22, applied to the other
+        counter). Three things are load-bearing: **delivery is never touched by
+        it** (a policy about collections says nothing about courier orders);
+        **`prepaid` with no gateway offers NOTHING rather than falling back to
+        pay-at-store**, which would serve the opposite of the merchant's policy
+        — `canRequirePrepaid` refuses the setting at SAVE time so that state
+        never exists; and `placeOrder` reuses its own gateway lookup for the
+        check, which is only correct while `offline` is independent of
+        `onlineAvailable` in `paymentOptionsFor` — a property with a test
+        pinning it, because a future policy that broke it would silently start
+        refusing COD orders.
+      - **★ CHECKOUT DEFAULTS TO ONLINE WHEN A GATEWAY IS CONNECTED.** It was
+        `useState<PaymentMethod>("cod")` with nothing reconciling it against
+        `payConfig.onlinePayments`, so every merchant who connected Razorpay
+        watched shoppers land on Cash on Delivery — the option that costs them a
+        courier round trip and a collection risk, pre-selected by us. The
+        default is now derived (`defaultPaymentMethod`) and applied in an effect,
+        because the config arrives after first paint — guarded by a `payTouched`
+        ref, since an effect that re-applied it would yank the selection out from
+        under a shopper who had already tapped one. It re-applies ONLY when the
+        current choice stops being offered (switching Delivery→Pickup under a
+        prepaid policy), which would otherwise fail at `placeOrder`.
       - **★ `pay_at_store` IS NOT A TENDER, so the tender is CAPTURED, never
         assumed** (`lib/pos/pickup-payment.ts`, pure + tested). It is a promise
         recorded at checkout, and the checkout copy says exactly that — "Pay at
@@ -2446,6 +2500,52 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★ A COLLECTION CODE, AND WHY IT IS NOT THE ORDER REFERENCE**
+        (`lib/fulfilment/collection-code.ts`, pure + tested;
+        `orders.pickup_code`, locations_11). Minted at checkout for collections
+        only. It is a **LOOKUP key, not a bearer token** — access control stays
+        UUID + store scope (§14) and the counter operator is already
+        authenticated — but it is RANDOM, because `order_ref` is sequential and
+        guessable and anyone at a counter could otherwise name somebody else's
+        collection. **Crockford base32**: the alphabet drops I, L, O and U, the
+        characters people misread off a phone screen in a shop, and
+        `normalizeCollectionCode` folds those confusions back in, so a customer
+        reading "0" as "O" still finds their order.
+      - **★★ THE EMAIL LEADS WITH THE CODE, NOT THE QR.** Gmail strips `data:`
+        URIs in `<img>` and every major client blocks remote images by default,
+        so a QR embedded in email is a broken-image icon on the one screen a
+        customer holds up at the counter. The code goes out as TEXT (always
+        renders, can be read aloud) and links to `/orders/[id]/collect`, which
+        draws the QR client-side via `BrowserQRCodeSvgWriter` — already a
+        dependency for camera scanning, so no new package. That page is
+        owner-gated and `noindex`, and the code in text is never conditional on
+        the QR rendering: if the writer fails, eight characters still work.
+      - **★ PICKUP ALERTS DEFAULT TO THE SHOP THEY HAPPENED AT.**
+        `EventDef.defaultScope` lets an event pick its own routing fallback, and
+        the four pickup-specific events (`ready_for_pickup`, `collected`,
+        `pickup_expiring`, `pickup_expired`) default to `event_location`: a
+        collection is physically at one shop, so the people who can act on it
+        are the ones standing in it. **`order.placed` deliberately does NOT** —
+        it fires for every order including deliveries, so narrowing it would
+        change who hears about ordinary orders for every existing store
+        (invariant 1). A merchant's own stored choice always beats the default;
+        the fallback only applies when they have chosen nothing.
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
+        scanned collection code OR a typed order number from the same input —
+        a hardware scanner is a keyboard, and making someone pick a field first
+        is exactly the friction the code was meant to remove.
+        `isCollectionCode` is a cheap shape check, so a scanner pointed at a
+        milk carton never becomes a database lookup, and a code belonging to a
+        sister branch names THAT branch rather than returning "not found".
+      - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
+        Marking ready is what tells a customer to travel, so it belongs to
+        someone who has seen the box; handing it over is a cashier's job with
+        the customer standing there, so `markCollected` stays on `sell`.
+        Tightening this was only safe because no store had pickup enabled when
+        it shipped (owner confirmed 2026-08-09) — invariant 1 is satisfied by
+        there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
+        **no test coverage at all** before this; it does now, in both
+        directions.
       - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
         (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
         not a delivery with a different address, and these pages used one
@@ -3056,52 +3156,85 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **⚠ Never exercised against a live Razorpay account**, and the exact
       idempotency header name should be re-checked against their current docs.
 
-27. **Cancellation — and why nothing pays automatically.** The other half of
-    roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10.
-    - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
-      on cancel was considered and refused — not even as a setting — for the
-      same reason §22 gives for owner-only discounts: money leaving with no
-      human looking at it is the one irreversible act with no physical trace.
-      So the OBLIGATION is made loud instead of automatic.
-    - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
-      cancelled order that was paid for. **Derived**, never stored: a flag
-      would need clearing on refund, on partial refund and on reinstatement,
-      and the one you forget is the one that nags a merchant forever.
-    - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
-      `refundDueForOrder` and rides `refund_due` into the
-      `order.pickup_expired` payload — the merchant learns it in the channel
-      they already read. `refund_due` had to be added to `MONEY` in
-      `lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
-      "Total 281.4" failure), and declared in `variables.ts` to be a usable
-      `{{token}}`.
-    - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
-      inline in `updateOrderStatus`; a second hand-written copy for the
-      customer path would fail SILENTLY — stock simply never comes back, and
-      it surfaces in a stock count weeks later. It preserves both branches
-      exactly: reserved stock releases at the location that reserved it (a POS
-      sale must not restock at the store's default shop), and a pickup order
-      releases HOLDS because its units never left the shelf.
-    - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
-      neither.** Stoppable (`pending`/`processing`, not collected, inside the
-      window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
-      Too late ⇒ `order.cancellation_requested` and the order is untouched. The
-      status is re-checked INSIDE the statement that changes it, so a dispatch
-      racing a cancel means one matches nothing rather than both "succeeding".
-      `withService` after the WHERE re-proves ownership + store scope, because
-      a shopper holds SELECT but not UPDATE on their own orders (convention
-      #12's model).
-    - **The button does NOT disappear once an order ships.** Someone who wants
-      out still wants out, and hiding it just becomes a support email the
-      merchant handles by hand anyway.
-    - Settings (group **Orders**, section `orders`, at
-      `/dashboard/orders/settings`): `orders.allowCustomerCancellation`
-      (**default OFF** — new behaviour on a live store, invariant 1) and
-      `orders.cancellationWindowHours` (24). Enforced server-side; a hidden
-      button is not a permission.
-    - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
-      Every registry event has a real emitter;
-      `order.cancellation_requested` was the last one waiting. Keep it that
-      way — an entry there is a deliberate act, not a way to silence the guard.
+27. **Cancellation — a REQUEST, then a decision** (roadmap Step 2, rebuilt
+    2026-08-09). Design: `docs/roadmap.md` Step 2.
+    - **★ ASKING IS NOT CANCELLING.** `cancelMyOrder` raises a request
+      (`orders.cancellation_status = 'requested'`); a human approves it. Money
+      and stock move on APPROVAL. It used to cancel outright the moment a
+      shopper pressed the button.
+    - **★ WHOLE-ORDER ONLY, AND DELIBERATELY SO.** No item-level cancellation,
+      approval, refund or state anywhere in this flow — it would need partial
+      fulfilment, which this system does not have. Owner decision; written into
+      `lib/orders/cancellation.ts` and `approve-cancellation.ts` headers so the
+      next reader does not "fix" it.
+    - **★ ONE IMPLEMENTATION OF CANCELLING** (`lib/orders/approve-cancellation.ts`),
+      shared by the merchant's Cancel panel, the Approve button, and the
+      customer path under automatic approval. Claim the status conditionally →
+      release stock (`lib/orders/cancel.ts`) → move the money → notify, in that
+      order and for stated reasons.
+    - **★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
+      `store_credit` as a method, so using it for both gives an `order_refunds`
+      row either way (keeping `refundDueForOrder` and `payment_status` correct),
+      the refund cap on both, and pending-row-first idempotency. Calling
+      `issueCredit` directly would credit a customer with no refund row behind
+      it — money out the order does not know about. `later` moves nothing by
+      design: it records the obligation.
+    - **★ A FAILED REFUND IS NEVER A SUCCESS, AND AN UNKNOWN ONE IS NEVER A
+      FAILURE.** The order is cancelled either way (the claim already
+      committed), but `refundError` and `refundPending` are returned separately
+      so the caller says which — §26's rule, reused.
+    - **★ APPROVAL IS REQUIRED BY DEFAULT** (`orders.cancellationApproval`), and
+      `normalizeApproval` resolves anything unknown to requiring it: automatic
+      approval moves money with nobody looking, so it is never what a typo
+      lands on.
+    - **★ THE WINDOW IS A FIXED LIST, INCLUDING "UNTIL FULFILLED"** — a
+      first-class rule, not a very long duration. A shop that packs in 20
+      minutes and one that takes three days both mean "before we've packed it".
+    - **★ A DECLINE CARRIES A REASON, ENFORCED SERVER-SIDE**, and the customer
+      reads it verbatim (`order.cancellation_declined`). A silent no is the
+      most complained-about thing a request flow does.
+    - One active request per order, enforced by a conditional claim on
+      `cancellation_status IS NULL`; a declined request cannot be reopened by
+      asking again.
+
+27b. **The original cancellation notes — and why nothing paid automatically.** The other half of
+roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10. - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
+on cancel was considered and refused — not even as a setting — for the
+same reason §22 gives for owner-only discounts: money leaving with no
+human looking at it is the one irreversible act with no physical trace.
+So the OBLIGATION is made loud instead of automatic. - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
+cancelled order that was paid for. **Derived**, never stored: a flag
+would need clearing on refund, on partial refund and on reinstatement,
+and the one you forget is the one that nags a merchant forever. - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
+`refundDueForOrder` and rides `refund_due` into the
+`order.pickup_expired` payload — the merchant learns it in the channel
+they already read. `refund_due` had to be added to `MONEY` in
+`lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
+"Total 281.4" failure), and declared in `variables.ts` to be a usable
+`{{token}}`. - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
+inline in `updateOrderStatus`; a second hand-written copy for the
+customer path would fail SILENTLY — stock simply never comes back, and
+it surfaces in a stock count weeks later. It preserves both branches
+exactly: reserved stock releases at the location that reserved it (a POS
+sale must not restock at the store's default shop), and a pickup order
+releases HOLDS because its units never left the shelf. - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
+neither.** Stoppable (`pending`/`processing`, not collected, inside the
+window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
+Too late ⇒ `order.cancellation_requested` and the order is untouched. The
+status is re-checked INSIDE the statement that changes it, so a dispatch
+racing a cancel means one matches nothing rather than both "succeeding".
+`withService` after the WHERE re-proves ownership + store scope, because
+a shopper holds SELECT but not UPDATE on their own orders (convention
+#12's model). - **The button does NOT disappear once an order ships.** Someone who wants
+out still wants out, and hiding it just becomes a support email the
+merchant handles by hand anyway. - Settings (group **Orders**, section `orders`, at
+`/dashboard/orders/settings`): `orders.allowCustomerCancellation`
+(**default OFF** — new behaviour on a live store, invariant 1) and
+`orders.cancellationWindowHours` (24). Enforced server-side; a hidden
+button is not a permission. - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
+Every registry event has a real emitter;
+`order.cancellation_requested` was the last one waiting. Keep it that
+way — an entry there is a deliberate act, not a way to silence the guard.
 
 28. **Returns — the policy surface.** Config + the pure rules; the request flow
     itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,

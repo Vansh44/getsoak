@@ -45,8 +45,11 @@ export const SETTING_KEYS = [
   "fulfilment.offerPickup",
   "fulfilment.pickupReadyDays",
   "fulfilment.pickupHoldDays",
+  "fulfilment.pickupPayment",
   "orders.allowCustomerCancellation",
+  "orders.cancellationWindow",
   "orders.cancellationWindowHours",
+  "orders.cancellationApproval",
   "returns.enabled",
   "returns.windowDays",
   "returns.selfServe",
@@ -72,8 +75,8 @@ export interface SettingDef {
   /** Dashboard permission section that governs this setting (permissions.ts).
    *  Viewing/saving it requires view/manage on this section. */
   section: string;
-  type: "boolean" | "number";
-  defaultValue: boolean | number;
+  type: "boolean" | "number" | "select";
+  defaultValue: boolean | number | string;
   /** Minimum plan required to change this setting (locked to default below). */
   minPlan?: Plan;
   /** Another boolean setting this one only applies under (UI dims it when the
@@ -83,6 +86,16 @@ export interface SettingDef {
   min?: number;
   /** For number types: maximum allowed value */
   max?: number;
+  /**
+   * For select types: the allowed values, in the order they should render.
+   *
+   * ★ THIS IS THE VALIDATION, not a UI hint. `resolveStoreSettings` refuses a
+   * stored value that is not in this list and falls back to the default — so a
+   * value removed here stops applying the moment it is removed, rather than
+   * lingering in a jsonb blob nobody reads. Choose ids that read as data
+   * (`prepaid`), never as prose, because they are what ends up in the database.
+   */
+  options?: readonly { value: string; label: string; description?: string }[];
   /** Not shown in the generic settings editor — driven by a dedicated control
    *  (e.g. pos.enabled is toggled by the Enable POS button, not a raw switch). */
   hidden?: boolean;
@@ -290,6 +303,39 @@ export const SETTINGS: readonly SettingDef[] = [
     dependsOn: "fulfilment.offerPickup",
   },
   {
+    key: "fulfilment.pickupPayment",
+    label: "Payment for collection orders",
+    description:
+      "Whether a shopper collecting from a shop pays online when they order, or at the counter when they collect.",
+    group: "Checkout",
+    section: "locations",
+    type: "select",
+    // ★ `customer_choice` IS TODAY'S BEHAVIOUR, so it is the default: a
+    // migration may not change what a live store does (roadmap invariant 1).
+    defaultValue: "customer_choice",
+    options: [
+      {
+        value: "customer_choice",
+        label: "Let the customer choose",
+        description: "Both options are offered at checkout.",
+      },
+      {
+        value: "prepaid",
+        label: "Pay online only",
+        description:
+          "Collection orders must be paid for when they are placed. Needs a connected payment gateway.",
+      },
+      {
+        value: "at_store",
+        label: "Pay at the counter only",
+        description:
+          "Nothing is charged online; the shop takes payment on collection.",
+      },
+    ],
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
+  },
+  {
     key: "orders.allowCustomerCancellation",
     label: "Let customers cancel their own orders",
     description:
@@ -303,16 +349,85 @@ export const SETTINGS: readonly SettingDef[] = [
     defaultValue: false,
   },
   {
+    key: "orders.cancellationWindow",
+    label: "Cancellation window",
+    description:
+      "How long after ordering a customer may ask to cancel. 'Until fulfilled' is the usual choice — it tracks your own packing rather than a guess at how long it takes.",
+    group: "Orders",
+    section: "orders",
+    type: "select",
+    // ★ A FIXED LIST, not just a number of hours. "Before you've packed it" is
+    // the rule most merchants actually mean, and it cannot be expressed as a
+    // duration — a shop that packs in 20 minutes and one that takes three days
+    // both want the same rule, not two different numbers.
+    defaultValue: "until_fulfilled",
+    options: [
+      {
+        value: "none",
+        label: "No cancellations",
+        description: "Customers cannot cancel; they contact you instead.",
+      },
+      {
+        value: "until_fulfilled",
+        label: "Until fulfilled",
+        description: "Any time before the order is marked fulfilled.",
+      },
+      {
+        value: "1h",
+        label: "1 hour",
+        description: "Within an hour of ordering.",
+      },
+      {
+        value: "24h",
+        label: "24 hours",
+        description: "Within a day of ordering.",
+      },
+      {
+        value: "custom",
+        label: "Custom hours",
+        description: "Use the number of hours set below.",
+      },
+    ],
+    dependsOn: "orders.allowCustomerCancellation",
+  },
+  {
     key: "orders.cancellationWindowHours",
     label: "Customers can cancel within",
     description:
-      "Hours from when the order was placed. BOTH conditions must hold: past this window, or once it has shipped, the button becomes a request the store reviews rather than an instant cancellation.",
+      "Used only when the cancellation window above is set to Custom hours.",
     group: "Orders",
     section: "orders",
     type: "number",
     defaultValue: 24,
     min: 1,
     max: 720,
+    dependsOn: "orders.allowCustomerCancellation",
+  },
+  {
+    key: "orders.cancellationApproval",
+    label: "Cancellation approval",
+    description:
+      "Whether a customer's cancellation request waits for you, or cancels the order straight away.",
+    group: "Orders",
+    section: "orders",
+    type: "select",
+    // ★ APPROVAL IS THE DEFAULT because automatic approval can move money with
+    // nobody reviewing the request — the same argument owner-only discounts
+    // make at the till (CODEBASE §22).
+    defaultValue: "require_approval",
+    options: [
+      {
+        value: "require_approval",
+        label: "Require my approval",
+        description: "Requests wait in Orders until you approve or decline.",
+      },
+      {
+        value: "auto",
+        label: "Approve automatically",
+        description:
+          "An eligible request cancels the order immediately. Restocks, and refunds per your choice below.",
+      },
+    ],
     dependsOn: "orders.allowCustomerCancellation",
   },
 
@@ -473,7 +588,7 @@ export function getSettingDef(key: string): SettingDef | undefined {
 }
 
 /** Resolved values for every setting in the catalog. */
-export type StoreSettingValues = Record<SettingKey, boolean | number>;
+export type StoreSettingValues = Record<SettingKey, boolean | number | string>;
 
 /**
  * Resolve a store's feature settings from its raw settings jsonb + plan:
@@ -500,6 +615,19 @@ export function resolveStoreSettings(
           def.min ?? -Infinity,
           Math.min(def.max ?? Infinity, stored),
         );
+        continue;
+      }
+      // ★ A STORED VALUE THAT IS NO LONGER AN OPTION FALLS BACK TO THE DEFAULT.
+      // Options live in code; the stored value is a jsonb blob nobody migrates.
+      // Accepting an unrecognised one would let a policy that was retired keep
+      // applying for every store that had selected it, invisibly — the same
+      // reason resolvePricing ignores a row for a plan id that no longer exists.
+      if (
+        def.type === "select" &&
+        typeof stored === "string" &&
+        def.options?.some((o) => o.value === stored)
+      ) {
+        out[def.key] = stored;
         continue;
       }
     }

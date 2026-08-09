@@ -105,6 +105,12 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "Where a delivery order is going. Empty for a collection.",
       sample: "hostel D, Thapar University, Patiala, Punjab 147004",
     },
+    {
+      name: "collection_code",
+      description:
+        "The code to show at the counter. Empty for delivery. Text, not a QR — an emailed QR is a broken image in most clients.",
+      sample: "PK0M-3T9V",
+    },
   ],
   "order.ready_for_pickup": [
     {
@@ -116,6 +122,16 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       name: "pickup_address",
       description: "That shop's address.",
       sample: "12 Radial Road, New Delhi",
+    },
+    {
+      // ★ TEXT, not a QR. Gmail strips data: URIs and every major client
+      // blocks remote images, so an emailed QR is a broken-image icon on the
+      // one screen that matters. The code always renders; the QR lives on the
+      // collection page the CTA links to (roadmap Step 3).
+      name: "collection_code",
+      description:
+        "The code to show at the counter. Always readable as text, unlike a QR in an email.",
+      sample: "PK0M-3T9V",
     },
   ],
   "order.collected": [

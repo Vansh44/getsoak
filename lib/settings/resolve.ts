@@ -18,6 +18,6 @@ export async function getStoreSettings(): Promise<StoreSettingValues> {
 // Convenience: one resolved setting for the current store.
 export async function getStoreSetting(
   key: SettingKey,
-): Promise<boolean | number> {
+): Promise<StoreSettingValues[SettingKey]> {
   return (await getStoreSettings())[key];
 }

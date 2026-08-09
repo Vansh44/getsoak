@@ -6,6 +6,7 @@
 // action — the client never names a shop, so there is nothing here to spoof.
 
 import { useState, useTransition } from "react";
+import { isCollectionCode } from "@/lib/fulfilment/collection-code";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  findPickupByCode,
   getPickupQueue,
   markCollected,
   markReadyForPickup,
@@ -59,6 +61,38 @@ export function PickupQueue({
       const res = await getPickupQueue(q);
       if (res.error) toast.error(res.error);
       else setOrders(res.orders);
+    });
+  };
+
+  /**
+   * ★ ONE BOX, TWO KINDS OF INPUT. A hardware scanner is a keyboard, so a
+   * scanned collection code arrives here exactly like a typed order number —
+   * and a counter should not make someone choose which field to use first.
+   * `isCollectionCode` is a cheap shape check, so anything that isn't one falls
+   * straight through to the existing order-number search.
+   */
+  const submit = () => {
+    if (!isCollectionCode(query)) {
+      refresh();
+      return;
+    }
+    start(async () => {
+      const res = await findPickupByCode(query);
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
+      // Belongs to a sister shop. Saying WHICH one is the whole point — the
+      // customer is standing here and "not found" sends them away with nothing.
+      if (res.otherLocation) {
+        toast.error(`That order is waiting at ${res.otherLocation}.`);
+        return;
+      }
+      if (res.order) {
+        // Show just the scanned order, so the next tap is unambiguous.
+        setOrders([res.order]);
+        setQuery("");
+      }
     });
   };
 
@@ -137,14 +171,14 @@ export function PickupQueue({
           className="relative mb-4"
           onSubmit={(e) => {
             e.preventDefault();
-            refresh();
+            submit();
           }}
         >
           <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-white/40" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Order number…"
+            placeholder="Scan a collection code, or type an order number…"
             className="w-full rounded-xl border border-white/10 bg-white/5 py-3 pr-4 pl-10 text-base outline-none focus:border-white/30"
           />
         </form>

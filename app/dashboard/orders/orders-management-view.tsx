@@ -3,7 +3,13 @@
 import { useEffect, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { RotateCcw, Search, Settings, ShoppingBag } from "lucide-react";
+import {
+  RotateCcw,
+  Search,
+  Settings,
+  ShoppingBag,
+  CircleSlash,
+} from "lucide-react";
 import { formatPrice } from "@/lib/pricing";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
 import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
@@ -199,6 +205,13 @@ export function OrdersManagementView({
               >
                 <RotateCcw className="h-4 w-4" />
                 Returns
+              </Link>
+              <Link
+                href="/dashboard/orders/cancellations"
+                className="dash-btn dash-btn-ghost"
+              >
+                <CircleSlash className="h-4 w-4" />
+                Cancellations
               </Link>
               <Link
                 href="/dashboard/orders/settings"

@@ -65,9 +65,9 @@ export function FeatureToggles({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [values, setValues] = useState<Record<string, boolean | number>>(() =>
-    Object.fromEntries(initialSettings.map((s) => [s.key, s.value])),
-  );
+  const [values, setValues] = useState<
+    Record<string, boolean | number | string>
+  >(() => Object.fromEntries(initialSettings.map((s) => [s.key, s.value])));
 
   const dirty = initialSettings.some((s) => values[s.key] !== s.value);
 
@@ -129,6 +129,39 @@ export function FeatureToggles({
                       disabled={disabled}
                       aria-label={s.label}
                     />
+                  </div>
+                ) : s.type === "select" ? (
+                  /* A native <select>: three policy choices do not warrant a
+                     portalled listbox, and this one has to work on a phone. The
+                     option DESCRIPTIONS render under it rather than inside, so
+                     the merchant reads what a choice means before committing —
+                     an option list of bare labels is where policy settings get
+                     picked wrong. */
+                  <div className="w-56 shrink-0">
+                    <select
+                      className="dash-input w-full"
+                      value={String(values[s.key] ?? "")}
+                      disabled={disabled}
+                      aria-label={s.label}
+                      onChange={(e) =>
+                        setValues((v) => ({ ...v, [s.key]: e.target.value }))
+                      }
+                    >
+                      {s.options?.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {s.options?.find((o) => o.value === values[s.key])
+                      ?.description && (
+                      <p className="mt-1.5 text-right text-[12px] leading-snug text-[#8b93a3]">
+                        {
+                          s.options.find((o) => o.value === values[s.key])
+                            ?.description
+                        }
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <Toggle

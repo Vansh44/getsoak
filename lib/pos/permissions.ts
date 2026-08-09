@@ -39,7 +39,12 @@ export type PosCapability =
    *  different question; see `revokeDevice`. */
   | "authorize_device"
   /** Arrange which products appear on the register grid, and in what order. */
-  | "edit_layout";
+  | "edit_layout"
+  /** Mark a collection order packed and ready. Manager and above: it is the
+   *  step that tells a customer to travel, and it should be someone who has
+   *  actually seen the box. Handing it over stays `sell` — that is a cashier's
+   *  job with the customer standing there. */
+  | "fulfil_pickup";
 
 /**
  * ★ Reserved to the superadmin: not a cashier, not a manager, and **not a
@@ -74,6 +79,7 @@ const CAPS: Record<PosRole, PosCapability[]> = {
     "open_close_shift",
     "cash_drop",
     "edit_layout",
+    "fulfil_pickup",
   ],
 };
 

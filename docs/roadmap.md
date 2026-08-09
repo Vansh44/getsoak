@@ -32,10 +32,10 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
-| **1**  | **Checkout payment defaults + pickup payment policy**          | S    | ⏭ next |
-| **2**  | Cancellation: per-product policy + refund to source            | M    | ⏳      |
-| **3**  | Pickup end to end: collection code, QR, manager/cashier split  | L    | ⏳      |
-| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
+| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                     | M    | ✅ done |
+| **3**  | **Pickup end to end: collection code, QR, role split**         | L    | ◐ part  |
+| **4**  | **POS customer capture (Shopify parity) + claim/merge**        | L    | ⏭ next |
 | **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
 | **6**  | Channel stock policy (LOC H)                                   | M    | ⏳      |
 | **7**  | Transfer lifecycle (LOC I)                                     | M    | ⏳      |
@@ -55,10 +55,34 @@ to end in a browser_. Steps 1 and 3 finish it.
 
 ---
 
-## Step 1 — Checkout payment defaults, and who pays when
+## Step 1 — Checkout payment defaults, and who pays when ✅ DONE
 
-Two small changes to the same screen. Ship them together; they touch the same
-state.
+Two small changes to the same screen, shipped together because they touch the
+same state (`995f83d`).
+
+**✅ Shipped:** `lib/fulfilment/payment-policy.ts` (pure + tested — the one rule
+the picker and `placeOrder` both ask), the `fulfilment.pickupPayment` setting,
+the derived checkout default, server enforcement in `placeOrder`, and the
+`canRequirePrepaid` guard on save. Acceptance: **PS-C.1–C.8**.
+
+**★ THE DEFAULT IS DERIVED DURING RENDER, NOT SET IN AN EFFECT.** State holds
+only the shopper's explicit choice (`null` = hasn't chosen); the displayed and
+submitted method is computed. Two eslint rules caught the wrong shapes on the
+way — `set-state-in-effect` (a cascading render and a visible frame on the wrong
+option) and `refs` (a ref read during render). Deriving removes both, and the
+"don't stomp a choice" race with them.
+
+**★ The settings registry gained its first `select` type** to carry this, and
+`saveStoreSettings` now validates EVERY type before writing — it used to store
+whatever arrived, on the reasoning that the read side rejects a wrong-typed
+value. True, but it left the stored blob full of values that do nothing, which
+is what makes a settings bug impossible to diagnose from the database.
+
+**⚠ NOT verified in a browser.** The Cloud SQL proxy could not start locally
+(ADC needed re-authenticating). PS-C.3 and PS-C.4 move real money — run them
+against a test-mode gateway.
+
+Below is the spec it was built from, kept for the reasoning.
 
 ### 1.1 A gateway-configured store still defaults to COD
 
@@ -113,7 +137,62 @@ sentence pointing at Channels.
 
 ---
 
-## Step 2 — Cancellation: per-product policy, and money back to source
+## Step 2 — Cancellation & refund flow ✅ DONE
+
+**Owner spec, 2026-08-09.** It supersedes the earlier draft below in two ways
+worth stating plainly: there is **no per-product `cancellable` control** (the
+window is store-level), and cancellation does **not** auto-refund to source —
+the refund DESTINATION is chosen and confirmed, Shopify's model.
+
+**✅ Shipped (server):**
+
+- `lib/orders/cancellation.ts` — pure rules + 49 tests: the five-value window
+  (`none` / `until_fulfilled` / `1h` / `24h` / `custom`), eligibility, the fixed
+  cancel-reason vocabulary, and which refund destinations an order can honour.
+- `supabase/orders_01_cancellation.sql` — the request lifecycle as columns on
+  `orders` (⚠ **not applied yet**), plus a partial index for the queue.
+- Three settings: allow, window (select), approval (select, **approval
+  required** by default).
+- `lib/orders/approve-cancellation.ts` — ONE implementation of "cancel it",
+  shared by the merchant's panel, the Approve button and customer auto-approve.
+- `cancelMyOrder` rewritten **request-first**; `getCancellationRequests`,
+  `cancelOrder` and `declineCancellation` on the merchant side; the
+  `order.cancellation_declined` event.
+
+**✅ Shipped (UI):** the storefront confirmation step (a real panel, not
+`window.confirm` — it has to say this cancels the ENTIRE order and that the
+store decides, and take the reason that makes the merchant's decision an
+informed one), the dashboard queue at `/dashboard/orders/cancellations` with
+approve/decline, and the settings selects (registry-driven, so the page needed
+only its now-wrong footnote corrected — it claimed cancelling "never moves
+money").
+
+**Acceptance:** PS-D.1–D.13. **⚠ Not verified in a browser** — the Cloud SQL
+proxy needs `gcloud auth application-default login`, and the migration is not
+applied.
+
+**★ ASKING IS NOT CANCELLING.** A customer raises a request; a human approves
+it. Money and stock move on APPROVAL. Before this, an eligible order was
+cancelled outright the moment the button was pressed.
+
+**★ WHOLE-ORDER ONLY, EVERYWHERE.** No item-level cancellation, approval,
+refund or state — and none is planned, because it needs partial fulfilment this
+system does not have. Owner decision, and written into the module headers so it
+survives the next person reading them.
+
+**★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
+`store_credit` as a method, so using it for both means an `order_refunds` row
+either way, the refund cap applied to both, and the pending-row-first
+idempotency. Calling `issueCredit` directly would credit a customer with no
+refund row behind it — money out that the order does not know about.
+
+**★ A FAILED REFUND IS NEVER REPORTED AS SUCCESS**, and a `pendingReconcile`
+answer is never reported as a failure (§26) — the order is cancelled either way,
+but the caller must say which happened.
+
+Below is the earlier draft, kept for the parts still true.
+
+### (superseded) Step 2 — per-product policy, and money back to source
 
 ### 2.1 Which products a customer may cancel
 
@@ -132,8 +211,15 @@ change every live store's policy (invariant 1).
 `cancelMyOrder` and `lib/orders/cancel.ts` cancel an entire order. Partial
 cancellation is a different feature: partial refunds, partial restocks, and an
 order that stays open afterwards — which is really "refund some items" and
-belongs with returns. Shopify draws the same line. **Owner decision, 2026-08-09:
-a customer cannot cancel part of a mixed order.**
+belongs with returns. **Owner decision, 2026-08-09: a customer cannot cancel
+part of a mixed order.**
+
+⚠ **CORRECTION (2026-08-09):** an earlier draft of this said "Shopify draws the
+same line". It does not. Shopify's self-serve cancellation is **per item** — a
+customer cancels the unshipped items and returns the shipped ones in the same
+order. (Its MERCHANT-side cancel is all-or-nothing, and refuses outright on a
+partially fulfilled order.) The decision above stands on its own merits —
+simplicity, and no partial-refund machinery — but not on that comparison.
 
 The order page must say _why_ when the button is absent — "This order contains
 items that can't be cancelled online" beats a missing control.
@@ -149,12 +235,14 @@ goods that will never ship, and making them press a button for each one is a
 support queue, not a control.
 
 **Ships.** `orders.autoRefundOnCancel` (section `orders`, **default OFF** —
-invariant 1). When on:
+invariant 1, and confirmed by the owner 2026-08-09). When on:
 
 - a **customer** self-cancel of a `razorpay`-paid order raises a gateway refund
   to source automatically, through `lib/payments/issue-refund.ts` — the ONE
   refund mechanism (§28), never a second copy;
-- a **merchant** cancel still only _prompts_, exactly as today;
+- a **merchant** cancel still only _prompts_, exactly as today — **settled by
+  the owner**: they may want to offer store credit, deduct something, or hold a
+  suspicious order, and an automatic payout removes that choice;
 - `cod` refunds nothing (no money moved); `store_credit` reinstates, which
   `reinstateCreditForOrder` already does.
 
@@ -180,7 +268,37 @@ editor, `(pages)/orders/[id]`.
 
 ---
 
-## Step 3 — Pickup, end to end
+## Step 3 — Pickup, end to end ✅ DONE
+
+**✅ Shipped:** `lib/fulfilment/collection-code.ts` (pure + 13 tests — Crockford
+base32, so the characters people misread off a phone are not in the alphabet and
+the normaliser folds them back), `orders.pickup_code` (⚠ **migration not
+applied**), code minted at checkout for collections only, the `fulfil_pickup`
+capability gating "mark ready" to manager and above, the customer collection
+page at `/orders/[id]/collect` with a client-rendered QR, the code carried into
+the `order.ready_for_pickup` notification, and `findPickupByCode` for the
+counter.
+
+**✅ Also shipped:** the scan box on `/pos/pickups` (one box takes both a
+scanned code and a typed order number — a scanner is a keyboard, and a counter
+should not make anyone choose a field first), the code in the confirmation
+email, and a per-event **default routing scope** so pickup events reach managers
+at the shop it happened at.
+
+**★ `order.placed` DELIBERATELY DOES NOT DEFAULT TO `event_location`.** It fires
+for every order including deliveries, so narrowing it would change who hears
+about ordinary orders for every existing store (invariant 1). Only the four
+pickup-specific events default, and those are safe because pickup has no live
+users. A merchant's own choice always wins over the default.
+
+**⏳ Remaining:** running PS-8.1–8.31 and PS-E.1–E.6 in a browser — blocked on
+the Cloud SQL proxy (ADC) and the two unapplied migrations.
+
+**★ THE ROLE SPLIT WAS SAFE TO MAKE** because no store had pickup enabled
+(owner confirmed 2026-08-09) — there was no live behaviour to take away. It is
+now covered by tests; `markReadyForPickup` had none at all before.
+
+Below is the spec it is being built from.
 
 The largest step and the one with the most already built. Read `CODEBASE.md` §23
 first — holds, routing, the queue and tender capture all exist.
@@ -491,14 +609,22 @@ They are the ones already paid for in bugs.
 
 **Settled**
 
+- **Pickup capability split: GO** (owner, 2026-08-09). No store has enabled
+  `fulfilment.offerPickup`, so making "mark ready" manager-only takes nothing
+  away from anybody — invariant 1 is satisfied because there is no live
+  behaviour to preserve.
+
 - **Partial cancellation: NO** (owner, 2026-08-09). A customer cannot cancel
   part of a mixed order; an order is cancellable only if every line is.
+- **Auto-refund fires on a CUSTOMER cancel only** (owner, 2026-08-09). A
+  merchant cancelling from the dashboard still gets the refund button to click,
+  because they may want to offer store credit, deduct something, or hold a
+  suspicious order — an automatic payout takes that choice away at exactly the
+  moment it matters.
+- **Auto-refund is OFF by default** (owner, 2026-08-09), a switch each merchant
+  turns on. Consistent with every other new behaviour here: nothing changes for
+  an existing store until they ask for it.
 
 **Open — the owner's to settle before the step they affect starts**
 
-- **Step 3 pickup capability split.** Making "mark ready" manager-only changes
-  current behaviour, which is safe only because pickup has no live users. If any
-  store has already enabled `fulfilment.offerPickup`, the capability must default
-  open instead.
-- **Step 2 auto-refund scope.** The plan scopes it to _customer_ self-cancel of
-  _prepaid_ orders, default OFF. Confirm that boundary before it ships.
+(none — all settled.)

@@ -15,6 +15,9 @@ import {
   resolveStoreSettings,
 } from "@/lib/settings/registry";
 import { effectivePlan } from "@/lib/plans";
+import { canRequirePrepaid } from "@/lib/fulfilment/payment-policy";
+import { getStoreGateway } from "@/lib/payments/provider";
+import { limitsFor } from "@/lib/plans";
 
 export interface ActionResult {
   success?: boolean;
@@ -27,8 +30,10 @@ export interface EditorSetting {
   label: string;
   description: string;
   group: string;
-  type: "boolean" | "number";
-  value: boolean | number;
+  type: "boolean" | "number" | "select";
+  value: boolean | number | string;
+  /** select only: the allowed values, in render order. */
+  options?: readonly { value: string; label: string; description?: string }[];
   /** True when the store's plan is below the setting's minimum — shown but
    *  not editable. */
   locked: boolean;
@@ -98,6 +103,7 @@ export async function getStoreSettingsForEditor(group?: string): Promise<{
       description: def.description,
       group: def.group,
       type: def.type,
+      options: def.options,
       value: values[def.key],
       locked: !planAllows(plan, def.minPlan),
       minPlan: def.minPlan,
@@ -117,7 +123,7 @@ export async function getStoreSettingsForEditor(group?: string): Promise<{
  * the storefront and all setting reads update at once.
  */
 export async function saveStoreSettings(
-  values: Record<string, boolean | number>,
+  values: Record<string, boolean | number | string>,
 ): Promise<ActionResult> {
   const ctx = await getViewerContext();
   if (ctx?.dbError) return { error: "Couldn't reach the database. Try again." };
@@ -156,11 +162,57 @@ export async function saveStoreSettings(
 
   for (const def of permitted) {
     if (!planAllows(plan, def.minPlan)) continue; // locked on this plan
-    let val = values[def.key];
-    if (def.type === "number" && typeof val === "number") {
-      val = Math.max(def.min ?? -Infinity, Math.min(def.max ?? Infinity, val));
+    const val = values[def.key];
+
+    // ★ VALIDATED BY TYPE, AND ANYTHING THAT DOESN'T MATCH IS SKIPPED. This
+    // used to write whatever arrived, on the reasoning that resolveStoreSettings
+    // rejects a wrong-typed value on READ — true, but it leaves the stored blob
+    // full of values that do nothing, which is exactly what makes a settings bug
+    // impossible to diagnose from the database. Storing only what can be read
+    // back keeps the row honest.
+    if (def.type === "boolean") {
+      if (typeof val !== "boolean") continue;
+      features[def.key] = val;
+      continue;
     }
-    features[def.key] = val;
+    if (def.type === "number") {
+      if (typeof val !== "number" || !Number.isFinite(val)) continue;
+      features[def.key] = Math.max(
+        def.min ?? -Infinity,
+        Math.min(def.max ?? Infinity, val),
+      );
+      continue;
+    }
+    if (def.type === "select") {
+      // ★ `prepaid` WITHOUT A GATEWAY MAKES PICKUP UNORDERABLE — every
+      // collection would need an online payment the store cannot take. Refused
+      // where the setting is SAVED, so the broken state never exists rather
+      // than being discovered by a shopper at checkout.
+      if (def.key === "fulfilment.pickupPayment" && val === "prepaid") {
+        // Both halves of "can this store take money online", asked the way
+        // checkout asks them: a connected AND enabled gateway, on a plan that
+        // still includes online payments. The plan is already resolved above,
+        // so this costs one query, not two.
+        const gateway = await getStoreGateway(storeId).catch(() => null);
+        const online = !!gateway?.enabled && limitsFor(plan).onlinePayments;
+        if (!canRequirePrepaid(online)) {
+          return {
+            error:
+              "Connect a payment gateway in Channels before requiring collection orders to be paid online.",
+          };
+        }
+      }
+      // The options list IS the allowlist. A client is a caller like any other
+      // (invariant 5), so a value the UI never offered must be refused here and
+      // not merely absent from the dropdown.
+      if (
+        typeof val !== "string" ||
+        !def.options?.some((o) => o.value === val)
+      ) {
+        continue;
+      }
+      features[def.key] = val;
+    }
   }
 
   try {

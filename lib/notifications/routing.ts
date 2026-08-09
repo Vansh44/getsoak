@@ -92,17 +92,23 @@ export function isRoutingScope(value: unknown): value is RoutingScope {
  * merchant hasn't finished choosing", not "tell nobody", which would silently
  * black-hole a store's order alerts.
  */
-export function normalizeRouting(input: {
-  routing?: unknown;
-  routing_scope?: unknown;
-  target_roles?: unknown;
-  target_admins?: unknown;
-}): RoutingRule {
+export function normalizeRouting(
+  input: {
+    routing?: unknown;
+    routing_scope?: unknown;
+    target_roles?: unknown;
+    target_admins?: unknown;
+  },
+  /** What to use when the merchant has chosen nothing. Per-event, because a
+   *  collection is inherently about one shop while an ordinary order is not
+   *  (EventDef.defaultScope). */
+  fallbackScope: RoutingScope = "store",
+): RoutingRule {
   const mode = isRoutingMode(input.routing) ? input.routing : "permission";
   // Scope is independent of mode, so it survives a mode that falls back.
   const scope = isRoutingScope(input.routing_scope)
     ? input.routing_scope
-    : "store";
+    : fallbackScope;
   const roles = toStringArray(input.target_roles);
   const admins = toStringArray(input.target_admins);
 

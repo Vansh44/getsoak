@@ -36,6 +36,11 @@ import { posCan } from "@/lib/pos/permissions";
 import { commitHold } from "@/lib/inventory/reservations";
 import { emitEvent } from "@/lib/notifications/record";
 import { formatAddressLine } from "@/lib/locations/address";
+import {
+  formatCollectionCode,
+  isCollectionCode,
+  normalizeCollectionCode,
+} from "@/lib/fulfilment/collection-code";
 import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
 import {
   settleTenders,
@@ -419,7 +424,19 @@ export async function markReadyForPickup(
 ): Promise<{ success?: boolean; error?: string }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
-  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+  // ★ MANAGER AND ABOVE (roadmap Step 3). Marking an order ready is what tells
+  // a customer to travel, so it should be someone who has actually seen the
+  // box — not anyone who happens to be on the till. Handing it over stays
+  // `sell`: that is a cashier's job, with the customer standing there.
+  //
+  // Safe to tighten because no store had pickup enabled when this shipped
+  // (owner confirmed 2026-08-09) — there is no live behaviour to preserve
+  // (invariant 1).
+  if (!posCan(op.role, "fulfil_pickup")) {
+    return {
+      error: "Only a manager can mark a collection order ready.",
+    };
+  }
 
   try {
     const rows = await withService((db) =>
@@ -438,6 +455,7 @@ export async function markReadyForPickup(
           id: orders.id,
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
+          pickup_code: orders.pickupCode,
           ...pickupShopColumns,
         }),
     );
@@ -459,6 +477,12 @@ export async function markReadyForPickup(
       payload: {
         pickupLocation: row.location_name ?? "",
         pickupAddress: formatAddressLine(row.location_address),
+        // ★ WITHOUT THIS the email says "ready" and gives them nothing to
+        // present. The code is text so it renders in every client; the QR is
+        // on the collection page the CTA links to.
+        collectionCode: row.pickup_code
+          ? formatCollectionCode(row.pickup_code)
+          : "",
       },
     });
   } catch (err) {
@@ -467,4 +491,81 @@ export async function markReadyForPickup(
 
   revalidatePath("/pos/pickups");
   return { success: true };
+}
+
+/**
+ * Find a collection by the code the customer is holding up (roadmap Step 3).
+ *
+ * ★ THE CODE IS A LOOKUP KEY, NOT AN AUTHORISATION. The operator is already
+ * authenticated and device-bound; this only saves them typing an order
+ * reference. Scoped to the STORE, and the result says which shop it belongs to
+ * rather than pretending it doesn't exist — a customer standing at Andheri with
+ * an order waiting at Bandra needs to be told that, not "not found".
+ */
+export async function findPickupByCode(
+  rawCode: string,
+): Promise<{ order?: PickupOrder; otherLocation?: string; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+
+  const code = normalizeCollectionCode(rawCode);
+  // Cheap shape check first, so a scanner pointed at a milk carton never
+  // becomes a database lookup.
+  if (!isCollectionCode(code)) {
+    return { error: "That doesn't look like a collection code." };
+  }
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          shipping_address: orders.shippingAddress,
+          total: orders.total,
+          created_at: orders.createdAt,
+          expires_at: orders.pickupExpiresAt,
+          status: orders.pickupStatus,
+          pickup_location_id: orders.pickupLocationId,
+          location_name: sql<string | null>`(
+            select l.name from ${storeLocations} l
+             where l.id = ${orders.pickupLocationId}
+          )`,
+        })
+        .from(orders)
+        .where(and(eq(orders.storeId, op.storeId), eq(orders.pickupCode, code)))
+        .limit(1),
+    );
+    const row = rows[0];
+    if (!row) return { error: "No collection found for that code." };
+
+    // Belongs to another shop in the same store — say which, so the customer
+    // can be sent to the right place.
+    if (row.pickup_location_id !== op.locationId) {
+      return { otherLocation: row.location_name ?? "another shop" };
+    }
+
+    const addr = (row.shipping_address ?? {}) as Record<string, unknown>;
+    const name =
+      [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() || null;
+
+    return {
+      order: {
+        id: row.id,
+        orderRef: row.order_ref ?? "",
+        customerName: name,
+        // The queue's own count is what the card renders; a scan lands on the
+        // order itself, where the caller re-reads what it needs.
+        itemCount: 0,
+        total: Number(row.total) || 0,
+        placedAt: row.created_at,
+        expiresAt: row.expires_at,
+        status: row.status ?? "awaiting",
+        amountDue: 0,
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't look that code up.") };
+  }
 }

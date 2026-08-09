@@ -24,6 +24,13 @@ import {
   storeLocations,
 } from "@/drizzle/schema";
 import { releaseCancelledOrder } from "@/lib/orders/cancel";
+import { approveCancellation } from "@/lib/orders/approve-cancellation";
+import {
+  isCancelReason,
+  isRefundDestination,
+  refundDestinationsFor,
+  type RefundDestination,
+} from "@/lib/orders/cancellation";
 import {
   getActingStoreId,
   getManagerIdentity,
@@ -551,4 +558,250 @@ export async function getOrderDetail(
     console.error("getOrderDetail:", err instanceof Error ? err.message : err);
     return { error: dbErrorMessage(err, "Could not load the order.") };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Cancellation — the merchant's side (roadmap Step 2).
+//
+// ★ WHOLE-ORDER ONLY. Approve/decline act on an ORDER, never on lines. There is
+// deliberately no item-level approval: this system has no partial fulfilment,
+// so an order is cancelled or it is not.
+//
+// The cancelling itself lives in lib/orders/approve-cancellation.ts, shared with
+// the customer auto-approve path, so the two cannot drift on what cancelling
+// does to stock, money or notifications.
+// ---------------------------------------------------------------------------
+
+export interface CancellationRequest {
+  orderId: string;
+  orderRef: string | null;
+  customerName: string | null;
+  customerEmail: string | null;
+  total: number;
+  /** The customer's stated reason, when they gave one. */
+  reason: string | null;
+  requestedAt: string | null;
+  status: string;
+  paymentMethod: string | null;
+  paymentStatus: string | null;
+  customerId: string | null;
+  /** Which refund destinations this order can actually offer. */
+  refundDestinations: RefundDestination[];
+}
+
+/** Cancellation requests waiting on a decision, oldest first — a queue of work,
+ *  so decided ones drop out of it. */
+export async function getCancellationRequests(): Promise<{
+  requests: CancellationRequest[];
+  error?: string;
+}> {
+  const admin = await getManagerIdentity("orders");
+  if (!admin) return { requests: [], error: "You don't have permission." };
+  const storeId = await getActingStoreId();
+
+  try {
+    const rows = await withUser(admin, (db) =>
+      db
+        .select({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          shipping_address: orders.shippingAddress,
+          total: orders.total,
+          status: orders.status,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+          customer_id: orders.customerId,
+          reason: orders.cancellationReason,
+          requested_at: orders.cancellationRequestedAt,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            eq(orders.cancellationStatus, "requested"),
+          ),
+        )
+        .orderBy(orders.cancellationRequestedAt)
+        .limit(200),
+    );
+
+    return {
+      requests: rows.map((r) => {
+        const addr = (r.shipping_address ?? {}) as Record<string, unknown>;
+        const name =
+          [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() ||
+          null;
+        return {
+          orderId: r.id,
+          orderRef: r.order_ref,
+          customerName: name,
+          customerEmail: (addr.email as string) ?? null,
+          total: Number(r.total ?? 0),
+          reason: r.reason,
+          requestedAt: r.requested_at,
+          status: r.status,
+          paymentMethod: r.payment_method,
+          paymentStatus: r.payment_status,
+          customerId: r.customer_id,
+          refundDestinations: refundDestinationsFor({
+            paymentMethod: r.payment_method,
+            paymentStatus: r.payment_status,
+            customerId: r.customer_id,
+          }),
+        };
+      }),
+    };
+  } catch (err) {
+    return {
+      requests: [],
+      error: dbErrorMessage(err, "Couldn't load cancellation requests."),
+    };
+  }
+}
+
+export interface CancelOrderInput {
+  /** Where the money goes. Defaults to the original method in the UI. */
+  refundDestination?: string;
+  reasonCode?: string;
+  restock?: boolean;
+  notify?: boolean;
+  /** ★ INTERNAL — never shown to the customer. */
+  staffNote?: string;
+}
+
+export interface CancelOrderResult {
+  success?: boolean;
+  error?: string;
+  refundDue?: number;
+  /** The order cancelled but the money did NOT move. Must be surfaced. */
+  refundError?: string;
+  /** The refund is real and in flight — do NOT invite a retry (§26). */
+  refundPending?: boolean;
+}
+
+/**
+ * Cancel an order from the dashboard — the merchant's own Cancel Order panel,
+ * and the Approve button on a customer request (they are the same act, so they
+ * are the same function).
+ */
+export async function cancelOrder(
+  orderId: string,
+  input: CancelOrderInput = {},
+): Promise<CancelOrderResult> {
+  const admin = await getManagerIdentity("orders");
+  if (!admin) return { error: "You don't have permission to do this." };
+  if (typeof orderId !== "string" || !orderId) {
+    return { error: "Invalid order." };
+  }
+  const storeId = await getActingStoreId();
+
+  // ★ VALIDATED SERVER-SIDE, not trusted from the panel. A destination the
+  // order cannot honour — a gateway refund on a COD order, store credit for a
+  // walk-in — would fail at the money step having already cancelled.
+  const destination = isRefundDestination(input.refundDestination)
+    ? input.refundDestination
+    : "later";
+  const reasonCode = isCancelReason(input.reasonCode)
+    ? input.reasonCode
+    : "other";
+
+  const res = await approveCancellation({
+    storeId,
+    orderId,
+    actorId: admin.uid,
+    actorLabel: admin.email,
+    refundDestination: destination,
+    reasonCode,
+    // Both default ON, matching what a merchant expects and what Shopify does.
+    restock: input.restock !== false,
+    notify: input.notify !== false,
+    staffNote: input.staffNote?.trim().slice(0, 500) || null,
+  });
+  if (res.error) return { error: res.error };
+
+  revalidatePath("/dashboard/orders");
+  return {
+    success: true,
+    refundDue: res.refundDue,
+    refundError: res.refundError,
+    refundPending: res.refundPending,
+  };
+}
+
+/**
+ * Decline a customer's cancellation request. The order stays ACTIVE.
+ *
+ * ★ A REASON IS REQUIRED. The customer reads it verbatim, and a silent "no" is
+ * the most complained-about thing a request flow does — the same rule the
+ * returns queue already enforces (CODEBASE §28).
+ */
+export async function declineCancellation(
+  orderId: string,
+  reason: string,
+): Promise<{ success?: boolean; error?: string }> {
+  const admin = await getManagerIdentity("orders");
+  if (!admin) return { error: "You don't have permission to do this." };
+  const note = (reason ?? "").trim().slice(0, 300);
+  if (!note) {
+    return {
+      error: "Give the customer a reason — they'll be told what it is.",
+    };
+  }
+  const storeId = await getActingStoreId();
+
+  let declined: {
+    id: string;
+    order_ref: string | null;
+    customer_id: string | null;
+  }[];
+  try {
+    // Conditional on the request still being open, so two admins deciding at
+    // once produce one decision rather than overwriting each other.
+    declined = await withService((db) =>
+      db
+        .update(orders)
+        .set({
+          cancellationStatus: "declined",
+          cancellationDeclineReason: note,
+          cancellationDecidedAt: sql`now()`,
+          cancellationDecidedBy: admin.uid,
+        })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, storeId),
+            eq(orders.cancellationStatus, "requested"),
+          ),
+        )
+        .returning({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+        }),
+    );
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't decline that request.") };
+  }
+  if (!declined.length) {
+    return { error: "That request has already been decided." };
+  }
+
+  emitEvent({
+    type: "order.cancellation_declined",
+    storeId,
+    actor: { type: "admin", id: admin.uid, label: admin.email },
+    subject: {
+      type: "order",
+      id: orderId,
+      label: declined[0].order_ref,
+    },
+    customerId: declined[0].customer_id,
+    payload: {
+      orderRef: declined[0].order_ref ?? "",
+      reason: note,
+    },
+  });
+
+  revalidatePath("/dashboard/orders");
+  return { success: true };
 }

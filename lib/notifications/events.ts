@@ -1,3 +1,4 @@
+import type { RoutingScope } from "./routing";
 // ---------------------------------------------------------------------------
 // Event registry — the single source of truth for everything that can happen
 // on StoreMink and who hears about it.
@@ -89,6 +90,17 @@ export interface EventDef {
    */
   hasLocation?: boolean;
   /**
+   * The routing scope to use when the merchant has not chosen one.
+   *
+   * ★ ONLY FOR EVENTS THAT ARE INHERENTLY ABOUT ONE SHOP. A collection is
+   * physically at a location, so the people who need to act on it are the ones
+   * standing in that shop — narrowing it is the useful default. `order.placed`
+   * deliberately does NOT set this: it fires for every order including
+   * deliveries, so narrowing it would change who hears about ordinary orders
+   * for every existing store (roadmap invariant 1).
+   */
+  defaultScope?: RoutingScope;
+  /**
    * False = the merchant cannot switch it off. Reserved for events a store
    * owner must not be able to go blind on (role changes, failed billing,
    * password changes) — the ones that matter in a dispute or a breach.
@@ -102,6 +114,7 @@ export const EVENT_KEYS = [
   "order.placed",
   "order.status_changed",
   "order.cancellation_requested",
+  "order.cancellation_declined",
   "order.cancelled",
   "order.payment_received",
   "order.payment_failed",
@@ -191,6 +204,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "info",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     // The SHOPPER is the point of this one — they need to know it's there.
     // Staff get it in-app so the queue stays honest without a mail each time.
     audiences: { "store-admins": IN_APP, customer: BOTH },
@@ -203,6 +219,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "info",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { "store-admins": IN_APP, customer: BOTH },
   },
   {
@@ -213,6 +232,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { customer: BOTH },
   },
   {
@@ -224,6 +246,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { "store-admins": BOTH, customer: BOTH },
   },
   {
@@ -243,6 +268,20 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "order.cancellation_declined",
+    label: "Cancellation declined",
+    description:
+      "A merchant declined a customer's request to cancel an order. The order stays active.",
+    group: "Orders",
+    section: "orders",
+    severity: "info",
+    // ★ THE CUSTOMER IS THE POINT. They asked and are waiting; a decision they
+    // are never told about reads as being ignored, and the merchant's reason is
+    // what stops the next message being a complaint. The team gets it in-app
+    // only — they made the decision, so mailing it back to them is noise.
+    audiences: { "store-admins": IN_APP, customer: BOTH },
   },
   {
     key: "order.cancelled",

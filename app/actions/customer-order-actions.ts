@@ -15,7 +15,7 @@
 // the human-readable order_ref is display only, never a lookup key).
 // ---------------------------------------------------------------------------
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
 import { orderItems, orders, products, storeLocations } from "@/drizzle/schema";
@@ -25,8 +25,12 @@ import { logError } from "@/lib/observability/logger";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { rateLimit } from "@/lib/rate-limit";
 import { emitEvent } from "@/lib/notifications/record";
-import { releaseCancelledOrder } from "@/lib/orders/cancel";
-import { refundDueForOrder } from "@/lib/payments/refund-reconcile";
+import {
+  SELF_CANCELLABLE_STATUSES,
+  canCustomerCancel,
+  rulesFromSettings,
+} from "@/lib/orders/cancellation";
+import { approveCancellation } from "@/lib/orders/approve-cancellation";
 
 export interface MyOrderRow {
   id: string;
@@ -76,6 +80,9 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
    *  a same-day store's customers "we'll let you know when it's ready". */
   pickup_ready_at: string | null;
   pickup_expires_at: string | null;
+  /** The code shown at the counter. A LOOKUP key, not a bearer token — the
+   *  page is already owner-gated (lib/fulfilment/collection-code.ts). */
+  pickup_code: string | null;
   pickup_location_name: string | null;
   pickup_location_address: Record<string, unknown> | null;
   items: MyOrderItem[];
@@ -208,6 +215,7 @@ export async function getMyOrder(
             pickup_status: orders.pickupStatus,
             pickup_ready_at: orders.pickupReadyAt,
             pickup_expires_at: orders.pickupExpiresAt,
+            pickup_code: orders.pickupCode,
             pickup_location_name: sql<string | null>`(
               select l.name from ${storeLocations} l
                where l.id = ${orders.pickupLocationId}
@@ -283,7 +291,6 @@ export interface CancelMyOrderResult {
 
 /** Statuses a shopper may cancel out of without anyone looking. Anything
  *  further along has left the building, physically or nearly. */
-const SELF_CANCELLABLE = ["pending", "processing"];
 
 /**
  * Cancel my own order — or, when it's too late for that, ask the store to.
@@ -310,14 +317,6 @@ export async function cancelMyOrder(
   }
   const storeId = await requireStorefrontStoreId();
 
-  // Server-side gate: a disabled control is not a permission (invariant 5).
-  const settings = await getStoreSettings();
-  if (!settings["orders.allowCustomerCancellation"]) {
-    return {
-      error: "This store handles cancellations directly — please contact them.",
-    };
-  }
-
   const { allowed } = await rateLimit(`cancel:${user.id}`, {
     max: 10,
     windowSeconds: 3600,
@@ -326,6 +325,7 @@ export async function cancelMyOrder(
     return { error: "Too many attempts. Please try again shortly." };
   }
 
+  const rules = rulesFromSettings(await getStoreSettings());
   const identity = { uid: user.id, email: user.email ?? null };
   const note = reason?.trim().slice(0, 200) || null;
 
@@ -338,6 +338,7 @@ export async function cancelMyOrder(
         total: number | null;
         created_at: string | null;
         collected_at: string | null;
+        cancellation_status: string | null;
       }
     | undefined;
   try {
@@ -351,6 +352,7 @@ export async function cancelMyOrder(
           total: orders.total,
           created_at: orders.createdAt,
           collected_at: orders.collectedAt,
+          cancellation_status: orders.cancellationStatus,
         })
         .from(orders)
         .where(
@@ -369,108 +371,99 @@ export async function cancelMyOrder(
   }
   if (!order) return { error: "Not found." };
 
-  if (order.status === "cancelled") {
-    return { error: "This order is already cancelled." };
-  }
+  // ★ THE SAME RULE THE BUTTON ASKED, RE-ASKED HERE. The order page hides the
+  // control when this refuses, but a hidden control is not a permission
+  // (invariant 5) — the window, the fulfilment state and the one-request rule
+  // are all enforced on this side too.
+  const eligible = canCustomerCancel(
+    {
+      status: order.status,
+      createdAt: order.created_at,
+      collectedAt: order.collected_at,
+      cancellationStatus: order.cancellation_status,
+    },
+    rules,
+  );
+  if (!eligible.ok) return { error: eligible.reason };
 
-  const windowHours = Number(settings["orders.cancellationWindowHours"]) || 24;
-  const placedAt = order.created_at ? new Date(order.created_at).getTime() : 0;
-  const withinWindow =
-    placedAt > 0 && Date.now() - placedAt <= windowHours * 3_600_000;
-  const stoppable =
-    SELF_CANCELLABLE.includes(order.status) &&
-    !order.collected_at &&
-    withinWindow;
-
-  // ── Too late: tell the store, don't touch the order ──────────────────────
-  if (!stoppable) {
-    emitEvent({
-      type: "order.cancellation_requested",
-      storeId,
-      actor: { type: "customer", id: user.id, label: user.email ?? null },
-      subject: { type: "order", id: order.id, label: order.order_ref },
-      customerId: user.id,
-      payload: {
-        orderRef: order.order_ref ?? "",
-        status: order.status,
-        total: Number(order.total ?? 0),
-        currency: "INR",
-        ...(note ? { reason: note } : {}),
-      },
-    });
-    return { requested: true };
-  }
-
-  // ── Still stoppable: claim it ────────────────────────────────────────────
-  // The WHERE is the authority AND the exactly-once guarantee in one: it
-  // re-proves ownership and store scope, and re-checks the status inside the
-  // same statement that changes it — so a dispatch racing this cancel means
-  // one of them matches nothing rather than both "succeeding".
-  //
-  // withService because a shopper holds SELECT on their own orders but not
-  // UPDATE (orders_table.sql), the checkout pattern: validate first, then
-  // write with the service role (convention #12).
-  let claimed: { id: string }[];
+  // ── Raise the request ────────────────────────────────────────────────────
+  // ★ ASKING IS NOT CANCELLING. The default is that a human decides: money and
+  // stock move on APPROVAL, not on a customer pressing a button. The claim is
+  // conditional on no request already existing, which is what makes a
+  // double-submit produce one request rather than two.
+  let claimedRequest: { id: string }[];
   try {
-    claimed = await withService((db) =>
+    claimedRequest = await withService((db) =>
       db
         .update(orders)
-        .set({ status: "cancelled" })
+        .set({
+          cancellationStatus: "requested",
+          cancellationRequestedAt: sql`now()`,
+          cancellationReason: note,
+        })
         .where(
           and(
             eq(orders.id, orderId),
             eq(orders.customerId, user.id),
             eq(orders.storeId, storeId),
-            inArray(orders.status, SELF_CANCELLABLE),
+            isNull(orders.cancellationStatus),
+            inArray(orders.status, [...SELF_CANCELLABLE_STATUSES]),
           ),
         )
         .returning({ id: orders.id }),
     );
   } catch (error) {
-    logError("customer orders: cancel claim failed", error, { orderId });
-    return { error: "Couldn't cancel that order. Please contact the store." };
+    logError("customer orders: cancel request failed", error, { orderId });
+    return { error: "Couldn't send that request. Please contact the store." };
   }
-  if (!claimed.length) {
-    // Someone moved it between our read and our write.
-    return {
-      error: "This order has moved on and can't be cancelled now.",
-    };
+  if (!claimedRequest.length) {
+    // Someone moved the order, or a second tab got here first.
+    return { error: "This order has moved on and can't be cancelled now." };
   }
-
-  // Give back reserved stock / pickup holds — the same implementation the
-  // dashboard uses, so this path cannot drift from it.
-  await releaseCancelledOrder(
-    storeId,
-    orderId,
-    withService,
-    "customer_cancelled",
-  );
-
-  const refundDue = await refundDueForOrder({
-    id: order.id,
-    total: order.total,
-    paymentStatus: order.payment_status,
-  });
 
   emitEvent({
-    type: "order.cancelled",
+    type: "order.cancellation_requested",
     storeId,
     actor: { type: "customer", id: user.id, label: user.email ?? null },
     subject: { type: "order", id: order.id, label: order.order_ref },
     customerId: user.id,
     payload: {
       orderRef: order.order_ref ?? "",
-      status: "cancelled",
+      status: order.status,
       total: Number(order.total ?? 0),
       currency: "INR",
-      // Surfaced BECAUSE nothing pays it automatically — this is how the
-      // merchant learns they owe money (§2.2).
-      ...(refundDue > 0 ? { refund_due: refundDue } : {}),
       ...(note ? { reason: note } : {}),
     },
   });
 
   revalidatePath("/orders");
   revalidatePath(`/orders/${orderId}`);
-  return { cancelled: true, refundDue };
+
+  // ── Auto-approve, if the merchant asked for it ───────────────────────────
+  // Off by default. The request row is written FIRST and approved second, so an
+  // auto-approval that fails half way leaves a request a merchant can still see
+  // and act on — rather than a silent nothing.
+  if (rules.approval === "auto") {
+    const approved = await approveCancellation({
+      storeId,
+      orderId,
+      actorId: user.id,
+      actorLabel: user.email ?? null,
+      customerId: user.id,
+      // The merchant configured automation, not a destination per order; the
+      // obligation is recorded and their refund panel shows what is owed.
+      refundDestination: "later",
+      reasonCode: "customer_changed_mind",
+      restock: true,
+      notify: true,
+    });
+    if (approved.error) {
+      // The REQUEST stands — it is in the merchant's queue either way, which is
+      // the honest outcome. Never report a cancellation that did not happen.
+      return { requested: true };
+    }
+    return { cancelled: true, refundDue: approved.refundDue };
+  }
+
+  return { requested: true };
 }

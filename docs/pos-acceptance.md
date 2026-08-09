@@ -562,6 +562,191 @@ Then ring the same ₹100 sale with **no** discount.
 
 ---
 
+## 7b. Checkout payment defaults & collection payment policy
+
+Roadmap Step 1. ⚠ PS-C.3 and PS-C.4 change what shoppers are charged — run them
+against a store whose Razorpay is in **test mode**.
+
+**PS-C.1 ★★ — A gateway-connected store defaults to ONLINE**
+Connect Razorpay in Channels, then open `/checkout` with items in the cart.
+**Expect:** "Pay online" is pre-selected.
+**Was:** Cash on Delivery, always — `useState("cod")` was hardcoded and nothing
+reconciled it with the gateway config. Every merchant who connected a gateway
+watched shoppers land on the option that costs them a courier round trip.
+
+**PS-C.2 ★ — It never overrides a choice the shopper made**
+Open `/checkout` and tap **Cash on Delivery** immediately, before the page
+settles.
+**Expect:** it stays on COD. The config and pickup policy both arrive after
+first paint, and a default re-applied on their arrival would yank the selection
+out from under someone mid-tap.
+
+**PS-C.3 — Prepaid collections**
+Locations → Online fulfilment → set **Payment for collection orders** to "Pay
+online only". At checkout, switch to Pickup.
+**Expect:** only "Pay online" is offered, with a line saying this store takes
+payment for collection orders when they are placed. COD/pay-at-store is gone.
+
+**PS-C.4 — Pay at the counter only**
+Set it to "Pay at the counter only" and switch to Pickup.
+**Expect:** only the counter option is offered, even though Razorpay is
+connected.
+
+**PS-C.5 ★ — Delivery is untouched by the collection policy**
+With either policy set, switch back to Delivery.
+**Expect:** both options are offered again. A policy about collections says
+nothing about courier orders, and silently switching COD off for them would be a
+policy the merchant never set.
+
+**PS-C.6 ★★ — The policy is enforced server-side**
+With the store on "Pay online only", call `placeOrder` directly with
+`paymentMethod: "pay_at_store"` and a pickup location.
+**Expect:** refused — "That payment method isn't available for collection orders
+at this store." A control the UI hides is not a permission (invariant 5);
+without this the goods are held and nobody ever owes anything.
+
+**PS-C.7 ★ — "Pay online only" needs a gateway**
+On a store with no Razorpay connected, try to set the policy to "Pay online
+only".
+**Expect:** refused at save — "Connect a payment gateway in Channels before
+requiring collection orders to be paid online." Otherwise pickup becomes
+unorderable and it is a shopper who discovers it.
+
+**PS-C.8 — A retired policy value falls back**
+Hand-edit `stores.settings.features["fulfilment.pickupPayment"]` to `"nonsense"`.
+**Expect:** checkout behaves as "Let the customer choose". A stricter policy
+nobody chose must never be imposed by a typo (invariant 6).
+
+---
+
+## 7c. Cancellation & refund flow (roadmap Step 2)
+
+⚠ Needs `supabase/orders_01_cancellation.sql` applied. PS-D.6–D.9 move real
+money — use a **test-mode** gateway.
+
+**PS-D.1 — The merchant sets the rules**
+Orders → Settings. Turn **Let customers cancel their own orders** on.
+**Expect:** a **Cancellation window** select (No cancellations / Until fulfilled
+/ 1 hour / 24 hours / Custom hours) and a **Cancellation approval** select,
+defaulting to **Require my approval**.
+
+**PS-D.2 — Asking is not cancelling**
+As a customer, open a pending order → **Cancel order** → confirm.
+**Expect:** the panel says it cancels **the entire order** and that the store
+reviews it. After submitting: "Cancellation request submitted." **The order is
+still active** — status unchanged, stock not returned, no money moved.
+**Was:** it cancelled outright the moment the button was pressed.
+
+**PS-D.3 ★ — One request, and a decline sticks**
+Submit a second request on the same order.
+**Expect:** refused ("already asked"). Have the merchant decline it, then try
+again: refused, quoting the decline. A decline that can be reopened by asking
+again means nothing.
+
+**PS-D.4 ★ — The window is enforced server-side**
+Set the window to 1 hour. On an order placed two hours ago, call `cancelMyOrder`
+directly.
+**Expect:** refused — "within 1 hour". A window enforced only in the browser is
+not enforced (invariant 5).
+
+**PS-D.5 ★ — "Until fulfilled" is not a duration**
+Set the window to **Until fulfilled**. Request cancellation on an order placed
+three months ago that nobody has fulfilled.
+**Expect:** accepted. Then mark an order shipped and try: refused, and pointed
+at returns.
+
+**PS-D.6 — Approving cancels the whole order**
+Orders → Cancellations → **Approve & cancel**. Choose a refund destination, a
+reason, leave Restock and Notify ON, add a staff note.
+**Expect:** order cancelled, stock returned, customer notified. The staff note
+appears **nowhere** the customer can see.
+
+**PS-D.7 — Refund to store credit uses the existing balance**
+Approve with **Store credit** on a ₹2,000 paid order.
+**Expect:** ₹2,000 on the customer's balance, AND an `order_refunds` row — the
+refund goes through `issueRefund`, not a separate credit path, so the order's
+refund cap and payment status stay correct.
+
+**PS-D.8 ★★ — A failed refund is never reported as success**
+Break the gateway (wrong key) and approve with **Original payment method**.
+**Expect:** "Order cancelled, but the refund failed: …". The order IS cancelled
+— that claim already committed — but nobody is told they were refunded when
+they were not.
+
+**PS-D.9 ★★ — An unknown gateway answer is not a failure**
+Force a timeout on the refund call.
+**Expect:** "the refund is in flight — don't send it again." NOT an error.
+Reporting this as failed is how a customer gets paid twice (CODEBASE §26).
+
+**PS-D.10 — Declining requires a reason, and the customer reads it**
+Decline a request with the reason box empty.
+**Expect:** refused. With a reason: the order stays **active** and the customer
+is notified with those exact words.
+
+**PS-D.11 — Automatic approval, off by default**
+Confirm a request waits by default. Switch approval to **Approve
+automatically**, then request again.
+**Expect:** the order cancels immediately. **Watch for:** it must still restock
+and notify.
+
+**PS-D.12 ★ — Only honourable refund destinations are offered**
+Open a request for a COD order.
+**Expect:** no "Original payment method" option. For a walk-in with no account:
+no "Store credit". A control that always fails is worse than no control.
+
+**PS-D.13 — Nothing is item-level**
+Look at every screen in this flow.
+**Expect:** no per-item cancel, approve, decline or refund anywhere. Whole-order
+only, by design — it needs partial fulfilment, which this system does not have.
+
+---
+
+## 7d. Collection codes & the role split (roadmap Step 3)
+
+⚠ Needs `supabase/locations_11_pickup_code.sql` applied.
+
+**PS-E.1 — A collection gets a code; a delivery does not**
+Place a pickup order, then a delivery order.
+**Expect:** the pickup confirmation email shows a code like `PK0M-3T9V` **as
+text**, and links to a collection page. The delivery email has neither.
+
+**PS-E.2 ★★ — The email must never rely on the QR**
+Open the pickup confirmation in Gmail with images blocked (the default).
+**Expect:** the code is fully readable. This is why it is text — an emailed QR
+is a broken-image icon on the one screen a customer holds up at the counter.
+
+**PS-E.3 — The collection page**
+Follow the link.
+**Expect:** a QR, the code in large monospace beneath it, the shop name and
+address, and the collect-by date. Signed out or as another customer: 404.
+
+**PS-E.4 ★ — Misreading the code still works**
+At the till, type the code with `O` for `0` and `I` for `1`, in lowercase, with
+the hyphen.
+**Expect:** it resolves. The alphabet excludes the confusable characters and the
+normaliser folds them back — "not found" with a queue waiting is the failure
+this prevents.
+
+**PS-E.5 ★ — A code from another shop names that shop**
+Scan a code belonging to a sister branch.
+**Expect:** "That order is waiting at Bandra." Not "not found" — the customer is
+standing there and needs to know where to go.
+
+**PS-E.6 ★★ — Manager marks ready, cashier hands over**
+As a **cashier**, try to mark a collection ready.
+**Expect:** refused — "Only a manager can mark a collection order ready."
+Nothing moves, and no "your order is ready" email goes out.
+As a **manager**: it works, and the ready email carries the code.
+Then as a **cashier**, hand it over: that still works. Tightening the wrong one
+would stop a shop serving customers.
+
+**PS-E.7 — Pickup alerts reach the right shop**
+On a store with two locations, place a pickup order at one of them.
+**Expect:** managers at THAT shop are notified. **Watch for:** ordinary delivery
+orders must still reach everyone — `order.placed` is deliberately not narrowed.
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**
