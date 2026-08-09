@@ -300,12 +300,19 @@ function applySettings(
     normalizeTemplateMap,
     (parsed) => Object.keys(parsed).length === 0,
   );
-  const routing = normalizeRouting({
-    routing: row.routing,
-    routing_scope: row.routingScope,
-    target_roles: row.targetRoles,
-    target_admins: row.targetAdmins,
-  });
+  const routing = normalizeRouting(
+    {
+      routing: row.routing,
+      routing_scope: row.routingScope,
+      target_roles: row.targetRoles,
+      target_admins: row.targetAdmins,
+    },
+    // The registry's own default, so a pickup event reaches the shop it
+    // happened at without every merchant having to find the switch.
+    // From the REGISTRY, not the resolved row: `defaultScope` is a property of
+    // the event itself, not something an operator or merchant overrides.
+    getEventDef(base.key)?.defaultScope,
+  );
 
   const audiences = { ...base.audiences };
   for (const audience of AUDIENCE_KEYS) {

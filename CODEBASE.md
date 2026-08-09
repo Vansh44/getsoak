@@ -2520,6 +2520,23 @@ group, span}` (span = columns of the 4-wide desktop grid),
         dependency for camera scanning, so no new package. That page is
         owner-gated and `noindex`, and the code in text is never conditional on
         the QR rendering: if the writer fails, eight characters still work.
+      - **★ PICKUP ALERTS DEFAULT TO THE SHOP THEY HAPPENED AT.**
+        `EventDef.defaultScope` lets an event pick its own routing fallback, and
+        the four pickup-specific events (`ready_for_pickup`, `collected`,
+        `pickup_expiring`, `pickup_expired`) default to `event_location`: a
+        collection is physically at one shop, so the people who can act on it
+        are the ones standing in it. **`order.placed` deliberately does NOT** —
+        it fires for every order including deliveries, so narrowing it would
+        change who hears about ordinary orders for every existing store
+        (invariant 1). A merchant's own stored choice always beats the default;
+        the fallback only applies when they have chosen nothing.
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
+        scanned collection code OR a typed order number from the same input —
+        a hardware scanner is a keyboard, and making someone pick a field first
+        is exactly the friction the code was meant to remove.
+        `isCollectionCode` is a cheap shape check, so a scanner pointed at a
+        milk carton never becomes a database lookup, and a code belonging to a
+        sister branch names THAT branch rather than returning "not found".
       - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
         Marking ready is what tells a customer to travel, so it belongs to
         someone who has seen the box; handing it over is a cashier's job with

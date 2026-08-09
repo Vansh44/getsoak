@@ -701,6 +701,52 @@ only, by design — it needs partial fulfilment, which this system does not have
 
 ---
 
+## 7d. Collection codes & the role split (roadmap Step 3)
+
+⚠ Needs `supabase/locations_11_pickup_code.sql` applied.
+
+**PS-E.1 — A collection gets a code; a delivery does not**
+Place a pickup order, then a delivery order.
+**Expect:** the pickup confirmation email shows a code like `PK0M-3T9V` **as
+text**, and links to a collection page. The delivery email has neither.
+
+**PS-E.2 ★★ — The email must never rely on the QR**
+Open the pickup confirmation in Gmail with images blocked (the default).
+**Expect:** the code is fully readable. This is why it is text — an emailed QR
+is a broken-image icon on the one screen a customer holds up at the counter.
+
+**PS-E.3 — The collection page**
+Follow the link.
+**Expect:** a QR, the code in large monospace beneath it, the shop name and
+address, and the collect-by date. Signed out or as another customer: 404.
+
+**PS-E.4 ★ — Misreading the code still works**
+At the till, type the code with `O` for `0` and `I` for `1`, in lowercase, with
+the hyphen.
+**Expect:** it resolves. The alphabet excludes the confusable characters and the
+normaliser folds them back — "not found" with a queue waiting is the failure
+this prevents.
+
+**PS-E.5 ★ — A code from another shop names that shop**
+Scan a code belonging to a sister branch.
+**Expect:** "That order is waiting at Bandra." Not "not found" — the customer is
+standing there and needs to know where to go.
+
+**PS-E.6 ★★ — Manager marks ready, cashier hands over**
+As a **cashier**, try to mark a collection ready.
+**Expect:** refused — "Only a manager can mark a collection order ready."
+Nothing moves, and no "your order is ready" email goes out.
+As a **manager**: it works, and the ready email carries the code.
+Then as a **cashier**, hand it over: that still works. Tightening the wrong one
+would stop a shop serving customers.
+
+**PS-E.7 — Pickup alerts reach the right shop**
+On a store with two locations, place a pickup order at one of them.
+**Expect:** managers at THAT shop are notified. **Watch for:** ordinary delivery
+orders must still reach everyone — `order.placed` is deliberately not narrowed.
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**

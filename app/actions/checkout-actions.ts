@@ -37,7 +37,10 @@ import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import { isPaymentMethodAllowed } from "@/lib/fulfilment/payment-policy";
 import type { PickupPaymentPolicy } from "@/lib/fulfilment/payment-policy";
-import { generateCollectionCode } from "@/lib/fulfilment/collection-code";
+import {
+  formatCollectionCode,
+  generateCollectionCode,
+} from "@/lib/fulfilment/collection-code";
 import {
   pickupPaymentPolicy,
   pickupEnabled,
@@ -1137,6 +1140,16 @@ export async function placeOrder(
     }
   }
 
+  // The code the customer shows at the counter (roadmap Step 3). Minted before
+  // the insert so the confirmation email can carry it — a collection order that
+  // is told "collect from Bandra" with no code to present is half an
+  // instruction. Only collections have one; a delivery has nothing to show.
+  const collectionCode = pickupAt
+    ? generateCollectionCode((n: number) =>
+        crypto.getRandomValues(new Uint8Array(n)),
+      )
+    : null;
+
   const orderRows = await withService((db) =>
     db
       .insert(orders)
@@ -1174,11 +1187,7 @@ export async function placeOrder(
         // collection has one; a delivery has nothing to present. Uniqueness is
         // a partial unique index, so the astronomically unlikely collision
         // surfaces as a failed insert rather than two orders sharing a code.
-        pickupCode: pickupAt
-          ? generateCollectionCode((n: number) =>
-              crypto.getRandomValues(new Uint8Array(n)),
-            )
-          : null,
+        pickupCode: collectionCode,
         pickupStatus: pickupAt ? "awaiting" : null,
         pickupReadyAt: pickupAt
           ? sql`now() + make_interval(days => ${readyDays})`
@@ -1454,6 +1463,13 @@ export async function placeOrder(
             pickupLocation: pickupShop?.name ?? "",
             pickupAddress: pickupShop?.address ?? "",
             readyOn: readyOn(readyDays).long,
+            // ★ THE CODE, AS TEXT. It is what the customer presents at the
+            // counter, and text is the only form that survives every mail
+            // client — an emailed QR is a broken-image icon in Gmail. The QR
+            // itself lives on /orders/[id]/collect, which the CTA links to.
+            ...(collectionCode
+              ? { collectionCode: formatCollectionCode(collectionCode) }
+              : {}),
           }
         : {
             fulfilment: "delivery",

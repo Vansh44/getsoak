@@ -105,6 +105,12 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       description: "Where a delivery order is going. Empty for a collection.",
       sample: "hostel D, Thapar University, Patiala, Punjab 147004",
     },
+    {
+      name: "collection_code",
+      description:
+        "The code to show at the counter. Empty for delivery. Text, not a QR — an emailed QR is a broken image in most clients.",
+      sample: "PK0M-3T9V",
+    },
   ],
   "order.ready_for_pickup": [
     {

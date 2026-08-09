@@ -35,7 +35,7 @@ sequence AND the spec for everything still to build.
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
 | **3**  | **Pickup end to end: collection code, QR, role split**         | L    | ◐ part  |
-| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
+| **4**  | **POS customer capture (Shopify parity) + claim/merge**        | L    | ⏭ next |
 | **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
 | **6**  | Channel stock policy (LOC H)                                   | M    | ⏳      |
 | **7**  | Transfer lifecycle (LOC I)                                     | M    | ⏳      |
@@ -268,7 +268,7 @@ editor, `(pages)/orders/[id]`.
 
 ---
 
-## Step 3 — Pickup, end to end ◐ IN PROGRESS
+## Step 3 — Pickup, end to end ✅ DONE
 
 **✅ Shipped:** `lib/fulfilment/collection-code.ts` (pure + 13 tests — Crockford
 base32, so the characters people misread off a phone are not in the alphabet and
@@ -279,10 +279,20 @@ page at `/orders/[id]/collect` with a client-rendered QR, the code carried into
 the `order.ready_for_pickup` notification, and `findPickupByCode` for the
 counter.
 
-**⏳ Remaining:** wiring the scan box into `/pos/pickups` (the action exists),
-linking the collection page from the confirmation email, the
-`routing_scope: event_location` default for pickup events, and running
-PS-8.1–8.31 in a browser.
+**✅ Also shipped:** the scan box on `/pos/pickups` (one box takes both a
+scanned code and a typed order number — a scanner is a keyboard, and a counter
+should not make anyone choose a field first), the code in the confirmation
+email, and a per-event **default routing scope** so pickup events reach managers
+at the shop it happened at.
+
+**★ `order.placed` DELIBERATELY DOES NOT DEFAULT TO `event_location`.** It fires
+for every order including deliveries, so narrowing it would change who hears
+about ordinary orders for every existing store (invariant 1). Only the four
+pickup-specific events default, and those are safe because pickup has no live
+users. A merchant's own choice always wins over the default.
+
+**⏳ Remaining:** running PS-8.1–8.31 and PS-E.1–E.6 in a browser — blocked on
+the Cloud SQL proxy (ADC) and the two unapplied migrations.
 
 **★ THE ROLE SPLIT WAS SAFE TO MAKE** because no store had pickup enabled
 (owner confirmed 2026-08-09) — there was no live behaviour to take away. It is

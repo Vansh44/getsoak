@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { getEventDef } from "./events";
 import {
   DEFAULT_ROUTING,
   ineligibleTargets,
@@ -296,5 +297,60 @@ describe("normalizeRouting — scope", () => {
     });
     expect(r.mode).toBe("permission");
     expect(r.scope).toBe("event_location");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-event default scope (roadmap Step 3)
+// ---------------------------------------------------------------------------
+
+describe("normalizeRouting — the per-event default scope", () => {
+  it("still defaults to the whole store when no fallback is given", () => {
+    expect(normalizeRouting({}).scope).toBe("store");
+  });
+
+  // ★ A collection is physically at ONE shop, so the people who can act on it
+  // are the ones standing in it.
+  it("★ honours an event's own default", () => {
+    expect(normalizeRouting({}, "event_location").scope).toBe("event_location");
+  });
+
+  // ★ THE MERCHANT ALWAYS WINS. A default is what applies until someone
+  // chooses; it must never override a choice they made.
+  it("★ never overrides a stored choice", () => {
+    expect(
+      normalizeRouting({ routing_scope: "store" }, "event_location").scope,
+    ).toBe("store");
+    expect(
+      normalizeRouting({ routing_scope: "event_location" }, "store").scope,
+    ).toBe("event_location");
+  });
+
+  it("survives a mode that falls back", () => {
+    // An empty targeted list falls back to permission mode — the scope must
+    // come through that unchanged.
+    const r = normalizeRouting(
+      { routing: "roles", target_roles: [] },
+      "event_location",
+    );
+    expect(r.mode).toBe("permission");
+    expect(r.scope).toBe("event_location");
+  });
+});
+
+describe("★ which events default to their own location", () => {
+  it("pickup events do; order.placed deliberately does NOT", () => {
+    // order.placed fires for EVERY order including deliveries — narrowing it
+    // would change who hears about ordinary orders for every existing store
+    // (invariant 1).
+    expect(getEventDef("order.placed")?.defaultScope).toBeUndefined();
+    for (const key of [
+      "order.ready_for_pickup",
+      "order.collected",
+      "order.pickup_expiring",
+      "order.pickup_expired",
+    ]) {
+      expect(getEventDef(key)?.defaultScope).toBe("event_location");
+    }
   });
 });
