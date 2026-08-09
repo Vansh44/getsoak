@@ -156,8 +156,15 @@ change every live store's policy (invariant 1).
 `cancelMyOrder` and `lib/orders/cancel.ts` cancel an entire order. Partial
 cancellation is a different feature: partial refunds, partial restocks, and an
 order that stays open afterwards — which is really "refund some items" and
-belongs with returns. Shopify draws the same line. **Owner decision, 2026-08-09:
-a customer cannot cancel part of a mixed order.**
+belongs with returns. **Owner decision, 2026-08-09: a customer cannot cancel
+part of a mixed order.**
+
+⚠ **CORRECTION (2026-08-09):** an earlier draft of this said "Shopify draws the
+same line". It does not. Shopify's self-serve cancellation is **per item** — a
+customer cancels the unshipped items and returns the shipped ones in the same
+order. (Its MERCHANT-side cancel is all-or-nothing, and refuses outright on a
+partially fulfilled order.) The decision above stands on its own merits —
+simplicity, and no partial-refund machinery — but not on that comparison.
 
 The order page must say _why_ when the button is absent — "This order contains
 items that can't be cancelled online" beats a missing control.
