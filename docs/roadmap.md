@@ -173,12 +173,14 @@ goods that will never ship, and making them press a button for each one is a
 support queue, not a control.
 
 **Ships.** `orders.autoRefundOnCancel` (section `orders`, **default OFF** —
-invariant 1). When on:
+invariant 1, and confirmed by the owner 2026-08-09). When on:
 
 - a **customer** self-cancel of a `razorpay`-paid order raises a gateway refund
   to source automatically, through `lib/payments/issue-refund.ts` — the ONE
   refund mechanism (§28), never a second copy;
-- a **merchant** cancel still only _prompts_, exactly as today;
+- a **merchant** cancel still only _prompts_, exactly as today — **settled by
+  the owner**: they may want to offer store credit, deduct something, or hold a
+  suspicious order, and an automatic payout removes that choice;
 - `cod` refunds nothing (no money moved); `store_credit` reinstates, which
   `reinstateCreditForOrder` already does.
 
@@ -517,6 +519,14 @@ They are the ones already paid for in bugs.
 
 - **Partial cancellation: NO** (owner, 2026-08-09). A customer cannot cancel
   part of a mixed order; an order is cancellable only if every line is.
+- **Auto-refund fires on a CUSTOMER cancel only** (owner, 2026-08-09). A
+  merchant cancelling from the dashboard still gets the refund button to click,
+  because they may want to offer store credit, deduct something, or hold a
+  suspicious order — an automatic payout takes that choice away at exactly the
+  moment it matters.
+- **Auto-refund is OFF by default** (owner, 2026-08-09), a switch each merchant
+  turns on. Consistent with every other new behaviour here: nothing changes for
+  an existing store until they ask for it.
 
 **Open — the owner's to settle before the step they affect starts**
 
@@ -524,5 +534,3 @@ They are the ones already paid for in bugs.
   current behaviour, which is safe only because pickup has no live users. If any
   store has already enabled `fulfilment.offerPickup`, the capability must default
   open instead.
-- **Step 2 auto-refund scope.** The plan scopes it to _customer_ self-cancel of
-  _prepaid_ orders, default OFF. Confirm that boundary before it ships.
