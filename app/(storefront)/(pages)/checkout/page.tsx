@@ -22,6 +22,10 @@ import {
   X,
 } from "lucide-react";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
+import {
+  defaultPaymentMethod,
+  paymentOptionsFor,
+} from "@/lib/fulfilment/payment-policy";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
 import {
   placeOrder,
@@ -139,7 +143,16 @@ export default function CheckoutPage() {
     postalCode: "",
     phone: "",
   });
-  const [payMethod, setPayMethod] = useState<PaymentMethod>("cod");
+  // ★ NULL MEANS "THE SHOPPER HASN'T CHOSEN YET", and that is the whole
+  // mechanism. The gateway config and the pickup policy both arrive after first
+  // paint, so the default cannot be an initial value — but storing a default and
+  // correcting it later would yank the selection out from under anyone who
+  // tapped an option in the meantime. A payment method that changes itself after
+  // the customer picked one is worse than a wrong default. So state holds only
+  // the explicit choice, and `resolvedPayMethod` below derives the rest.
+  const [chosenPayMethod, setChosenPayMethod] = useState<PaymentMethod | null>(
+    null,
+  );
   // A placed-but-unpaid online order (modal dismissed / payment failed). Kept
   // so "Retry payment" reopens the SAME Razorpay order instead of placing a
   // duplicate; the reaper cancels it server-side if the shopper walks away.
@@ -204,6 +217,47 @@ export default function CheckoutPage() {
     ? fulfilmentChoice
     : "delivery";
 
+  // What this store may be paid with, for the mode currently selected. Same
+  // function placeOrder validates against, so the screen can never offer
+  // something the server then refuses in front of a customer.
+  const payOptions = paymentOptionsFor({
+    fulfilment,
+    onlineAvailable: !!payConfig?.onlinePayments,
+    policy: pickup?.paymentPolicy ?? "customer_choice",
+  });
+
+  // ★ DERIVED DURING RENDER, NOT SET IN AN EFFECT. `payMethod` state holds only
+  // what the SHOPPER picked; what is displayed and submitted is resolved here.
+  // An effect would have to run after the config lands, causing a cascading
+  // render and a frame on the wrong option — and the "don't stomp a choice"
+  // guard would then be racing its own re-render. Deriving makes both problems
+  // disappear: there is no moment at which the value is stale.
+  //
+  // The shopper's choice is honoured only while it is still ON OFFER. Switching
+  // Delivery→Pickup under a prepaid policy retires COD, and leaving it selected
+  // would fail at placeOrder with the customer's card already out.
+  // The shopper's choice is honoured only while it is still ON OFFER. Switching
+  // Delivery→Pickup under a prepaid policy retires pay-at-store, and leaving it
+  // selected would fail at placeOrder with the customer's card already out.
+  const chosenStillOffered =
+    chosenPayMethod !== null &&
+    (chosenPayMethod === "razorpay"
+      ? payOptions.online
+      : payOptions.offline &&
+        (chosenPayMethod === "pay_at_store") === (fulfilment === "pickup"));
+
+  const resolvedPayMethod: PaymentMethod =
+    chosenStillOffered && chosenPayMethod
+      ? chosenPayMethod
+      : (defaultPaymentMethod({
+          fulfilment,
+          onlineAvailable: !!payConfig?.onlinePayments,
+          policy: pickup?.paymentPolicy ?? "customer_choice",
+        }) ??
+        // Nothing on offer (prepaid with no gateway) — the panel renders an
+        // explanation and placeOrder refuses, so this is only a placeholder.
+        "cod");
+
   // Pre-select the first shop that has the whole basket, so choosing "Pickup"
   // shows a real shop rather than an empty slot the shopper must go and fill.
   const chosenShop =
@@ -255,7 +309,7 @@ export default function CheckoutPage() {
   const creditSplit = creditToApply({
     orderTotal,
     balance: payConfig?.storeCredit ?? 0,
-    gatewayMinimum: payMethod === "razorpay" ? undefined : 0,
+    gatewayMinimum: resolvedPayMethod === "razorpay" ? undefined : 0,
   });
 
   const selected = addresses.find((a) => a.id === selectedId) ?? null;
@@ -523,7 +577,7 @@ export default function CheckoutPage() {
 
     // Retry path: an online order was already placed for this exact cart —
     // reopen the SAME Razorpay order rather than creating a duplicate.
-    if (activePendingPayment && payMethod === "razorpay") {
+    if (activePendingPayment && resolvedPayMethod === "razorpay") {
       await startOnlinePayment(activePendingPayment);
       return;
     }
@@ -535,9 +589,12 @@ export default function CheckoutPage() {
       form,
       cart.items,
       cart.appliedCoupon?.code,
-      fulfilment === "pickup" && payMethod === "cod"
-        ? "pay_at_store"
-        : payMethod,
+      // `payMethod` already holds the real method: the picker sets
+      // `pay_at_store` directly on a collection, and `defaultPaymentMethod`
+      // resolves it per fulfilment mode. The cod→pay_at_store translation that
+      // used to live here is gone — with the state now correct, it would have
+      // been a second place the mapping could drift from the server's.
+      resolvedPayMethod,
       fulfilment === "pickup" ? (chosenShop?.id ?? null) : null,
       // A collection has no delivery address to differ from, so the billing
       // question is only asked — and only sent — for a shipped order.
@@ -1077,13 +1134,17 @@ export default function CheckoutPage() {
                 <h2 className={styles.sectionTitle}>Payment Method</h2>
               </div>
 
-              {payConfig?.onlinePayments ? (
+              {payOptions.online && payOptions.offline ? (
                 <div className={styles.payStack}>
                   <button
                     type="button"
-                    className={`${styles.payOption}${payMethod === "cod" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setPayMethod("cod")}
-                    aria-pressed={payMethod === "cod"}
+                    className={`${styles.payOption}${resolvedPayMethod !== "razorpay" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() =>
+                      setChosenPayMethod(
+                        fulfilment === "pickup" ? "pay_at_store" : "cod",
+                      )
+                    }
+                    aria-pressed={resolvedPayMethod !== "razorpay"}
                   >
                     <span className={styles.payIcon}>
                       <Banknote size={22} />
@@ -1106,9 +1167,9 @@ export default function CheckoutPage() {
                   </button>
                   <button
                     type="button"
-                    className={`${styles.payOption}${payMethod === "razorpay" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setPayMethod("razorpay")}
-                    aria-pressed={payMethod === "razorpay"}
+                    className={`${styles.payOption}${resolvedPayMethod === "razorpay" ? "" : ` ${styles.payOptionMuted}`}`}
+                    onClick={() => setChosenPayMethod("razorpay")}
+                    aria-pressed={resolvedPayMethod === "razorpay"}
                   >
                     <span className={styles.payIcon}>
                       <CreditCard size={22} />
@@ -1124,7 +1185,27 @@ export default function CheckoutPage() {
                     </span>
                   </button>
                 </div>
-              ) : (
+              ) : payOptions.online ? (
+                /* The merchant requires collection orders to be paid up front
+                   (fulfilment.pickupPayment = prepaid). Shown, not hidden, so
+                   the shopper knows what will happen next. */
+                <div className={styles.payOption}>
+                  <span className={styles.payIcon}>
+                    <CreditCard size={22} />
+                  </span>
+                  <div>
+                    <div className={styles.payName}>Pay online</div>
+                    <div className={styles.payDesc}>
+                      {fulfilment === "pickup"
+                        ? "This store takes payment for collection orders when you place them."
+                        : "UPI, cards or netbanking — secured by Razorpay."}
+                    </div>
+                  </div>
+                  <span className={styles.payCheck}>
+                    <Check size={20} />
+                  </span>
+                </div>
+              ) : payOptions.offline ? (
                 <div className={styles.payOption}>
                   <span className={styles.payIcon}>
                     <Banknote size={22} />
@@ -1144,6 +1225,27 @@ export default function CheckoutPage() {
                   <span className={styles.payCheck}>
                     <Check size={20} />
                   </span>
+                </div>
+              ) : (
+                /* Nothing can be offered: the store requires prepayment but has
+                   no working gateway. `canRequirePrepaid` refuses that setting
+                   at save time, so this should be unreachable — but an
+                   explanation beats an empty panel and a Place Order button
+                   that fails, and a plan lapsing could still produce it. */
+                <div className={styles.payOption}>
+                  <span className={styles.payIcon}>
+                    <Banknote size={22} />
+                  </span>
+                  <div>
+                    <div className={styles.payName}>
+                      Collection isn&apos;t available right now
+                    </div>
+                    <div className={styles.payDesc}>
+                      This store takes payment online for collection orders, and
+                      online payment is temporarily unavailable. Choose
+                      delivery, or try again shortly.
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1287,9 +1389,9 @@ export default function CheckoutPage() {
               >
                 {placing
                   ? "Processing…"
-                  : activePendingPayment && payMethod === "razorpay"
+                  : activePendingPayment && resolvedPayMethod === "razorpay"
                     ? "Retry Payment"
-                    : payMethod === "razorpay"
+                    : resolvedPayMethod === "razorpay"
                       ? "Pay & Place Order"
                       : fulfilment === "pickup"
                         ? "Place Order (Pay at store)"
@@ -1317,7 +1419,7 @@ export default function CheckoutPage() {
               </div>
               <div className={styles.trustItem}>
                 <Lock size={16} />{" "}
-                {payMethod === "razorpay"
+                {resolvedPayMethod === "razorpay"
                   ? "Payments secured by Razorpay"
                   : fulfilment === "pickup"
                     ? "No payment needed until you collect"

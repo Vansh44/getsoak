@@ -35,7 +35,10 @@ import {
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
+import { isPaymentMethodAllowed } from "@/lib/fulfilment/payment-policy";
+import type { PickupPaymentPolicy } from "@/lib/fulfilment/payment-policy";
 import {
+  pickupPaymentPolicy,
   pickupEnabled,
   pickupHoldDays,
   pickupReadyDays,
@@ -568,6 +571,9 @@ export interface PickupOptions {
   readyDays: number;
   /** Same-day collection is the selling point, so the UI can highlight it. */
   readyToday: boolean;
+  /** The merchant's collection-payment policy, so the picker offers exactly
+   *  what placeOrder will accept. */
+  paymentPolicy: PickupPaymentPolicy;
   /** "Fri, 1 Aug". Empty when it's ready today. */
   readyDate: string;
 }
@@ -591,6 +597,7 @@ export async function getPickupOptions(
     readyDays: 0,
     readyToday: true,
     readyDate: "",
+    paymentPolicy: "customer_choice",
   };
   if (!Array.isArray(items) || items.length === 0) return off;
   if (!(await pickupEnabled())) return off;
@@ -658,6 +665,9 @@ export async function getPickupOptions(
     return {
       enabled: locations.length > 0,
       inStockCount: locations.filter((l) => l.hasStock).length,
+      // Sent so the picker offers exactly what placeOrder will accept — one
+      // rule, two consumers (lib/fulfilment/payment-policy.ts).
+      paymentPolicy: await pickupPaymentPolicy(),
       locations: ordered.map((l) => {
         const a = (l.address ?? {}) as Record<string, unknown>;
         const str = (k: string) =>
@@ -779,6 +789,32 @@ export async function placeOrder(
           "Online payment isn't available right now. Please choose Cash on Delivery.",
       };
     }
+  }
+
+  // ★ THE MERCHANT'S COLLECTION-PAYMENT POLICY IS ENFORCED HERE, NOT ONLY IN
+  // THE PICKER (invariant 5 — a control the UI hides is not a permission). A
+  // store on `prepaid` that accepted a pay-at-store order would hold the goods
+  // while nobody ever owed anything for them. Delivery orders are unaffected: a
+  // policy about collections says nothing about courier orders, and
+  // `paymentOptionsFor` encodes exactly that.
+  //
+  // ★ `onlineAvailable` REUSES THE LOOKUP ABOVE rather than making its own, so
+  // a COD order still costs zero extra queries. Passing `false` for a
+  // non-razorpay method is correct because `offline` is never a function of
+  // `onlineAvailable` in `paymentOptionsFor` — a property that module has a test
+  // pinning, because a future policy that broke it would fail silently here.
+  if (
+    !isPaymentMethodAllowed(paymentMethod, {
+      fulfilment: pickupLocationId ? "pickup" : "delivery",
+      onlineAvailable: !!gatewayCreds,
+      policy: await pickupPaymentPolicy(),
+    })
+  ) {
+    return {
+      error: pickupLocationId
+        ? "That payment method isn't available for collection orders at this store."
+        : "That payment method isn't available for this order.",
+    };
   }
 
   // 1. Re-validate prices by fetching products from the DB (anti-tampering),

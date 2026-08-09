@@ -466,6 +466,19 @@ wholesip/
 │   │                          # remainder gap below the gateway minimum) +
 │   │                          # store-credit.ts (the ONE way credit moves —
 │   │                          # issue/spend/reinstate, all via the RPCs)
+│   ├── fulfilment/            # ★ §23: resolve.ts (which location serves an online
+│   │                          # order) + strategies.ts (the routing REGISTRY) +
+│   │                          # pickup.ts (is pickup on, hold/ready days, the
+│   │                          # collection-payment policy reader) +
+│   │                          # ★ payment-policy.ts (PURE: which payment methods
+│   │                          # checkout may offer, and whether the one that came
+│   │                          # back is allowed — ONE rule asked by both the picker
+│   │                          # and placeOrder, so the UI can never offer what the
+│   │                          # server refuses. ⚠ NOT lib/pos/pickup-payment.ts,
+│   │                          # which answers a different question: what a
+│   │                          # collection still OWES at the counter. Renamed off
+│   │                          # that basename precisely so the two can't be
+│   │                          # imported for each other)
 │   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
 │   │                          # refundRouteFor: the TENDER decides where money goes,
 │   │                          # and a sale rung HERE is always returnable here),
@@ -932,6 +945,17 @@ wholesip/
    (in the action), not just in the UI. If RLS blocks a setting-dependent write
    (e.g. customers may only insert `pending_review` blogs), do the privileged
    step with the service-role client AFTER checking the setting — see
+   **★ THREE TYPES: `boolean`, `number` and `select`.** `select` carries
+   `options` — and that list IS the validation, not a UI hint:
+   `resolveStoreSettings` refuses a stored value that is not in it and falls
+   back to the default, so a retired option stops applying the moment it is
+   removed rather than lingering in a jsonb blob nobody reads.
+   `saveStoreSettings` re-checks it server-side (invariant 5 — the dropdown is
+   not the boundary) and now validates EVERY type before writing, where it used
+   to store whatever arrived on the reasoning that the read side rejects a
+   wrong-typed value. True, but it left the stored blob full of values that do
+   nothing, which is what makes a settings bug impossible to diagnose from the
+   database. First consumer: `fulfilment.pickupPayment` (§23).
    direct-publish in `blog-actions.ts`. First consumers:
    `blogs.customerSubmissions`, `blogs.requireApproval` (rendered at
    `/dashboard/blogs/settings`) and `pages.customCode` (rendered at
@@ -2400,6 +2424,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         count and gross. It is the mirror of the two bugs `lib/pos/shifts.ts`
         already guards — double-counted change and cash refunds — which both
         reported SHORT.
+      - **★ WHO PAYS WHEN IS THE MERCHANT'S CHOICE** — `fulfilment.pickupPayment`
+        (`customer_choice` | `prepaid` | `at_store`, defaulting to the first
+        because that is today's behaviour, invariant 1). The rule lives in
+        `lib/fulfilment/payment-policy.ts`, pure and tested, and **the same
+        function answers for the picker and for `placeOrder`** — the checkout
+        screen asks it which controls to render, the server asks it whether the
+        method that came back is allowed, so the UI can never offer something
+        the server then refuses in front of a customer (the
+        `RegisterConfig.canDiscount` rule from §22, applied to the other
+        counter). Three things are load-bearing: **delivery is never touched by
+        it** (a policy about collections says nothing about courier orders);
+        **`prepaid` with no gateway offers NOTHING rather than falling back to
+        pay-at-store**, which would serve the opposite of the merchant's policy
+        — `canRequirePrepaid` refuses the setting at SAVE time so that state
+        never exists; and `placeOrder` reuses its own gateway lookup for the
+        check, which is only correct while `offline` is independent of
+        `onlineAvailable` in `paymentOptionsFor` — a property with a test
+        pinning it, because a future policy that broke it would silently start
+        refusing COD orders.
+      - **★ CHECKOUT DEFAULTS TO ONLINE WHEN A GATEWAY IS CONNECTED.** It was
+        `useState<PaymentMethod>("cod")` with nothing reconciling it against
+        `payConfig.onlinePayments`, so every merchant who connected Razorpay
+        watched shoppers land on Cash on Delivery — the option that costs them a
+        courier round trip and a collection risk, pre-selected by us. The
+        default is now derived (`defaultPaymentMethod`) and applied in an effect,
+        because the config arrives after first paint — guarded by a `payTouched`
+        ref, since an effect that re-applied it would yank the selection out from
+        under a shopper who had already tapped one. It re-applies ONLY when the
+        current choice stops being offered (switching Delivery→Pickup under a
+        prepaid policy), which would otherwise fail at `placeOrder`.
       - **★ `pay_at_store` IS NOT A TENDER, so the tender is CAPTURED, never
         assumed** (`lib/pos/pickup-payment.ts`, pure + tested). It is a promise
         recorded at checkout, and the checkout copy says exactly that — "Pay at

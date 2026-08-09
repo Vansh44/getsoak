@@ -37,6 +37,7 @@ import {
   getManagerIdentity,
 } from "@/app/dashboard/lib/access";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import type { StoreSettingValues } from "@/lib/settings/registry";
 import { rateLimit } from "@/lib/rate-limit";
 import { emitEvent } from "@/lib/notifications/record";
 import { logError } from "@/lib/observability/logger";
@@ -1010,7 +1011,7 @@ async function priceReturn(
   orderId: string,
   lines: RequestReturnLine[],
   reasonCode: ReturnReason | null,
-  settings: Record<string, boolean | number>,
+  settings: StoreSettingValues,
 ) {
   const rows = await db
     .select({

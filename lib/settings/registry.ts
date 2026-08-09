@@ -45,6 +45,7 @@ export const SETTING_KEYS = [
   "fulfilment.offerPickup",
   "fulfilment.pickupReadyDays",
   "fulfilment.pickupHoldDays",
+  "fulfilment.pickupPayment",
   "orders.allowCustomerCancellation",
   "orders.cancellationWindowHours",
   "returns.enabled",
@@ -72,8 +73,8 @@ export interface SettingDef {
   /** Dashboard permission section that governs this setting (permissions.ts).
    *  Viewing/saving it requires view/manage on this section. */
   section: string;
-  type: "boolean" | "number";
-  defaultValue: boolean | number;
+  type: "boolean" | "number" | "select";
+  defaultValue: boolean | number | string;
   /** Minimum plan required to change this setting (locked to default below). */
   minPlan?: Plan;
   /** Another boolean setting this one only applies under (UI dims it when the
@@ -83,6 +84,16 @@ export interface SettingDef {
   min?: number;
   /** For number types: maximum allowed value */
   max?: number;
+  /**
+   * For select types: the allowed values, in the order they should render.
+   *
+   * ★ THIS IS THE VALIDATION, not a UI hint. `resolveStoreSettings` refuses a
+   * stored value that is not in this list and falls back to the default — so a
+   * value removed here stops applying the moment it is removed, rather than
+   * lingering in a jsonb blob nobody reads. Choose ids that read as data
+   * (`prepaid`), never as prose, because they are what ends up in the database.
+   */
+  options?: readonly { value: string; label: string; description?: string }[];
   /** Not shown in the generic settings editor — driven by a dedicated control
    *  (e.g. pos.enabled is toggled by the Enable POS button, not a raw switch). */
   hidden?: boolean;
@@ -290,6 +301,39 @@ export const SETTINGS: readonly SettingDef[] = [
     dependsOn: "fulfilment.offerPickup",
   },
   {
+    key: "fulfilment.pickupPayment",
+    label: "Payment for collection orders",
+    description:
+      "Whether a shopper collecting from a shop pays online when they order, or at the counter when they collect.",
+    group: "Checkout",
+    section: "locations",
+    type: "select",
+    // ★ `customer_choice` IS TODAY'S BEHAVIOUR, so it is the default: a
+    // migration may not change what a live store does (roadmap invariant 1).
+    defaultValue: "customer_choice",
+    options: [
+      {
+        value: "customer_choice",
+        label: "Let the customer choose",
+        description: "Both options are offered at checkout.",
+      },
+      {
+        value: "prepaid",
+        label: "Pay online only",
+        description:
+          "Collection orders must be paid for when they are placed. Needs a connected payment gateway.",
+      },
+      {
+        value: "at_store",
+        label: "Pay at the counter only",
+        description:
+          "Nothing is charged online; the shop takes payment on collection.",
+      },
+    ],
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
+  },
+  {
     key: "orders.allowCustomerCancellation",
     label: "Let customers cancel their own orders",
     description:
@@ -473,7 +517,7 @@ export function getSettingDef(key: string): SettingDef | undefined {
 }
 
 /** Resolved values for every setting in the catalog. */
-export type StoreSettingValues = Record<SettingKey, boolean | number>;
+export type StoreSettingValues = Record<SettingKey, boolean | number | string>;
 
 /**
  * Resolve a store's feature settings from its raw settings jsonb + plan:
@@ -500,6 +544,19 @@ export function resolveStoreSettings(
           def.min ?? -Infinity,
           Math.min(def.max ?? Infinity, stored),
         );
+        continue;
+      }
+      // ★ A STORED VALUE THAT IS NO LONGER AN OPTION FALLS BACK TO THE DEFAULT.
+      // Options live in code; the stored value is a jsonb blob nobody migrates.
+      // Accepting an unrecognised one would let a policy that was retired keep
+      // applying for every store that had selected it, invisibly — the same
+      // reason resolvePricing ignores a row for a plan id that no longer exists.
+      if (
+        def.type === "select" &&
+        typeof stored === "string" &&
+        def.options?.some((o) => o.value === stored)
+      ) {
+        out[def.key] = stored;
         continue;
       }
     }

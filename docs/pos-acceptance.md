@@ -562,6 +562,63 @@ Then ring the same ₹100 sale with **no** discount.
 
 ---
 
+## 7b. Checkout payment defaults & collection payment policy
+
+Roadmap Step 1. ⚠ PS-C.3 and PS-C.4 change what shoppers are charged — run them
+against a store whose Razorpay is in **test mode**.
+
+**PS-C.1 ★★ — A gateway-connected store defaults to ONLINE**
+Connect Razorpay in Channels, then open `/checkout` with items in the cart.
+**Expect:** "Pay online" is pre-selected.
+**Was:** Cash on Delivery, always — `useState("cod")` was hardcoded and nothing
+reconciled it with the gateway config. Every merchant who connected a gateway
+watched shoppers land on the option that costs them a courier round trip.
+
+**PS-C.2 ★ — It never overrides a choice the shopper made**
+Open `/checkout` and tap **Cash on Delivery** immediately, before the page
+settles.
+**Expect:** it stays on COD. The config and pickup policy both arrive after
+first paint, and a default re-applied on their arrival would yank the selection
+out from under someone mid-tap.
+
+**PS-C.3 — Prepaid collections**
+Locations → Online fulfilment → set **Payment for collection orders** to "Pay
+online only". At checkout, switch to Pickup.
+**Expect:** only "Pay online" is offered, with a line saying this store takes
+payment for collection orders when they are placed. COD/pay-at-store is gone.
+
+**PS-C.4 — Pay at the counter only**
+Set it to "Pay at the counter only" and switch to Pickup.
+**Expect:** only the counter option is offered, even though Razorpay is
+connected.
+
+**PS-C.5 ★ — Delivery is untouched by the collection policy**
+With either policy set, switch back to Delivery.
+**Expect:** both options are offered again. A policy about collections says
+nothing about courier orders, and silently switching COD off for them would be a
+policy the merchant never set.
+
+**PS-C.6 ★★ — The policy is enforced server-side**
+With the store on "Pay online only", call `placeOrder` directly with
+`paymentMethod: "pay_at_store"` and a pickup location.
+**Expect:** refused — "That payment method isn't available for collection orders
+at this store." A control the UI hides is not a permission (invariant 5);
+without this the goods are held and nobody ever owes anything.
+
+**PS-C.7 ★ — "Pay online only" needs a gateway**
+On a store with no Razorpay connected, try to set the policy to "Pay online
+only".
+**Expect:** refused at save — "Connect a payment gateway in Channels before
+requiring collection orders to be paid online." Otherwise pickup becomes
+unorderable and it is a shopper who discovers it.
+
+**PS-C.8 — A retired policy value falls back**
+Hand-edit `stores.settings.features["fulfilment.pickupPayment"]` to `"nonsense"`.
+**Expect:** checkout behaves as "Let the customer choose". A stricter policy
+nobody chose must never be imposed by a typo (invariant 6).
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**

@@ -32,8 +32,8 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
-| **1**  | **Checkout payment defaults + pickup payment policy**          | S    | ⏭ next |
-| **2**  | Cancellation: per-product policy + refund to source            | M    | ⏳      |
+| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
+| **2**  | **Cancellation: per-product policy + refund to source**        | M    | ⏭ next |
 | **3**  | Pickup end to end: collection code, QR, manager/cashier split  | L    | ⏳      |
 | **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
 | **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
@@ -55,10 +55,34 @@ to end in a browser_. Steps 1 and 3 finish it.
 
 ---
 
-## Step 1 — Checkout payment defaults, and who pays when
+## Step 1 — Checkout payment defaults, and who pays when ✅ DONE
 
-Two small changes to the same screen. Ship them together; they touch the same
-state.
+Two small changes to the same screen, shipped together because they touch the
+same state (`995f83d`).
+
+**✅ Shipped:** `lib/fulfilment/payment-policy.ts` (pure + tested — the one rule
+the picker and `placeOrder` both ask), the `fulfilment.pickupPayment` setting,
+the derived checkout default, server enforcement in `placeOrder`, and the
+`canRequirePrepaid` guard on save. Acceptance: **PS-C.1–C.8**.
+
+**★ THE DEFAULT IS DERIVED DURING RENDER, NOT SET IN AN EFFECT.** State holds
+only the shopper's explicit choice (`null` = hasn't chosen); the displayed and
+submitted method is computed. Two eslint rules caught the wrong shapes on the
+way — `set-state-in-effect` (a cascading render and a visible frame on the wrong
+option) and `refs` (a ref read during render). Deriving removes both, and the
+"don't stomp a choice" race with them.
+
+**★ The settings registry gained its first `select` type** to carry this, and
+`saveStoreSettings` now validates EVERY type before writing — it used to store
+whatever arrived, on the reasoning that the read side rejects a wrong-typed
+value. True, but it left the stored blob full of values that do nothing, which
+is what makes a settings bug impossible to diagnose from the database.
+
+**⚠ NOT verified in a browser.** The Cloud SQL proxy could not start locally
+(ADC needed re-authenticating). PS-C.3 and PS-C.4 move real money — run them
+against a test-mode gateway.
+
+Below is the spec it was built from, kept for the reasoning.
 
 ### 1.1 A gateway-configured store still defaults to COD
 
