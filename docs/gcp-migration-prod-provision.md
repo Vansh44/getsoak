@@ -78,9 +78,11 @@ on it, until 2026-08-10. Add it here if you ever provision again:
   --backup-start-time=20:30 --retained-backups-count=7   # 20:30 UTC = 02:00 IST
 ```
 
-Prod was patched to exactly that. **Point-in-time recovery is still off**, so a
-restore loses up to 24 hours of writes; `--enable-point-in-time-recovery`
-archives WAL and costs storage, which is why it was left for later.
+Prod was patched to exactly that, plus `--enable-point-in-time-recovery`, so
+**PITR is ON with 7 days of transaction logs** — a restore targets a moment
+rather than losing everything since the nightly snapshot. If you provision again,
+enable PITR at create time; turning it on later restarts the instance, because it
+switches on WAL archiving.
 
 **Then load the schema** (do it through the Auth Proxy as `postgres`, as on
 staging), in order:
