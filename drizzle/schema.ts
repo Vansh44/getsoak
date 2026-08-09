@@ -1221,6 +1221,9 @@ export const orders = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // The collection code a customer shows at the counter (locations_11).
+    // A LOOKUP key, not a bearer token — see lib/fulfilment/collection-code.ts.
+    pickupCode: text("pickup_code"),
     // ── Cancellation (orders_01_cancellation.sql) ──────────────────────────
     // WHOLE-ORDER only: there is deliberately no per-item equivalent, because
     // this system has no partial fulfilment. Lifecycle in

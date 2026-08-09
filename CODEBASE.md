@@ -2500,6 +2500,35 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★ A COLLECTION CODE, AND WHY IT IS NOT THE ORDER REFERENCE**
+        (`lib/fulfilment/collection-code.ts`, pure + tested;
+        `orders.pickup_code`, locations_11). Minted at checkout for collections
+        only. It is a **LOOKUP key, not a bearer token** — access control stays
+        UUID + store scope (§14) and the counter operator is already
+        authenticated — but it is RANDOM, because `order_ref` is sequential and
+        guessable and anyone at a counter could otherwise name somebody else's
+        collection. **Crockford base32**: the alphabet drops I, L, O and U, the
+        characters people misread off a phone screen in a shop, and
+        `normalizeCollectionCode` folds those confusions back in, so a customer
+        reading "0" as "O" still finds their order.
+      - **★★ THE EMAIL LEADS WITH THE CODE, NOT THE QR.** Gmail strips `data:`
+        URIs in `<img>` and every major client blocks remote images by default,
+        so a QR embedded in email is a broken-image icon on the one screen a
+        customer holds up at the counter. The code goes out as TEXT (always
+        renders, can be read aloud) and links to `/orders/[id]/collect`, which
+        draws the QR client-side via `BrowserQRCodeSvgWriter` — already a
+        dependency for camera scanning, so no new package. That page is
+        owner-gated and `noindex`, and the code in text is never conditional on
+        the QR rendering: if the writer fails, eight characters still work.
+      - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
+        Marking ready is what tells a customer to travel, so it belongs to
+        someone who has seen the box; handing it over is a cashier's job with
+        the customer standing there, so `markCollected` stays on `sell`.
+        Tightening this was only safe because no store had pickup enabled when
+        it shipped (owner confirmed 2026-08-09) — invariant 1 is satisfied by
+        there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
+        **no test coverage at all** before this; it does now, in both
+        directions.
       - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
         (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
         not a delivery with a different address, and these pages used one

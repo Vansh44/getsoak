@@ -80,6 +80,9 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
    *  a same-day store's customers "we'll let you know when it's ready". */
   pickup_ready_at: string | null;
   pickup_expires_at: string | null;
+  /** The code shown at the counter. A LOOKUP key, not a bearer token — the
+   *  page is already owner-gated (lib/fulfilment/collection-code.ts). */
+  pickup_code: string | null;
   pickup_location_name: string | null;
   pickup_location_address: Record<string, unknown> | null;
   items: MyOrderItem[];
@@ -212,6 +215,7 @@ export async function getMyOrder(
             pickup_status: orders.pickupStatus,
             pickup_ready_at: orders.pickupReadyAt,
             pickup_expires_at: orders.pickupExpiresAt,
+            pickup_code: orders.pickupCode,
             pickup_location_name: sql<string | null>`(
               select l.name from ${storeLocations} l
                where l.id = ${orders.pickupLocationId}

@@ -25,24 +25,24 @@ sequence AND the spec for everything still to build.
 
 ## Status at a glance
 
-| #      | Step                                                              | Size | State   |
-| ------ | ----------------------------------------------------------------- | ---- | ------- |
-| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock       | —    | ✅ done |
-| —      | LOC A–F: capabilities, scope, routing, reservations, pickup       | —    | ✅ done |
-| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes    | —    | ✅ done |
-| —      | Store credit                                                      | —    | ✅ done |
-| —      | Metered extra-location billing (POS 7)                            | —    | ✅ done |
-| **1**  | Checkout payment defaults + pickup payment policy                 | S    | ✅ done |
-| **2**  | Cancellation & refund flow                                        | M    | ✅ done |
-| **3**  | **Pickup end to end: collection code, QR, manager/cashier split** | L    | ⏭ next |
-| **4**  | POS customer capture (Shopify parity) + claim/merge               | L    | ⏳      |
-| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                       | M    | ⏳      |
-| **6**  | Channel stock policy (LOC H)                                      | M    | ⏳      |
-| **7**  | Transfer lifecycle (LOC I)                                        | M    | ⏳      |
-| **8**  | More routing strategies (LOC J)                                   | M    | ⏳      |
-| **9**  | Gift cards                                                        | M    | ⏳      |
-| **10** | Offline outbox (POS 9)                                            | XL   | ⏳      |
-| **11** | Full omnichannel (POS 8 = LOC K)                                  | XL   | ⏳      |
+| #      | Step                                                           | Size | State   |
+| ------ | -------------------------------------------------------------- | ---- | ------- |
+| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock    | —    | ✅ done |
+| —      | LOC A–F: capabilities, scope, routing, reservations, pickup    | —    | ✅ done |
+| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
+| —      | Store credit                                                   | —    | ✅ done |
+| —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                     | M    | ✅ done |
+| **3**  | **Pickup end to end: collection code, QR, role split**         | L    | ◐ part  |
+| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
+| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
+| **6**  | Channel stock policy (LOC H)                                   | M    | ⏳      |
+| **7**  | Transfer lifecycle (LOC I)                                     | M    | ⏳      |
+| **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
+| **9**  | Gift cards                                                     | M    | ⏳      |
+| **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
 
 **Where we actually are.** Everything in the top block works. **Pickup is the
 outlier**: every piece exists — holds, routing, the collection queue, tender
@@ -268,7 +268,27 @@ editor, `(pages)/orders/[id]`.
 
 ---
 
-## Step 3 — Pickup, end to end
+## Step 3 — Pickup, end to end ◐ IN PROGRESS
+
+**✅ Shipped:** `lib/fulfilment/collection-code.ts` (pure + 13 tests — Crockford
+base32, so the characters people misread off a phone are not in the alphabet and
+the normaliser folds them back), `orders.pickup_code` (⚠ **migration not
+applied**), code minted at checkout for collections only, the `fulfil_pickup`
+capability gating "mark ready" to manager and above, the customer collection
+page at `/orders/[id]/collect` with a client-rendered QR, the code carried into
+the `order.ready_for_pickup` notification, and `findPickupByCode` for the
+counter.
+
+**⏳ Remaining:** wiring the scan box into `/pos/pickups` (the action exists),
+linking the collection page from the confirmation email, the
+`routing_scope: event_location` default for pickup events, and running
+PS-8.1–8.31 in a browser.
+
+**★ THE ROLE SPLIT WAS SAFE TO MAKE** because no store had pickup enabled
+(owner confirmed 2026-08-09) — there was no live behaviour to take away. It is
+now covered by tests; `markReadyForPickup` had none at all before.
+
+Below is the spec it is being built from.
 
 The largest step and the one with the most already built. Read `CODEBASE.md` §23
 first — holds, routing, the queue and tender capture all exist.
@@ -579,6 +599,11 @@ They are the ones already paid for in bugs.
 
 **Settled**
 
+- **Pickup capability split: GO** (owner, 2026-08-09). No store has enabled
+  `fulfilment.offerPickup`, so making "mark ready" manager-only takes nothing
+  away from anybody — invariant 1 is satisfied because there is no live
+  behaviour to preserve.
+
 - **Partial cancellation: NO** (owner, 2026-08-09). A customer cannot cancel
   part of a mixed order; an order is cancellable only if every line is.
 - **Auto-refund fires on a CUSTOMER cancel only** (owner, 2026-08-09). A
@@ -592,7 +617,4 @@ They are the ones already paid for in bugs.
 
 **Open — the owner's to settle before the step they affect starts**
 
-- **Step 3 pickup capability split.** Making "mark ready" manager-only changes
-  current behaviour, which is safe only because pickup has no live users. If any
-  store has already enabled `fulfilment.offerPickup`, the capability must default
-  open instead.
+(none — all settled.)

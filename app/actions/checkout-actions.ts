@@ -37,6 +37,7 @@ import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import { isPaymentMethodAllowed } from "@/lib/fulfilment/payment-policy";
 import type { PickupPaymentPolicy } from "@/lib/fulfilment/payment-policy";
+import { generateCollectionCode } from "@/lib/fulfilment/collection-code";
 import {
   pickupPaymentPolicy,
   pickupEnabled,
@@ -1169,6 +1170,15 @@ export async function placeOrder(
         locationId: fulfilmentLocationId,
         fulfilmentType: pickupAt ? "pickup" : "delivery",
         pickupLocationId: pickupAt,
+        // The code the customer shows at the counter (roadmap Step 3). Only a
+        // collection has one; a delivery has nothing to present. Uniqueness is
+        // a partial unique index, so the astronomically unlikely collision
+        // surfaces as a failed insert rather than two orders sharing a code.
+        pickupCode: pickupAt
+          ? generateCollectionCode((n: number) =>
+              crypto.getRandomValues(new Uint8Array(n)),
+            )
+          : null,
         pickupStatus: pickupAt ? "awaiting" : null,
         pickupReadyAt: pickupAt
           ? sql`now() + make_interval(days => ${readyDays})`
