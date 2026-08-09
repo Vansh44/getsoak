@@ -1,15 +1,17 @@
 "use client";
 
-// The import dialog — pick a file, see what will happen, then commit.
+// The import dialog — pick a file, see what will happen, then hand it over.
 //
-// ★ THE FILE NEVER LEAVES THE BROWSER IN ONE PIECE. It is parsed and validated
+// It PREVIEWS in the browser and UPLOADS to the server. The preview is parsed
 // here with the same pure modules the server uses (lib/csv, lib/import-export),
-// so the preview is instant and costs nothing, and then the ROWS are posted in
-// chunks. See the header of app/actions/import-export-actions.ts for why
-// chunking is the design rather than an optimisation.
+// so "10 to create, 2 can't be imported" appears instantly and costs nothing.
+// It is a courtesy, not a gate: the worker re-parses the merchant's own bytes
+// and re-validates every row against the registry before writing anything.
 //
-// The preview is a courtesy, not a gate: the server re-parses and re-validates
-// every chunk against the same registry before writing anything.
+// ★ THE DIALOG NO LONGER RUNS THE IMPORT. It used to post the rows a slice at
+// a time, which meant closing the tab stopped the import half-applied. The file
+// now goes up in one request and lib/import-export/worker.ts applies it
+// server-side, so the browser stops mattering the moment Import is clicked.
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -40,19 +42,15 @@ import type {
   ResourceId,
   RowIssue,
 } from "@/lib/import-export/types";
-import {
-  previewImport,
-  startImport,
-} from "@/app/actions/import-export-actions";
+import { previewImport } from "@/app/actions/import-export-actions";
 import {
   MAX_IMPORT_FILE_BYTES,
   MAX_IMPORT_ROWS,
 } from "@/lib/import-export/limits";
-import { useImportRunner } from "./import-runner";
 
-// Two steps now, not four. "running" and "done" belonged here when the dialog
-// owned the import; the runner in the layout owns it, so the dialog's job ends
-// the moment the work is handed over.
+// Two steps, not four. "running" and "done" belonged here when the dialog
+// owned the import; the server owns it now, so the dialog's job ends at the
+// upload and the job's own log takes over.
 type Phase = "pick" | "review";
 
 interface Preview {
@@ -80,7 +78,6 @@ export function ImportDialog({
   locations,
 }: ImportDialogProps) {
   const router = useRouter();
-  const runner = useImportRunner();
   const resource = getResource(resourceId);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -108,8 +105,8 @@ export function ImportDialog({
   }, []);
 
   const close = (next: boolean) => {
-    // Nothing to hold on to any more: the import runs in the layout, so closing
-    // mid-flight is exactly what this design is for.
+    // Nothing to hold on to: the import runs on the server, so closing this at
+    // any point is exactly what the design is for.
     if (!next) reset();
     onOpenChange(next);
   };
@@ -223,48 +220,53 @@ export function ImportDialog({
     };
   }, [preview, resource, matchValueOf]);
 
-  // ★ THIS NO LONGER RUNS THE IMPORT — it starts one and gets out of the way.
+  // ★ THIS UPLOADS A FILE. IT DOES NOT RUN THE IMPORT.
   //
-  // The chunk loop moved to ImportRunnerProvider in the dashboard layout, so it
-  // survives navigation (see the header of import-runner.tsx). This function
-  // creates the job, hands the parsed rows over, closes, and sends the merchant
-  // to the job's log — which is the thing they actually want to look at while
-  // it runs, and where they would otherwise have had to find their own way.
+  // The rows used to be posted from here, a slice at a time, which is why an
+  // import died with the tab. Now the FILE goes up in one request and a
+  // server-side worker applies it (lib/import-export/worker.ts) — so once this
+  // POST returns, the browser is irrelevant and the merchant can close
+  // everything.
+  //
+  // The file, not the parsed rows: the server re-parses from the merchant's own
+  // bytes, which keeps the browser out of the validation path entirely. The
+  // preview above stays a courtesy.
   async function run() {
     if (!preview || !resource || !file) return;
     setStarting(true);
 
-    const options = { create, update, locationId: locationId || null };
+    const body = new FormData();
+    body.set("resource", resource.id);
+    body.set("file", file);
+    body.set("create", String(create));
+    body.set("update", String(update));
+    if (locationId) body.set("locationId", locationId);
 
-    const started = await startImport({
-      resource: resource.id,
-      filename: file.name,
-      totalRows: preview.rows.length,
-      header: preview.header,
-      options,
-    });
+    try {
+      const res = await fetch("/api/dashboard/import", {
+        method: "POST",
+        body,
+      });
+      const answer = (await res.json().catch(() => ({}))) as {
+        jobId?: string;
+        error?: string;
+      };
 
-    setStarting(false);
+      if (!res.ok || !answer.jobId) {
+        toast.error(answer.error ?? "Couldn't start the import.");
+        return;
+      }
 
-    if (!started.data) {
-      toast.error(started.error ?? "Couldn't start the import.");
-      return;
+      toast.success("Import started", {
+        description: "It runs on our servers — you can close this tab.",
+      });
+      close(false);
+      router.push(`/dashboard/logs/import-export/${answer.jobId}`);
+    } catch {
+      toast.error("Couldn't upload that file. Check your connection.");
+    } finally {
+      setStarting(false);
     }
-
-    runner.run({
-      jobId: started.data.jobId,
-      resource: resource.id,
-      filename: file.name,
-      // The RAW rows, exactly as parsed from the file. The server re-parses
-      // them against the registry — sending our typed values instead would make
-      // the browser the validator.
-      header: preview.header,
-      rows: preview.rows,
-      options,
-    });
-
-    close(false);
-    router.push(`/dashboard/logs/import-export/${started.data.jobId}`);
   }
 
   if (!resource) return null;
@@ -467,7 +469,7 @@ export function ImportDialog({
                   of this flow people don't expect, so it should not be a
                   surprise. */}
               <p className="hidden text-xs text-[var(--dash-text-3)] sm:block">
-                Runs in the background — we&apos;ll take you to its log.
+                Runs on our servers — we&apos;ll take you to its log.
               </p>
               <div className="flex items-center gap-2">
                 <button

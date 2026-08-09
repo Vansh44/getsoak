@@ -43,7 +43,7 @@ Two things that follow from this, and explain most of the design:
 | -------------- | --------------------------------------------------- | --------------------------------------------- |
 | Who            | The merchant's staff                                | The one shopper it happened to                |
 | Recipients     | Many; permission-derived, narrowable                | Exactly one — nothing to choose               |
-| Reads it at    | Dashboard bell, `/dashboard/logs`               | `/notifications`, `/orders` on the storefront |
+| Reads it at    | Dashboard bell, `/dashboard/logs`                   | `/notifications`, `/orders` on the storefront |
 | Email goes to  | Staff inboxes (+ optional Cc/Bcc)                   | The shopper's inbox                           |
 | Tone           | Operational — refs, totals, who acted               | Second person, about _their_ order            |
 | Who configures | Merchant, in the console                            | Merchant, in the console (separate tab)       |

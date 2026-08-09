@@ -25,13 +25,14 @@ stores, 0 orders, 0 lapsed plans, 0 pending razorpay orders, 0 campaign
 recipients.** Nothing was lost, because production has no real traffic yet — but
 each job is a landmine the moment it does:
 
-| Job                       | What its absence would have cost under real traffic                                                                                             |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send-emails`             | Coupon email campaigns never send.                                                                                                              |
-| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only). |
-| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                  |
-| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.      |
-| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                      |
+| Job                       | What its absence would have cost under real traffic                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send-emails`             | Coupon email campaigns never send.                                                                                                                          |
+| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).             |
+| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                              |
+| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                  |
+| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices. |
+| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                  |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -49,8 +50,9 @@ each job is a landmine the moment it does:
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
+| `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
 
-All six: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+All seven: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -141,6 +143,27 @@ gcloud scheduler jobs create http storemink-prune-logs \
   --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
+
+### `import-worker` is a BACKSTOP, not the normal path
+
+Uploading a file kicks the worker directly (`triggerImportWorker`), so an import
+starts within a second and self-chains until the file is done — the schedule
+exists for the chain that BREAKS. Ten minutes because a stalled import is a
+merchant watching a half-finished progress bar, and the sweep costs one query
+when there is nothing to do.
+
+```bash
+gcloud scheduler jobs create http storemink-import-worker \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="*/10 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/import-worker" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+It answers **200 even when an import failed** — a failed import is a recorded
+outcome on the job that the merchant reads in the log, not an outage, and a 5xx
+would make Scheduler retry a job that has already given up.
 
 ### What `prune-logs` closes
 

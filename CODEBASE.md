@@ -740,6 +740,12 @@ wholesip/
 │   │                          # line — the error log). Service-role only, the
 │   │                          # email_logs pattern: the rows quote raw cells, which
 │   │                          # for an orders export means customer addresses
+│   ├── import_export_02_background.sql # ★ §31: what makes an import a REAL
+│   │                          # background job — data_jobs.cursor/lease_until/
+│   │                          # attempts + data_job_payloads (the uploaded file,
+│   │                          # in Postgres NOT the public media bucket). Its own
+│   │                          # file because _01 is a CREATE TABLE IF NOT EXISTS
+│   │                          # that prod has already run (§15b)
 │   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
 │   │                          # — 'store' (default) | 'event_location'
 │   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
@@ -3586,36 +3592,72 @@ group, span}` (span = columns of the 4-wide desktop grid),
       side, or the whole validation layer is a suggestion.
     - **★ ROW-ATOMIC, NOT FILE-ATOMIC.** Each row is its own transaction, so
       row 12 failing says nothing about row 13. A 500-row file with 3 bad rows
-      imports 497 and reports 3. Wrapping the chunk in one transaction is
-      simpler and means one bad cell discards 199 good rows — after which the
+      imports 497 and reports 3. Wrapping a slice in one transaction is
+      simpler and means one bad cell discards 499 good rows — after which the
       merchant, unable to tell which, re-uploads and duplicates everything that
       did work. Hence `partial` is a first-class job status, and the job page
       says so in words, because the instinct on reading "failed" is to
       re-upload.
-    - **★ IT IS CHUNKED BECAUSE OF TWO HARD LIMITS.** A server action has a
-      body cap and Cloud Run has a request timeout; a 20,000-row product CSV
-      breaks both, and both failures land AFTER a long wait with the import
-      half-applied and no record of where it stopped. So the browser posts rows
-      in chunks of `IMPORT_CHUNK_ROWS` against a job id, each chunk commits
-      what it did, and the job row is the memory between them. A dropped
-      connection loses the REST of the file, not the part that worked.
-      `serverActions.bodySizeLimit` was raised to 4mb for headroom, but the
-      CHUNK SIZE is what actually bounds a request.
-    - **★★ THE CHUNK LOOP LIVES IN THE DASHBOARD LAYOUT, NOT THE DIALOG**
-      (`app/dashboard/components/import-runner.tsx`). A loop belongs to whatever
-      component owns it, so while it ran inside the import dialog the import
-      could only live as long as that modal: the merchant had to sit and watch a
-      progress bar, and navigating anywhere killed it half-done. The runner is a
-      provider mounted ONCE in the layout, so the loop survives route changes —
-      which is what lets the dialog hand the rows over, close, and send the
-      merchant to the job's log while it fills in. A fixed progress chip follows
-      them around the dashboard, and `beforeunload` guards the tab.
-      **⚠ IT IS STILL NOT A BACKGROUND JOB.** The loop runs in THAT TAB, so
-      closing it stops the import exactly as before — the chip and the copy on
-      the job page both say so. What is already imported stays imported (every
-      chunk commits on its own) and the log records where it stopped. Making
-      this genuinely server-side needs the file stored somewhere plus a worker,
-      which is a different feature; this one had to stop being modal first.
+    - **★★ AN IMPORT IS A REAL BACKGROUND JOB.** The file is uploaded ONCE to
+      `POST /api/dashboard/import`, stored in `data_job_payloads`, and applied
+      by `lib/import-export/worker.ts`. **Closing the tab changes nothing** —
+      the browser's only job is the upload.
+      It got here the long way. The rows used to be posted FROM the browser a
+      slice at a time, which was a real answer to two hard limits (a server
+      action's body cap, Cloud Run's request timeout) but meant an import died
+      with the tab; then the loop moved to a provider in the dashboard layout,
+      which bought surviving navigation and nothing more. Both are gone.
+      `startImport` / `importChunk` / `finishImport` were DELETED rather than
+      left unused: every export of a `"use server"` file is a public endpoint,
+      and `importChunk` took no lease, so a caller could still apply rows to a
+      job the worker was mid-way through.
+    - **★ THE UPLOAD IS A ROUTE HANDLER BECAUSE IT HAS TO BE.** A server action
+      caps the body at 4mb and `MAX_IMPORT_FILE_BYTES` is 25MB, so the file
+      cannot travel through one. That single POST is also atomic — either the
+      job is queued or nothing happened — where the chunked upload it replaced
+      could always leave a half-uploaded job behind.
+    - **★★ THE FILE LIVES IN POSTGRES, NOT THE MEDIA BUCKET, AND THAT IS A
+      SECURITY DECISION.** The GCS bucket is `allUsers:objectViewer` with
+      uniform bucket-level access (§7) — every object in it is readable by
+      anyone with the URL. An import file is the merchant's raw data, and the
+      same code path carries orders-shaped CSVs with customer names, addresses
+      and phone numbers; an unguessable public URL is obscurity, not access
+      control. `data_job_payloads` is service-role only, cascades with its job,
+      is dropped the moment the job finishes, and is already covered by §32
+      retention. A side table rather than a column, because the job row is read
+      by the history list, the detail page and the failures feed and none of
+      them want to drag 25MB along.
+    - **★★ THE LEASE IS WHAT STOPS A SLICE BEING APPLIED TWICE.** The worker
+      chains itself AND a cron sweep picks up stalled jobs, so two runs can
+      genuinely overlap — and importing is NOT idempotent, so an overlap means
+      duplicate products and double stock. The claim is one statement:
+      `FOR UPDATE SKIP LOCKED` picking the oldest free job, with `lease_until`
+      written in the same breath. Only an EXPIRED lease is claimable, which is
+      also what lets a job survive a worker killed mid-slice. `attempts` bounds
+      it, so a job that dies the same way every time gives up instead of being
+      re-claimed forever.
+    - **★ PROGRESS IS WRITTEN PER SLICE, NOT PER RUN.** `cursor` is where the
+      next run resumes and what the job page's progress bar reads. It is kept
+      DISTINCT from `processed_rows`: they move together today, and conflating
+      "where to resume" with "how much got done" is how a resumed job silently
+      skips a slice.
+    - **★ THE SLICE IS BOUNDED BY TIME, NOT ROWS** (`SLICE_BUDGET_MS` 40s under
+      the route's `maxDuration` 60, leaving room to write progress and chain).
+      Rows differ by an order of magnitude in cost — a product with variants and
+      images against a coupon — so a row count would either waste the request or
+      overrun it. `SLICE_MAX_ROWS` is a second ceiling on memory and on how much
+      one crash loses.
+    - **★ `reapStaleJobs` NOW TESTS THE LEASE, NOT THE AGE.** It cancels
+      pending/running jobs untouched for 30 minutes, which under the
+      browser-driven design could only mean a closed tab. Server-side, a large
+      import legitimately runs longer than that — so without the lease check the
+      merchant's own history page would reach in and cancel a healthy import
+      mid-slice.
+    - **★ THE CACHE BUSTING AND THE SEO HOOK MOVED WITH THE WORK.** They lived
+      in `finishImport`, the action the browser called when its loop ran out.
+      Moving the loop server-side without moving those would have left every
+      import writing rows the storefront kept serving stale, and new products
+      never reaching Google.
     - **★ THE JOB PAGE POLLS ITSELF WHILE THE JOB IS LIVE** (2s, `router.refresh`,
       stopping the moment the status leaves running/pending). It is now the page
       a merchant is SENT to at the START of an import, so a frozen screen of

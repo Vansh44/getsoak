@@ -4122,6 +4122,18 @@ export const dataJobs = pgTable("data_jobs", {
   /** The failure that killed the WHOLE job, as opposed to the per-row issues. */
   error: text(),
   options: jsonb().default({}).notNull(),
+  /** Next DATA row to read, 0-based. Deliberately distinct from
+   *  processedRows: "where to resume" and "how much got done" move together
+   *  today, and conflating them is how a resumed job skips a slice. */
+  cursor: integer().default(0).notNull(),
+  /** Worker claim. Only a job whose lease has EXPIRED is claimable, which is
+   *  what stops the self-chain and the cron sweep double-importing a slice. */
+  leaseUntil: timestamp("lease_until", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  /** Claims so far — bounded retries, so a job that reliably dies gives up. */
+  attempts: integer().default(0).notNull(),
   /** Firebase uid — TEXT, not UUID (phase6_01_uid_columns_to_text.sql). */
   createdBy: text("created_by"),
   actorEmail: text("actor_email"),
@@ -4131,6 +4143,19 @@ export const dataJobs = pgTable("data_jobs", {
     .defaultNow()
     .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+/** The uploaded file, held server-side so the import survives a closed tab.
+ *  In Postgres rather than the media bucket because that bucket is public —
+ *  see supabase/import_export_02_background.sql. Service-role only. */
+export const dataJobPayloads = pgTable("data_job_payloads", {
+  jobId: uuid("job_id").primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  header: jsonb().default([]).notNull(),
+  csv: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
     .defaultNow()
     .notNull(),
 });

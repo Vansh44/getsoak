@@ -111,9 +111,8 @@ export function JobIssuesView({
                 />
               </div>
               <p className="text-xs text-[var(--dash-text-3)]">
-                This page updates itself. You can leave it open or go elsewhere
-                in the dashboard — the import keeps running either way. Closing
-                the tab stops it.
+                This page updates itself. The import runs on our servers, so you
+                can close this tab and come back — it carries on either way.
               </p>
             </div>
           ) : (
