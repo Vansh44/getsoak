@@ -6,7 +6,14 @@ import { razorpayPlans } from "@/drizzle/schema";
 import { getPlatformRazorpayCreds } from "./provider";
 import { rzpCreatePlan, type RazorpayCreds } from "./razorpay";
 import { PLAN_META, type Plan } from "@/lib/plans";
-import { getPlanPricingLive } from "@/lib/plans/pricing";
+import {
+  extraLocationPaise,
+  subscriptionTotalPaise,
+} from "@/lib/plans/location-billing";
+import {
+  getExtraLocationPricingLive,
+  getPlanPricingLive,
+} from "@/lib/plans/pricing";
 import { logError } from "@/lib/observability/logger";
 
 // Recurring-billing helpers: resolve the Razorpay Plan id for a (tier, period)
@@ -38,6 +45,10 @@ export async function planAmountPaise(
 /** How much room to leave above the top plan when authorising a mandate. */
 const MANDATE_HEADROOM = 2;
 
+/** Extra locations a mandate is authorised to cover without re-authorising.
+ *  See mandateMaxPaise for why this is well below MAX_EXTRA_LOCATIONS. */
+export const MANDATE_LOCATION_ALLOWANCE = 10;
+
 /** Total billing cycles Razorpay requires up front — set effectively "forever"
  *  (10 years) so the subscription renews until cancelled. */
 export function totalCyclesFor(period: BillingPeriod): number {
@@ -53,16 +64,32 @@ export interface ResolvedPlan {
  * The Razorpay Plan id for (plan, period), from cache or freshly created.
  * Returns null only when the platform account isn't configured or the create
  * call fails.
+ *
+ * `extraLocations` folds metered POS locations into the AMOUNT rather than
+ * billing them separately (roadmap Step 5). That works without a schema change
+ * because the cache below is already keyed on the amount, so a different
+ * location count resolves to a different cached plan id — and `planForRzpPlan`
+ * still maps that id back to the right (tier, period) for the webhook, because
+ * neither of those changed. See lib/plans/location-billing.ts for why this
+ * beats a second mandate or per-cycle add-ons.
  */
 export async function resolveRazorpayPlanId(
   plan: Plan,
   period: BillingPeriod,
+  extraLocations = 0,
 ): Promise<ResolvedPlan | null> {
   if (plan === "free") return null;
   const creds = getPlatformRazorpayCreds();
   if (!creds) return null;
 
-  const amountPaise = await planAmountPaise(plan, period);
+  // LIVE, like the plan price beside it: this decides what is debited, and a
+  // cached add-on price a reprice has not reached would charge the old amount.
+  const amountPaise = subscriptionTotalPaise(
+    await planAmountPaise(plan, period),
+    extraLocations,
+    period,
+    await getExtraLocationPricingLive(),
+  );
 
   const cached = await withService((db) =>
     db
@@ -81,7 +108,13 @@ export async function resolveRazorpayPlanId(
     return { rzpPlanId: cached[0].rzp_plan_id, amountPaise };
   }
 
-  const created = await createPlan(creds, plan, period, amountPaise);
+  const created = await createPlan(
+    creds,
+    plan,
+    period,
+    amountPaise,
+    extraLocations,
+  );
   if (!created) return null;
 
   // Cache best-effort; a lost race just recreates a (harmless) duplicate plan.
@@ -109,17 +142,31 @@ async function createPlan(
   plan: Plan,
   period: BillingPeriod,
   amountPaise: number,
+  extraLocations: number,
 ): Promise<string | null> {
+  // The location count is in the NAME because it is not in any field Razorpay
+  // stores — the amount is all it keeps. Without it, a merchant reading their
+  // Razorpay invoice sees "StoreMink Pro (monthly)" charged at ₹7,000 with
+  // nothing to explain the ₹2,000, and so does whoever answers that ticket.
+  const suffix =
+    extraLocations > 0
+      ? ` + ${extraLocations} location${extraLocations === 1 ? "" : "s"}`
+      : "";
   const res = await rzpCreatePlan(creds, {
     period,
     amountPaise,
-    name: `StoreMink ${PLAN_META[plan].name} (${period})`,
+    name: `StoreMink ${PLAN_META[plan].name} (${period})${suffix}`,
   });
   if (!res.ok) {
     // ★ This is the end of the road for an upgrade: the caller returns null
     // and the merchant is told the subscription couldn't start, with the
     // gateway's actual reason living only here.
-    logError("billing.plan_create", res.error, { plan, period, amountPaise });
+    logError("billing.plan_create", res.error, {
+      plan,
+      period,
+      amountPaise,
+      extraLocations,
+    });
     return null;
   }
   return res.data.id;
@@ -146,7 +193,20 @@ export async function mandateMaxPaise(): Promise<number> {
   // a charge; Razorpay only ever debits the plan amount) and absorbs a
   // reprice.
   const top = await planAmountPaise("pro", "yearly");
-  return top * MANDATE_HEADROOM;
+  // ★ Plus room for metered locations (roadmap Step 5), because their cost is
+  // folded into the subscription AMOUNT — so a merchant who buys a shop two
+  // years from now is charged against the ceiling authorised today.
+  //
+  // Not MAX_EXTRA_LOCATIONS (50): the mandate screen shows this number to the
+  // merchant, and quoting a ₹6,00,000 ceiling to someone subscribing to a
+  // ₹5,000/month plan is how you lose the signup. Ten covers every merchant
+  // this product realistically serves; the eleventh gets a clear "re-authorise
+  // to add more", which changeBilledLocations checks for explicitly rather than
+  // letting Razorpay refuse the debit later.
+  const locations =
+    MANDATE_LOCATION_ALLOWANCE *
+    extraLocationPaise("yearly", await getExtraLocationPricingLive());
+  return top * MANDATE_HEADROOM + locations;
 }
 
 /**

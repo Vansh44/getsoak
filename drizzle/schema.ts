@@ -2868,6 +2868,11 @@ export const storeSubscriptions = pgTable(
     // separately from scheduledPlan: a same-tier period change never moves the
     // plan, so scheduledPlan alone cannot express it.
     scheduledPeriod: text("scheduled_period"),
+    // Extra POS locations this subscription pays for, ON TOP OF the plan's
+    // included count — additive, never a total (subscriptions_03). The cost is
+    // folded into the subscription amount rather than billed separately; see
+    // lib/plans/location-billing.ts.
+    billedLocations: integer("billed_locations").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),

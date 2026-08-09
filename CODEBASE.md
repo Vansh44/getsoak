@@ -1750,8 +1750,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
     An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
     SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
-    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
-    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered
+    billing is BUILT (Phase 7, see below); the v1 hard gate at 2 is gone**.
+    Work on branch `pos`. **Phase 0 (done) = the inventory
     location foundation, with ZERO changes to existing inventory/checkout code:**
     - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
       every store auto-gets one `is_default` "Main" location) +
@@ -2521,9 +2522,85 @@ group, span}` (span = columns of the 4-wide desktop grid),
         Reminders run AFTER the expiry sweep: an order that just lapsed is no
         longer awaiting collection, and telling someone to hurry and collect
         something already cancelled is worse than saying nothing.
-    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
-      metered extra-location billing (7), omnichannel/BOPIS (8), offline
-      outbox (9). See `docs/pos-plan.md`.
+    - **★ METERED EXTRA LOCATIONS (Phase 7, done).** Pro includes 2; more are
+      ₹1,000/mo (₹10,000/yr) by default, and **a platform operator sets the
+      live price from the console** — `plan_prices`, key `extra_location`
+      (`supabase/plans_05_extra_location_price.sql`), edited in the same
+      Pricing panel as the tiers. `EXTRA_LOCATION_PRICE` in `lib/plans.ts` is
+      only the fallback until one is set, the way `PLAN_META` is for tiers.
+      **★ IT IS PRICED LIKE A TIER BUT IS NOT ONE.** `resolvePricing` keys off
+      `PLAN_IDS` and so ignores this row — which is what stops it rendering as
+      a fourth card on the public pricing page that somebody could try to
+      subscribe to. `resolveExtraLocationPricing` reads it instead, and the two
+      share one query. Widening `resolvePricing` to accept arbitrary keys is
+      exactly the change that would break this; there is a test pinning it.
+      The add-on has no `base_*` price because it has no card to strike
+      through — `savePlanPricing` forces those null rather than storing a
+      number nobody can ever see. **Charging reads LIVE**
+      (`getExtraLocationPricingLive`), never the cached loader: a location is
+      bought against an already-authorised mandate, so quoting from a cache a
+      reprice has not reached would debit the old amount.
+      **⚠ `EXTRA_LOCATION_KEY` LIVES IN `lib/plans.ts`, NOT `lib/plans/pricing.ts`.**
+      That module is `server-only` — it pulls in the db client, and therefore
+      `pg` and `fs` — while the operator's Pricing panel is a CLIENT component
+      that needs the key at runtime to tell the add-on row from a tier. Defining
+      it there fails the BUILD while typecheck passes happily, which is what
+      makes it worth writing down. The TYPES may still come from `pricing.ts`;
+      those are erased. Same split as `lib/logs/failure-types.ts` and
+      `lib/themes/meta.ts`.
+      - **★★ AN EXTRA LOCATION IS A PRICE RISE ON THE SAME SUBSCRIPTION, NOT A
+        SECOND ONE** (`lib/plans/location-billing.ts`, pure + tested). A second
+        mandate would make the merchant authorise autopay twice and then let one
+        succeed while the other halts; per-cycle add-ons would need a charge
+        added at every renewal forever. Folding the cost into the plan AMOUNT
+        means the existing machinery already covers it: `razorpay_plans` is
+        keyed on **(plan, period, amount)**, so a different location count
+        resolves to a different cached plan id with NO new table;
+        `planForRzpPlan` still maps it back to (tier, period) for the webhook,
+        because neither changed; and `decidePlanChange`'s rule applies
+        unaltered — **buying prorates now, releasing waits for the cycle end** —
+        which keeps refunds out of the system (§15b's reasoning, reused).
+      - **★ `store_subscriptions.billed_locations` IS ADDITIVE, NEVER A TOTAL**
+        (`supabase/subscriptions_03_billed_locations.sql` — its OWN file, per
+        §15b's never-edit-an-applied-`CREATE TABLE IF NOT EXISTS` rule). The
+        allowance is `included + billed`, so if Pro's included count ever rises,
+        a merchant paying for one gains headroom rather than being billed for
+        what became free. Backfilled 0, which is the honest value: nobody has
+        ever been able to buy one (invariant 1).
+      - **★ THE COUNT IS ABSOLUTE, NEVER A DELTA.** Two tabs each pressing "add
+        one" against a delta buys two, and the merchant finds out on their card.
+        An absolute target is idempotent — the second request no-ops.
+      - **★ IT IS WRITTEN ONLY WHEN THE CHANGE IS LIVE.** Persisting a scheduled
+        RELEASE immediately would drop the allowance while they are still paying
+        for that location, refusing them a shop they own until the cycle ends.
+      - **★ `changePlan` CARRIES THE COUNT THROUGH.** Resolving a tier change
+        without it would silently drop the merchant to the bare plan price while
+        they keep every shop — a leak invisible from both sides. It is zeroed
+        only when the TARGET tier has no POS (charging for something the plan
+        cannot use is indefensible), and the stored count is deliberately NOT
+        written back, so returning to Pro resumes billing for the shops they
+        still hold rather than handing them over free.
+      - **★ THE MANDATE CEILING IS CHECKED BEFORE THE GATEWAY.** It was fixed
+        when autopay was authorised and cannot be raised without the merchant
+        re-authorising; Razorpay would accept the plan change and then fail the
+        DEBIT weeks later, surfacing as a halted subscription rather than as
+        "you can't buy this". `mandateMaxPaise` now carries room for
+        `MANDATE_LOCATION_ALLOWANCE` (10) locations — well below
+        `MAX_EXTRA_LOCATIONS` (50) on purpose, because this number is shown to
+        the merchant on the mandate screen and quoting a ₹6 lakh ceiling for a
+        ₹5,000/month plan loses the signup.
+      - **Refused, not clamped, in both directions.** Silently raising a request
+        charges for a number nobody chose; silently lowering one leaves them
+        paying for a release they believed went through. Releasing below the
+        locations in USE is refused outright — soft-on-downgrade means never
+        deleting a shop on the merchant's behalf.
+      - Merchants buy and release on `/dashboard/locations`
+        (`location-billing-card.tsx`); `getLocationBillingState` feeds it and
+        explains WHY the controls are absent when they are (a comped Pro store
+        has no mandate to raise, so it is told plainly rather than shown a
+        button that fails at the gateway).
+    - **Not yet built:** Twilio receipts (Phase 6), omnichannel/BOPIS (8),
+      offline outbox (9). See `docs/pos-plan.md` and `docs/roadmap.md`.
 
 24. **Notifications & email — one event log, registry-driven fan-out, one way
     out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each

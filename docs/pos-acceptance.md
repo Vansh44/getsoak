@@ -52,6 +52,83 @@ Fresh Pro store with one location and POS off.
 **Expect:** no Locations entry in the sidebar. It appears once the store has 2+
 locations or POS is on.
 
+### Metered extra locations (roadmap Step 5)
+
+⚠ These move real money on the platform's Razorpay account. Run them against a
+**test-mode** account first; PS-1.9 in particular cannot be undone by clicking.
+
+**PS-1.5 — At the included cap, the merchant is offered a location, not a wall**
+Pro store with 2 locations, autopay active. Open `/dashboard/locations`.
+**Expect:** "2 of 2 locations used", and an **Add a location · ₹1,000/month**
+button. **Was:** "additional locations are ₹1,000/mo (coming soon)" and a
+disabled button — the only item on the roadmap actively refusing money.
+
+**PS-1.6 ★ — Buying charges now and lifts the cap in the same breath**
+Press it and confirm.
+**Expect:** the toast says you'll be charged the difference for the rest of the
+cycle; the card reads "2 of 3"; **Add location** is enabled; the Razorpay
+subscription moves to a plan at ₹5,000 + ₹1,000. Create the third location — it
+saves. A merchant charged for a location the cap still refuses is the failure
+this whole step exists to avoid.
+
+**PS-1.7 ★ — Releasing waits for the cycle end**
+With 3 locations paid for and only 2 in use, press **Release 1 unused**.
+**Expect:** "You keep them until the end of this billing cycle. Nothing is
+charged today." No refund is issued — that is deliberate (Step 2's rule: nobody
+loses money, they keep what they bought until it runs out).
+
+**PS-1.8 ★ — You cannot stop paying for a shop you are using**
+With 3 locations, all 3 in use, try to release one.
+**Expect:** refused — "You're using 1 extra location. Delete or deactivate it
+before you stop paying for it." Refused, not silently clamped: a clamp leaves
+them paying for a release they believed went through, and they find out on their
+card.
+
+**PS-1.9 ★★ — A plan change keeps billing for the shops they keep**
+On a store paying for 1 extra location, switch monthly → yearly.
+**Expect:** the new subscription amount is ₹50,000 + ₹10,000, not ₹50,000. The
+location is priced at the YEARLY rate. **Watch for:** dropping to the bare plan
+price while the merchant keeps every shop — a revenue leak invisible from both
+sides, and the reason `changePlan` threads the count through.
+
+**PS-1.10 — A comped Pro store is told why, not shown a broken button**
+Operator-comp a store to Pro (no Razorpay mandate). Open Locations.
+**Expect:** "Extra locations are billed through your subscription. Set up
+autopay to add more shops." No buy button.
+
+**PS-1.11 ★ — The cap is server-side**
+Call `createLocation` directly while at the allowance.
+**Expect:** refused. A count the client could name would be a free location
+(invariant 5 — a disabled control is not a permission).
+
+**PS-1.13 ★ — The price comes from the operator console, not the code**
+As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There
+is an **Extra POS location** row with Charged/month and Charged/year (the "Was"
+columns show `—`: the add-on has no pricing card, so a strike-through has
+nowhere to render). Set it to ₹1,500/month and save.
+**Expect:** `/dashboard/locations` on a Pro store immediately offers "Add a
+location · ₹1,500/month", and buying one charges ₹1,500. Nothing needs a deploy.
+
+**PS-1.14 ★★ — Repricing never touches a live subscription**
+With a merchant already paying for one extra location at ₹1,000, change the
+console price to ₹1,500.
+**Expect:** their subscription still bills the old amount. `razorpay_plans` is
+keyed on (plan, period, amount), so a new price mints a NEW Razorpay plan and
+grandfathers everyone already on the old one — the same rule tier repricing
+follows. They move to the new price only when they next change something.
+
+**PS-1.15 ★ — The add-on never becomes a pricing card**
+After setting a price, open the public pricing page.
+**Expect:** three plan cards, exactly as before. `resolvePricing` keys off
+`PLAN_IDS` and ignores this row — widening it to accept arbitrary keys is the
+change that would put "Extra location" on the page as a plan someone could try
+to sign up to.
+
+**PS-1.12 — Downgrading never deletes a shop**
+Store with 4 locations (2 paid) → downgrade to Basic.
+**Expect:** all 4 locations still exist and POS stops working. No new ones can
+be created. Soft-on-downgrade, invariant 1.
+
 ---
 
 ## 2. Locations & capabilities

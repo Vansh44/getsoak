@@ -3,6 +3,7 @@ import { requireSectionAccess } from "../lib/access";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { getPosState } from "@/lib/pos/locations";
 import { listLocations } from "@/app/actions/location-actions";
+import { getLocationBillingState } from "@/app/actions/subscription-actions";
 import { LocationsClient } from "./locations-client";
 
 export const metadata = { title: "Locations" };
@@ -16,7 +17,12 @@ export default async function LocationsPage() {
   // nothing here to decide, so the POS overview owns the upgrade pitch.
   if (!state.posAvailable) redirect("/dashboard/pos");
 
-  const { locations, plan } = await listLocations();
+  const [{ locations, plan }, billing] = await Promise.all([
+    listLocations(),
+    // Null only when the viewer can't see the section, which requireSectionAccess
+    // has already ruled out — but the card handles it rather than assuming.
+    getLocationBillingState(),
+  ]);
 
   return (
     <LocationsClient
@@ -24,6 +30,7 @@ export default async function LocationsPage() {
       plan={plan}
       canManage={access.can("locations", "manage")}
       locationsIncluded={state.locationsIncluded}
+      billing={billing}
     />
   );
 }

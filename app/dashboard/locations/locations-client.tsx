@@ -19,6 +19,8 @@ import {
   type LocationType,
 } from "@/lib/locations/capabilities";
 import type { Plan } from "@/lib/plans";
+import type { LocationBillingState } from "@/app/actions/subscription-actions";
+import { LocationBillingCard } from "./location-billing-card";
 
 interface FormState {
   id: string | null; // null = creating
@@ -46,18 +48,25 @@ export function LocationsClient({
   plan,
   canManage,
   locationsIncluded,
+  billing,
 }: {
   initialLocations: LocationWithCapabilities[];
   plan: Plan;
   canManage: boolean;
   locationsIncluded: number;
+  billing: LocationBillingState | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [form, setForm] = useState<FormState | null>(null);
 
   const count = initialLocations.length;
-  const atCap = count >= locationsIncluded;
+  // The ceiling is what the plan includes PLUS what the store pays for
+  // (roadmap Step 5), so "Add location" stays enabled for a merchant who has
+  // bought one. Falls back to the included count if the billing read failed —
+  // the server enforces the real cap either way (invariant 5).
+  const allowance = billing?.allowance ?? locationsIncluded;
+  const atCap = count >= allowance;
 
   const openCreate = () => setForm({ ...BLANK });
   const save = () => {
@@ -113,7 +122,7 @@ export function LocationsClient({
             disabled={atCap || pending}
             title={
               atCap
-                ? `Your plan includes ${locationsIncluded} locations`
+                ? `You're using all ${allowance} of your locations — add another below`
                 : undefined
             }
             className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-[#111827] px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
@@ -137,10 +146,16 @@ export function LocationsClient({
         Online fulfilment &amp; pickup
       </Link>
 
-      <div className="mt-2 text-xs font-medium text-[#9aa1ab]">
-        {count} of {locationsIncluded} included locations used
-        {atCap && " · additional locations are ₹1,000/mo (coming soon)"}
-      </div>
+      {/* The count and the buy/release controls live together in one card —
+          the line that used to sit here said "coming soon", which was the only
+          thing between a merchant and a location they wanted to pay for. */}
+      {billing ? (
+        <LocationBillingCard state={billing} canManage={canManage} />
+      ) : (
+        <div className="mt-2 text-xs font-medium text-[#9aa1ab]">
+          {count} of {allowance} locations used
+        </div>
+      )}
 
       <div className="mt-5 max-w-3xl space-y-3">
         {initialLocations.map((l) => (

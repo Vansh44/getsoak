@@ -141,8 +141,36 @@ describe("location-actions", () => {
     });
 
     it("enforces the plan location cap", async () => {
-      // Pro includes 2 locations; already at 2 → blocked.
-      useSelects([[PRO_ON], [{ n: 2 }]]);
+      // Pro includes 2 locations; already at 2, paying for none → blocked.
+      useSelects([[PRO_ON], [{ n: 2 }], [{ billed_locations: 0 }]]);
+      const r = await createLocation({ name: "Delhi" });
+      expect(r.error).toMatch(/includes 2 locations/i);
+      // It now points at where you buy one, rather than "coming soon".
+      expect(r.error).toMatch(/₹1,000\/month/);
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+    });
+
+    // ★ THE PAID ALLOWANCE IS ADDITIVE (roadmap Step 5). Pro includes 2; a
+    // store paying for 1 may hold 3. Without this the merchant is charged for
+    // a location the cap still refuses to let them create.
+    it("allows a location bought on top of the included allowance", async () => {
+      useSelects([[PRO_ON], [{ n: 2 }], [{ billed_locations: 1 }]]);
+      const r = await createLocation({ name: "Delhi" });
+      expect(r.error).toBeUndefined();
+      expect(dbHolder.current.calls.insert).toHaveLength(1);
+    });
+
+    it("still stops at included + billed", async () => {
+      useSelects([[PRO_ON], [{ n: 3 }], [{ billed_locations: 1 }]]);
+      const r = await createLocation({ name: "Delhi" });
+      expect(r.error).toMatch(/using all 3 of your locations/i);
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+    });
+
+    // ★ The count comes from the subscription row, never the caller. A client
+    // that could name it would be naming a free location (invariant 5).
+    it("treats a missing subscription row as nothing paid for", async () => {
+      useSelects([[PRO_ON], [{ n: 2 }], []]);
       const r = await createLocation({ name: "Delhi" });
       expect(r.error).toMatch(/includes 2 locations/i);
       expect(dbHolder.current.calls.insert).toHaveLength(0);
