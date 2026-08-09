@@ -1851,7 +1851,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
            per location — enforced in `registerDevice` (the choke point both
            authorization paths funnel through) and pre-checked in
            `createPairingCode` so an admin isn't handed an unusable code.
-        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): every operator's
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`, mounted ONCE in
+           `app/pos/layout.tsx`): every operator's
            register locks after `pos.idleLockMinutes` of inactivity (registry
            setting, default 10, edited at `/dashboard/pos/settings`) with a
            **2-minute** countdown, capped at half the idle window so a
@@ -1869,6 +1870,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
            measure, NOT an authorization boundary (a client bypass keeps the
            cookie until it expires); the server boundary remains the device gate
            - per-request `pos_staff` re-validation.
+             **★★ IT IS MOUNTED IN THE LAYOUT, AND THAT IS THE WHOLE FIX.** It was
+             per-page opt-in, and **five of the seven POS screens never opted in** —
+             `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups` and
+             `/pos/sales`. Only `/pos` and `/pos/sell` ever locked, so the till sat
+             unlocked indefinitely on the three screens where walking away costs
+             MOST: returns issues refunds, inventory adjusts stock, shift moves
+             cash. A control every new page has to remember is one the next page
+             will forget. The layout renders it for any non-exempt operator and
+             nothing for `/pos/login|register|reset` (no operator ⇒ nothing to
+             lock, and a timer that redirects to the login page FROM the login page
+             is a loop). Pinned by `app/pos/idle-lock-coverage.test.ts`, which
+             fails in BOTH directions — the layout losing it (every screen stops
+             locking) and a page re-adding its own (two timers, two banners, two
+             racing `posLock()` calls). ⚠ `resolvePosOperator` is now wrapped in
+             React `cache()` so the layout's resolve is free: `/pos/sell` was
+             already resolving the operator three or four times per render (page
+             gate + `getRegisterConfig` + `lookupProducts`), and this dedupes them
+             within the request without touching the ACROSS-request re-validation
+             that makes deactivation immediate.
       - **Device authorization is the security boundary** (a cashier must not be
         able to sell from their personal phone). A browser becomes an authorized
         POS device when the **owner** either taps "Authorize this device" while
@@ -1945,7 +1965,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
           "tidied up" into symmetry. `pairDevice` is unchanged: the code is the
           authorization, redeemed on the device by whoever holds it.
         - **The idle lock now exempts ONLY the superadmin**
-          (`isIdleLockExempt`, used by `/pos` and `/pos/sell`). Not a
+          (`isIdleLockExempt`, applied once in `app/pos/layout.tsx` — see
+          Phase 1 §5 for why it is no longer per-page). Not a
           capability — it isn't something you may DO, it's whose screen may be
           left unattended — and a delegated admin at a shared counter is the
           same walked-away-from-an-open-till risk as any operator, with a
@@ -1977,6 +1998,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
           needs a manager's PIN above the cap, and for an override), which now asks
           `posCan(role, "discount_over_cap")` rather than an inline
           `role === "cashier"` that could drift from the capability table.
+          **★ A CAP OF 0 IS A REAL SETTING AND MUST SURVIVE THE FALLBACK.** The
+          cap was read as `Number(settings[…]) || 10`, which looks like a NaN
+          guard and is really a `0` eater: the registry declares `min: 0`, so 0
+          is legal and MEANS "a cashier needs approval for ANY discount" — and
+          the merchant who locked it down hardest silently got the 10% default,
+          handing cashiers exactly the authority they had withheld. It reads
+          `typeof === "number"` now, since `resolveStoreSettings` already
+          guarantees a number clamped to `[min, max]` and the fallback is only
+          for a structurally impossible value. Same rule as
+          `products.return_window_days` (§28): a real 0 is not an absent value.
+          Both directions are regression-tested — 0 must stop a 5% discount, and
+          must not refuse a sale carrying no discount at all.
       - **★ A MANAGER'S APPROVAL IS A SIGNED GRANT, NOT A CLIENT FLAG**
         (`lib/pos/approval.ts`). `verifyManagerPin` returned `{approved: true}`
         and `placePosSale` trusted an `opts.managerApproved` boolean that came

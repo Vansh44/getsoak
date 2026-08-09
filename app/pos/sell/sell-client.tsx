@@ -49,7 +49,6 @@ import {
   isTouchPrimary,
   subscribeTouchPrimary,
 } from "@/lib/pos/keyboard-wedge";
-import { isIdleLockExempt } from "@/lib/pos/permissions";
 import { useCatalog } from "@/lib/pos/use-catalog";
 import {
   applyLayout,
@@ -64,7 +63,6 @@ import {
   savePosLayout,
 } from "@/app/actions/pos-layout-actions";
 import { LayoutEditMode } from "./layout-editor";
-import { IdleLock } from "../idle-lock";
 import { TenderPanel } from "./tender-panel";
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
@@ -97,11 +95,9 @@ const subscribeNever = () => () => {};
 
 export function SellClient({
   config,
-  idleLockMinutes,
   initialItems,
 }: {
   config: RegisterConfig;
-  idleLockMinutes: number;
   initialItems: PosCatalogItem[];
 }) {
   const router = useRouter();
@@ -452,18 +448,9 @@ export function SellClient({
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      {/* Owners are exempt, as on the POS home: idle-lock targets the
-          walked-away-from-a-shared-till risk, and since posLock now ends the
-          Firebase session it would otherwise sign an owner out of the
-          dashboard for standing still. */}
-      {/* Only the SUPERADMIN is exempt now. A delegated admin at a shared
-          counter is the same walked-away-from-an-open-till risk as any
-          operator — more so, since their session reaches further than a
-          cashier's. Note the cost that buys: posLock clears sm_session, so an
-          idle till signs them out of the dashboard too. That is the intended
-          trade for everyone except the person whose shop it is. */}
-      {!isIdleLockExempt(config.role) && <IdleLock minutes={idleLockMinutes} />}
-
+      {/* The idle lock is mounted once in app/pos/layout.tsx, so it covers every
+          POS screen rather than the two that remembered to ask for it. The
+          exemption rule (superadmin only) moved there with it. */}
       <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
         <div className="flex items-center gap-2 font-semibold">
           <ScanLine className="h-5 w-5" strokeWidth={2} />

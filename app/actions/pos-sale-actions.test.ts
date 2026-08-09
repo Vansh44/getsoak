@@ -463,6 +463,38 @@ describe("placePosSale — the cap, when staff may discount", () => {
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
+  // ★ A DELIBERATE 0 MUST SURVIVE. The cap was read as `Number(...) || 10`, so
+  // a merchant who set it to 0 — "a cashier needs approval for ANY discount",
+  // and `min: 0` in the registry says that is a legal setting — silently got
+  // the 10% default instead, handing cashiers exactly the authority they had
+  // withheld. 5% of a ₹100 sale passed under the swallowed default and must
+  // now stop.
+  it("treats a 0% cap as approval-for-any-discount, not the 10% default", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...STAFF_MAY_DISCOUNT,
+      "pos.maxDiscountPercent": 0,
+    } as any);
+    const r = await placePosSale([line], [{ method: "cash", amount: 200 }], {
+      orderDiscount: 5,
+    });
+    expect(r.needsApproval).toBe(true);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  // The other half of the same rule: 0 must not become "refuse everything"
+  // either — a sale with no discount at all is untouched by the cap.
+  it("still rings a sale with no discount under a 0% cap", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...STAFF_MAY_DISCOUNT,
+      "pos.maxDiscountPercent": 0,
+    } as any);
+    const r = await placePosSale(
+      [line],
+      [{ method: "cash", amount: 118, tendered: 118 }],
+    );
+    expect(r.success).toBe(true);
+  });
+
   it("allows a cashier under the cap with no approval", async () => {
     // ₹100 − ₹10 = ₹90 taxable, +18% = ₹106.20. Tender ₹110.
     const r = await placePosSale(

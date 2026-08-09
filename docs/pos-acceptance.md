@@ -276,6 +276,26 @@ Set `pos.idleLockMinutes` to 1 (its minimum) and leave the till.
 capped at half the window, so a short setting doesn't put it on screen
 permanently.
 
+**PS-6.13 ★★ — EVERY screen locks, not just the two that asked**
+Set `pos.idleLockMinutes` to 1. As a cashier, go to each of `/pos`,
+`/pos/sell`, `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups`
+and `/pos/sales` in turn and leave the till alone on each.
+**Expect:** all seven warn and then lock to `/pos/login`.
+**Was:** only `/pos` and `/pos/sell` locked. The other five never did — so the
+till sat unlocked indefinitely on the screens that issue refunds, adjust stock
+and move cash, which are the ones where walking away costs most.
+
+**PS-6.14 — One timer, not two**
+On `/pos` and `/pos/sell` (the two that used to mount their own), let the
+warning appear.
+**Expect:** exactly ONE amber banner, and one lock. Two mounts would run two
+countdowns and fire two `posLock()` calls.
+
+**PS-6.15 — The login screen doesn't lock itself**
+Sit on `/pos/login`, `/pos/register` and `/pos/reset` past the idle window.
+**Expect:** nothing happens. No operator means nothing to lock, and a timer
+redirecting to the login page FROM the login page is a loop.
+
 ---
 
 ## 7. The register (`/pos/sell`)
@@ -448,6 +468,20 @@ out of the way whenever an editable element has focus.
 Open "Add customer" (or the tender panel) and type.
 **Expect:** the field keeps focus. The register never pulls focus back to the
 scan box while an overlay owns the screen.
+
+**PS-7.24 ★★ — A 0% discount cap means ZERO, not the default**
+Turn OFF `pos.ownerOnlyDiscounts`, turn ON
+`pos.requireManagerForDiscount`, and set `pos.maxDiscountPercent` to **0** (the
+registry allows it: `min: 0`). As a cashier, ring a ₹100 sale and apply a ₹5
+discount.
+**Expect:** "A manager's PIN is needed to approve this (over 0%)." A cap of 0
+is the merchant saying a cashier may discount NOTHING unaided.
+**Was:** allowed. The cap was read as `Number(…) || 10`, so a deliberate 0
+became the 10% default and handed cashiers exactly the authority the merchant
+had withheld — the strictest setting behaving as the most permissive.
+
+Then ring the same ₹100 sale with **no** discount.
+**Expect:** it goes through. A 0 cap must not become "refuse everything".
 
 ---
 
@@ -1239,16 +1273,18 @@ Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                                | Status                                                                                                                                                                                             |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
-| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                       |
-| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                      |
-| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                              |
-| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections   |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                      |
-| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                             |
-| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery        |
-| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                            |
-| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                        |
-| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                        |
+| Gap                                                                | Status                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                   |
+| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                         |
+| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                        |
+| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                |
+| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                     |
+| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second |
+| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                               |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
+| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
+| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
+| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
+| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |

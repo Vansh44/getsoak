@@ -733,7 +733,16 @@ export async function placePosSale(
   const settings = await getStoreSettings();
   const allowOverride = settings["pos.allowPriceOverride"] !== false;
   const requireApproval = settings["pos.requireManagerForDiscount"] === true;
-  const maxDiscountPct = Number(settings["pos.maxDiscountPercent"]) || 10;
+  // ★ A DELIBERATE 0 MUST SURVIVE. `|| 10` read as a NaN guard, but the setting
+  // declares `min: 0` and 0 is MEANINGFUL — "a cashier needs approval for ANY
+  // discount" — so the merchant who locked this down hardest silently got the
+  // 10% default instead, handing cashiers exactly the authority they withheld.
+  // resolveStoreSettings already guarantees a number clamped to [min, max], so
+  // the fallback is only for a structurally impossible value. Same rule
+  // `products.return_window_days` follows: a real 0 is not an absent value.
+  const rawMaxDiscount = settings["pos.maxDiscountPercent"];
+  const maxDiscountPct =
+    typeof rawMaxDiscount === "number" ? rawMaxDiscount : 10;
   // Default TRUE: discounting belongs to the owner unless a merchant hands it
   // out deliberately.
   const ownerOnlyDiscounts = settings["pos.ownerOnlyDiscounts"] !== false;
