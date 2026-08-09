@@ -198,10 +198,13 @@ gcloud builds triggers delete rmgpgab-storemink-web-asia-south1-Vansh44-storemin
 > **Backups were OFF on `storemink-prod-db` until 2026-08-10** — the instance was
 > created without `--backup` and nobody had noticed, with paying merchants on it.
 > Now: **daily automated backups at 20:30 UTC (02:00 IST), 7 retained.**
-> **Point-in-time recovery is still OFF**, so the exposure is up to 24 hours of
-> writes, not zero. PITR needs `--enable-point-in-time-recovery`, which archives
-> write-ahead logs and therefore adds storage cost — deliberately not enabled
-> during a cost cut, but it is the remaining gap.
+> **Point-in-time recovery is ON** as of 2026-08-10, with 7 days of transaction
+> logs, so a restore can target a moment rather than losing up to 24 hours of
+> writes back to the nightly snapshot. It was enabled the same day the
+> cancellation, refund and returns paths went live against real Razorpay keys —
+> a daily-snapshot-only window is not something to run a payments path on.
+> Enabling it archives WAL and therefore costs some storage; that was accepted
+> deliberately, against a cut that had already saved ~₹3,100/month.
 
 > **POS_SESSION_SECRET is required for the register to work at all.** It signs
 > the `pos_device` / `pos_operator` cookies (`lib/pos/session.ts`). Verification
