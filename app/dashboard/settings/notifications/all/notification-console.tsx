@@ -174,7 +174,7 @@ export function NotificationConsole({
           <p>
             Choose what your store notifies about, who receives it, and what it
             says. Everything is recorded in{" "}
-            <Link href="/dashboard/activity" className="underline">
+            <Link href="/dashboard/logs" className="underline">
               Activity
             </Link>{" "}
             whether or not it notifies anyone.

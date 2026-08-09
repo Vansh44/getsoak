@@ -2,7 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { savePlanPricing, type PlanPriceInput } from "@/app/actions/platform";
-import type { PlanPricing } from "@/lib/plans/pricing";
+// The KEY comes from the pure module: lib/plans/pricing.ts is `server-only`, so
+// importing a runtime value from it into this client component fails the build
+// (the TYPES are fine — they are erased).
+import { EXTRA_LOCATION_KEY } from "@/lib/plans";
+import type { ExtraLocationPricing, PlanPricing } from "@/lib/plans/pricing";
 
 // ---------------------------------------------------------------------------
 // Plan pricing, editable by a platform superadmin.
@@ -25,18 +29,44 @@ type Row = {
   baseYearlyInr: string;
 };
 
-function toRows(pricing: PlanPricing): Row[] {
-  return Object.entries(pricing).map(([plan, p]) => ({
+/** Rows the merchant can subscribe to, then the metered add-on. The add-on is
+ *  kept LAST and labelled, because it is priced here but is not a tier — it has
+ *  no pricing card and therefore no struck-through "Was" price. */
+function toRows(
+  pricing: PlanPricing,
+  extraLocation: ExtraLocationPricing,
+): Row[] {
+  const tiers = Object.entries(pricing).map(([plan, p]) => ({
     plan,
     monthlyInr: String(p.monthlyInr),
     yearlyInr: String(p.yearlyInr),
     baseMonthlyInr: p.baseMonthlyInr === null ? "" : String(p.baseMonthlyInr),
     baseYearlyInr: p.baseYearlyInr === null ? "" : String(p.baseYearlyInr),
   }));
+  return [
+    ...tiers,
+    {
+      plan: EXTRA_LOCATION_KEY,
+      monthlyInr: String(extraLocation.monthlyInr),
+      yearlyInr: String(extraLocation.yearlyInr),
+      baseMonthlyInr: "",
+      baseYearlyInr: "",
+    },
+  ];
 }
 
-export function PricingPanel({ pricing }: { pricing: PlanPricing }) {
-  const [rows, setRows] = useState<Row[]>(() => toRows(pricing));
+const ROW_LABEL: Record<string, string> = {
+  [EXTRA_LOCATION_KEY]: "Extra POS location",
+};
+
+export function PricingPanel({
+  pricing,
+  extraLocation,
+}: {
+  pricing: PlanPricing;
+  extraLocation: ExtraLocationPricing;
+}) {
+  const [rows, setRows] = useState<Row[]>(() => toRows(pricing, extraLocation));
   const [msg, setMsg] = useState<{ ok?: string; error?: string }>({});
   const [pending, start] = useTransition();
 
@@ -93,10 +123,11 @@ export function PricingPanel({ pricing }: { pricing: PlanPricing }) {
               const monthly = Number(r.monthlyInr || 0);
               const yearly = Number(r.yearlyInr || 0);
               const perMonth = yearly > 0 ? Math.round(yearly / 12) : 0;
+              const isAddon = r.plan === EXTRA_LOCATION_KEY;
               return (
                 <tr key={r.plan} className="border-t border-[var(--stq-line)]">
                   <td className="py-3 pr-4 font-semibold capitalize">
-                    {r.plan}
+                    {ROW_LABEL[r.plan] ?? r.plan}
                   </td>
                   {(
                     [
@@ -107,18 +138,31 @@ export function PricingPanel({ pricing }: { pricing: PlanPricing }) {
                     ] as const
                   ).map((key) => (
                     <td className="py-3 pr-4" key={key}>
-                      <input
-                        className="stq-input w-28"
-                        inputMode="numeric"
-                        value={r[key]}
-                        placeholder={key.startsWith("base") ? "none" : "0"}
-                        onChange={(e) => set(r.plan, key, e.target.value)}
-                        aria-label={`${r.plan} ${key}`}
-                      />
+                      {/* The add-on has no pricing card, so a struck-through
+                          price has nowhere to render — offering the field would
+                          store a number nobody ever sees. */}
+                      {isAddon && key.startsWith("base") ? (
+                        <span className="text-[var(--stq-muted)]">—</span>
+                      ) : (
+                        <input
+                          className="stq-input w-28"
+                          inputMode="numeric"
+                          value={r[key]}
+                          placeholder={key.startsWith("base") ? "none" : "0"}
+                          onChange={(e) => set(r.plan, key, e.target.value)}
+                          aria-label={`${r.plan} ${key}`}
+                        />
+                      )}
                     </td>
                   ))}
                   <td className="py-3 text-[var(--stq-muted)]">
-                    {monthly === 0 && yearly === 0 ? (
+                    {isAddon ? (
+                      <>
+                        per location, on top of Pro ·{" "}
+                        <b className="text-[var(--stq-ink)]">{inr(monthly)}</b>
+                        /mo
+                      </>
+                    ) : monthly === 0 && yearly === 0 ? (
                       "Free"
                     ) : (
                       <>

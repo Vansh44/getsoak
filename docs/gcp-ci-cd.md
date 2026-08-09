@@ -117,7 +117,7 @@ gcloud builds triggers create github \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml \
   --service-account=projects/storemink-prod/serviceAccounts/705863961054-compute@developer.gserviceaccount.com \
-  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=1,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com,_POS_SESSION_SECRET_SECRET=POS_SESSION_SECRET_PROD,_PAYMENT_CRED_KEY_SECRET=PAYMENT_CRED_KEY_PROD,_RAZORPAY_KEY_ID_SECRET=RAZORPAY_KEY_ID_PROD,_RAZORPAY_KEY_SECRET_SECRET=RAZORPAY_KEY_SECRET_PROD,_RAZORPAY_WEBHOOK_SECRET_SECRET=RAZORPAY_WEBHOOK_SECRET_PROD,_RESEND_WEBHOOK_SECRET_SECRET=RESEND_WEBHOOK_SECRET_PROD,_DOMAIN_ENV=prod'
+  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=0,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com,_POS_SESSION_SECRET_SECRET=POS_SESSION_SECRET_PROD,_PAYMENT_CRED_KEY_SECRET=PAYMENT_CRED_KEY_PROD,_RAZORPAY_KEY_ID_SECRET=RAZORPAY_KEY_ID_PROD,_RAZORPAY_KEY_SECRET_SECRET=RAZORPAY_KEY_SECRET_PROD,_RAZORPAY_WEBHOOK_SECRET_SECRET=RAZORPAY_WEBHOOK_SECRET_PROD,_RESEND_WEBHOOK_SECRET_SECRET=RESEND_WEBHOOK_SECRET_PROD,_DOMAIN_ENV=prod'
 ```
 
 > **⚠ The prod trigger must override every per-env secret NAME.** The
@@ -151,7 +151,8 @@ gcloud builds triggers delete rmgpgab-storemink-web-asia-south1-Vansh44-storemin
 | ------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `_SERVICE`                                  | `storemink-web`                                                     | `storemink-web-prod`                                             |
 | `_IMAGE` (tag)                              | `…/storemink/web:staging`                                           | `…/storemink/web:prod`                                           |
-| `_MIN_INSTANCES`                            | `0`                                                                 | `1`                                                              |
+| `_MIN_INSTANCES`                            | `0`                                                                 | `0` (was `1` — see below)                                        |
+| `_DB_POOL_MAX`                              | `5`                                                                 | `5`                                                              |
 | `_DB_CONN`                                  | `storemink-prod:asia-south1:storemink-prod-db`                      | `storemink-prod:asia-south1:storemink-prod-db`                   |
 | `_DB_NAME`                                  | `storemink_staging`                                                 | `storemink`                                                      |
 | `_DB_PASSWORD_SECRET`                       | `CLOUDSQL_PROD_APP_PW`                                              | `CLOUDSQL_PROD_APP_PW`                                           |
@@ -171,6 +172,36 @@ gcloud builds triggers delete rmgpgab-storemink-web-asia-south1-Vansh44-storemin
 | `_GOOGLE_SEARCH_CONSOLE_PROPERTY`           | _(empty — staging is never indexed)_                                | `sc-domain:storemink.com`                                        |
 | `_POS_SESSION_SECRET_SECRET`                | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_PROD`                                        |
 | `_RESEND_WEBHOOK_SECRET_SECRET`             | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_PROD`                                     |
+
+> **⚠ COST CUTS OF 2026-08-10 — three values here are now tuned for spend, not
+> for headroom.** Monthly GCP was tracking to ~₹6,400 and had to come down.
+>
+> - **`_MIN_INSTANCES` on prod went `1` → `0`.** The always-warm instance cost
+>   ~₹700/month. Prod now scales to zero; a measured cold start is ~1.2 s
+>   (`https://storemink.com`, first hit after idle). The original reason for
+>   pinning it to 1 was Firebase session-cookie verification latency
+>   ([phase-4 §126](gcp-migration-phase4-cloud-run.md)) — that cost is now paid
+>   on the first request after an idle period instead of never. Put it back to
+>   `1` the moment real traffic makes the cold start visible to shoppers.
+> - **The Cloud SQL instance went `db-g1-small` → `db-f1-micro`** (~₹1,700/month).
+>   0.6 GB RAM, shared core, **not covered by the Cloud SQL SLA** — Google
+>   positions shared-core tiers as dev/test. This is the first thing to revert
+>   if the database misbehaves under load:
+>   `gcloud sql instances patch storemink-prod-db --tier=db-g1-small` (restarts
+>   the instance; the downgrade itself took ~12 minutes).
+> - **`_DB_POOL_MAX` is new, and it exists BECAUSE of that tier.** `f1-micro`'s
+>   default `max_connections` is ~25, down from ~50 on `g1-small`, and staging
+>   and prod share the one instance. See the comment in `cloudbuild.yaml` for
+>   the arithmetic. `lib/db/client.ts` defaults to 10, so leaving this unset
+>   doubles the exposure — always pass it.
+>
+> **Backups were OFF on `storemink-prod-db` until 2026-08-10** — the instance was
+> created without `--backup` and nobody had noticed, with paying merchants on it.
+> Now: **daily automated backups at 20:30 UTC (02:00 IST), 7 retained.**
+> **Point-in-time recovery is still OFF**, so the exposure is up to 24 hours of
+> writes, not zero. PITR needs `--enable-point-in-time-recovery`, which archives
+> write-ahead logs and therefore adds storage cost — deliberately not enabled
+> during a cost cut, but it is the remaining gap.
 
 > **POS_SESSION_SECRET is required for the register to work at all.** It signs
 > the `pos_device` / `pos_operator` cookies (`lib/pos/session.ts`). Verification

@@ -70,7 +70,7 @@ steps:
       - --min-instances=${_MIN_INSTANCES}
       - --max-instances=4
       - --add-cloudsql-instances=${_DB_CONN}
-      - --set-env-vars=DOMAIN_ENV=${_DOMAIN_ENV},DOMAIN_CERT_MAP=${_DOMAIN_CERT_MAP},DOMAIN_LB_IP=${_DOMAIN_LB_IP},GCP_PROJECT_ID=${_GCP_PROJECT_ID},GCP_LOCATION=global,GCS_BUCKET=${_GCS_BUCKET},DB_HOST=/cloudsql/${_DB_CONN},DB_USER=app,DB_NAME=${_DB_NAME},FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID},FIREBASE_SERVICE_ACCOUNT_ID=${_FIREBASE_SA_ID},FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY},GOOGLE_SEARCH_CONSOLE_PROPERTY=${_GOOGLE_SEARCH_CONSOLE_PROPERTY},NEXT_PUBLIC_ROOT_DOMAIN=${_NEXT_PUBLIC_ROOT_DOMAIN},NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}
+      - --set-env-vars=DOMAIN_ENV=${_DOMAIN_ENV},DOMAIN_CERT_MAP=${_DOMAIN_CERT_MAP},DOMAIN_LB_IP=${_DOMAIN_LB_IP},GCP_PROJECT_ID=${_GCP_PROJECT_ID},GCP_LOCATION=global,GCS_BUCKET=${_GCS_BUCKET},DB_HOST=/cloudsql/${_DB_CONN},DB_USER=app,DB_NAME=${_DB_NAME},DB_POOL_MAX=${_DB_POOL_MAX},FIREBASE_PROJECT_ID=${_FIREBASE_PROJECT_ID},FIREBASE_SERVICE_ACCOUNT_ID=${_FIREBASE_SA_ID},FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY},GOOGLE_SEARCH_CONSOLE_PROPERTY=${_GOOGLE_SEARCH_CONSOLE_PROPERTY},NEXT_PUBLIC_ROOT_DOMAIN=${_NEXT_PUBLIC_ROOT_DOMAIN},NEXT_PUBLIC_APP_URL=${_NEXT_PUBLIC_APP_URL}
       # ⚠ EVERY secret named here must EXIST in Secret Manager before the next
       # deploy — Cloud Run fails the revision outright on a missing one, so
       # adding a line here without creating the secret takes the service down.
@@ -102,6 +102,18 @@ substitutions:
   _RUN_SA: storemink-run@storemink-prod.iam.gserviceaccount.com
   _GCP_PROJECT_ID: storemink-prod
   _MIN_INSTANCES: "0"
+  # ⚠ THE POOL CEILING IS max-instances × DB_POOL_MAX, AND IT MUST STAY UNDER
+  # THE INSTANCE'S max_connections. The shared Cloud SQL instance is
+  # `db-f1-micro` (cost — 2026-08-10), whose Postgres default max_connections is
+  # ~25; staging and prod BOTH connect to it, so the real worst case is
+  # 2 services × 4 instances × DB_POOL_MAX. At 5 that is 40 — over the ceiling
+  # in a simultaneous burst on both envs, but far under it at current traffic,
+  # where each service sits at 0–1 instances. lib/db/client.ts defaults to 10,
+  # which would double that, so this is set explicitly rather than left to the
+  # code default. If "too many connections" ever appears, this and the tier are
+  # the two dials — raise the tier back to db-g1-small (~50) before raising
+  # max_connections, which on 0.6 GB of RAM buys errors for OOM kills.
+  _DB_POOL_MAX: "5"
   # ⚠ SHARED-INSTANCE MODEL: staging is the `storemink_staging` DATABASE inside
   # the prod instance (storemink-prod-db) — there is no separate staging
   # instance. The database is chosen by _DB_NAME (lib/db/client.ts), NOT by the

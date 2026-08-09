@@ -29,6 +29,7 @@ import {
   SelectAllCheckbox,
 } from "@/app/dashboard/components/bulk-actions";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
+import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
 import { InventoryHistoryDrawer } from "./inventory-history-drawer";
 import { InventoryEditDrawer } from "./inventory-edit-drawer";
 
@@ -233,6 +234,14 @@ export function InventoryManagementView({
           <h1>Inventory</h1>
           <p>Track and manage product stock levels</p>
         </div>
+        {/* Export the shop currently being shown, so a stocktake sheet counts
+            the shelf the merchant is standing in front of. */}
+        <ImportExportMenu
+          resource="inventory"
+          canImport={canManage}
+          filters={{ location: locationId ?? undefined }}
+          locations={locations}
+        />
       </header>
 
       <div className="dash-card flex flex-col" style={{ flex: "1 1 auto" }}>

@@ -126,6 +126,14 @@ gcloud run deploy storemink-web \
 points at. `min-instances=1` avoids cold starts (Firebase session-cookie
 verification runs per request in `proxy.ts`). Tune later.
 
+⚠ **"Tune later" happened: prod runs `min-instances=0` since 2026-08-10.** The
+warm instance cost ~₹700/month against a ~₹6,400/month bill, and the measured
+cold start is ~1.2 s. Deploys are driven by `cloudbuild.yaml`, not this command,
+so the live value is the `_MIN_INSTANCES` substitution on the Cloud Build trigger
+— changing the service with `gcloud run services update` alone is reverted by the
+next deploy. Both were changed together; see the cost note in
+[`gcp-ci-cd.md`](gcp-ci-cd.md).
+
 ### 7. Smoke-test BEFORE DNS (the Host-header trick)
 
 `proxy.ts` routes by Host, and a raw `*.run.app` host is treated as an unknown

@@ -32,7 +32,6 @@ import {
   gte,
   inArray,
   isNull,
-  lt,
   or,
   sql,
 } from "drizzle-orm";
@@ -40,7 +39,6 @@ import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import {
   activityEvents,
   admins,
-  emailLogs,
   notificationEmailQueue,
   notificationPreferences,
   notifications,
@@ -318,7 +316,7 @@ export async function archiveNotification(
   }
 }
 
-// ── Activity feed (/dashboard/activity) ────────────────────────────────────
+// ── Activity feed (/dashboard/logs) ────────────────────────────────────
 
 export interface ActivityRow {
   id: string;
@@ -1342,49 +1340,19 @@ export async function getStoreNotificationAudience(): Promise<StoreAudience> {
 }
 
 // ── Retention ──────────────────────────────────────────────────────────────
-
-/**
- * Delete inbox rows and audit events past their retention window. Called by
- * the daily cron — an inbox that grows forever is a slow outage.
- */
-export async function pruneNotifications(
-  notificationDays = 90,
-  eventDays = 365,
-  // Email logs keep BODIES, so they're the heaviest of the three and get the
-  // shortest life. 90 days still covers "did last quarter's order confirmation
-  // go out?", which is the question anyone actually asks.
-  emailLogDays = 90,
-): Promise<{ notifications: number; events: number; emailLogs: number }> {
-  const notificationFloor = new Date(
-    Date.now() - notificationDays * 86_400_000,
-  ).toISOString();
-  const eventFloor = new Date(
-    Date.now() - eventDays * 86_400_000,
-  ).toISOString();
-  const emailFloor = new Date(
-    Date.now() - emailLogDays * 86_400_000,
-  ).toISOString();
-
-  return withService(async (db) => {
-    const removedNotifications = await db
-      .delete(notifications)
-      .where(lt(notifications.createdAt, notificationFloor))
-      .returning({ id: notifications.id });
-    const removedEvents = await db
-      .delete(activityEvents)
-      .where(lt(activityEvents.createdAt, eventFloor))
-      .returning({ id: activityEvents.id });
-    const removedEmailLogs = await db
-      .delete(emailLogs)
-      .where(lt(emailLogs.createdAt, emailFloor))
-      .returning({ id: emailLogs.id });
-    return {
-      notifications: removedNotifications.length,
-      events: removedEvents.length,
-      emailLogs: removedEmailLogs.length,
-    };
-  });
-}
+//
+// ★ MOVED, DELIBERATELY, to lib/retention/prune.ts and driven by
+// /api/cron/prune-logs.
+//
+// `pruneNotifications` lived here, and this is a `"use server"` file — so it
+// was a publicly reachable endpoint with NO gate, running under `withService`
+// (which bypasses RLS), taking its retention windows as parameters. Calling it
+// with zeroes would have wiped every notification, every email log and the
+// whole of `activity_events` — the append-only audit trail — for every store
+// on the platform. It also never ran: nothing ever called it.
+//
+// Do not add a prune back into this file. See CODEBASE.md §30 for the same
+// rule applied to lib/domains/reconcile.ts.
 
 // ---------------------------------------------------------------------------
 // Delivery failures — making the dead-letter queue visible

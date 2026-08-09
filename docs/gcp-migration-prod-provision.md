@@ -62,7 +62,25 @@ gcloud sql users set-password postgres --instance=$DB_INSTANCE --prompt-for-pass
 gcloud sql users create app          --instance=$DB_INSTANCE --prompt-for-password
 ```
 
-`db-g1-small` matches staging — fine to start; bump the tier for real prod load.
+⚠ **The live instance is `db-f1-micro`, not the `db-g1-small` this creates.** It
+was downgraded on 2026-08-10 to cut ~₹1,700/month off a ~₹6,400/month GCP bill
+(the Cloud SQL line alone was ~₹2,500). Shared-core tiers are **outside the Cloud
+SQL SLA**, and `f1-micro`'s default `max_connections` is ~25 rather than ~50 —
+which is why `_DB_POOL_MAX` exists in `cloudbuild.yaml`. Bump the tier back for
+real prod load; see the cost note in [`gcp-ci-cd.md`](gcp-ci-cd.md) for the
+revert command and the reasoning.
+
+⚠ **This command has no `--backup` flag, so it creates the instance with
+automated backups OFF** — and prod ran that way, unnoticed, with paying merchants
+on it, until 2026-08-10. Add it here if you ever provision again:
+
+```bash
+  --backup-start-time=20:30 --retained-backups-count=7   # 20:30 UTC = 02:00 IST
+```
+
+Prod was patched to exactly that. **Point-in-time recovery is still off**, so a
+restore loses up to 24 hours of writes; `--enable-point-in-time-recovery`
+archives WAL and costs storage, which is why it was left for later.
 
 **Then load the schema** (do it through the Auth Proxy as `postgres`, as on
 staging), in order:

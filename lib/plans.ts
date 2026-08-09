@@ -115,6 +115,41 @@ export const PLAN_META: Record<Plan, PlanMeta> = {
   },
 };
 
+/**
+ * An extra POS location, beyond what the plan includes (roadmap Step 5).
+ *
+ * THE DEFAULT ONLY — a platform operator sets the live price from the console
+ * (`plan_prices`, key `extra_location`, see plans_05). This is what applies
+ * until one ever has, exactly as `PLAN_META`'s prices are the fallback for the
+ * tiers. Read it through `getExtraLocationPricingLive()` anywhere the number
+ * decides what someone is CHARGED; never import this constant for that.
+ *
+ * Because `razorpay_plans` is keyed on the AMOUNT, a reprice mints a new
+ * Razorpay plan and existing subscribers keep what they authorised until they
+ * change something (§15b's grandfathering rule, inherited for free).
+ *
+ * Yearly is 10× monthly, the same "two months free" relationship `PLAN_META`
+ * promises. Keep that ratio if these move, or the promise quietly stops being
+ * true for the add-on while staying true for the plan.
+ */
+export const EXTRA_LOCATION_PRICE = {
+  monthlyInr: 1000,
+  yearlyInr: 10000,
+} as const;
+
+/**
+ * The key the add-on is stored under in `plan_prices` (plans_05).
+ *
+ * ★ IT LIVES HERE, NOT IN lib/plans/pricing.ts, AND THAT IS LOAD-BEARING.
+ * That module is `import "server-only"` — it pulls in the db client, and
+ * therefore `pg` and `fs`. The operator's Pricing panel is a CLIENT component
+ * and needs this key at runtime to tell the add-on row from a tier, so importing
+ * it from there fails the BUILD (typecheck passes happily, which is what makes
+ * it worth a comment). The TYPES may still come from pricing.ts — those are
+ * erased. Same split as lib/logs/failure-types.ts and lib/themes/meta.ts.
+ */
+export const EXTRA_LOCATION_KEY = "extra_location";
+
 // ── Limits & feature matrix ─────────────────────────────────────────────────
 // `null` = unlimited. Enforced SERVER-SIDE in the owning action (a limit that
 // only exists in the UI is a suggestion, not a limit). Enforcement is

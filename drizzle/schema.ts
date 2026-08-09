@@ -1221,6 +1221,32 @@ export const orders = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // The collection code a customer shows at the counter (locations_11).
+    // A LOOKUP key, not a bearer token — see lib/fulfilment/collection-code.ts.
+    pickupCode: text("pickup_code"),
+    // ── Cancellation (orders_01_cancellation.sql) ──────────────────────────
+    // WHOLE-ORDER only: there is deliberately no per-item equivalent, because
+    // this system has no partial fulfilment. Lifecycle in
+    // lib/orders/cancellation.ts. NULL status = nobody has ever asked.
+    cancellationStatus: text("cancellation_status"),
+    cancellationRequestedAt: timestamp("cancellation_requested_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** The customer's own words, shown to the merchant when deciding. */
+    cancellationReason: text("cancellation_reason"),
+    /** The merchant's words on a decline — shown TO the customer. */
+    cancellationDeclineReason: text("cancellation_decline_reason"),
+    cancellationDecidedAt: timestamp("cancellation_decided_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    cancellationDecidedBy: text("cancellation_decided_by"),
+    /** A code from CANCEL_REASONS, never free text. */
+    cancelReason: text("cancel_reason"),
+    /** ★ INTERNAL. Never rendered to a customer, anywhere. */
+    cancelStaffNote: text("cancel_staff_note"),
+    cancelRefundDestination: text("cancel_refund_destination"),
     // Claimed by the reminder job so the nudge fires exactly once
     // (locations_06_pickup_reminder.sql).
     // When the shop expects it ready (locations_09). The hold window is
@@ -2868,6 +2894,11 @@ export const storeSubscriptions = pgTable(
     // separately from scheduledPlan: a same-tier period change never moves the
     // plan, so scheduledPlan alone cannot express it.
     scheduledPeriod: text("scheduled_period"),
+    // Extra POS locations this subscription pays for, ON TOP OF the plan's
+    // included count — additive, never a total (subscriptions_03). The cost is
+    // folded into the subscription amount rather than billed separately; see
+    // lib/plans/location-billing.ts.
+    billedLocations: integer("billed_locations").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
@@ -4075,8 +4106,107 @@ export const orderRefunds = pgTable("order_refunds", {
   }),
   status: text().notNull(),
   actor: text(),
+  // `supabase/pos_12_returns.sql` declares this `timestamptz NOT NULL DEFAULT
+  // now()` and that migration has run, so the column is non-null in every
+  // environment. The introspected type was missing `.notNull()` — drift, not a
+  // real nullable — which made every reader carry a null branch that cannot
+  // happen.
   createdAt: timestamp("created_at", {
     withTimezone: true,
     mode: "string",
-  }).defaultNow(),
+  })
+    .defaultNow()
+    .notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// CSV import/export jobs + their per-row error log
+// (supabase/import_export_01_jobs.sql, CODEBASE.md §31).
+//
+// Service-role only, like email_logs: the rows quote raw cells from the
+// merchant's file, and for an orders export that means customer names and
+// addresses. Reads are gated at the app layer on the `activity` section.
+// ---------------------------------------------------------------------------
+
+export const dataJobs = pgTable("data_jobs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  /** 'import' | 'export'. */
+  kind: text().notNull(),
+  /** A lib/import-export/resources.ts id. Free text so an old row keeps its
+   *  meaning after a resource is renamed. */
+  resource: text().notNull(),
+  /** pending | running | completed | partial | failed | cancelled. `partial`
+   *  is a real outcome, not a failure — see the SQL header. */
+  status: text().default("pending").notNull(),
+  filename: text(),
+  totalRows: integer("total_rows").default(0).notNull(),
+  processedRows: integer("processed_rows").default(0).notNull(),
+  createdCount: integer("created_count").default(0).notNull(),
+  updatedCount: integer("updated_count").default(0).notNull(),
+  skippedCount: integer("skipped_count").default(0).notNull(),
+  failedCount: integer("failed_count").default(0).notNull(),
+  warningCount: integer("warning_count").default(0).notNull(),
+  /** Issues NOT written because the per-job cap was hit. Without this the log
+   *  silently looks complete. */
+  droppedIssues: integer("dropped_issues").default(0).notNull(),
+  /** The failure that killed the WHOLE job, as opposed to the per-row issues. */
+  error: text(),
+  options: jsonb().default({}).notNull(),
+  /** Next DATA row to read, 0-based. Deliberately distinct from
+   *  processedRows: "where to resume" and "how much got done" move together
+   *  today, and conflating them is how a resumed job skips a slice. */
+  cursor: integer().default(0).notNull(),
+  /** Worker claim. Only a job whose lease has EXPIRED is claimable, which is
+   *  what stops the self-chain and the cron sweep double-importing a slice. */
+  leaseUntil: timestamp("lease_until", {
+    withTimezone: true,
+    mode: "string",
+  }),
+  /** Claims so far — bounded retries, so a job that reliably dies gives up. */
+  attempts: integer().default(0).notNull(),
+  /** Firebase uid — TEXT, not UUID (phase6_01_uid_columns_to_text.sql). */
+  createdBy: text("created_by"),
+  actorEmail: text("actor_email"),
+  startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+  finishedAt: timestamp("finished_at", { withTimezone: true, mode: "string" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+/** The uploaded file, held server-side so the import survives a closed tab.
+ *  In Postgres rather than the media bucket because that bucket is public —
+ *  see supabase/import_export_02_background.sql. Service-role only. */
+export const dataJobPayloads = pgTable("data_job_payloads", {
+  jobId: uuid("job_id").primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  header: jsonb().default([]).notNull(),
+  csv: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const dataJobIssues = pgTable("data_job_issues", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  jobId: uuid("job_id").notNull(),
+  /** Denormalised from the job so a read is store-scoped without a join. */
+  storeId: uuid("store_id").notNull(),
+  /** 1-based line in the merchant's ORIGINAL file. 0 = a problem with the file
+   *  itself (a missing column) rather than any one row. */
+  line: integer().default(0).notNull(),
+  /** `column` is reserved in SQL — this is the CSV header involved. */
+  columnName: text("column_name"),
+  code: text().notNull(),
+  /** 'error' skips the row; 'warning' imports it and says what was assumed. */
+  severity: text().notNull(),
+  message: text().notNull(),
+  value: text(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
 });

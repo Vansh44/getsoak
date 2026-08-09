@@ -20,12 +20,7 @@ import { posLock } from "@/app/actions/pos-auth-actions";
 import { endSession } from "@/lib/auth/firebase-client";
 import { authorizeThisDevice } from "@/app/actions/pos-auth-actions";
 import { toast } from "sonner";
-import { IdleLock } from "./idle-lock";
-import {
-  isIdleLockExempt,
-  posCan,
-  type PosActorRole,
-} from "@/lib/pos/permissions";
+import { posCan, type PosActorRole } from "@/lib/pos/permissions";
 
 const ROLE_LABEL: Record<string, string> = {
   // "superadmin" is the person whose shop it is; "owner" is the pseudo-role for
@@ -45,7 +40,6 @@ export function RegisterHome({
   deviceAuthorized,
   canAuthorizeDevice,
   locations,
-  idleLockMinutes,
   pickupWaiting,
 }: {
   name: string;
@@ -55,7 +49,6 @@ export function RegisterHome({
   deviceAuthorized: boolean;
   canAuthorizeDevice: boolean;
   locations: { id: string; name: string }[];
-  idleLockMinutes: number;
   pickupWaiting: number;
 }) {
   const router = useRouter();
@@ -89,11 +82,8 @@ export function RegisterHome({
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Everyone but the superadmin auto-locks. This used to key off `source`,
-          which exempted a delegated dashboard admin as well — but they may be
-          standing at exactly the shared counter this guards, and their session
-          reaches further than a cashier's. */}
-      {!isIdleLockExempt(role) && <IdleLock minutes={idleLockMinutes} />}
+      {/* The idle lock is mounted once in app/pos/layout.tsx, for every POS
+          screen rather than the two that remembered to ask for it. */}
       <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <div className="flex items-center gap-2 font-semibold">
           <ShoppingBag className="h-5 w-5" strokeWidth={2} />

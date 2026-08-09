@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { parseHost, isHelpHost, isThemesHost } from "@/lib/store/host";
+import {
+  parseHost,
+  isHelpHost,
+  isThemesHost,
+  IS_PRODUCTION_PLATFORM,
+} from "@/lib/store/host";
 import { canonicalHostForSlug } from "@/lib/store/canonical";
 import { logError } from "@/lib/observability/logger";
 import { SESSION_COOKIE, verifySessionCookie } from "@/lib/auth/session-cookie";
@@ -90,11 +95,32 @@ export async function proxy(request: NextRequest) {
   // address). ⚠ POS device + operator cookies are host-only and SameSite=Strict
   // by design, so every paired till must be re-authorised once after a domain
   // goes live — there is no way to carry a host-scoped credential across origins.
+  //
+  // ★★ PRODUCTION ONLY, and this is a correctness gate rather than caution.
+  // A custom domain has ONE A record pointing at ONE load balancer IP, and
+  // cloudbuild.yaml gives staging the SAME `_DOMAIN_LB_IP` and the SAME
+  // `_DOMAIN_CERT_MAP` as production (one HTTPS proxy holds one map — see
+  // lib/domains/naming.ts). That LB routes by Host, so any given merchant domain
+  // reaches exactly one backend. Yet `custom_domain_verified` is per-DATABASE,
+  // and staging and prod have separate ones — so a domain verified in the
+  // staging database makes staging redirect to a host it can never itself serve.
+  // The merchant's staging store then either lands on PRODUCTION (a different
+  // database, where that store may not exist) or, if the domain's DNS is
+  // incomplete, nowhere at all.
+  //
+  // That is not hypothetical: echos.staging.storemink.com 308'd to storiq.in,
+  // whose zone holds only NS + SOA records, taking the storefront, /dashboard
+  // and /pos down together with no way back in. And it could not self-heal —
+  // §30's health check reverts a dead domain after 3 consecutive failures, but
+  // it only runs from /api/cron/domain-reconcile, and every Cloud Scheduler job
+  // targets https://storemink.com (docs/cron-jobs.md). Off prod, the safety net
+  // this redirect depends on does not exist.
+  //
+  // This subsumes the older `*.localhost` check, which excluded local dev for
+  // the identical reason ("redirecting local dev to a production custom domain
+  // would make that store impossible to work on") — same bug, narrower guard.
   const storeHost = parseHost(host);
-  // `*.localhost` is a store subdomain to parseHost, but redirecting local dev to
-  // a production custom domain would make that store impossible to work on.
-  const isLocal = (host ?? "").split(":")[0].endsWith(".localhost");
-  if (storeHost.type === "store-subdomain" && !isLocal) {
+  if (storeHost.type === "store-subdomain" && IS_PRODUCTION_PLATFORM) {
     const canonical = await canonicalHostForSlug(storeHost.slug);
     if (canonical) {
       const url = request.nextUrl.clone();

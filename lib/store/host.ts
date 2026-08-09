@@ -34,15 +34,24 @@ export const PLATFORM_URL = ((): string => {
   return raw.replace(/\/+$/, "");
 })();
 
+// Is this deploy the real production platform? Staging
+// (ROOT_DOMAIN=staging.storemink.com), Cloud Run previews and local dev are not.
+// A build-time constant because NEXT_PUBLIC_* are inlined at build.
+//
+// Split out from SEARCH_INDEXABLE so the two can't drift, and because they are
+// NOT the same question: NEXT_PUBLIC_NOINDEX is an indexing kill-switch, and a
+// caller asking "which environment am I?" must not have its answer changed by
+// someone hiding production from Google for an afternoon.
+export const IS_PRODUCTION_PLATFORM = ROOT_DOMAIN === "storemink.com";
+
 // Search indexing is enabled ONLY on the real production platform apex
-// (storemink.com) — and never when NEXT_PUBLIC_NOINDEX=1 forces it off. Staging
-// (ROOT_DOMAIN=staging.storemink.com), Vercel/Cloud Run previews, and local dev
-// are therefore never indexed AND never ping search engines, with no per-deploy
-// flag to remember (and no risk of accidentally no-indexing production). It's a
-// build-time constant because NEXT_PUBLIC_* are inlined at build. Consumed by
-// app/robots.ts, app/sitemap.ts, and lib/seo/search-engines.ts.
+// (storemink.com) — and never when NEXT_PUBLIC_NOINDEX=1 forces it off. Staging,
+// previews and local dev are therefore never indexed AND never ping search
+// engines, with no per-deploy flag to remember (and no risk of accidentally
+// no-indexing production). Consumed by app/robots.ts, app/sitemap.ts, and
+// lib/seo/search-engines.ts.
 export const SEARCH_INDEXABLE =
-  ROOT_DOMAIN === "storemink.com" && process.env.NEXT_PUBLIC_NOINDEX !== "1";
+  IS_PRODUCTION_PLATFORM && process.env.NEXT_PUBLIC_NOINDEX !== "1";
 
 export type HostKind =
   | { type: "store-subdomain"; slug: string }

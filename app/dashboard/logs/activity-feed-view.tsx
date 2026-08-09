@@ -8,6 +8,7 @@ import { useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Activity, Bot, ShieldCheck, ShoppingBag, User } from "lucide-react";
 import { EVENT_GROUPS, getEventDef } from "@/lib/notifications/events";
+import { formatWhen, relativeDay } from "@/lib/dates";
 import { ListPagination } from "../components/list-pagination";
 import type { ActivityRow } from "@/app/actions/notification-actions";
 
@@ -34,32 +35,15 @@ const SEVERITY_DOT: Record<string, string> = {
   critical: "bg-red-500",
 };
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+// ★ Both of these used to read the RUNTIME's locale and zone, which is exactly
+// what threw "Hydration failed because the server rendered text didn't match
+// the client" on this page — server "Aug 6, 10:26 PM" vs client "6 Aug, 22:26".
+// `dayKey` had the same bug twice over: its Today/Yesterday comparison used
+// `toDateString()`, which is also the machine's zone. Both are pinned in
+// lib/dates.ts now; see the note there for why.
 
 /** Group consecutive rows under a date heading, the way a log reads. */
-function dayKey(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const today = new Date();
-  const yesterday = new Date(Date.now() - 86_400_000);
-  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return "Today";
-  if (same(d, yesterday)) return "Yesterday";
-  return d.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "long",
-    year: d.getFullYear() === today.getFullYear() ? undefined : "numeric",
-  });
-}
+const dayKey = relativeDay;
 
 export function ActivityFeedView({
   events,
@@ -87,7 +71,7 @@ export function ActivityFeedView({
     // Any filter change invalidates the current page number.
     if (key !== "page") params.delete("page");
     startTransition(() => {
-      router.push(`/dashboard/activity?${params.toString()}`);
+      router.push(`/dashboard/logs?${params.toString()}`);
     });
   };
 

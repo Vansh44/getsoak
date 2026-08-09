@@ -155,7 +155,7 @@ export function NotificationOverview({
           <p>
             The emails your customers receive, and the alerts your team gets.
             Everything that happens is recorded in{" "}
-            <Link href="/dashboard/activity" className="underline">
+            <Link href="/dashboard/logs" className="underline">
               Activity
             </Link>{" "}
             whether or not it notifies anyone.

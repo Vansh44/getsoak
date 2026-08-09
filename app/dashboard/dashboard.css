@@ -2,6 +2,33 @@
    WholeSip Operations Center — premium design system
    Neutral + indigo, light theme. Scoped to .dashboard-shell
    ============================================================ */
+
+/* ★★ `.dashboard-shell` IS A SCOPE, NOT THE PAGE FRAME — and the split is what
+   makes every dashboard dialog work.
+   A shadcn/Radix `DialogContent` renders through a PORTAL into document.body,
+   which is OUTSIDE the shell element. So NONE of this stylesheet reached a
+   dialog: every `var(--dash-*)` resolved to nothing, and every `.dash-*`
+   component rule simply didn't match. That is not a subtle degradation —
+   Tailwind's `border` utility sets a width and leaves the colour to
+   `border-color: var(--dash-border)`, and an INVALID custom property makes the
+   declaration fall back to `currentColor`, so every panel in every dashboard
+   dialog drew a hard BLACK hairline where the design asks for an 8%-opacity
+   grey one. Buttons lost `inline-flex` (icons stacked above their labels) and
+   `cursor: pointer`. Cards lost their surface, radius and shadow.
+
+   The fix is to put the class on the dialog too (see components/ui/dialog.tsx)
+   rather than to rewrite 400 selectors. That is only safe because this class
+   now carries NOTHING but tokens: the page frame — `height: 100vh`,
+   `overflow: hidden`, the background — moved to `.dashboard-frame` below, and
+   would have wrecked any portalled element wearing the scope class. It already
+   was doing exactly that to the notification recipient picker, which has always
+   opted into `.dashboard-shell` for its tokens and silently inherited a
+   100vh height with it.
+
+   Nothing here can leak to the storefront: this stylesheet is imported by the
+   dashboard LAYOUT, so Next only loads it on dashboard routes. And every rule
+   below is `.dash-*` class-based — there are no bare element selectors — so
+   scoping a dialog cannot restyle its internals by accident. */
 .dashboard-shell {
   /* Surfaces */
   --dash-bg: #ebebeb;
@@ -55,7 +82,17 @@
   --dash-shadow-lg:
     0 12px 32px -8px rgba(16, 24, 40, 0.16),
     0 4px 12px -4px rgba(16, 24, 40, 0.08);
+}
 
+/* ★ THE PAGE FRAME, and it is deliberately NOT `.dashboard-shell`.
+   These are the declarations that only make sense on the one element wrapping
+   a whole dashboard PAGE. Leaving them on the scope class is what stopped the
+   scope from being reusable: anything else opting in — a portalled dialog, the
+   recipient picker's popover — would inherit `height: 100vh` and
+   `overflow: hidden` along with the tokens it actually wanted.
+   Applied alongside `.dashboard-shell` in app/dashboard/layout.tsx and
+   app/platform/dashboard/(console)/layout.tsx. */
+.dashboard-frame {
   background: var(--dash-bg);
   color: var(--dash-text);
   font-family: var(--font-dash), ui-sans-serif, system-ui, sans-serif;
@@ -476,6 +513,9 @@
 }
 
 /* ---------- Cards ---------- */
+/* `.dashboard-shell` — the portal reason
+   given at the top of this file. A card in a dialog had no background, no
+   border radius and no shadow, so it read as a plain block of text. */
 .dashboard-shell .dash-card {
   background: var(--dash-surface);
   border: 1px solid var(--dash-card-border);
@@ -509,6 +549,70 @@
 
 .dashboard-shell .dash-card-body {
   padding: 20px 22px;
+}
+
+/* ---------- Form controls ---------- */
+/* ★ `.dash-input` HAD NO RULE AT ALL — anywhere. Five call sites used it
+   (policies, domain settings, media library, and both Razorpay credential
+   fields) and every one of them was rendering a bare browser input: the class
+   was inert on the page as well as in a dialog, so this is not the portal bug,
+   it is a style that was never written. The credential fields are the tell —
+   they pair it with `font-mono`, which only makes sense on top of a real input
+   treatment.
+
+   Matched to `.dash-search-bar` rather than invented: same border, radius,
+   surface and accent focus ring, so a standalone field and the search bar read
+   as the same control.
+
+   ★★ IN `@layer components`, AND THAT IS THE LOAD-BEARING PART. The rest of
+   this file is UNLAYERED, and unlayered CSS beats every layered rule no matter
+   the specificity — Tailwind v4 ships its utilities in `@layer utilities`, so
+   an unlayered `.dash-input { font-family: inherit }` would silently defeat the
+   `font-mono` on both Razorpay credential fields, and its padding and
+   font-size would defeat the `px-2 text-xs` in the media library. A base
+   component style has to LOSE to the utilities a call site adds, which is
+   exactly the ordering this layer exists to give. globals.css documents the
+   same hazard from the other direction. */
+@layer components {
+  .dashboard-shell .dash-input {
+    display: block;
+    background: var(--dash-surface);
+    border: 1px solid var(--dash-border-strong);
+    border-radius: var(--dash-radius-sm);
+    padding: 8px 12px;
+    color: var(--dash-text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition:
+      border-color 0.15s,
+      box-shadow 0.15s;
+  }
+
+  .dashboard-shell .dash-input::placeholder {
+    color: var(--dash-text-3);
+  }
+
+  .dashboard-shell .dash-input:hover:not(:disabled, :focus) {
+    border-color: var(--dash-border-hover);
+  }
+
+  .dashboard-shell .dash-input:focus {
+    border-color: var(--dash-accent);
+    box-shadow: 0 0 0 3px var(--dash-accent-soft);
+  }
+
+  .dashboard-shell .dash-input:disabled {
+    background: var(--dash-surface-2);
+    color: var(--dash-text-3);
+    cursor: not-allowed;
+  }
+
+  /* A textarea carries the class too (policies) — it keeps its own height and
+     stays resizable, so no fixed control height is asserted here. */
+  .dashboard-shell textarea.dash-input {
+    line-height: 1.5;
+  }
 }
 
 /* ---------- Stat cards ---------- */
@@ -959,6 +1063,17 @@ a.dash-status-pill:hover {
 }
 
 /* ---------- Buttons ---------- */
+/* ★ `.dashboard-shell` for the portal reason
+   in the header — a dialog is not inside the shell, so NONE of this applied to
+   a button in one. Two visible symptoms, both reported: the icon sat ABOVE the
+   label instead of beside it (no `inline-flex`, so the SVG and the text were
+   two block-level lines), which in turn made a button with an icon taller than
+   one without and left Cancel and Import visibly unaligned; and hovering gave
+   no pointer, because `cursor` never landed either.
+
+   `:is()` takes the specificity of its most specific argument — both are a
+   single class/attribute — so this matches the old `.dashboard-shell .dash-btn`
+   weight exactly and cannot reorder anything already overriding these rules. */
 .dashboard-shell .dash-btn {
   display: inline-flex;
   align-items: center;
@@ -973,6 +1088,19 @@ a.dash-status-pill:hover {
   border: none;
   transition: all 0.15s ease;
   white-space: nowrap;
+}
+
+/* An icon inside a button is decoration, never a separate hit target: without
+   this the SVG can be the event target and a `cursor` set on the button alone
+   still flickers. Also stops flex from squashing it when the label is long. */
+.dashboard-shell .dash-btn > svg {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.dashboard-shell .dash-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .dashboard-shell .dash-btn-primary {

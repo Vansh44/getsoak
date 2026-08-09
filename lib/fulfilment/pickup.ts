@@ -35,6 +35,10 @@ import {
 import { formatAddressLine } from "@/lib/locations/address";
 import { effectivePlan } from "@/lib/plans";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import {
+  normalizePickupPayment,
+  type PickupPaymentPolicy,
+} from "@/lib/fulfilment/payment-policy";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { releaseHold } from "@/lib/inventory/reservations";
 import { recordEvent } from "@/lib/notifications/record";
@@ -57,6 +61,23 @@ export async function pickupEnabled(): Promise<boolean> {
     return settings["fulfilment.offerPickup"] === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * The merchant's collection-payment policy (roadmap Step 1.2).
+ *
+ * Fails to `customer_choice` on a settings read error, matching `pickupEnabled`
+ * beside it: a hiccup must not silently impose a stricter policy than the
+ * merchant set, and it must never stop a store selling (invariant 6).
+ */
+export async function pickupPaymentPolicy(): Promise<PickupPaymentPolicy> {
+  try {
+    return normalizePickupPayment(
+      (await getStoreSettings())["fulfilment.pickupPayment"],
+    );
+  } catch {
+    return "customer_choice";
   }
 }
 

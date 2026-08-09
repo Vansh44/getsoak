@@ -28,7 +28,15 @@ vi.mock("@/lib/observability/logger", () => ({
 }));
 vi.mock("./provider", () => ({ getPlatformRazorpayCreds: vi.fn() }));
 vi.mock("./razorpay", () => ({ rzpCreatePlan: vi.fn() }));
-vi.mock("@/lib/plans/pricing", () => ({ getPlanPricingLive: vi.fn() }));
+vi.mock("@/lib/plans/pricing", () => ({
+  getPlanPricingLive: vi.fn(),
+  // The operator-set add-on price (plans_05). Defaulted to the catalog values
+  // so every existing assertion in this file keeps its arithmetic.
+  getExtraLocationPricingLive: vi.fn(async () => ({
+    monthlyInr: 1000,
+    yearlyInr: 10000,
+  })),
+}));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 vi.mock("@/lib/db/client", () => ({
@@ -40,6 +48,7 @@ import { rzpCreatePlan } from "./razorpay";
 import { getPlanPricingLive } from "@/lib/plans/pricing";
 import { logError } from "@/lib/observability/logger";
 import {
+  MANDATE_LOCATION_ALLOWANCE,
   amountForRzpPlan,
   mandateMaxPaise,
   planAmountPaise,
@@ -137,12 +146,17 @@ describe("totalCyclesFor", () => {
 // ---------------------------------------------------------------------------
 
 describe("mandateMaxPaise", () => {
-  it("★ authorises DOUBLE the top yearly price", async () => {
+  // Room for metered locations, on top of the doubled plan price: their cost is
+  // folded into the subscription AMOUNT, so a shop bought two years from now is
+  // charged against the ceiling authorised today.
+  const LOCATION_ROOM = MANDATE_LOCATION_ALLOWANCE * 1_000_000; // ₹10,000/yr each
+
+  it("★ authorises DOUBLE the top yearly price, plus room for locations", async () => {
     // A mandate ceiling is fixed when authorised and can only be raised by
     // re-authorising. Pinning it to today's top price means the next price
     // rise locks existing subscribers out of upgrading, with "cancel and
     // subscribe again" as the only route. A ceiling is not a charge.
-    expect(await mandateMaxPaise()).toBe(4000000 * 2);
+    expect(await mandateMaxPaise()).toBe(4000000 * 2 + LOCATION_ROOM);
   });
 
   it("moves with a reprice", async () => {
@@ -150,7 +164,15 @@ describe("mandateMaxPaise", () => {
       ...PRICING,
       pro: { monthlyInr: 5000, yearlyInr: 60000 },
     } as any);
-    expect(await mandateMaxPaise()).toBe(6000000 * 2);
+    expect(await mandateMaxPaise()).toBe(6000000 * 2 + LOCATION_ROOM);
+  });
+
+  // ★ The allowance is well below MAX_EXTRA_LOCATIONS (50) on purpose: this
+  // number is shown to the merchant on the mandate screen, and quoting a ₹6
+  // lakh ceiling for a ₹5,000/month plan loses the signup. The 11th location
+  // gets an explicit "re-authorise" rather than a debit that fails weeks later.
+  it("★ does not authorise the absolute maximum number of locations", () => {
+    expect(MANDATE_LOCATION_ALLOWANCE).toBeLessThan(50);
   });
 });
 
@@ -246,7 +268,75 @@ describe("resolveRazorpayPlanId", () => {
     expect(logError).toHaveBeenCalledWith(
       "billing.plan_create",
       "The api key provided is invalid",
-      { plan: "pro", period: "yearly", amountPaise: 4000000 },
+      {
+        plan: "pro",
+        period: "yearly",
+        amountPaise: 4000000,
+        extraLocations: 0,
+      },
+    );
+  });
+
+  // ---- metered locations (roadmap Step 5) --------------------------------
+
+  // ★ THE WHOLE DESIGN IN ONE TEST. An extra location is a price rise on the
+  // same subscription, so it needs no new table and no second mandate: the
+  // cache is already keyed on the amount, so a different location count simply
+  // resolves to a different plan id.
+  it("★ folds extra locations into the amount", async () => {
+    vi.mocked(rzpCreatePlan).mockResolvedValue({
+      ok: true,
+      data: { id: "plan_pro_2loc" },
+    } as any);
+    // Mocked pro monthly ₹4,000 + 2 × ₹1,000 = ₹6,000
+    expect(await resolveRazorpayPlanId("pro", "monthly", 2)).toEqual({
+      rzpPlanId: "plan_pro_2loc",
+      amountPaise: 600_000,
+    });
+  });
+
+  it("★ prices locations at the YEARLY rate on a yearly subscription", async () => {
+    vi.mocked(rzpCreatePlan).mockResolvedValue({
+      ok: true,
+      data: { id: "plan_yr" },
+    } as any);
+    // ₹40,000 (the mocked pro yearly) + 1 × ₹10,000. Charging the monthly
+    // ₹1,000 against a yearly cycle would sell a shop for a tenth of its price.
+    const res = await resolveRazorpayPlanId("pro", "yearly", 1);
+    expect(res?.amountPaise).toBe(4_000_000 + 1_000_000);
+  });
+
+  it("defaults to no locations, so every existing caller is unchanged", async () => {
+    vi.mocked(rzpCreatePlan).mockResolvedValue({
+      ok: true,
+      data: { id: "plan_plain" },
+    } as any);
+    const withArg = await resolveRazorpayPlanId("pro", "monthly", 0);
+    const without = await resolveRazorpayPlanId("pro", "monthly");
+    expect(without).toEqual(withArg);
+    expect(without?.amountPaise).toBe(400_000);
+  });
+
+  // The count reaches Razorpay ONLY as an amount, so the name is the only place
+  // a human reading an invoice can see what the extra ₹2,000 is for.
+  it("names the location count in the plan", async () => {
+    vi.mocked(rzpCreatePlan).mockResolvedValue({
+      ok: true,
+      data: { id: "p" },
+    } as any);
+    await resolveRazorpayPlanId("pro", "monthly", 2);
+    expect(rzpCreatePlan).toHaveBeenCalledWith(
+      CREDS,
+      expect.objectContaining({
+        name: "StoreMink Pro (monthly) + 2 locations",
+      }),
+    );
+
+    vi.mocked(rzpCreatePlan).mockClear();
+    await resolveRazorpayPlanId("pro", "monthly", 1);
+    expect(rzpCreatePlan).toHaveBeenCalledWith(
+      CREDS,
+      expect.objectContaining({ name: "StoreMink Pro (monthly) + 1 location" }),
     );
   });
 

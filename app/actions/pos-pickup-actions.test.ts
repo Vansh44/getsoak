@@ -43,7 +43,11 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { commitHold } from "@/lib/inventory/reservations";
 import { currentShiftIdFor } from "./pos-shift-actions";
-import { getPickupQueue, markCollected } from "./pos-pickup-actions";
+import {
+  getPickupQueue,
+  markCollected,
+  markReadyForPickup,
+} from "./pos-pickup-actions";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -372,5 +376,60 @@ describe("getPickupQueue", () => {
     const res = await getPickupQueue();
     expect(res.error).toMatch(/signed in/i);
     expect(res.orders).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Who may mark an order ready (roadmap Step 3)
+//
+// ★ THE SPLIT IS THE POINT. Marking ready is what tells a customer to travel,
+// so it belongs to someone who has actually seen the box. Handing over stays a
+// cashier's job — they are the one standing in front of the customer.
+//
+// Safe to tighten because no store had pickup enabled when this shipped, so
+// there was no live behaviour to take away (invariant 1).
+// ---------------------------------------------------------------------------
+
+const MANAGER = { ...CASHIER, role: "manager" as const, name: "Asha" };
+
+describe("markReadyForPickup — the capability split", () => {
+  it("★ refuses a cashier", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+    dbHolder.current = makeDbMock({ returning: CLAIMED });
+    const res = await markReadyForPickup("ord-1");
+    expect(res.error).toMatch(/only a manager/i);
+    // Nothing moved, and nobody was told a box was waiting for them.
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("allows a manager", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
+    dbHolder.current = makeDbMock({ returning: CLAIMED });
+    const res = await markReadyForPickup("ord-1");
+    expect(res.success).toBe(true);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "order.ready_for_pickup" }),
+    );
+  });
+
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    expect((await markReadyForPickup("ord-1")).error).toMatch(/signed in/i);
+  });
+
+  // ★ HANDING OVER IS STILL A CASHIER'S JOB. Tightening mark-ready must not
+  // quietly tighten this too — that would stop a shop serving customers.
+  it("★ leaves markCollected open to a cashier", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [{ total: 0, payment_method: "razorpay", payment_status: "paid" }],
+      ],
+      returning: CLAIMED,
+    });
+    const res = await markCollected("ord-1");
+    expect(res.error).toBeUndefined();
+    expect(res.success).toBe(true);
   });
 });

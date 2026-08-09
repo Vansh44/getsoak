@@ -405,29 +405,28 @@ export const SECTIONS: DashboardSection[] = [
     parent: "settings",
   },
   {
+    // ★ THE KEY STAYS `activity` THOUGH THE LABEL IS NOW "Logs". Roles store
+    // this key, so renaming it would silently revoke every grant already saved
+    // — the reason `navigation` kept its key when it folded into the builder.
     key: "activity",
-    label: "Activity logs",
-    href: "/dashboard/activity",
+    label: "Logs",
+    href: "/dashboard/logs",
     icon: "activity",
     group: "Settings",
     actions: ["view"],
-    parent: "settings",
-    // Two logs, one permission: "what happened" and "what we sent about it".
-    // They answer different questions but they're the same class of data, so
-    // splitting them into separate permission sections would only give an owner
-    // a distinction they don't want to think about.
-    children: [
-      {
-        label: "Activity",
-        href: "/dashboard/activity",
-        icon: "activity",
-      },
-      {
-        label: "Email logs",
-        href: "/dashboard/activity/email-logs",
-        icon: "mail",
-      },
-    ],
+    // ★ NO `children`, DELIBERATELY. It used to carry one per log type, which
+    // became two competing navigations for the same destinations once the hub
+    // grew its own rail (app/dashboard/logs/logs-rail.tsx). The sidebar
+    // links to the hub; the rail moves between logs.
+    //
+    // Every log stays on ONE permission: "what happened", "what we sent",
+    // "what that import changed" and "what failed" answer different questions
+    // but are the same class of data, and splitting them would only give an
+    // owner a distinction they don't want to think about.
+    //
+    // ⚠ `parent` is also gone, so Logs is a top-level entry rather than a
+    // third level under Settings. Five log types buried two levels deep is
+    // what made them hard to find.
   },
 ];
 

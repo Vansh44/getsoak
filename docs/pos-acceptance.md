@@ -52,6 +52,83 @@ Fresh Pro store with one location and POS off.
 **Expect:** no Locations entry in the sidebar. It appears once the store has 2+
 locations or POS is on.
 
+### Metered extra locations (roadmap Step 5)
+
+⚠ These move real money on the platform's Razorpay account. Run them against a
+**test-mode** account first; PS-1.9 in particular cannot be undone by clicking.
+
+**PS-1.5 — At the included cap, the merchant is offered a location, not a wall**
+Pro store with 2 locations, autopay active. Open `/dashboard/locations`.
+**Expect:** "2 of 2 locations used", and an **Add a location · ₹1,000/month**
+button. **Was:** "additional locations are ₹1,000/mo (coming soon)" and a
+disabled button — the only item on the roadmap actively refusing money.
+
+**PS-1.6 ★ — Buying charges now and lifts the cap in the same breath**
+Press it and confirm.
+**Expect:** the toast says you'll be charged the difference for the rest of the
+cycle; the card reads "2 of 3"; **Add location** is enabled; the Razorpay
+subscription moves to a plan at ₹5,000 + ₹1,000. Create the third location — it
+saves. A merchant charged for a location the cap still refuses is the failure
+this whole step exists to avoid.
+
+**PS-1.7 ★ — Releasing waits for the cycle end**
+With 3 locations paid for and only 2 in use, press **Release 1 unused**.
+**Expect:** "You keep them until the end of this billing cycle. Nothing is
+charged today." No refund is issued — that is deliberate (Step 2's rule: nobody
+loses money, they keep what they bought until it runs out).
+
+**PS-1.8 ★ — You cannot stop paying for a shop you are using**
+With 3 locations, all 3 in use, try to release one.
+**Expect:** refused — "You're using 1 extra location. Delete or deactivate it
+before you stop paying for it." Refused, not silently clamped: a clamp leaves
+them paying for a release they believed went through, and they find out on their
+card.
+
+**PS-1.9 ★★ — A plan change keeps billing for the shops they keep**
+On a store paying for 1 extra location, switch monthly → yearly.
+**Expect:** the new subscription amount is ₹50,000 + ₹10,000, not ₹50,000. The
+location is priced at the YEARLY rate. **Watch for:** dropping to the bare plan
+price while the merchant keeps every shop — a revenue leak invisible from both
+sides, and the reason `changePlan` threads the count through.
+
+**PS-1.10 — A comped Pro store is told why, not shown a broken button**
+Operator-comp a store to Pro (no Razorpay mandate). Open Locations.
+**Expect:** "Extra locations are billed through your subscription. Set up
+autopay to add more shops." No buy button.
+
+**PS-1.11 ★ — The cap is server-side**
+Call `createLocation` directly while at the allowance.
+**Expect:** refused. A count the client could name would be a free location
+(invariant 5 — a disabled control is not a permission).
+
+**PS-1.13 ★ — The price comes from the operator console, not the code**
+As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There
+is an **Extra POS location** row with Charged/month and Charged/year (the "Was"
+columns show `—`: the add-on has no pricing card, so a strike-through has
+nowhere to render). Set it to ₹1,500/month and save.
+**Expect:** `/dashboard/locations` on a Pro store immediately offers "Add a
+location · ₹1,500/month", and buying one charges ₹1,500. Nothing needs a deploy.
+
+**PS-1.14 ★★ — Repricing never touches a live subscription**
+With a merchant already paying for one extra location at ₹1,000, change the
+console price to ₹1,500.
+**Expect:** their subscription still bills the old amount. `razorpay_plans` is
+keyed on (plan, period, amount), so a new price mints a NEW Razorpay plan and
+grandfathers everyone already on the old one — the same rule tier repricing
+follows. They move to the new price only when they next change something.
+
+**PS-1.15 ★ — The add-on never becomes a pricing card**
+After setting a price, open the public pricing page.
+**Expect:** three plan cards, exactly as before. `resolvePricing` keys off
+`PLAN_IDS` and ignores this row — widening it to accept arbitrary keys is the
+change that would put "Extra location" on the page as a plan someone could try
+to sign up to.
+
+**PS-1.12 — Downgrading never deletes a shop**
+Store with 4 locations (2 paid) → downgrade to Basic.
+**Expect:** all 4 locations still exist and POS stops working. No new ones can
+be created. Soft-on-downgrade, invariant 1.
+
 ---
 
 ## 2. Locations & capabilities
@@ -276,6 +353,26 @@ Set `pos.idleLockMinutes` to 1 (its minimum) and leave the till.
 capped at half the window, so a short setting doesn't put it on screen
 permanently.
 
+**PS-6.13 ★★ — EVERY screen locks, not just the two that asked**
+Set `pos.idleLockMinutes` to 1. As a cashier, go to each of `/pos`,
+`/pos/sell`, `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups`
+and `/pos/sales` in turn and leave the till alone on each.
+**Expect:** all seven warn and then lock to `/pos/login`.
+**Was:** only `/pos` and `/pos/sell` locked. The other five never did — so the
+till sat unlocked indefinitely on the screens that issue refunds, adjust stock
+and move cash, which are the ones where walking away costs most.
+
+**PS-6.14 — One timer, not two**
+On `/pos` and `/pos/sell` (the two that used to mount their own), let the
+warning appear.
+**Expect:** exactly ONE amber banner, and one lock. Two mounts would run two
+countdowns and fire two `posLock()` calls.
+
+**PS-6.15 — The login screen doesn't lock itself**
+Sit on `/pos/login`, `/pos/register` and `/pos/reset` past the idle window.
+**Expect:** nothing happens. No operator means nothing to lock, and a timer
+redirecting to the login page FROM the login page is a loop.
+
 ---
 
 ## 7. The register (`/pos/sell`)
@@ -393,7 +490,7 @@ it, and a failed read degrades to everything rather than an empty screen.
 
 **PS-7.13 ★ — A register sale emits like a sale**
 Complete a sale that empties a SKU.
-**Expect:** an entry in `/dashboard/activity`, the team notification fires, and
+**Expect:** an entry in `/dashboard/logs`, the team notification fires, and
 the low/out-of-stock alert fires. An in-store sale is a sale.
 
 **PS-7.14 ★ — Cancelling a POS sale restocks at ITS OWN shop**
@@ -448,6 +545,205 @@ out of the way whenever an editable element has focus.
 Open "Add customer" (or the tender panel) and type.
 **Expect:** the field keeps focus. The register never pulls focus back to the
 scan box while an overlay owns the screen.
+
+**PS-7.24 ★★ — A 0% discount cap means ZERO, not the default**
+Turn OFF `pos.ownerOnlyDiscounts`, turn ON
+`pos.requireManagerForDiscount`, and set `pos.maxDiscountPercent` to **0** (the
+registry allows it: `min: 0`). As a cashier, ring a ₹100 sale and apply a ₹5
+discount.
+**Expect:** "A manager's PIN is needed to approve this (over 0%)." A cap of 0
+is the merchant saying a cashier may discount NOTHING unaided.
+**Was:** allowed. The cap was read as `Number(…) || 10`, so a deliberate 0
+became the 10% default and handed cashiers exactly the authority the merchant
+had withheld — the strictest setting behaving as the most permissive.
+
+Then ring the same ₹100 sale with **no** discount.
+**Expect:** it goes through. A 0 cap must not become "refuse everything".
+
+---
+
+## 7b. Checkout payment defaults & collection payment policy
+
+Roadmap Step 1. ⚠ PS-C.3 and PS-C.4 change what shoppers are charged — run them
+against a store whose Razorpay is in **test mode**.
+
+**PS-C.1 ★★ — A gateway-connected store defaults to ONLINE**
+Connect Razorpay in Channels, then open `/checkout` with items in the cart.
+**Expect:** "Pay online" is pre-selected.
+**Was:** Cash on Delivery, always — `useState("cod")` was hardcoded and nothing
+reconciled it with the gateway config. Every merchant who connected a gateway
+watched shoppers land on the option that costs them a courier round trip.
+
+**PS-C.2 ★ — It never overrides a choice the shopper made**
+Open `/checkout` and tap **Cash on Delivery** immediately, before the page
+settles.
+**Expect:** it stays on COD. The config and pickup policy both arrive after
+first paint, and a default re-applied on their arrival would yank the selection
+out from under someone mid-tap.
+
+**PS-C.3 — Prepaid collections**
+Locations → Online fulfilment → set **Payment for collection orders** to "Pay
+online only". At checkout, switch to Pickup.
+**Expect:** only "Pay online" is offered, with a line saying this store takes
+payment for collection orders when they are placed. COD/pay-at-store is gone.
+
+**PS-C.4 — Pay at the counter only**
+Set it to "Pay at the counter only" and switch to Pickup.
+**Expect:** only the counter option is offered, even though Razorpay is
+connected.
+
+**PS-C.5 ★ — Delivery is untouched by the collection policy**
+With either policy set, switch back to Delivery.
+**Expect:** both options are offered again. A policy about collections says
+nothing about courier orders, and silently switching COD off for them would be a
+policy the merchant never set.
+
+**PS-C.6 ★★ — The policy is enforced server-side**
+With the store on "Pay online only", call `placeOrder` directly with
+`paymentMethod: "pay_at_store"` and a pickup location.
+**Expect:** refused — "That payment method isn't available for collection orders
+at this store." A control the UI hides is not a permission (invariant 5);
+without this the goods are held and nobody ever owes anything.
+
+**PS-C.7 ★ — "Pay online only" needs a gateway**
+On a store with no Razorpay connected, try to set the policy to "Pay online
+only".
+**Expect:** refused at save — "Connect a payment gateway in Channels before
+requiring collection orders to be paid online." Otherwise pickup becomes
+unorderable and it is a shopper who discovers it.
+
+**PS-C.8 — A retired policy value falls back**
+Hand-edit `stores.settings.features["fulfilment.pickupPayment"]` to `"nonsense"`.
+**Expect:** checkout behaves as "Let the customer choose". A stricter policy
+nobody chose must never be imposed by a typo (invariant 6).
+
+---
+
+## 7c. Cancellation & refund flow (roadmap Step 2)
+
+⚠ Needs `supabase/orders_01_cancellation.sql` applied. PS-D.6–D.9 move real
+money — use a **test-mode** gateway.
+
+**PS-D.1 — The merchant sets the rules**
+Orders → Settings. Turn **Let customers cancel their own orders** on.
+**Expect:** a **Cancellation window** select (No cancellations / Until fulfilled
+/ 1 hour / 24 hours / Custom hours) and a **Cancellation approval** select,
+defaulting to **Require my approval**.
+
+**PS-D.2 — Asking is not cancelling**
+As a customer, open a pending order → **Cancel order** → confirm.
+**Expect:** the panel says it cancels **the entire order** and that the store
+reviews it. After submitting: "Cancellation request submitted." **The order is
+still active** — status unchanged, stock not returned, no money moved.
+**Was:** it cancelled outright the moment the button was pressed.
+
+**PS-D.3 ★ — One request, and a decline sticks**
+Submit a second request on the same order.
+**Expect:** refused ("already asked"). Have the merchant decline it, then try
+again: refused, quoting the decline. A decline that can be reopened by asking
+again means nothing.
+
+**PS-D.4 ★ — The window is enforced server-side**
+Set the window to 1 hour. On an order placed two hours ago, call `cancelMyOrder`
+directly.
+**Expect:** refused — "within 1 hour". A window enforced only in the browser is
+not enforced (invariant 5).
+
+**PS-D.5 ★ — "Until fulfilled" is not a duration**
+Set the window to **Until fulfilled**. Request cancellation on an order placed
+three months ago that nobody has fulfilled.
+**Expect:** accepted. Then mark an order shipped and try: refused, and pointed
+at returns.
+
+**PS-D.6 — Approving cancels the whole order**
+Orders → Cancellations → **Approve & cancel**. Choose a refund destination, a
+reason, leave Restock and Notify ON, add a staff note.
+**Expect:** order cancelled, stock returned, customer notified. The staff note
+appears **nowhere** the customer can see.
+
+**PS-D.7 — Refund to store credit uses the existing balance**
+Approve with **Store credit** on a ₹2,000 paid order.
+**Expect:** ₹2,000 on the customer's balance, AND an `order_refunds` row — the
+refund goes through `issueRefund`, not a separate credit path, so the order's
+refund cap and payment status stay correct.
+
+**PS-D.8 ★★ — A failed refund is never reported as success**
+Break the gateway (wrong key) and approve with **Original payment method**.
+**Expect:** "Order cancelled, but the refund failed: …". The order IS cancelled
+— that claim already committed — but nobody is told they were refunded when
+they were not.
+
+**PS-D.9 ★★ — An unknown gateway answer is not a failure**
+Force a timeout on the refund call.
+**Expect:** "the refund is in flight — don't send it again." NOT an error.
+Reporting this as failed is how a customer gets paid twice (CODEBASE §26).
+
+**PS-D.10 — Declining requires a reason, and the customer reads it**
+Decline a request with the reason box empty.
+**Expect:** refused. With a reason: the order stays **active** and the customer
+is notified with those exact words.
+
+**PS-D.11 — Automatic approval, off by default**
+Confirm a request waits by default. Switch approval to **Approve
+automatically**, then request again.
+**Expect:** the order cancels immediately. **Watch for:** it must still restock
+and notify.
+
+**PS-D.12 ★ — Only honourable refund destinations are offered**
+Open a request for a COD order.
+**Expect:** no "Original payment method" option. For a walk-in with no account:
+no "Store credit". A control that always fails is worse than no control.
+
+**PS-D.13 — Nothing is item-level**
+Look at every screen in this flow.
+**Expect:** no per-item cancel, approve, decline or refund anywhere. Whole-order
+only, by design — it needs partial fulfilment, which this system does not have.
+
+---
+
+## 7d. Collection codes & the role split (roadmap Step 3)
+
+⚠ Needs `supabase/locations_11_pickup_code.sql` applied.
+
+**PS-E.1 — A collection gets a code; a delivery does not**
+Place a pickup order, then a delivery order.
+**Expect:** the pickup confirmation email shows a code like `PK0M-3T9V` **as
+text**, and links to a collection page. The delivery email has neither.
+
+**PS-E.2 ★★ — The email must never rely on the QR**
+Open the pickup confirmation in Gmail with images blocked (the default).
+**Expect:** the code is fully readable. This is why it is text — an emailed QR
+is a broken-image icon on the one screen a customer holds up at the counter.
+
+**PS-E.3 — The collection page**
+Follow the link.
+**Expect:** a QR, the code in large monospace beneath it, the shop name and
+address, and the collect-by date. Signed out or as another customer: 404.
+
+**PS-E.4 ★ — Misreading the code still works**
+At the till, type the code with `O` for `0` and `I` for `1`, in lowercase, with
+the hyphen.
+**Expect:** it resolves. The alphabet excludes the confusable characters and the
+normaliser folds them back — "not found" with a queue waiting is the failure
+this prevents.
+
+**PS-E.5 ★ — A code from another shop names that shop**
+Scan a code belonging to a sister branch.
+**Expect:** "That order is waiting at Bandra." Not "not found" — the customer is
+standing there and needs to know where to go.
+
+**PS-E.6 ★★ — Manager marks ready, cashier hands over**
+As a **cashier**, try to mark a collection ready.
+**Expect:** refused — "Only a manager can mark a collection order ready."
+Nothing moves, and no "your order is ready" email goes out.
+As a **manager**: it works, and the ready email carries the code.
+Then as a **cashier**, hand it over: that still works. Tightening the wrong one
+would stop a shop serving customers.
+
+**PS-E.7 — Pickup alerts reach the right shop**
+On a store with two locations, place a pickup order at one of them.
+**Expect:** managers at THAT shop are notified. **Watch for:** ordinary delivery
+orders must still reach everyone — `order.placed` is deliberately not narrowed.
 
 ---
 
@@ -895,7 +1191,7 @@ Switch customer cancellations OFF, then call `cancelMyOrder` directly.
 **Expect:** refused. A hidden button is not a permission.
 
 **PS-12.12 — The team hears about it**
-**Expect:** an `order.refund_issued` entry in `/dashboard/activity` and the
+**Expect:** an `order.refund_issued` entry in `/dashboard/logs` and the
 customer notified — the same event the till emits.
 
 ## 10d. Returns requested online (CODEBASE §28)
@@ -1239,16 +1535,18 @@ Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                                | Status                                                                                                                                                                                             |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay |
-| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                       |
-| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                      |
-| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                              |
-| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections   |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                      |
-| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                             |
-| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery        |
-| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                            |
-| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                        |
-| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                        |
+| Gap                                                                | Status                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                   |
+| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                         |
+| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                        |
+| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                |
+| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                     |
+| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second |
+| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                               |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
+| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
+| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
+| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
+| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |

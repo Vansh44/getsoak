@@ -42,6 +42,13 @@ export default async function PlatformDashboardLayout({
       group: "WORKSPACE" as SectionGroup,
       items: [
         { href: "/dashboard", label: "Stores", icon: "dashboard" as const },
+        {
+          // Cross-store failures. Workspace rather than Administration: it is
+          // something an operator watches, not something they configure.
+          href: "/dashboard/failures",
+          label: "Failures",
+          icon: "activity" as const,
+        },
       ],
     },
     {
@@ -63,7 +70,9 @@ export default async function PlatformDashboardLayout({
 
   return (
     <div
-      className={`dashboard-shell ${dashFont.variable} ${dashMono.variable} flex flex-col`}
+      // See app/dashboard/layout.tsx: `dashboard-shell` is the token/component
+      // scope, `dashboard-frame` is the 100vh page frame.
+      className={`dashboard-shell dashboard-frame ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
       <MobileNavProvider>
         <DashboardTopbar

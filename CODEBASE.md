@@ -99,7 +99,7 @@ wholesip/
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
-│                              # and daily seo-refresh (docs/cron-jobs.md)
+│                              # daily seo-refresh and prune-logs (docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -276,9 +276,17 @@ wholesip/
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
-│   │   ├── activity/          # ★ Activity & audit trail (§22): the store's
-│   │   │                      # activity_events feed — filters by category/date,
-│   │   │                      # day-grouped. Fills the long-dead `activity` nav link
+│   │   ├── activity/          # ★ THE LOGS HUB (§33). layout.tsx + logs-rail.tsx
+│   │   │                      # give every log one left rail (log-types.ts is the
+│   │   │                      # registry); the sidebar has NO children anymore, or
+│   │   │                      # there'd be two navigations for the same five pages.
+│   │   │                      # page.tsx = activity_events audit feed (§22, day-
+│   │   │                      # grouped); email-logs/ = what was SENT (§24);
+│   │   │                      # ★ import-export/ = CSV job history + [jobId] per-ROW
+│   │   │                      # error log (§31), split into Import/Export by ?kind=;
+│   │   │                      # ★ failures/ = everything that DIDN'T work, read
+│   │   │                      # across the other tables (§33). FIVE logs, ONE
+│   │   │                      # `activity` permission
 │   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
@@ -295,6 +303,8 @@ wholesip/
 │   │   │                      # route), phone via signInWithPhoneNumber.
 │   │   ├── login/             # Platform-operator login — Firebase email-LINK sign-in
 │   │   └── dashboard/         # Platform-admin console: stores-console, operators-console
+│   │                          # + ★ failures/ = the SAME feed as a store's, scoped
+│   │                          # { kind: "platform" } across every store (§33)
 │   │                          # (guarded by supabase/multitenant_07_platform_admins.sql)
 │   │                          # (the OAuth callback route was removed in Phase 6 —
 │   │                          # Google now uses signInWithPopup)
@@ -354,6 +364,12 @@ wholesip/
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
 │   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
 │   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── import-export-actions.ts # ★ §31 CSV import trust boundary: previewImport
+│   │   │                      # (which match keys exist — all the browser can't know),
+│   │   │                      # startImport → importChunk × N → finishImport, plus the
+│   │   │                      # log readers. Chunked (body cap + request timeout),
+│   │   │                      # re-parses every chunk server-side, row-atomic. Gated on
+│   │   │                      # the RESOURCE's own section, never a key of its own. Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
 │   │   │                      # getMyOrders/getMyOrder. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
@@ -393,6 +409,16 @@ wholesip/
 │       │                      # someone watches the settings page for ~30 minutes.
 │       │                      # 200 even while waiting — the usual "failure" is a
 │       │                      # merchant who hasn't added their DNS records yet
+│       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
+│       │                      # lib/retention/prune.ts. notifications 90d,
+│       │                      # activity_events 365d, email_logs 90d — windows
+│       │                      # that were documented for months and enforced by
+│       │                      # nothing. 503 on a failed table (seo-refresh
+│       │                      # contract), 200 while a backlog drains
+│       ├── dashboard/export/  # ★ §31 CSV export — a ROUTE, not an action, so it
+│       │                      # STREAMS (keyset-paged, one page in memory) with
+│       │                      # Content-Disposition. ?template=1 = blank template.
+│       │                      # Gated on `view` of the resource's own section
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -404,6 +430,22 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
+│   │                          # quoted fields w/ embedded delimiters+newlines, quote-
+│   │                          # aware delimiter sniffing for Excel's semicolons, ragged
+│   │                          # rows, ORIGINAL-file line numbers) + serialize.ts
+│   │                          # (guardFormula — CSV injection, exempting plain numbers
+│   │                          # so the round trip survives). Shared by browser + server
+│   ├── import-export/         # ★ §31 THE REGISTRY: resources.ts (products/categories/
+│   │                          # inventory/orders/coupons + their columns, aliases,
+│   │                          # toCells), coerce.ts (one cell → one typed value; ISO
+│   │                          # dates only), parse.ts (header mapping + Shopify handle
+│   │                          # grouping), types.ts, limits.ts (in lib/ because a
+│   │                          # "use server" file may only export async functions),
+│   │                          # exporters.ts (async generators, keyset-paged),
+│   │                          # jobs.ts (server-only job + ISSUE_CAP'd error log),
+│   │                          # importers/{categories,products,inventory,coupons}.ts
+│   │                          # (row-atomic, never throw, one outcome per row). Tested
 │   ├── domains/               # ★ §30 custom domains: domain.ts (PURE validation +
 │   │                          # normalisation + zone-relative record names),
 │   │                          # naming.ts (deterministic Certificate Manager ids +
@@ -424,6 +466,19 @@ wholesip/
 │   │                          # remainder gap below the gateway minimum) +
 │   │                          # store-credit.ts (the ONE way credit moves —
 │   │                          # issue/spend/reinstate, all via the RPCs)
+│   ├── fulfilment/            # ★ §23: resolve.ts (which location serves an online
+│   │                          # order) + strategies.ts (the routing REGISTRY) +
+│   │                          # pickup.ts (is pickup on, hold/ready days, the
+│   │                          # collection-payment policy reader) +
+│   │                          # ★ payment-policy.ts (PURE: which payment methods
+│   │                          # checkout may offer, and whether the one that came
+│   │                          # back is allowed — ONE rule asked by both the picker
+│   │                          # and placeOrder, so the UI can never offer what the
+│   │                          # server refuses. ⚠ NOT lib/pos/pickup-payment.ts,
+│   │                          # which answers a different question: what a
+│   │                          # collection still OWES at the counter. Renamed off
+│   │                          # that basename precisely so the two can't be
+│   │                          # imported for each other)
 │   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
 │   │                          # refundRouteFor: the TENDER decides where money goes,
 │   │                          # and a sale rung HERE is always returnable here),
@@ -460,6 +515,23 @@ wholesip/
 │   │                          # {{token}} copy, validated at save). Tested,
 │   │                          # incl. coverage.test.ts — the CI guard that FAILS
 │   │                          # if a registry event has no emitter anywhere.
+│   ├── logs/                  # ★ §33: the Failures feed. failure-types.ts is the
+│   │                          # CLIENT-safe half (shapes + FAILURE_SOURCE_META for
+│   │                          # the filter chips); failures.ts is the server half —
+│   │                          # FAILURE_SOURCES, one entry per table it reads. The
+│   │                          # split is load-bearing: failures.ts imports the db
+│   │                          # client, so a client component importing it drags
+│   │                          # `pg` (and `fs`) into the browser bundle and FAILS
+│   │                          # the build. Same rule as themes/meta.ts. Tested,
+│   │                          # incl. a guard that the two catalogs stay in step
+│   ├── retention/             # ★ §32: prune.ts — the log-retention sweep.
+│   │                          # RETENTION_POLICIES is the registry (add a table
+│   │                          # = add an entry); batches are 1000 rows, EACH ITS
+│   │                          # OWN withService transaction. NOT a "use server"
+│   │                          # file, deliberately — the version that lived in
+│   │                          # app/actions was an ungated public endpoint that
+│   │                          # could wipe the audit trail. Tested (the stopping
+│   │                          # rules; deleteBatch is injected)
 │   ├── inventory/             # status.ts (the display-status source of truth, §13)
 │   │                          # + ★ alerts.ts (§22: stockAlertFor — the pure
 │   │                          # crossing rule behind inventory.low_stock/
@@ -675,6 +747,18 @@ wholesip/
 │   ├── email_logs.sql         # ★ §22 Email Logs: every message sent, per store
 │   │                          # (platform rows = store_id NULL). Service-role
 │   │                          # only; bodies redacted for credential mailers
+│   ├── import_export_01_jobs.sql # ★ §31: data_jobs (one row per CSV import or
+│   │                          # export; `partial` is a real status) + data_job_issues
+│   │                          # (one row per PROBLEM, carrying the ORIGINAL file
+│   │                          # line — the error log). Service-role only, the
+│   │                          # email_logs pattern: the rows quote raw cells, which
+│   │                          # for an orders export means customer addresses
+│   ├── import_export_02_background.sql # ★ §31: what makes an import a REAL
+│   │                          # background job — data_jobs.cursor/lease_until/
+│   │                          # attempts + data_job_payloads (the uploaded file,
+│   │                          # in Postgres NOT the public media bucket). Its own
+│   │                          # file because _01 is a CREATE TABLE IF NOT EXISTS
+│   │                          # that prod has already run (§15b)
 │   ├── notifications_07_routing_scope.sql # ★ notification_settings.routing_scope
 │   │                          # — 'store' (default) | 'event_location'
 │   ├── notifications_05_suppressions.sql # ★ §22 delivery: email_suppressions
@@ -813,6 +897,37 @@ wholesip/
 6. **Styling**: Tailwind v4 + CSS modules for scoped styles + a few plain `.css`
    files per area (`dashboard.css`, `storefront-theme.css`, `platform.css`).
    Per-store theming = CSS variables injected by `brand-provider.tsx`.
+   - **★★ `.dashboard-shell` IS A SCOPE; `.dashboard-frame` IS THE PAGE.** The
+     scope class carries the `--dash-*` tokens and every `.dash-*` component
+     rule. The frame class carries the things only a whole-page wrapper should
+     have — `height: 100vh`, `overflow: hidden`, the page background — and is
+     applied ALONGSIDE the scope in `app/dashboard/layout.tsx` and the platform
+     console layout. **Keep them apart.** They were one class, and that is why
+     nothing in `dashboard.css` reached a dialog: a Radix `DialogContent`
+     portals into `document.body`, outside the shell element, so every
+     `var(--dash-*)` resolved to nothing and every `.dash-*` rule failed to
+     match. Not subtle — Tailwind's `border` utility sets a width and leaves the
+     colour to `var(--dash-border)`, and an invalid custom property falls back to
+     `currentColor`, so every panel in every dashboard dialog drew a hard BLACK
+     hairline; buttons lost `inline-flex` (icons stacked above their labels) and
+     `cursor: pointer`; cards lost surface, radius and shadow. The fix is that
+     the four portalled primitives (`dialog`, `dropdown-menu`, `sheet`,
+     `select` in `components/ui/`) each wear `dashboard-shell`, which is only
+     safe because the frame no longer rides along — it was already giving the
+     notification recipient picker, which opts into the scope for its tokens, a
+     100vh height and an `overflow: hidden` that beat its own `overflow-y-auto`.
+     **Rewriting the ~414 selectors instead was the obvious move and the wrong
+     one**: it fixes dialogs only, and dropdowns/sheets/selects portal too.
+     Adding a class is safe because no rule in the file is a bare element
+     selector — they are all `.dash-*`, so scoping an overlay cannot restyle its
+     internals by accident. Keep it that way.
+   - **⚠ `dashboard.css` IS UNLAYERED, so it beats every Tailwind utility**
+     regardless of specificity (utilities live in `@layer utilities`). That is
+     fine for rules that predate the utilities at a call site, but a NEW base
+     style must go in `@layer components` or it silently defeats them — which is
+     where `.dash-input` lives, because two Razorpay credential fields pass
+     `font-mono` and the media library passes `px-2 text-xs`. `globals.css`
+     documents the same hazard from the other direction.
 7. **Next.js 16 caution**: APIs may differ from training data — check
    `node_modules/next/dist/docs/` before using unfamiliar APIs (AGENTS.md rule).
 8. **Tests**: `npm run test` (vitest, coverage). CI also runs `lint`, `typecheck`,
@@ -830,6 +945,17 @@ wholesip/
    (in the action), not just in the UI. If RLS blocks a setting-dependent write
    (e.g. customers may only insert `pending_review` blogs), do the privileged
    step with the service-role client AFTER checking the setting — see
+   **★ THREE TYPES: `boolean`, `number` and `select`.** `select` carries
+   `options` — and that list IS the validation, not a UI hint:
+   `resolveStoreSettings` refuses a stored value that is not in it and falls
+   back to the default, so a retired option stops applying the moment it is
+   removed rather than lingering in a jsonb blob nobody reads.
+   `saveStoreSettings` re-checks it server-side (invariant 5 — the dropdown is
+   not the boundary) and now validates EVERY type before writing, where it used
+   to store whatever arrived on the reasoning that the read side rejects a
+   wrong-typed value. True, but it left the stored blob full of values that do
+   nothing, which is what makes a settings bug impossible to diagnose from the
+   database. First consumer: `fulfilment.pickupPayment` (§23).
    direct-publish in `blog-actions.ts`. First consumers:
    `blogs.customerSubmissions`, `blogs.requireApproval` (rendered at
    `/dashboard/blogs/settings`) and `pages.customCode` (rendered at
@@ -1648,8 +1774,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
     An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
     SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
-    Pro-only; 2 locations included, extra locations ₹1,000/mo (billing is Phase 7,
-    v1 GATES at 2). Work on branch `pos`. **Phase 0 (done) = the inventory
+    Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered
+    billing is BUILT (Phase 7, see below); the v1 hard gate at 2 is gone**.
+    Work on branch `pos`. **Phase 0 (done) = the inventory
     location foundation, with ZERO changes to existing inventory/checkout code:**
     - **Multi-location inventory.** `store_locations` (per-store shops/warehouses;
       every store auto-gets one `is_default` "Main" location) +
@@ -1749,7 +1876,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
            per location — enforced in `registerDevice` (the choke point both
            authorization paths funnel through) and pre-checked in
            `createPairingCode` so an admin isn't handed an unusable code.
-        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`): every operator's
+        5. **Idle auto-lock** (`app/pos/idle-lock.tsx`, mounted ONCE in
+           `app/pos/layout.tsx`): every operator's
            register locks after `pos.idleLockMinutes` of inactivity (registry
            setting, default 10, edited at `/dashboard/pos/settings`) with a
            **2-minute** countdown, capped at half the idle window so a
@@ -1767,6 +1895,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
            measure, NOT an authorization boundary (a client bypass keeps the
            cookie until it expires); the server boundary remains the device gate
            - per-request `pos_staff` re-validation.
+             **★★ IT IS MOUNTED IN THE LAYOUT, AND THAT IS THE WHOLE FIX.** It was
+             per-page opt-in, and **five of the seven POS screens never opted in** —
+             `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups` and
+             `/pos/sales`. Only `/pos` and `/pos/sell` ever locked, so the till sat
+             unlocked indefinitely on the three screens where walking away costs
+             MOST: returns issues refunds, inventory adjusts stock, shift moves
+             cash. A control every new page has to remember is one the next page
+             will forget. The layout renders it for any non-exempt operator and
+             nothing for `/pos/login|register|reset` (no operator ⇒ nothing to
+             lock, and a timer that redirects to the login page FROM the login page
+             is a loop). Pinned by `app/pos/idle-lock-coverage.test.ts`, which
+             fails in BOTH directions — the layout losing it (every screen stops
+             locking) and a page re-adding its own (two timers, two banners, two
+             racing `posLock()` calls). ⚠ `resolvePosOperator` is now wrapped in
+             React `cache()` so the layout's resolve is free: `/pos/sell` was
+             already resolving the operator three or four times per render (page
+             gate + `getRegisterConfig` + `lookupProducts`), and this dedupes them
+             within the request without touching the ACROSS-request re-validation
+             that makes deactivation immediate.
       - **Device authorization is the security boundary** (a cashier must not be
         able to sell from their personal phone). A browser becomes an authorized
         POS device when the **owner** either taps "Authorize this device" while
@@ -1843,7 +1990,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
           "tidied up" into symmetry. `pairDevice` is unchanged: the code is the
           authorization, redeemed on the device by whoever holds it.
         - **The idle lock now exempts ONLY the superadmin**
-          (`isIdleLockExempt`, used by `/pos` and `/pos/sell`). Not a
+          (`isIdleLockExempt`, applied once in `app/pos/layout.tsx` — see
+          Phase 1 §5 for why it is no longer per-page). Not a
           capability — it isn't something you may DO, it's whose screen may be
           left unattended — and a delegated admin at a shared counter is the
           same walked-away-from-an-open-till risk as any operator, with a
@@ -1875,6 +2023,18 @@ group, span}` (span = columns of the 4-wide desktop grid),
           needs a manager's PIN above the cap, and for an override), which now asks
           `posCan(role, "discount_over_cap")` rather than an inline
           `role === "cashier"` that could drift from the capability table.
+          **★ A CAP OF 0 IS A REAL SETTING AND MUST SURVIVE THE FALLBACK.** The
+          cap was read as `Number(settings[…]) || 10`, which looks like a NaN
+          guard and is really a `0` eater: the registry declares `min: 0`, so 0
+          is legal and MEANS "a cashier needs approval for ANY discount" — and
+          the merchant who locked it down hardest silently got the 10% default,
+          handing cashiers exactly the authority they had withheld. It reads
+          `typeof === "number"` now, since `resolveStoreSettings` already
+          guarantees a number clamped to `[min, max]` and the fallback is only
+          for a structurally impossible value. Same rule as
+          `products.return_window_days` (§28): a real 0 is not an absent value.
+          Both directions are regression-tested — 0 must stop a 5% discount, and
+          must not refuse a sale carrying no discount at all.
       - **★ A MANAGER'S APPROVAL IS A SIGNED GRANT, NOT A CLIENT FLAG**
         (`lib/pos/approval.ts`). `verifyManagerPin` returned `{approved: true}`
         and `placePosSale` trusted an `opts.managerApproved` boolean that came
@@ -2014,7 +2174,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       - **A register sale is a SALE — it emits like one.** `placePosSale` ends
         with `emitEvent("order.placed")` + `reportStockChanges` (§22
         notifications). Without them an in-store sale wrote an `orders` row and
-        nothing else: no `/dashboard/activity` entry, no team alert, and no
+        nothing else: no `/dashboard/logs` entry, no team alert, and no
         low/out-of-stock warning even when it emptied the shelf — the one
         channel physically in front of the merchant was the one they couldn't
         see. `customerId` is null for a walk-in, which the fan-out reads as "no
@@ -2264,6 +2424,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         count and gross. It is the mirror of the two bugs `lib/pos/shifts.ts`
         already guards — double-counted change and cash refunds — which both
         reported SHORT.
+      - **★ WHO PAYS WHEN IS THE MERCHANT'S CHOICE** — `fulfilment.pickupPayment`
+        (`customer_choice` | `prepaid` | `at_store`, defaulting to the first
+        because that is today's behaviour, invariant 1). The rule lives in
+        `lib/fulfilment/payment-policy.ts`, pure and tested, and **the same
+        function answers for the picker and for `placeOrder`** — the checkout
+        screen asks it which controls to render, the server asks it whether the
+        method that came back is allowed, so the UI can never offer something
+        the server then refuses in front of a customer (the
+        `RegisterConfig.canDiscount` rule from §22, applied to the other
+        counter). Three things are load-bearing: **delivery is never touched by
+        it** (a policy about collections says nothing about courier orders);
+        **`prepaid` with no gateway offers NOTHING rather than falling back to
+        pay-at-store**, which would serve the opposite of the merchant's policy
+        — `canRequirePrepaid` refuses the setting at SAVE time so that state
+        never exists; and `placeOrder` reuses its own gateway lookup for the
+        check, which is only correct while `offline` is independent of
+        `onlineAvailable` in `paymentOptionsFor` — a property with a test
+        pinning it, because a future policy that broke it would silently start
+        refusing COD orders.
+      - **★ CHECKOUT DEFAULTS TO ONLINE WHEN A GATEWAY IS CONNECTED.** It was
+        `useState<PaymentMethod>("cod")` with nothing reconciling it against
+        `payConfig.onlinePayments`, so every merchant who connected Razorpay
+        watched shoppers land on Cash on Delivery — the option that costs them a
+        courier round trip and a collection risk, pre-selected by us. The
+        default is now derived (`defaultPaymentMethod`) and applied in an effect,
+        because the config arrives after first paint — guarded by a `payTouched`
+        ref, since an effect that re-applied it would yank the selection out from
+        under a shopper who had already tapped one. It re-applies ONLY when the
+        current choice stops being offered (switching Delivery→Pickup under a
+        prepaid policy), which would otherwise fail at `placeOrder`.
       - **★ `pay_at_store` IS NOT A TENDER, so the tender is CAPTURED, never
         assumed** (`lib/pos/pickup-payment.ts`, pure + tested). It is a promise
         recorded at checkout, and the checkout copy says exactly that — "Pay at
@@ -2310,6 +2500,52 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★ A COLLECTION CODE, AND WHY IT IS NOT THE ORDER REFERENCE**
+        (`lib/fulfilment/collection-code.ts`, pure + tested;
+        `orders.pickup_code`, locations_11). Minted at checkout for collections
+        only. It is a **LOOKUP key, not a bearer token** — access control stays
+        UUID + store scope (§14) and the counter operator is already
+        authenticated — but it is RANDOM, because `order_ref` is sequential and
+        guessable and anyone at a counter could otherwise name somebody else's
+        collection. **Crockford base32**: the alphabet drops I, L, O and U, the
+        characters people misread off a phone screen in a shop, and
+        `normalizeCollectionCode` folds those confusions back in, so a customer
+        reading "0" as "O" still finds their order.
+      - **★★ THE EMAIL LEADS WITH THE CODE, NOT THE QR.** Gmail strips `data:`
+        URIs in `<img>` and every major client blocks remote images by default,
+        so a QR embedded in email is a broken-image icon on the one screen a
+        customer holds up at the counter. The code goes out as TEXT (always
+        renders, can be read aloud) and links to `/orders/[id]/collect`, which
+        draws the QR client-side via `BrowserQRCodeSvgWriter` — already a
+        dependency for camera scanning, so no new package. That page is
+        owner-gated and `noindex`, and the code in text is never conditional on
+        the QR rendering: if the writer fails, eight characters still work.
+      - **★ PICKUP ALERTS DEFAULT TO THE SHOP THEY HAPPENED AT.**
+        `EventDef.defaultScope` lets an event pick its own routing fallback, and
+        the four pickup-specific events (`ready_for_pickup`, `collected`,
+        `pickup_expiring`, `pickup_expired`) default to `event_location`: a
+        collection is physically at one shop, so the people who can act on it
+        are the ones standing in it. **`order.placed` deliberately does NOT** —
+        it fires for every order including deliveries, so narrowing it would
+        change who hears about ordinary orders for every existing store
+        (invariant 1). A merchant's own stored choice always beats the default;
+        the fallback only applies when they have chosen nothing.
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
+        scanned collection code OR a typed order number from the same input —
+        a hardware scanner is a keyboard, and making someone pick a field first
+        is exactly the friction the code was meant to remove.
+        `isCollectionCode` is a cheap shape check, so a scanner pointed at a
+        milk carton never becomes a database lookup, and a code belonging to a
+        sister branch names THAT branch rather than returning "not found".
+      - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
+        Marking ready is what tells a customer to travel, so it belongs to
+        someone who has seen the box; handing it over is a cashier's job with
+        the customer standing there, so `markCollected` stays on `sell`.
+        Tightening this was only safe because no store had pickup enabled when
+        it shipped (owner confirmed 2026-08-09) — invariant 1 is satisfied by
+        there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
+        **no test coverage at all** before this; it does now, in both
+        directions.
       - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
         (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
         not a delivery with a different address, and these pages used one
@@ -2386,16 +2622,92 @@ group, span}` (span = columns of the 4-wide desktop grid),
         Reminders run AFTER the expiry sweep: an order that just lapsed is no
         longer awaiting collection, and telling someone to hurry and collect
         something already cancelled is worse than saying nothing.
-    - **Not yet built:** returns/store credit (Phase 5), Twilio receipts (6),
-      metered extra-location billing (7), omnichannel/BOPIS (8), offline
-      outbox (9). See `docs/pos-plan.md`.
+    - **★ METERED EXTRA LOCATIONS (Phase 7, done).** Pro includes 2; more are
+      ₹1,000/mo (₹10,000/yr) by default, and **a platform operator sets the
+      live price from the console** — `plan_prices`, key `extra_location`
+      (`supabase/plans_05_extra_location_price.sql`), edited in the same
+      Pricing panel as the tiers. `EXTRA_LOCATION_PRICE` in `lib/plans.ts` is
+      only the fallback until one is set, the way `PLAN_META` is for tiers.
+      **★ IT IS PRICED LIKE A TIER BUT IS NOT ONE.** `resolvePricing` keys off
+      `PLAN_IDS` and so ignores this row — which is what stops it rendering as
+      a fourth card on the public pricing page that somebody could try to
+      subscribe to. `resolveExtraLocationPricing` reads it instead, and the two
+      share one query. Widening `resolvePricing` to accept arbitrary keys is
+      exactly the change that would break this; there is a test pinning it.
+      The add-on has no `base_*` price because it has no card to strike
+      through — `savePlanPricing` forces those null rather than storing a
+      number nobody can ever see. **Charging reads LIVE**
+      (`getExtraLocationPricingLive`), never the cached loader: a location is
+      bought against an already-authorised mandate, so quoting from a cache a
+      reprice has not reached would debit the old amount.
+      **⚠ `EXTRA_LOCATION_KEY` LIVES IN `lib/plans.ts`, NOT `lib/plans/pricing.ts`.**
+      That module is `server-only` — it pulls in the db client, and therefore
+      `pg` and `fs` — while the operator's Pricing panel is a CLIENT component
+      that needs the key at runtime to tell the add-on row from a tier. Defining
+      it there fails the BUILD while typecheck passes happily, which is what
+      makes it worth writing down. The TYPES may still come from `pricing.ts`;
+      those are erased. Same split as `lib/logs/failure-types.ts` and
+      `lib/themes/meta.ts`.
+      - **★★ AN EXTRA LOCATION IS A PRICE RISE ON THE SAME SUBSCRIPTION, NOT A
+        SECOND ONE** (`lib/plans/location-billing.ts`, pure + tested). A second
+        mandate would make the merchant authorise autopay twice and then let one
+        succeed while the other halts; per-cycle add-ons would need a charge
+        added at every renewal forever. Folding the cost into the plan AMOUNT
+        means the existing machinery already covers it: `razorpay_plans` is
+        keyed on **(plan, period, amount)**, so a different location count
+        resolves to a different cached plan id with NO new table;
+        `planForRzpPlan` still maps it back to (tier, period) for the webhook,
+        because neither changed; and `decidePlanChange`'s rule applies
+        unaltered — **buying prorates now, releasing waits for the cycle end** —
+        which keeps refunds out of the system (§15b's reasoning, reused).
+      - **★ `store_subscriptions.billed_locations` IS ADDITIVE, NEVER A TOTAL**
+        (`supabase/subscriptions_03_billed_locations.sql` — its OWN file, per
+        §15b's never-edit-an-applied-`CREATE TABLE IF NOT EXISTS` rule). The
+        allowance is `included + billed`, so if Pro's included count ever rises,
+        a merchant paying for one gains headroom rather than being billed for
+        what became free. Backfilled 0, which is the honest value: nobody has
+        ever been able to buy one (invariant 1).
+      - **★ THE COUNT IS ABSOLUTE, NEVER A DELTA.** Two tabs each pressing "add
+        one" against a delta buys two, and the merchant finds out on their card.
+        An absolute target is idempotent — the second request no-ops.
+      - **★ IT IS WRITTEN ONLY WHEN THE CHANGE IS LIVE.** Persisting a scheduled
+        RELEASE immediately would drop the allowance while they are still paying
+        for that location, refusing them a shop they own until the cycle ends.
+      - **★ `changePlan` CARRIES THE COUNT THROUGH.** Resolving a tier change
+        without it would silently drop the merchant to the bare plan price while
+        they keep every shop — a leak invisible from both sides. It is zeroed
+        only when the TARGET tier has no POS (charging for something the plan
+        cannot use is indefensible), and the stored count is deliberately NOT
+        written back, so returning to Pro resumes billing for the shops they
+        still hold rather than handing them over free.
+      - **★ THE MANDATE CEILING IS CHECKED BEFORE THE GATEWAY.** It was fixed
+        when autopay was authorised and cannot be raised without the merchant
+        re-authorising; Razorpay would accept the plan change and then fail the
+        DEBIT weeks later, surfacing as a halted subscription rather than as
+        "you can't buy this". `mandateMaxPaise` now carries room for
+        `MANDATE_LOCATION_ALLOWANCE` (10) locations — well below
+        `MAX_EXTRA_LOCATIONS` (50) on purpose, because this number is shown to
+        the merchant on the mandate screen and quoting a ₹6 lakh ceiling for a
+        ₹5,000/month plan loses the signup.
+      - **Refused, not clamped, in both directions.** Silently raising a request
+        charges for a number nobody chose; silently lowering one leaves them
+        paying for a release they believed went through. Releasing below the
+        locations in USE is refused outright — soft-on-downgrade means never
+        deleting a shop on the merchant's behalf.
+      - Merchants buy and release on `/dashboard/locations`
+        (`location-billing-card.tsx`); `getLocationBillingState` feeds it and
+        explains WHY the controls are absent when they are (a comped Pro store
+        has no mandate to raise, so it is told plainly rather than shown a
+        button that fails at the gateway).
+    - **Not yet built:** Twilio receipts (Phase 6), omnichannel/BOPIS (8),
+      offline outbox (9). See `docs/pos-plan.md` and `docs/roadmap.md`.
 
 24. **Notifications & email — one event log, registry-driven fan-out, one way
     out.** **📖 Full guide: `docs/notifications.md`** (mental model, where each
     decision lives, how to add one, troubleshooting). This section restores the
     summary the POS merge overwrote.
     - **EVERY action emits an EVENT** into append-only `activity_events` — the
-      audit trail, complete by construction, rendered at `/dashboard/activity`.
+      audit trail, complete by construction, rendered at `/dashboard/logs`.
       Only events with a non-empty `audiences` entry FAN OUT into per-recipient
       `notifications` rows; `audiences: {}` is audit-only, which is how a busy
       store gets full history without 400 badges a day.
@@ -2491,7 +2803,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       to `https://staging.storemink.com`, telling another environment to drain a
       queue that wasn't ours. `PLATFORM_URL` remains the fallback for callers
       with no request scope (the cron chaining itself).
-    - **EMAIL LOGS** at `/dashboard/activity/email-logs` (a child of Activity
+    - **EMAIL LOGS** at `/dashboard/logs/email-logs` (a child of Activity
       Logs, same `activity` permission): To / From / Type / Provider / Status /
       Sent at, filterable, with the body in a **sandboxed iframe** (no
       `allow-same-origin`, no `allow-scripts`). `supabase/email_logs.sql`,
@@ -2844,52 +3156,85 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **⚠ Never exercised against a live Razorpay account**, and the exact
       idempotency header name should be re-checked against their current docs.
 
-27. **Cancellation — and why nothing pays automatically.** The other half of
-    roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10.
-    - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
-      on cancel was considered and refused — not even as a setting — for the
-      same reason §22 gives for owner-only discounts: money leaving with no
-      human looking at it is the one irreversible act with no physical trace.
-      So the OBLIGATION is made loud instead of automatic.
-    - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
-      cancelled order that was paid for. **Derived**, never stored: a flag
-      would need clearing on refund, on partial refund and on reinstatement,
-      and the one you forget is the one that nags a merchant forever.
-    - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
-      `refundDueForOrder` and rides `refund_due` into the
-      `order.pickup_expired` payload — the merchant learns it in the channel
-      they already read. `refund_due` had to be added to `MONEY` in
-      `lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
-      "Total 281.4" failure), and declared in `variables.ts` to be a usable
-      `{{token}}`.
-    - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
-      inline in `updateOrderStatus`; a second hand-written copy for the
-      customer path would fail SILENTLY — stock simply never comes back, and
-      it surfaces in a stock count weeks later. It preserves both branches
-      exactly: reserved stock releases at the location that reserved it (a POS
-      sale must not restock at the store's default shop), and a pickup order
-      releases HOLDS because its units never left the shelf.
-    - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
-      neither.** Stoppable (`pending`/`processing`, not collected, inside the
-      window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
-      Too late ⇒ `order.cancellation_requested` and the order is untouched. The
-      status is re-checked INSIDE the statement that changes it, so a dispatch
-      racing a cancel means one matches nothing rather than both "succeeding".
-      `withService` after the WHERE re-proves ownership + store scope, because
-      a shopper holds SELECT but not UPDATE on their own orders (convention
-      #12's model).
-    - **The button does NOT disappear once an order ships.** Someone who wants
-      out still wants out, and hiding it just becomes a support email the
-      merchant handles by hand anyway.
-    - Settings (group **Orders**, section `orders`, at
-      `/dashboard/orders/settings`): `orders.allowCustomerCancellation`
-      (**default OFF** — new behaviour on a live store, invariant 1) and
-      `orders.cancellationWindowHours` (24). Enforced server-side; a hidden
-      button is not a permission.
-    - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
-      Every registry event has a real emitter;
-      `order.cancellation_requested` was the last one waiting. Keep it that
-      way — an entry there is a deliberate act, not a way to silence the guard.
+27. **Cancellation — a REQUEST, then a decision** (roadmap Step 2, rebuilt
+    2026-08-09). Design: `docs/roadmap.md` Step 2.
+    - **★ ASKING IS NOT CANCELLING.** `cancelMyOrder` raises a request
+      (`orders.cancellation_status = 'requested'`); a human approves it. Money
+      and stock move on APPROVAL. It used to cancel outright the moment a
+      shopper pressed the button.
+    - **★ WHOLE-ORDER ONLY, AND DELIBERATELY SO.** No item-level cancellation,
+      approval, refund or state anywhere in this flow — it would need partial
+      fulfilment, which this system does not have. Owner decision; written into
+      `lib/orders/cancellation.ts` and `approve-cancellation.ts` headers so the
+      next reader does not "fix" it.
+    - **★ ONE IMPLEMENTATION OF CANCELLING** (`lib/orders/approve-cancellation.ts`),
+      shared by the merchant's Cancel panel, the Approve button, and the
+      customer path under automatic approval. Claim the status conditionally →
+      release stock (`lib/orders/cancel.ts`) → move the money → notify, in that
+      order and for stated reasons.
+    - **★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
+      `store_credit` as a method, so using it for both gives an `order_refunds`
+      row either way (keeping `refundDueForOrder` and `payment_status` correct),
+      the refund cap on both, and pending-row-first idempotency. Calling
+      `issueCredit` directly would credit a customer with no refund row behind
+      it — money out the order does not know about. `later` moves nothing by
+      design: it records the obligation.
+    - **★ A FAILED REFUND IS NEVER A SUCCESS, AND AN UNKNOWN ONE IS NEVER A
+      FAILURE.** The order is cancelled either way (the claim already
+      committed), but `refundError` and `refundPending` are returned separately
+      so the caller says which — §26's rule, reused.
+    - **★ APPROVAL IS REQUIRED BY DEFAULT** (`orders.cancellationApproval`), and
+      `normalizeApproval` resolves anything unknown to requiring it: automatic
+      approval moves money with nobody looking, so it is never what a typo
+      lands on.
+    - **★ THE WINDOW IS A FIXED LIST, INCLUDING "UNTIL FULFILLED"** — a
+      first-class rule, not a very long duration. A shop that packs in 20
+      minutes and one that takes three days both mean "before we've packed it".
+    - **★ A DECLINE CARRIES A REASON, ENFORCED SERVER-SIDE**, and the customer
+      reads it verbatim (`order.cancellation_declined`). A silent no is the
+      most complained-about thing a request flow does.
+    - One active request per order, enforced by a conditional claim on
+      `cancellation_status IS NULL`; a declined request cannot be reopened by
+      asking again.
+
+27b. **The original cancellation notes — and why nothing paid automatically.** The other half of
+roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10. - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
+on cancel was considered and refused — not even as a setting — for the
+same reason §22 gives for owner-only discounts: money leaving with no
+human looking at it is the one irreversible act with no physical trace.
+So the OBLIGATION is made loud instead of automatic. - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
+cancelled order that was paid for. **Derived**, never stored: a flag
+would need clearing on refund, on partial refund and on reinstatement,
+and the one you forget is the one that nags a merchant forever. - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
+`refundDueForOrder` and rides `refund_due` into the
+`order.pickup_expired` payload — the merchant learns it in the channel
+they already read. `refund_due` had to be added to `MONEY` in
+`lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
+"Total 281.4" failure), and declared in `variables.ts` to be a usable
+`{{token}}`. - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
+inline in `updateOrderStatus`; a second hand-written copy for the
+customer path would fail SILENTLY — stock simply never comes back, and
+it surfaces in a stock count weeks later. It preserves both branches
+exactly: reserved stock releases at the location that reserved it (a POS
+sale must not restock at the store's default shop), and a pickup order
+releases HOLDS because its units never left the shelf. - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
+neither.** Stoppable (`pending`/`processing`, not collected, inside the
+window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
+Too late ⇒ `order.cancellation_requested` and the order is untouched. The
+status is re-checked INSIDE the statement that changes it, so a dispatch
+racing a cancel means one matches nothing rather than both "succeeding".
+`withService` after the WHERE re-proves ownership + store scope, because
+a shopper holds SELECT but not UPDATE on their own orders (convention
+#12's model). - **The button does NOT disappear once an order ships.** Someone who wants
+out still wants out, and hiding it just becomes a support email the
+merchant handles by hand anyway. - Settings (group **Orders**, section `orders`, at
+`/dashboard/orders/settings`): `orders.allowCustomerCancellation`
+(**default OFF** — new behaviour on a live store, invariant 1) and
+`orders.cancellationWindowHours` (24). Enforced server-side; a hidden
+button is not a permission. - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
+Every registry event has a real emitter;
+`order.cancellation_requested` was the last one waiting. Keep it that
+way — an entry there is a deliberate act, not a way to silence the guard.
 
 28. **Returns — the policy surface.** Config + the pure rules; the request flow
     itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,
@@ -3283,6 +3628,44 @@ group, span}` (span = columns of the 4-wide desktop grid),
       pinned in their own browser — so reverting `custom_domain_verified` would
       restore the subdomain for the whole internet EXCEPT the one person who
       needs it. The status stays 308 so search engines still consolidate signals.
+    - **★★ THE REDIRECT IS PRODUCTION-ONLY (`IS_PRODUCTION_PLATFORM`), AND THAT
+      IS CORRECTNESS, NOT CAUTION.** A custom domain has ONE A record → ONE load
+      balancer, and `cloudbuild.yaml` gives staging the SAME `_DOMAIN_LB_IP` and
+      `_DOMAIN_CERT_MAP` as prod (one HTTPS proxy holds one map). The URL map has
+      exactly one host rule — `staging.storemink.com` + `*.staging.storemink.com`
+      → the staging backend — so **every merchant domain falls to `defaultService`,
+      the PRODUCTION backend**. Staging can therefore never serve a custom domain.
+      But `custom_domain_verified` is per-DATABASE and staging has its own, so
+      staging would redirect to a host only prod can answer: the store lands on a
+      different database (where it may not exist) or, if DNS is incomplete,
+      nowhere.
+      Observed 2026-08-08: `echos.staging.storemink.com` 308'd to `storiq.in`,
+      whose zone holds only NS + SOA — storefront, `/dashboard` and `/pos` gone
+      together, with no way back in. **And it could not self-heal**: the health
+      check that reverts a dead domain (3 consecutive failures) runs only from
+      `/api/cron/domain-reconcile`, and every Cloud Scheduler job targets
+      `https://storemink.com` (`docs/cron-jobs.md`) — the affected row had
+      `domain_health_checked_at = null`, never checked once. Off prod the safety
+      net this redirect leans on does not exist, so the redirect must not run
+      there. This SUBSUMES the older `*.localhost` check, which excluded local dev
+      for the identical reason. `IS_PRODUCTION_PLATFORM` lives in
+      `lib/store/host.ts` and `SEARCH_INDEXABLE` now derives from it — split apart
+      deliberately, since `NEXT_PUBLIC_NOINDEX` is an indexing kill-switch and
+      must not change the answer to "which environment am I?". Pinned by
+      `proxy.test.ts`.
+    - **★ PROVISIONING IS GATED THE SAME WAY, IN `reconcileDomainForStore`** —
+      the one place BOTH the merchant's Verify click and the cron sweep pass
+      through, so neither can provision behind the other's back
+      (`ensureProvisioned` has no other caller). Without it staging still wrote
+      real `sm-domain-stg-*` certificates, authorizations and entries into the
+      SHARED prod map: billable, and an entry makes the LB terminate TLS for a
+      host the prod backend then 404s as an unknown store. Five such resources
+      for one staging test domain were deleted by hand on 2026-08-08. The check
+      sits BEFORE the plan check deliberately — this is "this cannot work", not
+      "you may not", and reporting it as an upgrade prompt would send someone to
+      buy Pro to fix an environment. **Deprovisioning is deliberately NOT gated**:
+      `disconnectDomain` does not route through here, so a store that already has
+      a domain set off prod can still tidy up. Pinned by `reconcile.test.ts`.
     - The proxy cannot use `unstable_cache` (no render scope in middleware) and
       the storefront path is deliberately free of per-request DB work, so the
       mapping sits in a 60s per-instance TTL cache bounded at 1000 entries. A DB
@@ -3429,6 +3812,347 @@ group, span}` (span = columns of the 4-wide desktop grid),
       and the notification links to the DOMAIN, not `/dashboard`, because the one
       thing anyone wants on being told this is to click through and see their own
       shop answer on it.
+
+31. **CSV import & export — a registry, and a log that names the row.**
+    Products, Categories, Inventory and Coupons import + export; **Orders
+    export ONLY**. Shopify's shape, because that is the file merchants already
+    have. Import/Export lives in a menu on each resource's OWN list page; the
+    HISTORY lives at `/dashboard/logs/import-export`, beside Activity and
+    Email logs.
+    - **★ A REGISTRY, NOT FIVE IMPORT SCREENS** (`lib/import-export/`). The
+      alternative is header matching, coercion, validation, error reporting and
+      the template file reimplemented per resource, diverging immediately, with
+      a sixth resource costing a week. Same trade `lib/settings/registry.ts` and
+      `lib/notifications/events.ts` make. `resources.ts` holds the columns;
+      adding a resource is a `ResourceDef` plus one importer function.
+    - **★ THE PURE CORE IS SHARED BY THE BROWSER AND THE SERVER.** `lib/csv/`
+      (RFC 4180 parse + serialize) and `lib/import-export/{coerce,parse}.ts`
+      have no server imports, so the browser parses the merchant's file to
+      build an instant preview and the server re-parses the SAME bytes before
+      writing. Two parsers would be the bug: the preview would promise one
+      thing and the import would do another. The preview is a COURTESY — every
+      coercion, length cap, URL-scheme check and enum check runs again server-
+      side, or the whole validation layer is a suggestion.
+    - **★ ROW-ATOMIC, NOT FILE-ATOMIC.** Each row is its own transaction, so
+      row 12 failing says nothing about row 13. A 500-row file with 3 bad rows
+      imports 497 and reports 3. Wrapping a slice in one transaction is
+      simpler and means one bad cell discards 499 good rows — after which the
+      merchant, unable to tell which, re-uploads and duplicates everything that
+      did work. Hence `partial` is a first-class job status, and the job page
+      says so in words, because the instinct on reading "failed" is to
+      re-upload.
+    - **★★ AN IMPORT IS A REAL BACKGROUND JOB.** The file is uploaded ONCE to
+      `POST /api/dashboard/import`, stored in `data_job_payloads`, and applied
+      by `lib/import-export/worker.ts`. **Closing the tab changes nothing** —
+      the browser's only job is the upload.
+      It got here the long way. The rows used to be posted FROM the browser a
+      slice at a time, which was a real answer to two hard limits (a server
+      action's body cap, Cloud Run's request timeout) but meant an import died
+      with the tab; then the loop moved to a provider in the dashboard layout,
+      which bought surviving navigation and nothing more. Both are gone.
+      `startImport` / `importChunk` / `finishImport` were DELETED rather than
+      left unused: every export of a `"use server"` file is a public endpoint,
+      and `importChunk` took no lease, so a caller could still apply rows to a
+      job the worker was mid-way through.
+    - **★ THE UPLOAD IS A ROUTE HANDLER BECAUSE IT HAS TO BE.** A server action
+      caps the body at 4mb and `MAX_IMPORT_FILE_BYTES` is 25MB, so the file
+      cannot travel through one. That single POST is also atomic — either the
+      job is queued or nothing happened — where the chunked upload it replaced
+      could always leave a half-uploaded job behind.
+    - **★★ THE FILE LIVES IN POSTGRES, NOT THE MEDIA BUCKET, AND THAT IS A
+      SECURITY DECISION.** The GCS bucket is `allUsers:objectViewer` with
+      uniform bucket-level access (§7) — every object in it is readable by
+      anyone with the URL. An import file is the merchant's raw data, and the
+      same code path carries orders-shaped CSVs with customer names, addresses
+      and phone numbers; an unguessable public URL is obscurity, not access
+      control. `data_job_payloads` is service-role only, cascades with its job,
+      is dropped the moment the job finishes, and is already covered by §32
+      retention. A side table rather than a column, because the job row is read
+      by the history list, the detail page and the failures feed and none of
+      them want to drag 25MB along.
+    - **★★ THE LEASE IS WHAT STOPS A SLICE BEING APPLIED TWICE.** The worker
+      chains itself AND a cron sweep picks up stalled jobs, so two runs can
+      genuinely overlap — and importing is NOT idempotent, so an overlap means
+      duplicate products and double stock. The claim is one statement:
+      `FOR UPDATE SKIP LOCKED` picking the oldest free job, with `lease_until`
+      written in the same breath. Only an EXPIRED lease is claimable, which is
+      also what lets a job survive a worker killed mid-slice. `attempts` bounds
+      it, so a job that dies the same way every time gives up instead of being
+      re-claimed forever.
+    - **★ PROGRESS IS WRITTEN PER SLICE, NOT PER RUN.** `cursor` is where the
+      next run resumes and what the job page's progress bar reads. It is kept
+      DISTINCT from `processed_rows`: they move together today, and conflating
+      "where to resume" with "how much got done" is how a resumed job silently
+      skips a slice.
+    - **★ THE SLICE IS BOUNDED BY TIME, NOT ROWS** (`SLICE_BUDGET_MS` 40s under
+      the route's `maxDuration` 60, leaving room to write progress and chain).
+      Rows differ by an order of magnitude in cost — a product with variants and
+      images against a coupon — so a row count would either waste the request or
+      overrun it. `SLICE_MAX_ROWS` is a second ceiling on memory and on how much
+      one crash loses.
+    - **★ `reapStaleJobs` NOW TESTS THE LEASE, NOT THE AGE.** It cancels
+      pending/running jobs untouched for 30 minutes, which under the
+      browser-driven design could only mean a closed tab. Server-side, a large
+      import legitimately runs longer than that — so without the lease check the
+      merchant's own history page would reach in and cancel a healthy import
+      mid-slice.
+    - **★ THE CACHE BUSTING AND THE SEO HOOK MOVED WITH THE WORK.** They lived
+      in `finishImport`, the action the browser called when its loop ran out.
+      Moving the loop server-side without moving those would have left every
+      import writing rows the storefront kept serving stale, and new products
+      never reaching Google.
+    - **★ THE JOB PAGE POLLS ITSELF WHILE THE JOB IS LIVE** (2s, `router.refresh`,
+      stopping the moment the status leaves running/pending). It is now the page
+      a merchant is SENT to at the START of an import, so a frozen screen of
+      zeroes reads as a stuck import. Polling a FINISHED job forever is how a
+      forgotten background tab quietly costs a request every two seconds all
+      afternoon, which is why the interval is torn down on status rather than on
+      unmount alone.
+    - **★ `data.import_started` IS A SECOND EVENT FOR ONE IMPORT, DELIBERATELY.**
+      Between `startImport` and `data.imported` there is a window — minutes, on
+      a big file — where the only record is a job row nobody has a link to. The
+      merchant is redirected to that log, but they are free to navigate away, and
+      the finish event cannot help them: it does not exist yet while they are
+      wondering where their import went. **IN-APP ONLY**; mailing "started" and
+      then "finished" is the two-messages-for-one-action pattern §24 says trains
+      people to ignore a channel.
+    - **★ ALL THREE DATA EVENTS CARRY A URL NOW.** They fell through to
+      `render.ts`'s default, which renders the event label and NO link — so
+      "Import finished" sat in the bell as a dead end, next to an import whose
+      entire value is the row-by-row log one click away. `subjectId` is the job
+      id at every emit site.
+    - **An EXPORT redirects to the export LIST, not to its own job page**, and
+      that is a limitation rather than a preference: the job row is created by
+      the streaming route as it starts, so the id does not exist on the client
+      side of the call. The export just started is the newest row. The download
+      itself is a `Content-Disposition: attachment` navigation, which does NOT
+      unload the page, so the redirect and the save coexist.
+    - **★ AN ABSENT CELL MEANS "LEAVE THIS ALONE", NEVER "SET TO NULL"** — what
+      makes a two-column file (Handle + Selling Price) a safe way to change only
+      prices.
+    - **★ THE GATE IS THE RESOURCE'S OWN PERMISSION SECTION**, deliberately not
+      an `import_export` key of its own — that would be a way to grant write
+      access to the whole catalogue without granting Products, a grant that
+      looks narrow and is the widest in the system. Import needs `manage`,
+      export needs `view` (downloading is a read). Inventory additionally needs
+      `products` (`alsoRequires`) because resolving a SKU is a product read.
+      Inventory import also respects `admin_locations` scope — the file names
+      locations by TEXT, so without it a location-bound manager could type
+      another branch's name.
+    - **★ ORDERS ARE EXPORT-ONLY, AND THAT IS A DECISION.** An imported order
+      would carry an `order_ref` this store never issued, reserve no stock, take
+      no money, and land in revenue reports as a sale that never happened. Every
+      order column is `readOnly`; a CI test asserts it has no writable column.
+    - **★ COLUMN DRIFT IS IMPOSSIBLE BY CONSTRUCTION.** Exporters yield records
+      KEYED BY FIELD and `toCells` lays them out in registry order. Positional
+      arrays had to be kept in step by hand, and the failure is silent and
+      total: add a column, forget one exporter, and every cell after it shifts —
+      prices land in the stock column and the file still looks plausible enough
+      to reimport. `EXPORT_FIELDS` + two tests pin it both ways (no phantom
+      field, no always-blank column).
+    - **★ THE EXPORT STREAMS, AND ITS STATUS CODE IS COMMITTED FIRST.** A route
+      (`/api/dashboard/export`), not an action: an action builds the whole file
+      in memory twice on a fixed-memory container while the merchant watches a
+      dead page. Keyset paging (`id > cursor`), not OFFSET, because OFFSET skips
+      and repeats rows when the catalogue is edited mid-export — the POS
+      catalogue snapshot pages this way for the same reason. Once headers are
+      sent a mid-stream failure CANNOT become a 500, so it is recorded on the
+      job and the stream ends with a visible marker row: a silently truncated
+      CSV is one a merchant reimports believing it complete.
+    - **★ CSV FORMULA INJECTION IS GUARDED ON WRITE** (`guardFormula`). A cell
+      beginning `=`, `+`, `-`, `@`, tab or CR executes when the file is opened,
+      and the export carries customer-supplied text — a crafted name on an order
+      reaches the merchant's spreadsheet, so the attacker needs no account here.
+      **A plain number is exempt**, or the guard mangles every negative price
+      and breaks the round trip it exists inside.
+    - **★ DATES ARE ISO-ONLY, REFUSED OTHERWISE.** `05/08/2026` is 5 August to
+      the merchant and 8 May to V8's parser, and nothing in the string
+      distinguishes them. §24 already paid for that once; a coupon silently
+      starting three months early is the same bug with money attached.
+    - **★ STOCK NEVER MOVES THROUGH A PRODUCT IMPORT.** `products.stock` is a
+      trigger-maintained aggregate of `inventory_levels`, so a direct write is
+      reverted by the next sale. It is accepted on CREATE only, where the
+      pos_01 seed trigger carries it onto the default location's shelf. The
+      Inventory import applies counts as a DELTA through `adjust_stock_at`:
+      atomic, and it leaves the `stock_movements` ledger row without which a
+      stocktake is indistinguishable from stock going missing. It feeds
+      `reportStockChanges`, so a correction to zero still fires the low-stock
+      crossing.
+    - **★ VARIANTS ABSENT FROM THE FILE ARE LEFT ALONE, NEVER DELETED.** The
+      editor deletes them because it shows the complete set and a human is
+      looking at it; a CSV is routinely partial, and deleting the rest would
+      destroy stock, order links and system SKUs that can never be reissued.
+    - **A missing CATEGORY is created and named in the log; a missing TAX CLASS
+      is not.** They look alike and are not: a category is navigation a merchant
+      renames in ten seconds, while a tax class carries a RATE, and inventing
+      "GST 12%" means guessing 12 — a filing problem found by an auditor, not by
+      looking at the shop.
+    - **★ ONE EVENT PER JOB, NOT PER ROW.** `data.imported` (both channels) and
+      `data.exported` (in-app only — an orders file carries every customer's
+      address and "who took a copy, when" is only answerable afterwards if
+      someone wrote it down, but it is routine enough that emailing would train
+      people to ignore it). 2,000 per-row events would bury every other thing
+      that happened that day.
+    - **The error log is `data_job_issues`** (`supabase/import_export_01_jobs.sql`,
+      service-role only, the email_logs pattern — the rows quote raw cells,
+      which for an orders export means customer addresses). Issues carry the
+      **1-based ORIGINAL FILE LINE**, not the row index: blank lines and
+      newlines inside quoted fields make the two diverge, and "row 40 is broken"
+      pointing at line 47 is worse than no number. Capped at `ISSUE_CAP` per job
+      with the overflow COUNTED (`dropped_issues`) — a log that looks complete
+      when it isn't is worse than a truncated one that says so.
+    - **Not built:** customers (blocked by design — `users.id` IS the Firebase
+      uid and `(phone, store_id)` is unique, so an imported row collides with
+      that person's later signup; it needs the same claim/merge story the POS
+      lacks), scheduled/recurring imports, and import from a URL.
+
+32. **Log retention — the policy that was written down three times and enforced
+    nowhere.** `lib/retention/prune.ts`, driven daily by
+    `/api/cron/prune-logs` (03:00 UTC). Windows: `notifications` 90 days,
+    `activity_events` 365, `email_logs` 90. Full operational detail —
+    the schedule, the `gcloud` command, how to read a response — is in
+    `docs/cron-jobs.md`.
+    - **★ IT WAS DOCUMENTED, INDEXED, AND DEAD.** `supabase/email_logs.sql`
+      states the 90-day intent and ships `email_logs_created_idx` built "for
+      retention sweeps"; `pruneNotifications` had the right windows and a
+      docstring saying it was "called by the daily cron". **Nothing called it.**
+      A comment asserting that something runs is not a thing that runs — the
+      same failure `docs/cron-jobs.md` records for the jobs that were documented
+      but never created. This is why the guard is a real endpoint on a real
+      schedule and not a comment.
+    - **★★ AND IT WAS AN UNGATED PUBLIC ENDPOINT.** `pruneNotifications` was
+      exported from `app/actions/notification-actions.ts`, a `"use server"` file
+      — where every export is a publicly reachable endpoint — with no gate of
+      any kind, running under `withService` (which bypasses RLS), taking its
+      retention windows as **parameters**. An unauthenticated caller passing
+      zeroes would have deleted every notification, every email log and the
+      whole of `activity_events` — the append-only audit trail — for every store
+      on the platform. Destroying the audit log is precisely what an attacker
+      does to cover their tracks. The function is **deleted**, not wired up. The
+      core lives in `lib/` and the cron route is the gate, which is the identical
+      resolution §30 gives for `lib/domains/reconcile.ts`; the same rule, for the
+      same reason, is why `lib/pos/tenders.ts` is not a `"use server"` file
+      either. **Do not put a prune back in `app/actions/`.**
+    - **★ EACH BATCH IS ITS OWN TRANSACTION.** `withService` wraps its callback
+      in one BEGIN/COMMIT, so looping batches inside a single call would be one
+      enormous transaction — exactly what batching exists to avoid. The loop
+      calls `withService` per batch: locks release between batches, WAL stays
+      bounded, and a run killed half way is resumable because the committed
+      batches stay committed. The sweep is idempotent; the next night carries on.
+    - **★ ORDER IS LOAD-BEARING.** `notifications.event_id` references
+      `activity_events` **ON DELETE CASCADE**, so pruning events destroys their
+      notifications too. Notifications are swept FIRST and at the shorter
+      window, leaving the event sweep far less to cascade through.
+    - **★ A DRAINING BACKLOG IS NOT A FAILURE.** It stops at 50,000 rows per
+      table or 240 seconds and reports `stop` per table
+      (`drained`/`cap`/`budget`/`error`). `incomplete` returns **200** — a first
+      sweep over years of rows legitimately hits its cap, and a permanently-red
+      job is one nobody reads (the `domain-reconcile` lesson). A failed table
+      returns **503** so Scheduler's retries engage (the `seo-refresh`
+      contract), and one table failing never stops the next.
+    - **Financial records are never touched** — orders, refunds and credit notes
+      live in their own tables. This sweep only ever deletes the inbox, the
+      activity feed and the mail log.
+    - **⚠ §31's `data_jobs` / `data_job_issues` are NOT swept yet, and they
+      should be.** `ISSUE_CAP` bounds issues per job, but nothing bounds the
+      number of jobs. The sweep was written on `main`, where those tables do
+      not exist; on this branch they do, so the blocker is gone. Adding them is
+      two `RETENTION_POLICIES` entries — **issues before jobs**, because
+      `data_job_issues.job_id` is `ON DELETE CASCADE` from `data_jobs`, the
+      same shape as notifications→events. ⚠ They also carry only
+      `(store_id, created_at)` composite indexes, which a sweep filtering on
+      `created_at` ALONE cannot use, so each also wants a plain `created_at`
+      index in `supabase/import_export_01_jobs.sql` — a separate
+      `CREATE INDEX IF NOT EXISTS`, so re-running the file stays idempotent.
+    - **⚠ The Cloud Scheduler job did not exist when this shipped.** Until it is
+      created, none of the above runs. See the warning in `docs/cron-jobs.md`.
+
+33. **Logs — five of them, one hub, one permission.** `/dashboard/logs`,
+    with `lib/logs/` behind the newest of them.
+    - **★ THE CAPABILITY WAS THERE; THE IA WASN'T.** Activity, Email, Import
+      and Export logs all existed, and the Email table already carried To /
+      From / Type / Provider / Status / Sent at. What was missing was a place
+      they lived together: `activity` sat under Settings with `parent` set, so
+      the logs were a third-level nav item, and its `children` duplicated the
+      rail. The section is now top-level, its children are GONE, and
+      `logs-rail.tsx` (driven by `log-types.ts`) is the one navigation between
+      logs.
+    - **★ THE PERMISSION KEY IS STILL `activity`.** Roles store the key, so
+      renaming it to `logs` would silently revoke every grant already saved —
+      the same reason `navigation` kept its key when it folded into the
+      builder. Only the LABEL and the URL changed.
+    - **★ THE ROUTES ARE `/dashboard/logs/*`** (was `/dashboard/activity/*`).
+      The old path named ONE of the five logs after the section holding all of
+      them, so the URL contradicted the nav the moment you opened Email logs.
+      **The old paths still resolve** — a 307 pair in `next.config.ts`, query
+      string preserved. Not a courtesy to bookmarks: every notification email
+      ALREADY SENT carries an absolute `/dashboard/activity` link
+      (`lib/email/notification-emails.ts`) and those are in inboxes nobody can
+      edit. TEMPORARY (307), not permanent: this is an internal admin path
+      behind a login, so there are no SEO signals to consolidate, and a 308 is
+      cached indefinitely by browsers — the trap `proxy.ts` already had to work
+      around with `Cache-Control: no-store` (§30).
+    - **★ THE RAIL IS THE SIDEBAR NOW, NOT A SECOND COLUMN.** It rendered
+      beside the content, which put THREE navigations on screen at once: the
+      dashboard's own nav, the rail, and the page's filters. The dashboard
+      already had the right pattern — the sub-nav panel that swaps the main nav
+      for Back + the section's pages (Settings, Blogs, POS) — so
+      `dashboard-sidebar.tsx` branches on the logs path and renders `LogsRail`
+      in that slot, and `logs/layout.tsx` renders nothing but its children.
+      ⚠ It stays a COMPONENT driven by `LOG_TYPES` rather than becoming
+      `children` on the permission section, which would have been the obvious
+      tidy-up: Import and Export share a pathname and differ only by `?kind=`,
+      and the sidebar's generic child matcher compares hrefs while ignoring the
+      query string — so it would light up both entries on either page.
+      `activeLogKey` is the thing that knows better.
+    - **Import and Export are one page filtered two ways.** `data_jobs.kind`
+      already separates them and the page already read `?kind=`, so the split
+      the merchant sees costs two rail entries and no route.
+    - **★ FAILURES READS EXISTING TABLES; IT DOES NOT ADD ONE.** Every failure
+      is already recorded — a bounced email is an `email_logs` row, a dead
+      refund is `order_refunds.status = 'failed'`, a broken import is a
+      `data_jobs` row. A `failures` table would be a second copy of facts we
+      hold, a write to forget on every new failure path, and a row that can
+      disagree with the thing it describes. So `FAILURE_SOURCES` is a registry
+      of READS (email, notification, refund, import, payment) — add a source =
+      add an entry — and there is nothing to migrate, backfill, or prune (§32
+      already prunes the underlying tables).
+    - **★ SCOPE IS A DISCRIMINATED UNION, NOT AN OPTIONAL `storeId`.** These
+      queries run under `withService`, which BYPASSES RLS, so tenant scoping is
+      the caller's job (convention #2). An optional field would make "every
+      store on the platform" the value you get by FORGETTING an argument — the
+      worst available default. `{ kind: "platform" }` cannot be produced by
+      omission, and it is constructed in exactly one file, the operator page.
+    - **★ A PARTIAL ANSWER IS NEVER SHOWN AS A CLEAN ONE.** One source erroring
+      must not blank the page — this view is read precisely when things are
+      broken — so a failed source is caught, NAMED in `failedSources`, and
+      rendered as a banner. A short list that looks healthy is the one wrong
+      answer this feature must not give.
+    - **Merging cannot paginate exactly**, so it takes the most recent 100 per
+      source, merges, sorts and caps. Ties break on id, because the common case
+      is a batch that failed together sharing one timestamp — without it the
+      order shuffles between refreshes. Past that depth you are auditing, not
+      triaging, and the individual logs are where that belongs.
+    - **★ THE CLIENT/SERVER SPLIT IS LOAD-BEARING.** `failures.ts` imports the
+      db client, which pulls in `pg`, which needs `fs` — so a client component
+      importing the source catalog from it fails the BUILD (typecheck passes
+      happily). The filter chips therefore read `FAILURE_SOURCE_META` from
+      `failure-types.ts`, the same split `lib/themes/meta.ts` makes, with a test
+      asserting the two catalogs stay in step.
+    - **The operator view is the same feed unscoped**, at
+      `/dashboard/failures` on the platform host, gated by the console's
+      `getServerUser` + `getPlatformViewer` pair. ⚠ It shows only
+      MERCHANT-READABLE failures. Stack traces and platform internals stay in
+      Cloud Logging / Error Reporting, which already group and alert on them;
+      copying them into a table would be a worse duplicate that nobody prunes.
+    - **⚠ SMS and Push are NOT here**, and can't be: both are marked
+      `available: false` in `lib/notifications/channels.ts` with no provider
+      connected. A log of sends that never happen is an empty table. They need
+      a provider (Twilio/MSG91, FCM) first — the log is the last 10% of that
+      work.
+    - **⚠ The activity feed is still day-grouped CARDS** while the other four
+      are tables. Left alone deliberately: it is working UI, and a
+      chronological event stream reads better as cards than as rows.
 
 ## 6. Commands
 

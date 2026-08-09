@@ -1,3 +1,4 @@
+import type { RoutingScope } from "./routing";
 // ---------------------------------------------------------------------------
 // Event registry — the single source of truth for everything that can happen
 // on StoreMink and who hears about it.
@@ -6,7 +7,7 @@
 // every activity" survivable:
 //
 //   • EVERY event in this catalog is RECORDED in activity_events. That is the
-//     audit trail (/dashboard/activity) — complete by construction.
+//     audit trail (/dashboard/logs) — complete by construction.
 //   • Only events with a non-empty `audiences` entry are FANNED OUT into
 //     someone's inbox. An event with `audiences: {}` is audit-only: visible in
 //     the feed, silent in the bell. That is how a busy store gets a full
@@ -89,6 +90,17 @@ export interface EventDef {
    */
   hasLocation?: boolean;
   /**
+   * The routing scope to use when the merchant has not chosen one.
+   *
+   * ★ ONLY FOR EVENTS THAT ARE INHERENTLY ABOUT ONE SHOP. A collection is
+   * physically at a location, so the people who need to act on it are the ones
+   * standing in that shop — narrowing it is the useful default. `order.placed`
+   * deliberately does NOT set this: it fires for every order including
+   * deliveries, so narrowing it would change who hears about ordinary orders
+   * for every existing store (roadmap invariant 1).
+   */
+  defaultScope?: RoutingScope;
+  /**
    * False = the merchant cannot switch it off. Reserved for events a store
    * owner must not be able to go blind on (role changes, failed billing,
    * password changes) — the ones that matter in a dispute or a breach.
@@ -102,6 +114,7 @@ export const EVENT_KEYS = [
   "order.placed",
   "order.status_changed",
   "order.cancellation_requested",
+  "order.cancellation_declined",
   "order.cancelled",
   "order.payment_received",
   "order.payment_failed",
@@ -151,6 +164,10 @@ export const EVENT_KEYS = [
   "subscription.payment_failed",
   "ai.credits_low",
   "ai.credits_purchased",
+  // ── Data (CSV import/export) ────────────────────────────────────────────
+  "data.import_started",
+  "data.imported",
+  "data.exported",
   // ── Platform (store_id IS NULL — StoreMink operators) ───────────────────
   "platform.store_created",
   "platform.store_suspended",
@@ -187,6 +204,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "info",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     // The SHOPPER is the point of this one — they need to know it's there.
     // Staff get it in-app so the queue stays honest without a mail each time.
     audiences: { "store-admins": IN_APP, customer: BOTH },
@@ -199,6 +219,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "info",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { "store-admins": IN_APP, customer: BOTH },
   },
   {
@@ -209,6 +232,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { customer: BOTH },
   },
   {
@@ -220,6 +246,9 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     hasLocation: true,
+    // Pickup is inherently about ONE shop; safe to default because no
+    // store had pickup enabled when this shipped (owner, 2026-08-09).
+    defaultScope: "event_location" as const,
     audiences: { "store-admins": BOTH, customer: BOTH },
   },
   {
@@ -239,6 +268,20 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "order.cancellation_declined",
+    label: "Cancellation declined",
+    description:
+      "A merchant declined a customer's request to cancel an order. The order stays active.",
+    group: "Orders",
+    section: "orders",
+    severity: "info",
+    // ★ THE CUSTOMER IS THE POINT. They asked and are waiting; a decision they
+    // are never told about reads as being ignored, and the merchant's reason is
+    // what stops the next message being a complaint. The team gets it in-app
+    // only — they made the decision, so mailing it back to them is noise.
+    audiences: { "store-admins": IN_APP, customer: BOTH },
   },
   {
     key: "order.cancelled",
@@ -640,6 +683,62 @@ export const EVENTS: readonly EventDef[] = [
     group: "Plan & billing",
     section: "ai",
     severity: "success",
+    audiences: { "store-admins": IN_APP },
+  },
+
+  // ── Data (CSV import/export) ─────────────────────────────────────────────
+  //
+  // ★ ONE EVENT PER JOB, NOT PER ROW. A 2,000-product import emits ONE
+  // `data.imported`, because the alternative is 2,000 activity rows burying
+  // every other thing that happened that day and 2,000 chances to page the
+  // team. The per-row detail already has a better home: the job's own error
+  // log, which is searchable and doesn't expire.
+  {
+    key: "data.import_started",
+    label: "Import started",
+    description:
+      "A CSV import began. Links straight to its log, which fills in as it runs.",
+    group: "Catalog",
+    section: "activity",
+    severity: "info",
+    // ★ IN-APP ONLY, AND NOT CONFIGURABLE OFF THE EMAIL — there is no email to
+    // turn off. Mailing "your import started" and then "your import finished"
+    // is the pattern §24 says trains people to ignore a channel: two messages
+    // for one action, the first of which is obsolete by the time it arrives.
+    //
+    // It exists at all because an import now runs in the BACKGROUND: the
+    // merchant is redirected to its log, but they are free to navigate away,
+    // and without a record there would be nothing to click to get back. The
+    // finish event alone can't do that — it doesn't exist yet while they're
+    // wondering where their import went.
+    audiences: { "store-admins": IN_APP },
+  },
+  {
+    key: "data.imported",
+    label: "Import finished",
+    description:
+      "A CSV import finished. Says what was created, updated and rejected.",
+    group: "Catalog",
+    // Not `products`: an import can touch coupons or stock, and the person who
+    // should hear about a bulk change to the shop's data is whoever watches
+    // its audit trail.
+    section: "activity",
+    severity: "info",
+    audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "data.exported",
+    label: "Data exported",
+    description:
+      "Someone downloaded a CSV of your store's data. Recorded for audit.",
+    group: "Catalog",
+    section: "activity",
+    severity: "info",
+    // In-app only, deliberately. An export is worth RECORDING — an orders file
+    // carries every customer's name, address and phone number, and "who took a
+    // copy of that, and when" is a question you only get to ask afterwards if
+    // someone wrote it down. But it is a routine action a merchant may do
+    // weekly, so emailing about it would train them to ignore the log.
     audiences: { "store-admins": IN_APP },
   },
 

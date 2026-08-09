@@ -6,7 +6,10 @@ import { THEME_META } from "@/lib/themes/meta";
 import { StoresConsole } from "./stores-console";
 import { ThemesPanel } from "./themes-panel";
 import { PricingPanel } from "./pricing-panel";
-import { getPlanPricingLive } from "@/lib/plans/pricing";
+import {
+  getExtraLocationPricingLive,
+  getPlanPricingLive,
+} from "@/lib/plans/pricing";
 
 export const metadata = { title: "StoreMink Admin" };
 
@@ -59,7 +62,10 @@ export default async function PlatformDashboard({
       />
       {viewer.role === "superadmin" && (
         <>
-          <PricingPanel pricing={await getPlanPricingLive()} />
+          <PricingPanel
+            pricing={await getPlanPricingLive()}
+            extraLocation={await getExtraLocationPricingLive()}
+          />
           <ThemesPanel rootDomain={ROOT_DOMAIN} demoSlugsLive={demoSlugsLive} />
         </>
       )}

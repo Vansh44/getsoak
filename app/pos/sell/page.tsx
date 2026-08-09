@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
-import { getStoreSettings } from "@/lib/settings/resolve";
 import {
   getRegisterConfig,
   lookupProducts,
@@ -15,18 +14,13 @@ export default async function PosSellPage() {
   if (!operator) redirect("/pos/login");
   if (!posCan(operator.role, "sell")) redirect("/pos");
 
-  const [config, initial, settings] = await Promise.all([
+  const [config, initial] = await Promise.all([
     getRegisterConfig(),
     lookupProducts("", 24),
-    getStoreSettings(),
   ]);
   if ("error" in config) redirect("/pos/login");
 
-  return (
-    <SellClient
-      config={config}
-      initialItems={initial.items}
-      idleLockMinutes={Number(settings["pos.idleLockMinutes"]) || 10}
-    />
-  );
+  // The idle lock is mounted in app/pos/layout.tsx, which reads the setting
+  // itself — every POS screen gets it, not just this one.
+  return <SellClient config={config} initialItems={initial.items} />;
 }

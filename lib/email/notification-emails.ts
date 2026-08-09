@@ -185,7 +185,7 @@ export function renderNotificationDigest(opts: {
     .join("\n");
 
   const window = digest === "hourly" ? "in the last hour" : "since yesterday";
-  const dashboardUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/activity`;
+  const dashboardUrl = `${baseUrl.replace(/\/+$/, "")}/dashboard/logs`;
 
   const bodyHtml = `
 <h1 style="margin:0 0 4px; font-family:${EMAIL_FONT}; font-size:22px; line-height:1.3; font-weight:700; letter-spacing:-0.3px; color:${EMAIL_THEME.ink};">
