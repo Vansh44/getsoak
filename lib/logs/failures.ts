@@ -109,7 +109,7 @@ export const FAILURE_SOURCES: FailureSource[] = [
           detail: r.error,
           occurredAt: r.createdAt,
           storeId: r.storeId,
-          href: "/dashboard/activity/email-logs?status=failed",
+          href: "/dashboard/logs/email-logs?status=failed",
         }));
       }),
   },
@@ -214,7 +214,7 @@ export const FAILURE_SOURCES: FailureSource[] = [
           detail: r.error,
           occurredAt: r.createdAt,
           storeId: r.storeId,
-          href: `/dashboard/activity/import-export/${r.id}`,
+          href: `/dashboard/logs/import-export/${r.id}`,
         }));
       }),
   },

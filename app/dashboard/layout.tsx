@@ -220,7 +220,10 @@ export default async function DashboardLayout({
 
   return (
     <div
-      className={`dashboard-shell ${dashFont.variable} ${dashMono.variable} flex flex-col`}
+      // `dashboard-shell` is the design-system SCOPE (tokens + .dash-* rules) and
+      // is now also worn by portalled dialogs; `dashboard-frame` is the page
+      // frame (100vh, overflow hidden) that only this element should have.
+      className={`dashboard-shell dashboard-frame ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
       <ChatProvider>
         <MobileNavProvider>

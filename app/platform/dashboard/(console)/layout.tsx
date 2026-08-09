@@ -70,7 +70,9 @@ export default async function PlatformDashboardLayout({
 
   return (
     <div
-      className={`dashboard-shell ${dashFont.variable} ${dashMono.variable} flex flex-col`}
+      // See app/dashboard/layout.tsx: `dashboard-shell` is the token/component
+      // scope, `dashboard-frame` is the 100vh page frame.
+      className={`dashboard-shell dashboard-frame ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
       <MobileNavProvider>
         <DashboardTopbar

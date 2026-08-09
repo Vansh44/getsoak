@@ -71,7 +71,7 @@ export function ActivityFeedView({
     // Any filter change invalidates the current page number.
     if (key !== "page") params.delete("page");
     startTransition(() => {
-      router.push(`/dashboard/activity?${params.toString()}`);
+      router.push(`/dashboard/logs?${params.toString()}`);
     });
   };
 

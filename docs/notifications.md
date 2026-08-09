@@ -22,7 +22,7 @@ short version; this is the one to read when something is confusing.
    └──────────────────┘      └──────────────┘    │    CUSTOMER
             │                                    └──► • storefront bell
             ▼                                         • shopper email
-    /dashboard/activity
+    /dashboard/logs
       (the audit trail)
 ```
 
@@ -43,7 +43,7 @@ Two things that follow from this, and explain most of the design:
 | -------------- | --------------------------------------------------- | --------------------------------------------- |
 | Who            | The merchant's staff                                | The one shopper it happened to                |
 | Recipients     | Many; permission-derived, narrowable                | Exactly one — nothing to choose               |
-| Reads it at    | Dashboard bell, `/dashboard/activity`               | `/notifications`, `/orders` on the storefront |
+| Reads it at    | Dashboard bell, `/dashboard/logs`                   | `/notifications`, `/orders` on the storefront |
 | Email goes to  | Staff inboxes (+ optional Cc/Bcc)                   | The shopper's inbox                           |
 | Tone           | Operational — refs, totals, who acted               | Second person, about _their_ order            |
 | Who configures | Merchant, in the console                            | Merchant, in the console (separate tab)       |
@@ -149,7 +149,7 @@ owns that mail, because merchants asked to edit the copy.
 
 ### Every email is logged — Activity → Email Logs
 
-`/dashboard/activity/email-logs` lists every message this store has sent:
+`/dashboard/logs/email-logs` lists every message this store has sent:
 notifications, campaigns, enquiry alerts, invites, password resets, billing, and
 sign-in codes. Filterable by status, type, date and recipient; a row opens the
 rendered body.

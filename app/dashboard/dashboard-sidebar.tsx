@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { SidebarNavLink } from "./sidebar-nav-link";
 import { navIcons, type NavIconKey } from "./nav-icons";
 import { useMobileNav } from "./dashboard-mobile-nav";
+import { LogsRail } from "./logs/logs-rail";
 
 type Child = {
   label: string;
@@ -120,7 +121,11 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
   }, [isResizing]);
 
   const activeSection = resolveActiveSection(allItems, pathname);
-  const showPanel = !!activeSection?.children?.length;
+  // Logs has no `children` (see permissions.ts) — its five entries live in
+  // LOG_TYPES, because Import and Export share a pathname and only `?kind=`
+  // tells them apart, which the generic child matcher below cannot see. So it
+  // gets the same panel treatment through its own rail.
+  const inLogs = pathname.startsWith("/dashboard/logs");
 
   useEffect(() => {
     setOpen(false);
@@ -146,7 +151,29 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
         />
 
         <div className="dash-primary" style={{ width: "100%" }}>
-          {showPanel ? (
+          {inLogs ? (
+            <div className="dash-nav-scroll px-3">
+              <Link
+                href="/dashboard"
+                className="dash-nav-item dash-subnav-back"
+              >
+                <span className="dash-nav-icon" aria-hidden>
+                  <ArrowLeft className="h-[17px] w-[17px]" strokeWidth={2} />
+                </span>
+                <span className="truncate">Back</span>
+              </Link>
+              <div className="pt-1">
+                <div className="dash-nav-label mb-2 px-2.5 text-xs font-semibold text-[#8a8a8a]">
+                  Logs
+                </div>
+                {/* useSearchParams needs a boundary, or this opts the whole
+                    sidebar into a client-side bailout during rendering. */}
+                <Suspense fallback={<div className="h-[164px]" />}>
+                  <LogsRail />
+                </Suspense>
+              </div>
+            </div>
+          ) : activeSection?.children?.length ? (
             (() => {
               const activeChildHref = activeSection
                 .children!.filter((c) => matches(pathname, c.href))

@@ -20,14 +20,14 @@ export const LOG_TYPES: LogType[] = [
   {
     key: "activity",
     label: "Activity",
-    href: "/dashboard/activity",
+    href: "/dashboard/logs",
     icon: "activity",
     blurb: "Everything that happened in this store.",
   },
   {
     key: "email",
     label: "Email logs",
-    href: "/dashboard/activity/email-logs",
+    href: "/dashboard/logs/email-logs",
     icon: "mail",
     blurb: "Every message sent, and what was in it.",
   },
@@ -36,21 +36,21 @@ export const LOG_TYPES: LogType[] = [
     // already separates them, so this costs a query param rather than a route.
     key: "imports",
     label: "Import logs",
-    href: "/dashboard/activity/import-export?kind=import",
+    href: "/dashboard/logs/import-export?kind=import",
     icon: "download",
     blurb: "Files brought in, and what they changed.",
   },
   {
     key: "exports",
     label: "Export logs",
-    href: "/dashboard/activity/import-export?kind=export",
+    href: "/dashboard/logs/import-export?kind=export",
     icon: "upload",
     blurb: "Files taken out.",
   },
   {
     key: "failures",
     label: "Failures",
-    href: "/dashboard/activity/failures",
+    href: "/dashboard/logs/failures",
     icon: "alert",
     blurb: "Everything that didn't work, in one place.",
   },
@@ -65,10 +65,10 @@ export const LOG_TYPES: LogType[] = [
  * the param is absent or invalid.
  */
 export function activeLogKey(pathname: string, kind?: string): string {
-  if (pathname.startsWith("/dashboard/activity/import-export")) {
+  if (pathname.startsWith("/dashboard/logs/import-export")) {
     return kind === "export" ? "exports" : "imports";
   }
-  if (pathname.startsWith("/dashboard/activity/email-logs")) return "email";
-  if (pathname.startsWith("/dashboard/activity/failures")) return "failures";
+  if (pathname.startsWith("/dashboard/logs/email-logs")) return "email";
+  if (pathname.startsWith("/dashboard/logs/failures")) return "failures";
   return "activity";
 }

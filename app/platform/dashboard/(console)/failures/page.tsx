@@ -7,7 +7,7 @@ import {
   storeNamesFor,
   type FailureSourceKey,
 } from "@/lib/logs/failures";
-import { FailuresView } from "@/app/dashboard/activity/failures/failures-view";
+import { FailuresView } from "@/app/dashboard/logs/failures/failures-view";
 
 export const metadata = { title: "Failures — StoreMink Admin" };
 

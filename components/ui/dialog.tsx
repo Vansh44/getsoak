@@ -53,6 +53,19 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
+          // ★ `dashboard-shell` carries the dashboard design system into the
+          // PORTAL. A dialog renders into document.body, outside the shell
+          // element, so without this every `var(--dash-*)` inside it resolved
+          // to nothing and every `.dash-*` rule failed to match — buttons lost
+          // their flex layout and pointer cursor, cards lost their surface, and
+          // Tailwind `border` utilities fell back to `currentColor`, painting
+          // black hairlines. It is the SCOPE class only; the 100vh page frame
+          // is `.dashboard-frame` and stays on the layout element.
+          //
+          // Harmless outside the dashboard: dashboard.css is imported by the
+          // dashboard layout, so Next never loads it on storefront routes and
+          // the class matches no rules there.
+          "dashboard-shell",
           "fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}

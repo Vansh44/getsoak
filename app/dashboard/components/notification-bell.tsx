@@ -265,7 +265,7 @@ export function NotificationBell() {
 
           <div className="border-t border-[var(--dash-border)] bg-[var(--dash-surface-2)] px-4 py-2.5">
             <Link
-              href="/dashboard/activity"
+              href="/dashboard/logs"
               onClick={() => setOpen(false)}
               className="text-[12.5px] font-medium text-[var(--dash-accent)] hover:underline"
             >

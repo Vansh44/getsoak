@@ -176,7 +176,7 @@ describe("renderNotificationDigest", () => {
     });
     expect(html).toContain("New order ORD10010004");
     expect(html).toContain("Low stock · Cold Brew");
-    expect(html).toContain("https://acme.storemink.com/dashboard/activity");
+    expect(html).toContain("https://acme.storemink.com/dashboard/logs");
   });
 
   it("names the window it covers", () => {

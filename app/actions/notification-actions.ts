@@ -316,7 +316,7 @@ export async function archiveNotification(
   }
 }
 
-// ── Activity feed (/dashboard/activity) ────────────────────────────────────
+// ── Activity feed (/dashboard/logs) ────────────────────────────────────
 
 export interface ActivityRow {
   id: string;

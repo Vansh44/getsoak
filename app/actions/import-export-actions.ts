@@ -8,62 +8,33 @@
 // COURTESY — nothing it computed is trusted here. The same pure modules run
 // again on the same bytes before a single row is written.
 //
-// ★ WHY IT IS CHUNKED. Two hard limits, one design:
-//   • A Next.js server action has a request body cap, and a 20,000-row product
-//     CSV is tens of megabytes.
-//   • Cloud Run has a request timeout, and a long import will exceed it.
-// Sending the file whole means both failures land on the merchant AFTER a long
-// wait, with the import half-applied and no record of where it stopped. So the
-// browser sends the rows in chunks against a job id, each chunk is a short
-// request that commits what it did, and the job row is the memory between
-// them. A dropped connection loses the REST of the file, not the part that
-// already worked — and the job says exactly how far it got.
+// ★ WHAT IS LEFT HERE IS THE PREVIEW AND THE LOG. Running an import is no
+// longer an action at all: the file is POSTed to /api/dashboard/import (a route
+// handler, because a 25 MB file cannot fit through a server action's 4 MB body
+// cap) and applied by lib/import-export/worker.ts, so an import survives the
+// merchant closing the tab. See the note above cancelImport for what was
+// deleted and why it could not simply be left in place.
 
-import { revalidatePath, revalidateTag } from "next/cache";
-import { after } from "next/server";
 import {
   getActingStoreId,
   getManagerIdentity,
   getViewerAccess,
 } from "@/app/dashboard/lib/access";
-import { rateLimit } from "@/lib/rate-limit";
-import { TAGS } from "@/lib/storefront/tags";
-import { emitEvent } from "@/lib/notifications/record";
 import { logError } from "@/lib/observability/logger";
-import { notifyStoreContentPublished } from "@/lib/seo/store-indexing";
-import type { CsvRow } from "@/lib/csv/parse";
-import {
-  crossRowIssues,
-  groupProductRows,
-  parseFile,
-} from "@/lib/import-export/parse";
 import { getResource, isResourceId } from "@/lib/import-export/resources";
-// Limits live in lib/ because a "use server" file may only export async
-// functions — everything exported from one is a public endpoint.
-import { IMPORT_CHUNK_ROWS, MAX_IMPORT_ROWS } from "@/lib/import-export/limits";
 import {
-  addProgress,
-  createJob,
   finishJob,
   getJob,
   getJobIssues,
   listJobs,
   reapStaleJobs,
-  recordIssues,
   type JobIssueRow,
   type JobRow,
 } from "@/lib/import-export/jobs";
-import { importCategories } from "@/lib/import-export/importers/categories";
-import { importCoupons } from "@/lib/import-export/importers/coupons";
-import { importInventory } from "@/lib/import-export/importers/inventory";
-import { importProducts } from "@/lib/import-export/importers/products";
-import {
-  DEFAULT_IMPORT_OPTIONS,
-  type ImportContext,
-  type ImportOptions,
-  type RowResult,
-} from "@/lib/import-export/importers/types";
-import type { ResourceId, RowIssue } from "@/lib/import-export/types";
+import type { ResourceId } from "@/lib/import-export/types";
+// Limits live in lib/ because a "use server" file may only export async
+// functions — everything exported from one is a public endpoint.
+import { MAX_IMPORT_ROWS } from "@/lib/import-export/limits";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { withUser } from "@/lib/db/client";
 import { categories, coupons, products } from "@/drizzle/schema";
@@ -106,19 +77,6 @@ async function importGate(resourceId: string) {
 
   const storeId = await getActingStoreId();
   return { resource, admin, storeId };
-}
-
-function normalizeOptions(
-  input: Partial<ImportOptions> | undefined,
-): ImportOptions {
-  return {
-    create: input?.create ?? DEFAULT_IMPORT_OPTIONS.create,
-    update: input?.update ?? DEFAULT_IMPORT_OPTIONS.update,
-    locationId:
-      typeof input?.locationId === "string" && input.locationId
-        ? input.locationId
-        : null,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,275 +177,19 @@ export async function previewImport(
 
 // ---------------------------------------------------------------------------
 // The import
+//
+// ★ THE ACTIONS THAT RAN AN IMPORT ARE GONE — startImport / importChunk /
+// finishImport. They existed so the BROWSER could drive the work a slice at a
+// time, which is why closing the tab stopped an import half-applied. Uploading
+// is now POST /api/dashboard/import (a route handler, because a 25 MB file
+// cannot fit through a server action's 4 MB body cap) and the work is done by
+// lib/import-export/worker.ts.
+//
+// They were DELETED rather than left unused: every export of a `"use server"`
+// file is a publicly reachable endpoint, and importChunk took no lease, so a
+// caller could still have applied rows to a job the worker was mid-way through
+// — double-importing a slice with nothing to stop it.
 // ---------------------------------------------------------------------------
-
-export interface StartImportInput {
-  resource: string;
-  filename?: string;
-  totalRows: number;
-  header: string[];
-  options?: Partial<ImportOptions>;
-}
-
-export async function startImport(
-  input: StartImportInput,
-): Promise<ActionResult<{ jobId: string }>> {
-  const gate = await importGate(input.resource);
-  if ("error" in gate) return { error: gate.error };
-  const { resource, admin, storeId } = gate;
-
-  if (!Array.isArray(input.header) || input.header.length === 0)
-    return { error: "That file has no header row." };
-  if (input.totalRows > MAX_IMPORT_ROWS) {
-    return {
-      error: `That file has ${input.totalRows.toLocaleString("en-IN")} rows. Imports are limited to ${MAX_IMPORT_ROWS.toLocaleString("en-IN")} at a time — split it and run them one after another.`,
-    };
-  }
-
-  // Per-store, not per-user: the cost is database write throughput, and two
-  // admins importing the whole catalogue at once is the same load as one doing
-  // it twice. Generous, because a legitimate migration is several files.
-  const limit = await rateLimit(`import:${storeId}`, {
-    max: 20,
-    windowSeconds: 3600,
-  });
-  if (!limit.allowed)
-    return {
-      error:
-        "That's a lot of imports in one hour. Give it a few minutes and try again.",
-    };
-
-  const options = normalizeOptions(input.options);
-
-  try {
-    const jobId = await createJob({
-      storeId,
-      kind: "import",
-      resource: resource.id,
-      filename: input.filename ?? null,
-      totalRows: input.totalRows,
-      options: { ...options, header: input.header },
-      actor: { uid: admin.uid, email: admin.email },
-    });
-    return { success: true, data: { jobId } };
-  } catch (error) {
-    logError("import: could not start", error, { resource: resource.id });
-    return { error: "Couldn't start the import. Please try again." };
-  }
-}
-
-export interface ImportChunkInput {
-  jobId: string;
-  resource: string;
-  header: string[];
-  rows: CsvRow[];
-  options?: Partial<ImportOptions>;
-}
-
-export interface ChunkSummary {
-  created: number;
-  updated: number;
-  skipped: number;
-  failed: number;
-  /** A handful of issues, so the UI can show progress without a round trip. */
-  sample: RowIssue[];
-}
-
-/**
- * Apply one chunk.
- *
- * ★ ROW-ATOMIC, NOT CHUNK-ATOMIC. Each row is its own transaction, so row 12
- * failing says nothing about row 13. Wrapping the chunk in one transaction
- * would be simpler and would mean one bad cell discards 199 good rows — and
- * the merchant, having no way to tell which, re-uploads and duplicates
- * everything that did work.
- */
-export async function importChunk(
-  input: ImportChunkInput,
-): Promise<ActionResult<ChunkSummary>> {
-  const gate = await importGate(input.resource);
-  if ("error" in gate) return { error: gate.error };
-  const { resource, admin, storeId } = gate;
-
-  // The job id is scoped to the store, so a chunk cannot be posted into
-  // another store's job even with a valid session here.
-  const job = await getJob(input.jobId, storeId);
-  if (!job) return { error: "That import can't be found." };
-  if (job.kind !== "import" || job.resource !== resource.id)
-    return { error: "That import is for something else." };
-  if (job.status === "cancelled")
-    return { error: "That import was cancelled." };
-
-  const rows = Array.isArray(input.rows) ? input.rows : [];
-  if (rows.length === 0)
-    return {
-      success: true,
-      data: { created: 0, updated: 0, skipped: 0, failed: 0, sample: [] },
-    };
-  if (rows.length > IMPORT_CHUNK_ROWS * 2)
-    return { error: "That chunk is too large." };
-
-  // ★ RE-PARSED SERVER-SIDE. The browser sent raw cells; every coercion,
-  // length cap, URL scheme check and enum check runs again here against the
-  // same registry. Trusting the browser's parse would make the whole
-  // validation layer a suggestion.
-  const parsed = parseFile(resource.id, {
-    header: input.header ?? [],
-    rows,
-    delimiter: ",",
-    raggedLines: [],
-    truncated: false,
-  });
-  if ("error" in parsed) return { error: parsed.error };
-
-  const ctx: ImportContext = {
-    storeId,
-    admin,
-    options: normalizeOptions(input.options),
-  };
-
-  // File-level issues ("the Vendor column isn't one we recognise") describe the
-  // HEADER, so every chunk re-derives the identical set. Recorded on the FIRST
-  // chunk only — repeating them 100 times would bury the row errors, and
-  // dropping them entirely (which is what filtering to `line > 0` did) loses
-  // the one note that explains why a whole column appears to have been ignored.
-  const firstChunk = job.processedRows === 0;
-  const issues: RowIssue[] = parsed.fileIssues.filter(
-    (i) => i.line > 0 || firstChunk,
-  );
-  let results: RowResult[] = [];
-
-  // Rows that failed to PARSE never reach an importer — they are already
-  // failures, with the cell-level reason the merchant needs.
-  const badRows = parsed.records.filter((r) => !r.ok);
-  for (const record of badRows) issues.push(...record.issues);
-  const goodRows = parsed.records.filter((r) => r.ok);
-
-  issues.push(...crossRowIssues(resource, goodRows));
-
-  try {
-    switch (resource.id) {
-      case "products":
-        results = await importProducts(ctx, groupProductRows(goodRows));
-        break;
-      case "categories":
-        results = await importCategories(ctx, goodRows);
-        break;
-      case "inventory":
-        results = await importInventory(ctx, goodRows);
-        break;
-      case "coupons":
-        results = await importCoupons(ctx, goodRows);
-        break;
-      default:
-        return { error: `${resource.label} can't be imported.` };
-    }
-  } catch (error) {
-    // An importer is contractually not supposed to throw. If one does, the
-    // chunk is lost but the JOB survives with the reason recorded — the
-    // merchant sees where it stopped rather than a spinner that never ends.
-    logError("import: chunk threw", error, {
-      jobId: input.jobId,
-      resource: resource.id,
-    });
-    await recordIssues(input.jobId, storeId, [
-      {
-        line: rows[0]?.line ?? 0,
-        column: null,
-        code: "chunk_failed",
-        message: `Something went wrong applying rows ${rows[0]?.line}–${rows[rows.length - 1]?.line}. Nothing after this point in the chunk was imported.`,
-        severity: "error",
-        value: null,
-      },
-    ]);
-    await addProgress(input.jobId, storeId, {
-      processed: rows.length,
-      failed: rows.length,
-    });
-    return { error: "Something went wrong importing those rows." };
-  }
-
-  for (const result of results) issues.push(...result.issues);
-
-  const summary: ChunkSummary = {
-    created: results.filter((r) => r.outcome === "created").length,
-    updated: results.filter((r) => r.outcome === "updated").length,
-    skipped: results.filter((r) => r.outcome === "skipped").length,
-    failed:
-      badRows.length + results.filter((r) => r.outcome === "failed").length,
-    sample: issues.slice(0, 5),
-  };
-
-  const stored = await recordIssues(input.jobId, storeId, issues);
-  await addProgress(input.jobId, storeId, {
-    processed: rows.length,
-    created: summary.created,
-    updated: summary.updated,
-    skipped: summary.skipped,
-    failed: summary.failed,
-    warnings: issues.filter((i) => i.severity === "warning").length,
-    dropped: stored.dropped,
-  });
-
-  return { success: true, data: summary };
-}
-
-export async function finishImport(
-  jobId: string,
-  resourceId: string,
-): Promise<ActionResult<JobRow>> {
-  const gate = await importGate(resourceId);
-  if ("error" in gate) return { error: gate.error };
-  const { resource, admin, storeId } = gate;
-
-  const job = await getJob(jobId, storeId);
-  if (!job) return { error: "That import can't be found." };
-
-  await finishJob(jobId, storeId);
-  const finished = (await getJob(jobId, storeId)) ?? job;
-
-  // Everything the import could have touched. Cheap, and being conservative
-  // here is much better than a merchant refreshing a storefront that still
-  // shows yesterday's prices.
-  revalidateTag(TAGS.products, "max");
-  revalidateTag(TAGS.categories, "max");
-  revalidatePath("/dashboard/products");
-  revalidatePath("/dashboard/categories");
-  revalidatePath("/dashboard/inventory");
-  revalidatePath("/dashboard/marketing/coupons");
-  revalidatePath("/shop");
-
-  // ONE event for the job, not one per row — see the note on `data.imported`
-  // in lib/notifications/events.ts.
-  emitEvent({
-    type: "data.imported",
-    storeId,
-    actor: { type: "admin", id: admin.uid, label: admin.email },
-    subject: { type: "product", id: jobId, label: resource.label },
-    payload: {
-      resource: resource.label,
-      created: finished.createdCount,
-      updated: finished.updatedCount,
-      skipped: finished.skippedCount,
-      failed: finished.failedCount,
-      status: finished.status,
-      ...(finished.filename ? { file: finished.filename } : {}),
-    },
-  });
-
-  // New or newly-published products need to reach search engines, the same
-  // hook the single-product editor calls. Off the response path.
-  if (resource.id === "products" && finished.createdCount > 0) {
-    after(() =>
-      notifyStoreContentPublished({
-        storeId,
-        paths: ["/shop", "/"],
-      }).catch(() => {}),
-    );
-  }
-
-  return { success: true, data: finished };
-}
 
 export async function cancelImport(
   jobId: string,

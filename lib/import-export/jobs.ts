@@ -353,11 +353,21 @@ export async function getJobIssues(
 }
 
 /**
- * Close jobs that were left running.
+ * Close jobs that were abandoned, so the history doesn't show work that will
+ * never finish. Called opportunistically when the history page loads.
  *
- * A merchant who closes the tab mid-import leaves a `running` row that would
- * otherwise sit in their history forever looking like work still in progress.
- * Called opportunistically when the history page loads, so it needs no cron.
+ * ★★ IT MUST NOT CANCEL A JOB A WORKER IS STILL ON. Imports moved server-side,
+ * and a large one legitimately runs for longer than this window — a 50,000-row
+ * product file is many chained runs. The old rule was "pending or running and
+ * untouched for 30 minutes", which under the browser-driven design could only
+ * mean a closed tab; now it would reach in and cancel a healthy import while
+ * the worker was mid-slice, and the merchant would watch their own history page
+ * kill it.
+ *
+ * So the test is the LEASE, not the age: a live job has a lease in the future
+ * (the worker renews it on every claim) or was updated within the window by a
+ * slice landing. Only a job that is BOTH unclaimed and untouched is genuinely
+ * abandoned — which now means the queue never picked it up at all.
  */
 export async function reapStaleJobs(
   storeId: string,
@@ -367,12 +377,13 @@ export async function reapStaleJobs(
     const cutoff = new Date(
       Date.now() - olderThanMinutes * 60_000,
     ).toISOString();
+    const now = new Date().toISOString();
     await withService((db) =>
       db
         .update(dataJobs)
         .set({
           status: "cancelled",
-          error: "Stopped before it finished — the tab was probably closed.",
+          error: "Stopped before it finished.",
           finishedAt: new Date().toISOString(),
         })
         .where(
@@ -380,6 +391,9 @@ export async function reapStaleJobs(
             eq(dataJobs.storeId, storeId),
             inArray(dataJobs.status, ["pending", "running"]),
             sql`${dataJobs.updatedAt} < ${cutoff}`,
+            // No worker holds it. A NULL lease is a job that has never been
+            // claimed, which after this long means nothing ever will.
+            sql`(${dataJobs.leaseUntil} IS NULL OR ${dataJobs.leaseUntil} < ${now})`,
           ),
         ),
     );
