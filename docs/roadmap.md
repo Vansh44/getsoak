@@ -12,6 +12,10 @@ the sequence; those are the specifications.**
 
 - **Acceptance tests:** `docs/pos-acceptance.md`
 - **Architecture:** `CODEBASE.md` §22 (POS), §23 (locations), §24 (notifications)
+- **★ Steps 1–5 below are specified in `docs/pos-completion-plan.md`** — the
+  checkout payment defaults, per-product cancellation + refund-to-source, the
+  full pickup flow with collection codes, and POS customer capture. That file is
+  the detail; this one stays the sequence.
 
 > **Keep this current.** Any commit that finishes, splits or reorders a step
 > updates the table below in the same commit — the same rule `CODEBASE.md`
@@ -31,17 +35,23 @@ the sequence; those are the specifications.**
 | —      | POS 4: inventory from the shop floor, transfers                     | ✅ done |
 | —      | LOC A–C: capabilities, Locations section, scope, inventory selector | ✅ done |
 | —      | LOC D–F: routing, reservations, pickup, searchable store picker     | ✅ done |
-| **1**  | **Finish pickup + close the gaps**                                  | ⏭ next |
-| **2**  | **Refunds & cancellation** — the money-out path                     | ✅ done |
-| **3**  | Returns, exchanges & BORIS                                          | ✅ done |
-| **4**  | Store credit ✅ — gift cards left                                   | ◐ part  |
-| **5**  | Metered extra-location billing (POS 7)                              | ✅ done |
+| —      | Refunds & cancellation, returns/exchanges/BORIS, store credit       | ✅ done |
+| —      | Metered extra-location billing (POS 7)                              | ✅ done |
+| **1**  | **Checkout payment defaults + pickup payment policy**               | ⏭ next |
+| **2**  | Cancellation: per-product policy + refund to source                 | ⏳      |
+| **3**  | Pickup end to end: collection code, QR, manager/cashier split       | ⏳      |
+| **4**  | POS customer capture (Shopify parity) + claim/merge                 | ⏳      |
+| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                         | ⏳      |
 | **6**  | Channel stock policy (LOC H)                                        | ⏳      |
 | **7**  | Transfer lifecycle (LOC I)                                          | ⏳      |
 | **8**  | More routing strategies (LOC J)                                     | ⏳      |
-| **9**  | WhatsApp/SMS receipts (POS 6)                                       | ⏳      |
+| **9**  | Gift cards (the rest of Step 4's old scope)                         | ⏳      |
 | **10** | Offline outbox (POS 9)                                              | ⏳      |
 | **11** | Full omnichannel (POS 8 = LOC K)                                    | ⏳      |
+
+**Steps 1–5 are specified in `docs/pos-completion-plan.md`.** The old Step 1
+("finish pickup") is absorbed into the new Step 3, which covers the same ground
+plus the collection code, the QR and the role split.
 
 ---
 
