@@ -33,7 +33,7 @@ sequence AND the spec for everything still to build.
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
-| **2**  | **Cancellation: per-product policy + refund to source**        | M    | ⏭ next |
+| **2**  | **Cancellation & refund flow** — server done, UI remaining     | M    | ◐ part  |
 | **3**  | Pickup end to end: collection code, QR, manager/cashier split  | L    | ⏳      |
 | **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ⏳      |
 | **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
@@ -137,7 +137,54 @@ sentence pointing at Channels.
 
 ---
 
-## Step 2 — Cancellation: per-product policy, and money back to source
+## Step 2 — Cancellation & refund flow ◐ SERVER DONE, UI REMAINING
+
+**Owner spec, 2026-08-09.** It supersedes the earlier draft below in two ways
+worth stating plainly: there is **no per-product `cancellable` control** (the
+window is store-level), and cancellation does **not** auto-refund to source —
+the refund DESTINATION is chosen and confirmed, Shopify's model.
+
+**✅ Shipped (server):**
+
+- `lib/orders/cancellation.ts` — pure rules + 49 tests: the five-value window
+  (`none` / `until_fulfilled` / `1h` / `24h` / `custom`), eligibility, the fixed
+  cancel-reason vocabulary, and which refund destinations an order can honour.
+- `supabase/orders_01_cancellation.sql` — the request lifecycle as columns on
+  `orders` (⚠ **not applied yet**), plus a partial index for the queue.
+- Three settings: allow, window (select), approval (select, **approval
+  required** by default).
+- `lib/orders/approve-cancellation.ts` — ONE implementation of "cancel it",
+  shared by the merchant's panel, the Approve button and customer auto-approve.
+- `cancelMyOrder` rewritten **request-first**; `getCancellationRequests`,
+  `cancelOrder` and `declineCancellation` on the merchant side; the
+  `order.cancellation_declined` event.
+
+**⏳ Remaining:** the storefront confirmation step, the dashboard request queue
+and cancel panel, and the settings UI rendering (the registry drives it, but the
+Orders settings page needs the new selects laid out).
+
+**★ ASKING IS NOT CANCELLING.** A customer raises a request; a human approves
+it. Money and stock move on APPROVAL. Before this, an eligible order was
+cancelled outright the moment the button was pressed.
+
+**★ WHOLE-ORDER ONLY, EVERYWHERE.** No item-level cancellation, approval,
+refund or state — and none is planned, because it needs partial fulfilment this
+system does not have. Owner decision, and written into the module headers so it
+survives the next person reading them.
+
+**★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
+`store_credit` as a method, so using it for both means an `order_refunds` row
+either way, the refund cap applied to both, and the pending-row-first
+idempotency. Calling `issueCredit` directly would credit a customer with no
+refund row behind it — money out that the order does not know about.
+
+**★ A FAILED REFUND IS NEVER REPORTED AS SUCCESS**, and a `pendingReconcile`
+answer is never reported as a failure (§26) — the order is cancelled either way,
+but the caller must say which happened.
+
+Below is the earlier draft, kept for the parts still true.
+
+### (superseded) Step 2 — per-product policy, and money back to source
 
 ### 2.1 Which products a customer may cancel
 

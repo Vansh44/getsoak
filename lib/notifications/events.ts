@@ -102,6 +102,7 @@ export const EVENT_KEYS = [
   "order.placed",
   "order.status_changed",
   "order.cancellation_requested",
+  "order.cancellation_declined",
   "order.cancelled",
   "order.payment_received",
   "order.payment_failed",
@@ -243,6 +244,20 @@ export const EVENTS: readonly EventDef[] = [
     section: "orders",
     severity: "warning",
     audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "order.cancellation_declined",
+    label: "Cancellation declined",
+    description:
+      "A merchant declined a customer's request to cancel an order. The order stays active.",
+    group: "Orders",
+    section: "orders",
+    severity: "info",
+    // ★ THE CUSTOMER IS THE POINT. They asked and are waiting; a decision they
+    // are never told about reads as being ignored, and the merchant's reason is
+    // what stops the next message being a complaint. The team gets it in-app
+    // only — they made the decision, so mailing it back to them is noise.
+    audiences: { "store-admins": IN_APP, customer: BOTH },
   },
   {
     key: "order.cancelled",

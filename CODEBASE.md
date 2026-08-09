@@ -3110,52 +3110,85 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **⚠ Never exercised against a live Razorpay account**, and the exact
       idempotency header name should be re-checked against their current docs.
 
-27. **Cancellation — and why nothing pays automatically.** The other half of
-    roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10.
-    - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
-      on cancel was considered and refused — not even as a setting — for the
-      same reason §22 gives for owner-only discounts: money leaving with no
-      human looking at it is the one irreversible act with no physical trace.
-      So the OBLIGATION is made loud instead of automatic.
-    - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
-      cancelled order that was paid for. **Derived**, never stored: a flag
-      would need clearing on refund, on partial refund and on reinstatement,
-      and the one you forget is the one that nags a merchant forever.
-    - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
-      `refundDueForOrder` and rides `refund_due` into the
-      `order.pickup_expired` payload — the merchant learns it in the channel
-      they already read. `refund_due` had to be added to `MONEY` in
-      `lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
-      "Total 281.4" failure), and declared in `variables.ts` to be a usable
-      `{{token}}`.
-    - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
-      inline in `updateOrderStatus`; a second hand-written copy for the
-      customer path would fail SILENTLY — stock simply never comes back, and
-      it surfaces in a stock count weeks later. It preserves both branches
-      exactly: reserved stock releases at the location that reserved it (a POS
-      sale must not restock at the store's default shop), and a pickup order
-      releases HOLDS because its units never left the shelf.
-    - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
-      neither.** Stoppable (`pending`/`processing`, not collected, inside the
-      window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
-      Too late ⇒ `order.cancellation_requested` and the order is untouched. The
-      status is re-checked INSIDE the statement that changes it, so a dispatch
-      racing a cancel means one matches nothing rather than both "succeeding".
-      `withService` after the WHERE re-proves ownership + store scope, because
-      a shopper holds SELECT but not UPDATE on their own orders (convention
-      #12's model).
-    - **The button does NOT disappear once an order ships.** Someone who wants
-      out still wants out, and hiding it just becomes a support email the
-      merchant handles by hand anyway.
-    - Settings (group **Orders**, section `orders`, at
-      `/dashboard/orders/settings`): `orders.allowCustomerCancellation`
-      (**default OFF** — new behaviour on a live store, invariant 1) and
-      `orders.cancellationWindowHours` (24). Enforced server-side; a hidden
-      button is not a permission.
-    - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
-      Every registry event has a real emitter;
-      `order.cancellation_requested` was the last one waiting. Keep it that
-      way — an entry there is a deliberate act, not a way to silence the guard.
+27. **Cancellation — a REQUEST, then a decision** (roadmap Step 2, rebuilt
+    2026-08-09). Design: `docs/roadmap.md` Step 2.
+    - **★ ASKING IS NOT CANCELLING.** `cancelMyOrder` raises a request
+      (`orders.cancellation_status = 'requested'`); a human approves it. Money
+      and stock move on APPROVAL. It used to cancel outright the moment a
+      shopper pressed the button.
+    - **★ WHOLE-ORDER ONLY, AND DELIBERATELY SO.** No item-level cancellation,
+      approval, refund or state anywhere in this flow — it would need partial
+      fulfilment, which this system does not have. Owner decision; written into
+      `lib/orders/cancellation.ts` and `approve-cancellation.ts` headers so the
+      next reader does not "fix" it.
+    - **★ ONE IMPLEMENTATION OF CANCELLING** (`lib/orders/approve-cancellation.ts`),
+      shared by the merchant's Cancel panel, the Approve button, and the
+      customer path under automatic approval. Claim the status conditionally →
+      release stock (`lib/orders/cancel.ts`) → move the money → notify, in that
+      order and for stated reasons.
+    - **★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
+      `store_credit` as a method, so using it for both gives an `order_refunds`
+      row either way (keeping `refundDueForOrder` and `payment_status` correct),
+      the refund cap on both, and pending-row-first idempotency. Calling
+      `issueCredit` directly would credit a customer with no refund row behind
+      it — money out the order does not know about. `later` moves nothing by
+      design: it records the obligation.
+    - **★ A FAILED REFUND IS NEVER A SUCCESS, AND AN UNKNOWN ONE IS NEVER A
+      FAILURE.** The order is cancelled either way (the claim already
+      committed), but `refundError` and `refundPending` are returned separately
+      so the caller says which — §26's rule, reused.
+    - **★ APPROVAL IS REQUIRED BY DEFAULT** (`orders.cancellationApproval`), and
+      `normalizeApproval` resolves anything unknown to requiring it: automatic
+      approval moves money with nobody looking, so it is never what a typo
+      lands on.
+    - **★ THE WINDOW IS A FIXED LIST, INCLUDING "UNTIL FULFILLED"** — a
+      first-class rule, not a very long duration. A shop that packs in 20
+      minutes and one that takes three days both mean "before we've packed it".
+    - **★ A DECLINE CARRIES A REASON, ENFORCED SERVER-SIDE**, and the customer
+      reads it verbatim (`order.cancellation_declined`). A silent no is the
+      most complained-about thing a request flow does.
+    - One active request per order, enforced by a conditional claim on
+      `cancellation_status IS NULL`; a declined request cannot be reopened by
+      asking again.
+
+27b. **The original cancellation notes — and why nothing paid automatically.** The other half of
+roadmap Step 2; design in `docs/returns-exchanges-plan.md` §10. - **★ CANCELLING NEVER MOVES MONEY, AND THAT IS THE FEATURE.** Auto-refund
+on cancel was considered and refused — not even as a setting — for the
+same reason §22 gives for owner-only discounts: money leaving with no
+human looking at it is the one irreversible act with no physical trace.
+So the OBLIGATION is made loud instead of automatic. - **`OrderRefundState.refundOwed`** turns the refund panel amber on a
+cancelled order that was paid for. **Derived**, never stored: a flag
+would need clearing on refund, on partial refund and on reinstatement,
+and the one you forget is the one that nags a merchant forever. - **A CRON CANNOT PROMPT, SO IT TELLS.** `sweepExpiredPickups` computes
+`refundDueForOrder` and rides `refund_due` into the
+`order.pickup_expired` payload — the merchant learns it in the channel
+they already read. `refund_due` had to be added to `MONEY` in
+`lib/notifications/format.ts` or it would arrive as a bare `840` (§24's
+"Total 281.4" failure), and declared in `variables.ts` to be a usable
+`{{token}}`. - **`lib/orders/cancel.ts` is ONE implementation for TWO callers.** It was
+inline in `updateOrderStatus`; a second hand-written copy for the
+customer path would fail SILENTLY — stock simply never comes back, and
+it surfaces in a stock count weeks later. It preserves both branches
+exactly: reserved stock releases at the location that reserved it (a POS
+sale must not restock at the store's default shop), and a pickup order
+releases HOLDS because its units never left the shelf. - **★ `cancelMyOrder` — ONE BUTTON, TWO OUTCOMES, and the client decides
+neither.** Stoppable (`pending`/`processing`, not collected, inside the
+window) ⇒ cancelled outright + `order.cancelled` carrying `refund_due`.
+Too late ⇒ `order.cancellation_requested` and the order is untouched. The
+status is re-checked INSIDE the statement that changes it, so a dispatch
+racing a cancel means one matches nothing rather than both "succeeding".
+`withService` after the WHERE re-proves ownership + store scope, because
+a shopper holds SELECT but not UPDATE on their own orders (convention
+#12's model). - **The button does NOT disappear once an order ships.** Someone who wants
+out still wants out, and hiding it just becomes a support email the
+merchant handles by hand anyway. - Settings (group **Orders**, section `orders`, at
+`/dashboard/orders/settings`): `orders.allowCustomerCancellation`
+(**default OFF** — new behaviour on a live store, invariant 1) and
+`orders.cancellationWindowHours` (24). Enforced server-side; a hidden
+button is not a permission. - **★ `PENDING` in `lib/notifications/coverage.test.ts` IS NOW EMPTY.**
+Every registry event has a real emitter;
+`order.cancellation_requested` was the last one waiting. Keep it that
+way — an entry there is a deliberate act, not a way to silence the guard.
 
 28. **Returns — the policy surface.** Config + the pure rules; the request flow
     itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,

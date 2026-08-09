@@ -1221,6 +1221,29 @@ export const orders = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // ── Cancellation (orders_01_cancellation.sql) ──────────────────────────
+    // WHOLE-ORDER only: there is deliberately no per-item equivalent, because
+    // this system has no partial fulfilment. Lifecycle in
+    // lib/orders/cancellation.ts. NULL status = nobody has ever asked.
+    cancellationStatus: text("cancellation_status"),
+    cancellationRequestedAt: timestamp("cancellation_requested_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** The customer's own words, shown to the merchant when deciding. */
+    cancellationReason: text("cancellation_reason"),
+    /** The merchant's words on a decline — shown TO the customer. */
+    cancellationDeclineReason: text("cancellation_decline_reason"),
+    cancellationDecidedAt: timestamp("cancellation_decided_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    cancellationDecidedBy: text("cancellation_decided_by"),
+    /** A code from CANCEL_REASONS, never free text. */
+    cancelReason: text("cancel_reason"),
+    /** ★ INTERNAL. Never rendered to a customer, anywhere. */
+    cancelStaffNote: text("cancel_staff_note"),
+    cancelRefundDestination: text("cancel_refund_destination"),
     // Claimed by the reminder job so the nudge fires exactly once
     // (locations_06_pickup_reminder.sql).
     // When the shop expects it ready (locations_09). The hold window is

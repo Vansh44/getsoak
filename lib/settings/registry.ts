@@ -47,7 +47,9 @@ export const SETTING_KEYS = [
   "fulfilment.pickupHoldDays",
   "fulfilment.pickupPayment",
   "orders.allowCustomerCancellation",
+  "orders.cancellationWindow",
   "orders.cancellationWindowHours",
+  "orders.cancellationApproval",
   "returns.enabled",
   "returns.windowDays",
   "returns.selfServe",
@@ -347,16 +349,85 @@ export const SETTINGS: readonly SettingDef[] = [
     defaultValue: false,
   },
   {
+    key: "orders.cancellationWindow",
+    label: "Cancellation window",
+    description:
+      "How long after ordering a customer may ask to cancel. 'Until fulfilled' is the usual choice — it tracks your own packing rather than a guess at how long it takes.",
+    group: "Orders",
+    section: "orders",
+    type: "select",
+    // ★ A FIXED LIST, not just a number of hours. "Before you've packed it" is
+    // the rule most merchants actually mean, and it cannot be expressed as a
+    // duration — a shop that packs in 20 minutes and one that takes three days
+    // both want the same rule, not two different numbers.
+    defaultValue: "until_fulfilled",
+    options: [
+      {
+        value: "none",
+        label: "No cancellations",
+        description: "Customers cannot cancel; they contact you instead.",
+      },
+      {
+        value: "until_fulfilled",
+        label: "Until fulfilled",
+        description: "Any time before the order is marked fulfilled.",
+      },
+      {
+        value: "1h",
+        label: "1 hour",
+        description: "Within an hour of ordering.",
+      },
+      {
+        value: "24h",
+        label: "24 hours",
+        description: "Within a day of ordering.",
+      },
+      {
+        value: "custom",
+        label: "Custom hours",
+        description: "Use the number of hours set below.",
+      },
+    ],
+    dependsOn: "orders.allowCustomerCancellation",
+  },
+  {
     key: "orders.cancellationWindowHours",
     label: "Customers can cancel within",
     description:
-      "Hours from when the order was placed. BOTH conditions must hold: past this window, or once it has shipped, the button becomes a request the store reviews rather than an instant cancellation.",
+      "Used only when the cancellation window above is set to Custom hours.",
     group: "Orders",
     section: "orders",
     type: "number",
     defaultValue: 24,
     min: 1,
     max: 720,
+    dependsOn: "orders.allowCustomerCancellation",
+  },
+  {
+    key: "orders.cancellationApproval",
+    label: "Cancellation approval",
+    description:
+      "Whether a customer's cancellation request waits for you, or cancels the order straight away.",
+    group: "Orders",
+    section: "orders",
+    type: "select",
+    // ★ APPROVAL IS THE DEFAULT because automatic approval can move money with
+    // nobody reviewing the request — the same argument owner-only discounts
+    // make at the till (CODEBASE §22).
+    defaultValue: "require_approval",
+    options: [
+      {
+        value: "require_approval",
+        label: "Require my approval",
+        description: "Requests wait in Orders until you approve or decline.",
+      },
+      {
+        value: "auto",
+        label: "Approve automatically",
+        description:
+          "An eligible request cancels the order immediately. Restocks, and refunds per your choice below.",
+      },
+    ],
     dependsOn: "orders.allowCustomerCancellation",
   },
 
