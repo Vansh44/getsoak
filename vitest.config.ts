@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
@@ -8,6 +8,17 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // ★ A GIT WORKTREE IS A SECOND COPY OF THIS REPO, INSIDE IT. Background
+    // agents create them under .claude/worktrees/, so test discovery found every
+    // spec twice — the run reported 384 files instead of 195, and failures from
+    // ANOTHER branch's half-finished work appeared as failures of this one. That
+    // is worse than noise: it is a red suite nobody can act on, and the habit it
+    // teaches is to ignore the number.
+    //
+    // `configDefaults.exclude` is SPREAD, not replaced. Assigning a bare array
+    // here silently drops vitest's own defaults — node_modules first among them —
+    // so the run would then descend into every dependency's shipped tests.
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
     alias: {
       "@": path.resolve(__dirname, "./"),
       // `server-only` throws when resolved outside an RSC graph; stub it so
