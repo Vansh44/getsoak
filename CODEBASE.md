@@ -131,7 +131,9 @@ wholesip/
 │   │   │   │                  #   the customer rows the fan-out has always
 │   │   │   │                  #   written, finally rendered
 │   │   │   ├── profile/       #   customer profile (personal info + address-book
-│   │   │   │                  #   card + quick links to orders/notifications)
+│   │   │   │                  #   card + ★ credit-balance.tsx, the store-credit
+│   │   │   │                  #   card (§29 — hides itself at zero with no
+│   │   │   │                  #   history) + quick links to orders/notifications)
 │   │   │   └── [pageSlug]/    #   ★ ALL content pages from store_pages (see §11): merchant
 │   │   │                      #   custom pages AND the former hardcoded static pages
 │   │   │                      #   (our-story, faqs, …) — retired in Phase 4b, now editable
@@ -381,6 +383,11 @@ wholesip/
 │   │   │                      # centre (§22): list/unread/mark-read over the
 │   │   │                      # same notifications table the staff bell uses,
 │   │   │                      # scoped to recipient_type 'customer' + host store
+│   │   ├── customer-credit-actions.ts # ★ The shopper's OWN store credit (§29):
+│   │   │                      # getMyCredit = balance + recent movements, session
+│   │   │                      # uid + host store, both server-derived. Exposes
+│   │   │                      # NEITHER the ledger's `ref` NOR its `note` (both
+│   │   │                      # internal); customer wording derives from `kind`
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
 │   │   │                      # activity feed, preference get/save, pruneNotifications.
@@ -3517,6 +3524,29 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Offered, never forced** (§28's §3.3 rule): the refund panel shows it
       only when the order has a customer account, and tells the merchant to
       make sure the customer agreed to a balance rather than their money back.
+    - **★ THE CUSTOMER CAN NOW SEE IT** (`app/actions/customer-credit-actions.ts`
+      → `getMyCredit`, rendered by `(pages)/profile/credit-balance.tsx`). Credit
+      was INVISIBLE to the person who owns it: it applied itself at checkout
+      (`creditSplit.applied > 0`) and appeared nowhere else — not in the
+      profile, not on an order — so a shopper refunded to credit had no way to
+      learn they had any short of filling a cart and noticing the total drop.
+      That is how a merchant gets "you never refunded me", and it made the
+      "offered, never forced" rule above half a promise. Three decisions:
+      - **Scope is server-derived on BOTH axes** — session uid + HOST store,
+        never caller input. That is what keeps the `withService` reads inside
+        `lib/credit` safe from a storefront entry point; and the store scope is
+        not redundant, because a Firebase uid is global
+        (the `customer-order-actions.ts` double lock).
+      - **★ `ref` AND `note` ARE NOT EXPOSED.** `note` is merchant-authored
+        (free text once the grant UI lands) and `ref` carries internal ids —
+        §16's AI ledger uses an operator's EMAIL as a ref. The customer's
+        wording is derived from `kind` alone, a closed vocabulary the action
+        owns, so a private note can never surface on a storefront page. Pinned
+        by a test; don't "complete" the mapping by passing `note` through.
+      - **The card hides itself** when the balance is 0 AND there is no
+        history, matching checkout's `applied > 0`. A spent-to-zero balance
+        still renders, because the history explains where the money went and
+        vanishing would look like it was lost.
     - **Not built:** gift cards (they share this ledger shape — that is why
       `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
       needs no migration), a merchant grant UI (`issueCredit` takes
