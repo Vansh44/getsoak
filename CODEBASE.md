@@ -685,7 +685,12 @@ wholesip/
 │   │                          # the status map, the gateway matcher; tested) +
 │   │                          # refund-reconcile.ts (settles refunds whose gateway
 │   │                          # answer never arrived: reconcile-on-read + cron sweep)
-│   ├── billing/               # ★ credit-note-data.ts (§28: what a GST credit note
+│   ├── billing/               # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
+│   │                          # cycle (a DURATION, never a calendar unit), the
+│   │                          # X+3 collection lead, the 48h grace window,
+│   │                          # collectionRoute (mandate max AND the AFA-exempt
+│   │                          # limit — two different ceilings) and mandateSizePaise.
+│   │                          # ★ credit-note-data.ts (§28: what a GST credit note
 │   │                          # says — the invoice it reverses + splitGst on the
 │   │                          # refunded tax, all from the ORDER's snapshot).
 │   │                          # Invoices & tax (§17): types.ts (BillingSettings/
@@ -781,6 +786,24 @@ wholesip/
 │   │                          # public — object URLs are public, the listing is admin-only)
 │   ├── invoicing.sql          # ★ tax_classes + products.tax_class_id + order_items tax
 │   │                          # cols + orders.tax_inclusive + store_billing_settings — §17
+│   ├── billing_01_foundation.sql   # ★ §34 platform_billing_settings (operator GST
+│   │                          # singleton; tax OFF until a GSTIN exists) +
+│   │                          # billing_accounts + billing_mandates (one ACTIVE
+│   │                          # per store, max_amount read from the token)
+│   ├── billing_02_subscriptions.sql # ★ §34 billing_subscriptions (OUR state
+│   │                          # machine, not Razorpay's) + billing_claim_downgrade()
+│   │                          # — ONE statement that re-checks state, deadline,
+│   │                          # comp exemption AND payment inside the UPDATE
+│   ├── billing_03_invoices.sql # ★ §34 billing_invoices + items + the gapless FY
+│   │                          # series (allocated ON FINALIZE by trigger, via
+│   │                          # sm_pad) + immutability triggers. ⚠ APPLY BEFORE
+│   │                          # billing_02's function is ever CALLED — plpgsql
+│   │                          # resolves table names at call time, so the wrong
+│   │                          # order succeeds and then fails at runtime
+│   ├── billing_04_payments.sql # ★ §34 billing_payment_attempts (ONE in flight per
+│   │                          # invoice, partial unique) + billing_credits +
+│   │                          # billing_reconciliation_items + the additive
+│   │                          # billing_webhook_events extension
 │   ├── plans_02_basic_and_expiry.sql # ★ starter→basic rename + plan_expires_at — §15
 │   ├── ai_credits.sql         # ★ credit balances/ledger/purchases + add_ai_credits/
 │   │                          # try_spend_ai_credit RPCs (service-role only) — §16
@@ -4183,6 +4206,106 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **⚠ The activity feed is still day-grouped CARDS** while the other four
       are tables. Left alone deliberately: it is working UI, and a
       chronological event stream reads better as cards than as rows.
+
+34. **Platform → merchant billing (IN PROGRESS — schema only, nothing applied).**
+    Full design: **`docs/billing-architecture.md`**. This is StoreMink billing its
+    OWN merchants, and is distinct from §17 (a merchant invoicing their shopper)
+    and §18 (a merchant's BYO gateway). Greenfield: there are no production
+    customers, so it REPLACES the Razorpay-Subscriptions design rather than
+    migrating it. Phases 1–2 are done; §3 onward is unbuilt.
+    - **★★ THE PRICE MUST NOT LIVE IN A PROVIDER-SIDE PLAN.** Razorpay's own
+      docs: _"You can only update a Subscription authorised using cards and not
+      via UPI and Emandate."_ Every amount change — tier, period, locations —
+      goes through `rzpUpdateSubscription`, so on a UPI or e-mandate mandate
+      `changePlan` AND `changeBilledLocations` are both **dead**, and add-ons
+      (the usual escape hatch) are deprecated. So StoreMink computes the amount
+      and the gateway merely collects it: token-based recurring, not
+      Subscriptions.
+    - **★★ TWO DIFFERENT CEILINGS, AND CONFLATING THEM IS THE COMMON ERROR.**
+      A mandate's registered `max_amount` is the most it may EVER be debited for
+      (₹1,00,000+ on UPI, effectively uncapped on cards). The **AFA-exempt
+      limit** is the most that can be taken without the customer authenticating
+      that specific debit — **₹15,000**, UPI and cards alike (RBI _Digital
+      Payments — E-mandate Framework, 2026_; raised from ₹5,000 on 16 June
+      2022). A ₹2,00,000 mandate does NOT make a ₹50,000 debit automatic, only
+      permitted. `collectionRoute` (`lib/billing/cycle.ts`) is therefore a
+      CONJUNCTION of both, and fails closed on an unrecorded max.
+      ⚠ The ₹1,00,000 AFA exemption is real but reaches only insurance
+      premiums, mutual-fund subscriptions and credit-card bills. A SaaS
+      subscription is none of those.
+    - **★★ THE X+3 RULE RESHAPES THE TIMELINE.** RBI requires a pre-debit
+      notification ≥24h ahead and Razorpay's guidance is that a recurring
+      payment takes **X+3 days** to confirm. So collection starts at
+      **T−4 days**, not at cycle start: the naive loop would expire the 2-day
+      grace **before the payment result was even known** and downgrade merchants
+      whose money was still in flight. A consequence that resolves an
+      ambiguity — the amount freezes at T−4, so a location added at T−2 bills
+      NEXT cycle.
+    - **★ 30 DAYS MEANS 30 DAYS; YEARLY IS 365** (owner, 2026-08-11). A
+      DURATION, never a calendar unit, so February and leap years get no special
+      case — and the tests assert exactly that, in the inverted direction. Two
+      intended consequences: the billing date DRIFTS (1 Aug → 31 Aug → 30 Sep,
+      so "we bill on the 1st" is never true), and a 365-day year is not an
+      anniversary — a cycle starting 1 Jan 2028 ends **31 Dec 2028**.
+    - **★ THE MANDATE COVERS THE RENEWAL, NOT EVERY FUTURE PURCHASE.** A failed
+      renewal costs a grace period and possibly the merchant; an upgrade that
+      needs re-authorisation happens while the merchant is on screen, which is a
+      fine place for friction. The superseded `mandateMaxPaise()` had this
+      backwards — no arguments, one global ₹2,00,000 for everyone, over half of
+      it provisioning locations a Basic plan cannot buy. `mandateSizePaise`
+      sizes on plan + billed locations, ×1.18 tax, ×1.5 reprice headroom
+      (Basic yearly ⇒ **₹27,000**).
+      **★★ The tax provision is applied even while `tax_enabled` is false** —
+      GST turns Basic yearly into ₹17,700, and a mandate sized on the bare price
+      would be REFUSED at the first post-GST renewal for everyone who signed up
+      before the switch.
+    - **★ CONSTRAINTS, NOT APPLICATION LOGIC** (invariant 3). Duplicate renewal
+      invoices are impossible via `unique (store_id, kind, cycle_seq)`; two
+      in-flight payment attempts via a partial unique on `invoice_id`; two
+      active mandates via a partial unique on `store_id`. And
+      `billing_claim_downgrade()` is ONE statement re-checking state, deadline,
+      the comp exemption and whether the invoice was paid — so a payment racing
+      the downgrade, a payment at the exact boundary, and the job running twice
+      all resolve with no lock and no read-then-write window.
+    - **★ OUT-OF-ORDER WEBHOOKS ARE SOLVED BY A MONOTONIC STATE MACHINE**, not
+      by comparing timestamps: `captured`/`refunded` are terminal, so a late
+      `payment.failed` is rejected by the machine itself. `unknown` is a
+      first-class state whose only exit is provider verification — `RzpResult`
+      (`lib/payments/razorpay.ts`) already distinguishes `rejected` from
+      `unknown`, so this needs no new plumbing, only callers that respect it.
+    - **★ A PAYMENT AFTER DOWNGRADE NEVER REACTIVATES THE PLAN**, and it also
+      never takes money for nothing: the invoice becomes `uncollectible` and
+      unpayable, and any money that still arrives becomes an `account_credit` in
+      `billing_credits` against their next subscription.
+    - **★ GST IS OPERATOR-CONFIGURED** (owner, 2026-08-11), in the singleton
+      `platform_billing_settings`. Tax is OFF until a GSTIN exists, a CHECK
+      refuses enabling it without one, and turning it on is NEVER retroactive
+      because finalized invoices are immutable by trigger. The document series is
+      gapless per Indian FY, allocated **on finalization** by trigger (a draft
+      that is abandoned must not burn a number — the §28 credit-note reasoning)
+      and routed through `sm_pad()`, never bare `lpad()` (§14).
+    - **★ A COMPED STORE IS NEVER BILLED AND NEVER DOWNGRADED.** It has no
+      mandate and no invoice, so the renewal worker skips it and the downgrade
+      claim excludes it; `billingMayApplyPlan`'s comp-is-a-floor rule survives
+      unchanged.
+    - **★ DOWNGRADE FORCE-CLOSES AN OPEN POS SHIFT** with a system note (owner,
+      2026-08-11), in the same transaction. `posEnabled` goes false, so the till
+      stops; an open shift holds uncounted cash and leaving it open strands the
+      drawer. Closed at `counted = expected` and attributed to the system — a
+      variance invented by a billing event would read as a cashier being short.
+    - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an
+      apply-order dependency (see the tree). The Drizzle types describe tables
+      that do not exist yet: that typechecks and fails at query time.
+    - **⚠ Six Razorpay facts are still unverified** (exact subsequent-charge
+      endpoint signature, recurring webhook event names, retry and
+      payment-failure behaviour, e-mandate specifics, MCC restrictions). Listed
+      in the design doc's §10 rather than guessed; several need a test-mode
+      account to settle.
+    - **13 defects found in the current billing code while mapping it**, two of
+      them live revenue bugs (`confirmSubscription` bypasses the comp floor and
+      can overwrite a comp DOWNWARD; a scheduled location release never lands,
+      so Razorpay bills the cheaper plan while the allowance keeps granting the
+      released slots free). Ten live in code this rebuild deletes.
 
 ## 6. Commands
 
