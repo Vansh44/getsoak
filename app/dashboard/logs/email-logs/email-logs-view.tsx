@@ -48,6 +48,8 @@ export function EmailLogsView({
   q,
   days,
   error,
+  basePath = "/dashboard/logs/email-logs",
+  platform = false,
 }: {
   rows: EmailLogRow[];
   total: number;
@@ -59,6 +61,8 @@ export function EmailLogsView({
   q: string;
   days: number;
   error?: string;
+  basePath?: string;
+  platform?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -73,7 +77,7 @@ export function EmailLogsView({
     // Any filter change invalidates the current page number.
     if (key !== "page") params.delete("page");
     startTransition(() => {
-      router.push(`/dashboard/logs/email-logs?${params.toString()}`);
+      router.push(`${basePath}?${params.toString()}`);
     });
   };
 
@@ -85,10 +89,9 @@ export function EmailLogsView({
         <div>
           <h1>Email logs</h1>
           <p>
-            Every email this store has sent — order notifications, campaigns,
-            invites and sign-in codes. Password resets and staff invites are
-            recorded without their contents, because the link inside is a
-            working credential.
+            {platform
+              ? "Platform delivery history for signup, operator access and StoreMink billing. Real signup codes are redacted; codes for reserved dummy addresses are operator-only and remain visible for test-store creation."
+              : "Every email this store has sent — order notifications, campaigns, invites and sign-in codes. Password resets and staff invites are recorded without their contents, because the link inside is a working credential."}
           </p>
         </div>
       </header>
@@ -162,7 +165,7 @@ export function EmailLogsView({
                 onClick={() => {
                   setSearch("");
                   startTransition(() => {
-                    router.push("/dashboard/logs/email-logs");
+                    router.push(basePath);
                   });
                 }}
               >

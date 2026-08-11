@@ -309,6 +309,7 @@ describe("coupon-actions", () => {
       vi.mocked(getServerUser).mockResolvedValue({
         id: "user-9",
         email: null,
+        emailConfirmed: false,
         phone: null,
         phoneConfirmed: false,
         metadata: {},
@@ -428,6 +429,7 @@ describe("coupon-actions", () => {
       vi.mocked(getServerUser).mockResolvedValue({
         id: "user-1",
         email: null,
+        emailConfirmed: false,
         phone: null,
         phoneConfirmed: false,
         metadata: {},

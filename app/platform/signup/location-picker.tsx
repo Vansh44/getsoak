@@ -39,6 +39,46 @@ export interface PickedLocation {
   countryCode: string;
 }
 
+interface ClientGeocodeResult {
+  city?: string;
+  locality?: string;
+  principalSubdivision?: string;
+  countryCode?: string;
+  countryName?: string;
+}
+
+/**
+ * City-level, keyless reverse geocoding for coordinates the browser just
+ * captured with permission. This deliberately runs in that same browser — the
+ * provider's free client endpoint requires it, and it keeps the location
+ * button useful when the optional Google map key is absent.
+ */
+async function describeCurrentLocation(
+  lat: number,
+  lng: number,
+): Promise<Pick<PickedLocation, "address" | "city" | "countryCode">> {
+  const params = new URLSearchParams({
+    latitude: String(lat),
+    longitude: String(lng),
+    localityLanguage: "en",
+  });
+  const response = await fetch(
+    `https://api.bigdatacloud.net/data/reverse-geocode-client?${params}`,
+  );
+  if (!response.ok) throw new Error("reverse geocoding failed");
+  const result = (await response.json()) as ClientGeocodeResult;
+  const city =
+    result.city || result.locality || result.principalSubdivision || "";
+  const address = [city, result.principalSubdivision, result.countryName]
+    .filter((part, index, all) => part && all.indexOf(part) === index)
+    .join(", ");
+  return {
+    city,
+    address,
+    countryCode: result.countryCode?.toUpperCase() ?? "",
+  };
+}
+
 // Minimal shapes for the globals the script defines — enough to use it without
 // pulling in @types/google.maps for one screen.
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -95,48 +135,69 @@ export function LocationPicker({
   onChangeRef.current = onChange;
 
   /** Reverse-geocode a pin into an address + city + country, best-effort. */
-  const describe = useCallback((lat: number, lng: number) => {
+  const describe = useCallback(async (lat: number, lng: number) => {
     if (!geocoder.current) {
-      onChangeRef.current({
-        lat,
-        lng,
-        address: "",
-        city: "",
-        countryCode: "",
-      });
-      return;
-    }
-    geocoder.current.geocode(
-      { location: { lat, lng } },
-      (results: any[], status: string) => {
-        if (status !== "OK" || !results?.length) {
-          // Keep the coordinates — they're the part we actually captured.
-          onChangeRef.current({
-            lat,
-            lng,
-            address: "",
-            city: "",
-            countryCode: "",
-          });
-          return;
-        }
-        const best = results[0];
-        const parts: any[] = best.address_components ?? [];
-        const find = (type: string) =>
-          parts.find((c) => c.types?.includes(type));
+      try {
+        const place = await describeCurrentLocation(lat, lng);
+        onChangeRef.current({ lat, lng, ...place });
+        setGeoError("");
+      } catch {
         onChangeRef.current({
           lat,
           lng,
-          address: String(best.formatted_address ?? ""),
-          city: String(
-            find("locality")?.long_name ??
-              find("administrative_area_level_2")?.long_name ??
-              "",
-          ),
-          countryCode: String(find("country")?.short_name ?? ""),
+          address: "",
+          city: "",
+          countryCode: "",
         });
-      },
-    );
+        setGeoError(
+          "We found your coordinates but couldn't identify the city. Please type it below.",
+        );
+      }
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      geocoder.current.geocode(
+        { location: { lat, lng } },
+        async (results: any[], status: string) => {
+          if (status !== "OK" || !results?.length) {
+            try {
+              const place = await describeCurrentLocation(lat, lng);
+              onChangeRef.current({ lat, lng, ...place });
+              setGeoError("");
+            } catch {
+              onChangeRef.current({
+                lat,
+                lng,
+                address: "",
+                city: "",
+                countryCode: "",
+              });
+            }
+            resolve();
+            return;
+          }
+          const best = results[0];
+          const parts: any[] = best.address_components ?? [];
+          const find = (type: string) =>
+            parts.find((c) => c.types?.includes(type));
+          onChangeRef.current({
+            lat,
+            lng,
+            address: String(best.formatted_address ?? ""),
+            city: String(
+              find("locality")?.long_name ??
+                find("postal_town")?.long_name ??
+                find("administrative_area_level_2")?.long_name ??
+                find("administrative_area_level_1")?.long_name ??
+                "",
+            ),
+            countryCode: String(find("country")?.short_name ?? ""),
+          });
+          setGeoError("");
+          resolve();
+        },
+      );
+    });
   }, []);
 
   // Build the map once the script is in.
@@ -207,9 +268,9 @@ export function LocationPicker({
     setGeoError("");
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
+        await describe(pos.coords.latitude, pos.coords.longitude);
         setLocating(false);
-        describe(pos.coords.latitude, pos.coords.longitude);
       },
       (err) => {
         setLocating(false);

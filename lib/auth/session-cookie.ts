@@ -35,6 +35,8 @@ export interface SessionClaims {
 export interface SessionUser {
   uid: string;
   email: string | null;
+  /** True when Firebase has verified control of the email address. */
+  emailConfirmed: boolean;
   phone: string | null;
   /** Firebase phone numbers are verified when present. */
   phoneConfirmed: boolean;
@@ -87,6 +89,7 @@ export async function verifySessionCookie(
     return {
       uid: decoded.uid,
       email: decoded.email ?? null,
+      emailConfirmed: decoded.email_verified === true,
       phone: (decoded.phone_number as string | undefined) ?? null,
       phoneConfirmed: Boolean(decoded.phone_number),
       name: (decoded.name as string | undefined) ?? null,

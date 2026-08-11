@@ -185,6 +185,40 @@ describe("sendEmail", () => {
     expect(row.storeId).toBeNull();
   });
 
+  it("redacts a real-address signup code", async () => {
+    await sendEmail({
+      ...base,
+      storeId: null,
+      subject: "739105 is your StoreMink verification code",
+      html: "<p>739105</p>",
+      mailer: "signup_otp",
+    });
+
+    expect(loggedRow()).toMatchObject({
+      storeId: null,
+      subject: REDACTED,
+      bodyHtml: null,
+      mailer: "signup_otp",
+    });
+  });
+
+  it("stores a dummy-address signup code for operator verification", async () => {
+    await sendEmail({
+      ...base,
+      storeId: null,
+      subject: "739105 is your StoreMink verification code",
+      html: "<p>739105</p>",
+      mailer: "signup_test_otp",
+    });
+
+    expect(loggedRow()).toMatchObject({
+      storeId: null,
+      subject: "739105 is your StoreMink verification code",
+      bodyHtml: "<p>739105</p>",
+      mailer: "signup_test_otp",
+    });
+  });
+
   it("keeps oversized bodies out of the log but still records the send", async () => {
     await sendEmail({ ...base, html: "x".repeat(300_000) });
 

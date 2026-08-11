@@ -39,9 +39,10 @@ export async function generateMetadata() {
   const brand = await getStoreBrand();
   return {
     title: `${brand.name} — Operations Center`,
-    icons: brand.logoUrl
-      ? { icon: brand.logoUrl }
-      : { icon: "/brand/storemink-mark.png" },
+    // The dashboard is StoreMink product chrome, not the merchant storefront.
+    // Legacy stores can still carry WholeSip's seeded logo in brand.logoUrl;
+    // using it here made an unrelated brand appear in the browser tab.
+    icons: { icon: "/brand/storemink-mark.png" },
   };
 }
 

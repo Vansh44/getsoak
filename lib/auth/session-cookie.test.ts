@@ -59,6 +59,7 @@ describe("verifySessionCookie", () => {
     auth.verifySessionCookie.mockResolvedValue({
       uid: "u1",
       email: "a@b.com",
+      email_verified: true,
       phone_number: "+15551234567",
       name: "Ada",
       role: "superadmin",
@@ -70,6 +71,7 @@ describe("verifySessionCookie", () => {
     expect(user).toEqual({
       uid: "u1",
       email: "a@b.com",
+      emailConfirmed: true,
       phone: "+15551234567",
       phoneConfirmed: true,
       name: "Ada",
@@ -88,6 +90,7 @@ describe("verifySessionCookie", () => {
 
     const user = await verifySessionCookie("cookie");
     expect(user?.claims).toEqual({ role: "member", forcePasswordReset: false });
+    expect(user?.emailConfirmed).toBe(false);
     expect(user?.phoneConfirmed).toBe(false);
   });
 

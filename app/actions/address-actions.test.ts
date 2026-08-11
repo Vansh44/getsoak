@@ -30,6 +30,7 @@ const STORE = "a0000000-0000-4000-8000-000000000001";
 const serverUser = {
   id: "user-1",
   email: "ada@example.com",
+  emailConfirmed: true,
   phone: null,
   phoneConfirmed: true,
   metadata: {},

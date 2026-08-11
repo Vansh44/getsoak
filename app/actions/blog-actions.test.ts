@@ -136,6 +136,7 @@ const ada = { first_name: "Ada", last_name: "Lovelace" };
 const serverUser = {
   id: "user-1",
   email: "ada@example.com",
+  emailConfirmed: true,
   phone: null,
   phoneConfirmed: true,
   metadata: {},

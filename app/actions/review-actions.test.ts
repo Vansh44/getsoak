@@ -41,6 +41,7 @@ describe("review-actions", () => {
     vi.mocked(getServerUser).mockResolvedValue({
       id: "user-1",
       email: "ada@example.com",
+      emailConfirmed: true,
       phone: null,
       phoneConfirmed: false,
       metadata: {},

@@ -24,6 +24,8 @@ export const MAILER_KEYS = [
   "billing",
   // Platform security
   "operator_otp",
+  "signup_otp",
+  "signup_test_otp",
 ] as const;
 
 export type MailerKey = (typeof MAILER_KEYS)[number];
@@ -118,6 +120,24 @@ export const MAILERS: MailerDef[] = [
     // expiry. It is NOT visible to merchants: operator OTP is platform mail
     // (store_id NULL), so it only ever shows on the storemink.com console, not
     // in any store's log. Setting `sensitive: true` here reverses it.
+  },
+  {
+    key: "signup_otp",
+    label: "Signup verification code",
+    description:
+      "A six-digit code that verifies a new merchant's email address.",
+    sensitive: true,
+  },
+  {
+    key: "signup_test_otp",
+    label: "Dummy signup code",
+    description:
+      "A verification code for an RFC-reserved dummy address with no inbox.",
+    // Platform-scoped and intentionally retained by the owner's decision
+    // (2026-08-12): operators use this to complete dummy-store signups whose
+    // reserved test addresses have no inbox. Real-address signup_otp mail is
+    // sensitive and redacted; this type never appears in a merchant log and
+    // its code expires after 10 minutes.
   },
 ];
 

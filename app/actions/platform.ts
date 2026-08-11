@@ -88,6 +88,60 @@ export interface PlatformStoreRow {
   gateway: "none" | "enabled" | "paused";
 }
 
+export interface PlatformOverview {
+  totalStores: number;
+  activeStores: number;
+  paidStores: number;
+  newStores30d: number;
+  suspendedStores: number;
+  emailFailures24h: number;
+}
+
+/** Small, uncached operator health snapshot for the console header. */
+export async function getPlatformOverview(): Promise<PlatformOverview> {
+  const empty: PlatformOverview = {
+    totalStores: 0,
+    activeStores: 0,
+    paidStores: 0,
+    newStores30d: 0,
+    suspendedStores: 0,
+    emailFailures24h: 0,
+  };
+  if (!(await getPlatformViewer())) return empty;
+
+  try {
+    const result = await withService((db) =>
+      db.execute(sql`
+        select
+          (select count(*)::int from stores) as total_stores,
+          (select count(*)::int from stores where status = 'active') as active_stores,
+          (select count(*)::int from stores
+            where plan <> 'free'
+              and (plan_expires_at is null or plan_expires_at > now())) as paid_stores,
+          (select count(*)::int from stores
+            where created_at >= now() - interval '30 days') as new_stores_30d,
+          (select count(*)::int from stores where status = 'suspended') as suspended_stores,
+          (select count(*)::int from email_logs
+            where status = 'failed'
+              and created_at >= now() - interval '24 hours') as email_failures_24h
+      `),
+    );
+    const row = result.rows[0] as Record<string, number | string> | undefined;
+    if (!row) return empty;
+    return {
+      totalStores: Number(row.total_stores) || 0,
+      activeStores: Number(row.active_stores) || 0,
+      paidStores: Number(row.paid_stores) || 0,
+      newStores30d: Number(row.new_stores_30d) || 0,
+      suspendedStores: Number(row.suspended_stores) || 0,
+      emailFailures24h: Number(row.email_failures_24h) || 0,
+    };
+  } catch (error) {
+    logError("getPlatformOverview failed", error);
+    return empty;
+  }
+}
+
 // Trim the search term to a sane length (parameterised — no escaping needed).
 function sanitize(q: string): string {
   return q.trim().slice(0, 80);

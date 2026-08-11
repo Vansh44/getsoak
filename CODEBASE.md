@@ -304,12 +304,15 @@ wholesip/
 │   │   ├── page.tsx           # Marketing landing page
 │   │   ├── signup/            # ★ Store creation wizard (see §19): Shopify-style
 │   │   │                      # step order — email → password (+ Continue with
-│   │   │                      # Google) → phone OTP → name → store + location →
-│   │   │                      # theme → plan (Razorpay autopay for paid plans).
+│   │   │                      # Google) → email OTP → phone OTP → name → store →
+│   │   │                      # location → theme → plan (Razorpay autopay).
 │   │   │                      # Firebase: Google via signInWithPopup (no callback
-│   │   │                      # route), phone via signInWithPhoneNumber.
-│   │   ├── login/             # Platform-operator login — Firebase email-LINK sign-in
-│   │   └── dashboard/         # Platform-admin console: stores-console, operators-console
+│   │   │                      # route), phone via signInWithPhoneNumber; password
+│   │   │                      # email ownership via signup-email-otp action.
+│   │   ├── login/             # Platform-operator login — six-digit email OTP
+│   │   └── dashboard/         # Platform-admin control centre: live health metrics,
+│   │                          # stores-console, operators-console, email-logs/
+│   │                          # (platform mail incl. signup/operator OTPs)
 │   │                          # + ★ failures/ = the SAME feed as a store's, scoped
 │   │                          # { kind: "platform" } across every store (§33)
 │   │                          # (guarded by supabase/multitenant_07_platform_admins.sql)
@@ -336,6 +339,9 @@ wholesip/
 │   │   │                      # business location, returns {slug,storeId} —,
 │   │   │                      # getSignupResumeInfo (resume wizard after Google
 │   │   │                      # redirect / refreshed tab)
+│   │   ├── signup-email-otp.ts # Authenticated, rate-limited 6-digit email proof;
+│   │   │                      # signed httpOnly hash cookie, capped attempts,
+│   │   │                      # marks Firebase emailVerified only on success
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
@@ -688,6 +694,8 @@ wholesip/
 │   │                          # (CI-guarded by send-coverage.test.ts);
 │   │                          # mailers.ts — the mail-type catalog + which types
 │   │                          # are redacted because they carry a credential
+│   │                          # ★ signup-otp.ts — platform-branded signup code;
+│   │                          # RFC example-domain mail is log-only for dummy stores
 │   ├── homepage/section-types.ts  # Section schema (typed, tested) — shared by homepage AND
 │   │                          # custom pages; 17 types incl. editorial media/gallery/
 │   │                          # testimonials, video, newsletter, rich_text + custom_code (§11)
@@ -1799,19 +1807,33 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
 
 19. **Signup wizard (Shopify-style, `app/platform/signup/page.tsx`).** One
     client wizard, one focused screen per step, with a progress stepper. Step
-    order: **email → password (+ Continue with Google) → phone OTP → name →
-    store + location → theme → plan**. Data model: names go to
+    order: **email → password (+ Continue with Google) → email OTP → phone OTP
+    → name → store → location → theme → plan**. Data model: names go to
     `admins.first_name`/`last_name`; the selling **location** (country + city)
     goes to `stores.settings.business` (anon-readable jsonb — non-secret, prints
     on invoices; convention #9). Country list in `lib/countries.ts` (pure,
     client-safe, India-first). - **Auth (Identity Platform, Phase 6)**: email/password via
     `createUserWithEmailAndPassword` (falls back to `signInWithEmailAndPassword`
-    on `auth/email-already-in-use`); phone via `PhoneAuthProvider.verifyPhoneNumber`
+    on `auth/email-already-in-use`). Password users then pass a six-digit email
+    OTP (`app/actions/signup-email-otp.ts`): the server derives identity from the
+    session, rate-limits account + IP, stores only a peppered hash in a signed
+    httpOnly cookie, caps wrong attempts, expires it after 10 minutes, and marks
+    Firebase `emailVerified` after a constant-time match. Google already supplies
+    a verified email claim and skips only that step. Phone uses
+    `PhoneAuthProvider.verifyPhoneNumber`
     (invisible reCAPTCHA) + `updatePhoneNumber`. After each sign-in / phone link
     the client `establishSession()`s (POST the ID token → httpOnly cookie);
-    `createStore` enforces `phoneConfirmed` server-side via `getServerUser`, so
-    the wizard re-mints the cookie (`establishSession(forceRefresh)`) after phone
-    verify. - **Google**: `signInWithPopup(GoogleAuthProvider)` — entirely
+    `createStore` enforces **both** `emailConfirmed` and `phoneConfirmed`
+    server-side via `getServerUser`, so the wizard re-mints the cookie
+    (`establishSession(forceRefresh)`) after each verification. Every signup OTP
+    is platform mail and lands in the operator email log with its credential
+    redacted; RFC-reserved example domains and `.test`/`.invalid`/`.localhost`
+    dummy domains skip Resend and put the code in that operator-gated log under
+    the separate `signup_test_otp` mailer.
+    The Terms/Privacy/AUP checkbox still gates Google and password signup, but
+    the buttons stay interactive so a click explains the requirement instead of
+    looking like a broken OAuth control. - **Google**:
+    `signInWithPopup(GoogleAuthProvider)` — entirely
     client-side, NO OAuth callback route (removed in Phase 6). After the popup +
     establishSession, the wizard calls `getSignupResumeInfo` to resume at the
     right step (phone / name / dashboard); the same path recovers a refreshed tab
@@ -1829,7 +1851,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     `confirmSubscriptionForStore` cores the dashboard uses. An abandoned
     payment leaves a working Free store (upgrade later at `/dashboard/plans`).
     Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
-    `RAZORPAY_KEY_SECRET`).
+    `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
+    Browser geolocation is followed by the keyless BigDataCloud client-side
+    reverse-geocode endpoint, so country/city fill even when the optional Google
+    Maps key/script is missing; Google remains the richer street/map enhancement.
 
 20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
     is a WIDGET the merchant can remove, re-order, or add back — Shopify's
@@ -2973,6 +2998,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
       platform mail (`store_id NULL`), so it only appears on the storemink.com
       console — but an operator can read another operator's live code. Flipping
       one flag reverses it; both behaviours are pinned by tests.
+      The platform console exposes the platform scope at
+      `/dashboard/email-logs`; real-address `signup_otp` credentials are
+      redacted, while `signup_test_otp` is deliberately retained in full (owner
+      decision, 2026-08-12) so an operator can verify only an RFC-reserved dummy
+      address. Both are platform rows and never enter a merchant log.
     - **VALUES ARE FORMATTED FOR READING** (`lib/notifications/format.ts`, pure
       - tested). Every value used to reach the email as `String(value)`, so an
         order confirmation read "Total 281.4 / Currency INR / Payment method cod /
@@ -4654,7 +4684,11 @@ npm run format      # prettier --write
   set and falls back to the plain country/city form when it is missing, blocked,
   or rejected — location is a REQUIRED signup step, so the map must never be
   able to stop someone signing up. "Use my current location" is the browser's
-  own Geolocation API: free, keyless, and works with the map switched off.
+  own Geolocation API: free, keyless, and works with the map switched off. The
+  resulting current-device coordinates are reverse-geocoded client-side through
+  BigDataCloud's keyless `reverse-geocode-client` endpoint to fill city/country;
+  this is deliberately a same-browser call (the provider's fair-use contract)
+  and Google remains the optional street-address + draggable-map enhancement.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&
