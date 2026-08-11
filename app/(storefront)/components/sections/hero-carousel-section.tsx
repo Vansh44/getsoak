@@ -146,7 +146,7 @@ function Slide({
           src={slide.image_url}
           alt={slide.heading || "Slide"}
           fill
-          priority={first}
+          preload={first}
           sizes="100vw"
           className="home-carousel-media"
         />

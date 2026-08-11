@@ -41,7 +41,7 @@ export function ShopByCategorySection({
         {c.image_url ? (
           <Image
             src={c.image_url}
-            alt={c.name}
+            alt=""
             fill
             sizes="(max-width: 768px) 40vw, 200px"
             className="home-cat-img-el"
