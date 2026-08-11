@@ -415,7 +415,7 @@ wholesip/
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
-│       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help
+│       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help/themes
 │       │                      # sitemaps + every launched store; custom-domain META
 │       │                      # verification/property creation; 503 triggers retries
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
@@ -4666,8 +4666,9 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   `storemink-run@…` SA as a property user, enable the Search Console and Site
   Verification APIs, and create the `storemink-seo-refresh` Cloud Scheduler job.
   `lib/seo/store-indexing.ts` is the single store discovery pipeline: publish
-  paths call it after commit, and `/api/cron/seo-refresh` reconciles every
-  active/launched/non-demo store daily. StoreMink subdomains submit under the
+  paths call it after commit, and `/api/cron/seo-refresh` registers the platform,
+  help, and themes sitemaps before reconciling every active/launched/non-demo
+  store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
   sitemap submission. Attempt/success/error timestamps are persisted;

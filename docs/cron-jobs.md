@@ -65,8 +65,8 @@ them: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
-`seo-refresh` registers the platform/help sitemaps, retries sitemap coverage for
-every launched store, and automatically verifies Search Console URL-prefix
+`seo-refresh` registers the platform/help/themes sitemaps, retries sitemap
+coverage for every launched store, and automatically verifies Search Console URL-prefix
 properties for connected custom domains. It returns **503 on any partial
 failure**, so Scheduler retries are part of its reliability contract. Enable
 the Google Search Console + Site Verification APIs and configure the runtime
@@ -287,8 +287,11 @@ The original three were verified this way on 2026-07-30.
 
 `storemink-seo-refresh` was created and verified on **2026-08-06** — it had never
 existed, so sitemap submission had never run on a schedule. Verified by calling
-the endpoint directly (`200 {"ok":true}`, both roots registered, both eligible
-stores ready) after enabling the two APIs above.
+the endpoint directly (`200 {"ok":true}`, the then-configured platform/help
+roots registered, both eligible stores ready) after enabling the two APIs above.
+The themes catalog joined that same retry-backed root registration in Phase 4;
+the response names each root so a rejected themes sitemap is visible rather
+than an ambiguous array position.
 
 `storemink-domain-reconcile` was created on **2026-08-06** alongside the fix it
 backs. Its route ships in the same change, so verify its **response** once that

@@ -10,7 +10,7 @@
 > below is now closed in code: `lib/seo/store-indexing.ts` unifies all
 > product/blog/page publish paths, automatically verifies custom-domain
 > URL-prefix properties, and persists Google attempt/success/error state;
-> `/api/cron/seo-refresh` retries the platform/help sitemaps and every launched
+> `/api/cron/seo-refresh` retries the platform/help/themes sitemaps and every launched
 > store daily. Bulk product publish and customer direct-publish now participate,
 > merchant Organization schema uses configured identity/contact/social data, and
 > custom-domain canonical selection includes the live plan-entitlement gate.
