@@ -715,6 +715,22 @@ wholesip/
 │   │                          # charge; amountDueForInvoice returns NULL rather
 │   │                          # than the full total, since guessing when credit
 │   │                          # may be applied would double-charge.
+│   │                          # ★★ enrol.ts (server-only): a merchant's FIRST
+│   │                          # paid cycle. Works WITHOUT the unverified
+│   │                          # recurring endpoint — cycle 1 is collected ON
+│   │                          # SESSION by the same verified one-time checkout
+│   │                          # the AI-credit purchase uses, and the mandate is
+│   │                          # registered opportunistically for later cycles.
+│   │                          # The plan is NOT granted until the payment is
+│   │                          # captured (grace is for renewals, where
+│   │                          # something has already been paid for). The HMAC
+│   │                          # signature is the trust boundary. BOTH stores.plan
+│   │                          # (the entitlement every gate reads) and
+│   │                          # billing_subscriptions move, and the comp floor
+│   │                          # holds — the old confirmSubscription wrote
+│   │                          # stores.plan unconditionally and could overwrite
+│   │                          # an operator comp DOWNWARD. Money in but plan
+│   │                          # not moved is never a bare failure.
 │   │                          # ★★ collect.ts (server-only): the ONLY place
 │   │                          # money moves. issue-refund.ts generalised —
 │   │                          # attempt row FIRST with OUR idempotency key,
