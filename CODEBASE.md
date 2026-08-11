@@ -131,7 +131,9 @@ wholesip/
 │   │   │   │                  #   the customer rows the fan-out has always
 │   │   │   │                  #   written, finally rendered
 │   │   │   ├── profile/       #   customer profile (personal info + address-book
-│   │   │   │                  #   card + quick links to orders/notifications)
+│   │   │   │                  #   card + ★ credit-balance.tsx, the store-credit
+│   │   │   │                  #   card (§29 — hides itself at zero with no
+│   │   │   │                  #   history) + quick links to orders/notifications)
 │   │   │   └── [pageSlug]/    #   ★ ALL content pages from store_pages (see §11): merchant
 │   │   │                      #   custom pages AND the former hardcoded static pages
 │   │   │                      #   (our-story, faqs, …) — retired in Phase 4b, now editable
@@ -332,7 +334,15 @@ wholesip/
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
-│   │   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
+│   │   ├── subscribe-actions.ts # ★ §34 the NEW subscribe path: startSubscribe /
+│   │                      # confirmSubscribe. Runs ALONGSIDE the old
+│   │                      # subscription-actions.ts until the cutover, and
+│   │                      # REFUSES when the old system already has a live
+│   │                      # mandate — failing CLOSED on a read error, because
+│   │                      # billing one store from two systems has no single
+│   │                      # place to stop it. ⚠ NOT the same file as
+│   │                      # billing-actions.ts (§17 tax classes).
+│   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
 │   │   │                      # invoice settings. Gated on `billing`, revalidates TAGS.billing.
 │   │   ├── store-domain.ts    # Custom domain connect (§30) — the GATE only; the
 │   │                          # work is lib/domains/reconcile.ts so the cron runs
@@ -381,6 +391,11 @@ wholesip/
 │   │   │                      # centre (§22): list/unread/mark-read over the
 │   │   │                      # same notifications table the staff bell uses,
 │   │   │                      # scoped to recipient_type 'customer' + host store
+│   │   ├── customer-credit-actions.ts # ★ The shopper's OWN store credit (§29):
+│   │   │                      # getMyCredit = balance + recent movements, session
+│   │   │                      # uid + host store, both server-derived. Exposes
+│   │   │                      # NEITHER the ledger's `ref` NOR its `note` (both
+│   │   │                      # internal); customer wording derives from `kind`
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
 │   │   │                      # activity feed, preference get/save, pruneNotifications.
@@ -400,7 +415,7 @@ wholesip/
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
-│       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help
+│       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help/themes
 │       │                      # sitemaps + every launched store; custom-domain META
 │       │                      # verification/property creation; 503 triggers retries
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
@@ -409,6 +424,19 @@ wholesip/
 │       │                      # someone watches the settings page for ~30 minutes.
 │       │                      # 200 even while waiting — the usual "failure" is a
 │       │                      # merchant who hasn't added their DNS records yet
+│       ├── cron/billing/      # ★ §34 the subscription heartbeat, HOURLY. The
+│       │                      # three renewal passes in ONE request, in order —
+│       │                      # collect (T−4d), evaluate (cycle turn),
+│       │                      # downgrade (grace+48h) — because split across
+│       │                      # jobs each pass would lag the previous by a full
+│       │                      # interval and the 48h buffer would become 48h +
+│       │                      # two intervals. Auth FAILS CLOSED (it charges
+│       │                      # merchants and removes plans). A declined
+│       │                      # payment or a downgrade is 200, not an outage;
+│       │                      # only a thrown pass is 503. ⚠ While the Razorpay
+│       │                      # charge endpoint is unverified, collection is
+│       │                      # SKIPPED and `collectionSkipped` is set — a
+│       │                      # green run then means NOBODY IS BEING CHARGED
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
 │       │                      # activity_events 365d, email_logs 90d — windows
@@ -678,7 +706,87 @@ wholesip/
 │   │                          # the status map, the gateway matcher; tested) +
 │   │                          # refund-reconcile.ts (settles refunds whose gateway
 │   │                          # answer never arrived: reconcile-on-read + cron sweep)
-│   ├── billing/               # ★ credit-note-data.ts (§28: what a GST credit note
+│   ├── billing/               # ★ invoice.ts (§34, PURE + tested): line items,
+│   │                          # tax in BOTH modes (inclusive carves
+│   │                          # gross×r/(1+r), NOT gross×r), GST split,
+│   │                          # proration, amountDuePaise. ★ payment-state.ts:
+│   │                          # the MONOTONIC attempt machine — captured is
+│   │                          # terminal, so a late payment.failed is rejected
+│   │                          # by the machine rather than by comparing clocks.
+│   │                          # ★ invoice-store.ts (server-only): the repository.
+│   │                          # ensureRenewalInvoice is ON CONFLICT DO NOTHING +
+│   │                          # read-the-WINNER, so a lost race never creates a
+│   │                          # second obligation; lines are written BEFORE
+│   │                          # finalize (the trigger freezes them after);
+│   │                          # loadTaxContext falls back to tax-OFF on a read
+│   │                          # failure, because a blip must never invent a tax
+│   │                          # charge; amountDueForInvoice returns NULL rather
+│   │                          # than the full total, since guessing when credit
+│   │                          # may be applied would double-charge.
+│   │                          # ★★ manual-pay.ts (server-only): paying an open
+│   │                          # invoice on session — TODAY the only way a
+│   │                          # renewal is paid, since automatic collection is
+│   │                          # gated on an unverified endpoint. Refuses a
+│   │                          # cross-tenant invoice id, and refuses an
+│   │                          # UNCOLLECTIBLE/VOID one: those belong to a cycle
+│   │                          # the merchant was already downgraded for, so
+│   │                          # taking money would charge for service never
+│   │                          # received. Paying during grace restores the plan
+│   │                          # AT ONCE via advanceAfterPayment — the SAME
+│   │                          # advance the worker uses, never a second copy.
+│   │                          # ★★ enrol.ts (server-only): a merchant's FIRST
+│   │                          # paid cycle. Works WITHOUT the unverified
+│   │                          # recurring endpoint — cycle 1 is collected ON
+│   │                          # SESSION by the same verified one-time checkout
+│   │                          # the AI-credit purchase uses, and the mandate is
+│   │                          # registered opportunistically for later cycles.
+│   │                          # The plan is NOT granted until the payment is
+│   │                          # captured (grace is for renewals, where
+│   │                          # something has already been paid for). The HMAC
+│   │                          # signature is the trust boundary. BOTH stores.plan
+│   │                          # (the entitlement every gate reads) and
+│   │                          # billing_subscriptions move, and the comp floor
+│   │                          # holds — the old confirmSubscription wrote
+│   │                          # stores.plan unconditionally and could overwrite
+│   │                          # an operator comp DOWNWARD. Money in but plan
+│   │                          # not moved is never a bare failure.
+│   │                          # ★★ collect.ts (server-only): the ONLY place
+│   │                          # money moves. issue-refund.ts generalised —
+│   │                          # attempt row FIRST with OUR idempotency key,
+│   │                          # THEN the gateway, THEN claim the outcome. A
+│   │                          # UNIQUE violation on begin means "already
+│   │                          # collecting", not an error. An UNKNOWN outcome
+│   │                          # (5xx, timeout, THROW, or an unrecognised
+│   │                          # gateway status) is NEVER a failure and is never
+│   │                          # retried — a failure starts the grace clock.
+│   │                          # Eligibility is checked BEFORE anything is
+│   │                          # written, so an over-AFA amount routes to manual
+│   │                          # rather than becoming a failed attempt. The
+│   │                          # gateway call is INJECTED, because the Razorpay
+│   │                          # subsequent-charge signature is still unverified.
+│   │                          # ★ renewal-worker.ts (server-only): three passes.
+│   │                          # COLLECT at T−4d (the X+3 rule), EVALUATE at T0,
+│   │                          # DOWNGRADE at T0+48h. ★★ A PROCESSING invoice at
+│   │                          # the boundary does NOTHING — no advance, no
+│   │                          # grace, no clock. With the X+3 window that is
+│   │                          # the ORDINARY state, so treating it as unpaid
+│   │                          # would downgrade paying merchants routinely.
+│   │                          # Grace is measured from the OBSERVATION, not the
+│   │                          # cycle boundary, so an outage on our side cannot
+│   │                          # eat a merchant's 48h notice. Downgrade
+│   │                          # force-closes an open POS shift at ZERO variance
+│   │                          # in the SAME transaction — a variance invented
+│   │                          # by a billing event reads as a cashier being
+│   │                          # short. ⚠ Pass 1 takes NO row lock on purpose:
+│   │                          # it would expire before the gateway call it
+│   │                          # looked like it protected. The constraints are
+│   │                          # the guarantee.
+│   │                          # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
+│   │                          # cycle (a DURATION, never a calendar unit), the
+│   │                          # X+3 collection lead, the 48h grace window,
+│   │                          # collectionRoute (mandate max AND the AFA-exempt
+│   │                          # limit — two different ceilings) and mandateSizePaise.
+│   │                          # ★ credit-note-data.ts (§28: what a GST credit note
 │   │                          # says — the invoice it reverses + splitGst on the
 │   │                          # refunded tax, all from the ORDER's snapshot).
 │   │                          # Invoices & tax (§17): types.ts (BillingSettings/
@@ -774,6 +882,48 @@ wholesip/
 │   │                          # public — object URLs are public, the listing is admin-only)
 │   ├── invoicing.sql          # ★ tax_classes + products.tax_class_id + order_items tax
 │   │                          # cols + orders.tax_inclusive + store_billing_settings — §17
+│   ├── billing_01_foundation.sql   # ★ §34 platform_billing_settings (operator GST
+│   │                          # singleton; tax OFF until a GSTIN exists) +
+│   │                          # billing_accounts + billing_mandates (one ACTIVE
+│   │                          # per store, max_amount read from the token)
+│   ├── billing_02_subscriptions.sql # ★ §34 billing_subscriptions (OUR state
+│   │                          # machine, not Razorpay's) + billing_claim_downgrade()
+│   │                          # — ONE statement that re-checks state, deadline,
+│   │                          # comp exemption AND payment inside the UPDATE
+│   ├── billing_03_invoices.sql # ★ §34 billing_invoices + items + the gapless FY
+│   │                          # series (allocated ON FINALIZE by trigger, via
+│   │                          # sm_pad) + immutability triggers. ⚠ APPLY BEFORE
+│   │                          # billing_02's function is ever CALLED — plpgsql
+│   │                          # resolves table names at call time, so the wrong
+│   │                          # order succeeds and then fails at runtime
+│   ├── billing_06_migrate_legacy.sql # ★ §34 the CUTOVER: moves live
+│   │                          # store_subscriptions rows onto the new tables
+│   │                          # (one in prod). ⚠ The mandate CANNOT come with
+│   │                          # them — a Razorpay Subscription's mandate is a
+│   │                          # different product from a recurring token — so
+│   │                          # they re-authorise or pay manually next cycle.
+│   │                          # No invoice for the already-paid cycle (it would
+│   │                          # burn a GST number for a document never sent),
+│   │                          # comped stores skipped, and ⚠ the gateway
+│   │                          # subscription must be cancelled SEPARATELY or
+│   │                          # Razorpay's timer bills alongside our worker
+│   ├── billing_05_tax_mode.sql # ★ §34 platform_billing_settings.tax_inclusive.
+│   │                          # ⚠ Its OWN file because billing_01 is APPLIED —
+│   │                          # editing an applied CREATE TABLE IF NOT EXISTS
+│   │                          # is a silent no-op (§15b's subscriptions_02)
+│   ├── billing_verify.sql     # ★ §34 adversarial check of the APPLIED schema
+│   │                          # (26 checks). Mutations run in a plpgsql
+│   │                          # SUBTRANSACTION that is rolled back, so nothing
+│   │                          # persists — not even a burned invoice number —
+│   │                          # while the results survive in plpgsql ARRAYS,
+│   │                          # which are memory rather than transactional
+│   │                          # state. Asserts 26-of-26 RAN, so an empty or
+│   │                          # half-dead run can never render as green.
+│   │                          # No psql meta-commands: runs in Cloud SQL Studio
+│   ├── billing_04_payments.sql # ★ §34 billing_payment_attempts (ONE in flight per
+│   │                          # invoice, partial unique) + billing_credits +
+│   │                          # billing_reconciliation_items + the additive
+│   │                          # billing_webhook_events extension
 │   ├── plans_02_basic_and_expiry.sql # ★ starter→basic rename + plan_expires_at — §15
 │   ├── ai_credits.sql         # ★ credit balances/ledger/purchases + add_ai_credits/
 │   │                          # try_spend_ai_credit RPCs (service-role only) — §16
@@ -3517,6 +3667,29 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Offered, never forced** (§28's §3.3 rule): the refund panel shows it
       only when the order has a customer account, and tells the merchant to
       make sure the customer agreed to a balance rather than their money back.
+    - **★ THE CUSTOMER CAN NOW SEE IT** (`app/actions/customer-credit-actions.ts`
+      → `getMyCredit`, rendered by `(pages)/profile/credit-balance.tsx`). Credit
+      was INVISIBLE to the person who owns it: it applied itself at checkout
+      (`creditSplit.applied > 0`) and appeared nowhere else — not in the
+      profile, not on an order — so a shopper refunded to credit had no way to
+      learn they had any short of filling a cart and noticing the total drop.
+      That is how a merchant gets "you never refunded me", and it made the
+      "offered, never forced" rule above half a promise. Three decisions:
+      - **Scope is server-derived on BOTH axes** — session uid + HOST store,
+        never caller input. That is what keeps the `withService` reads inside
+        `lib/credit` safe from a storefront entry point; and the store scope is
+        not redundant, because a Firebase uid is global
+        (the `customer-order-actions.ts` double lock).
+      - **★ `ref` AND `note` ARE NOT EXPOSED.** `note` is merchant-authored
+        (free text once the grant UI lands) and `ref` carries internal ids —
+        §16's AI ledger uses an operator's EMAIL as a ref. The customer's
+        wording is derived from `kind` alone, a closed vocabulary the action
+        owns, so a private note can never surface on a storefront page. Pinned
+        by a test; don't "complete" the mapping by passing `note` through.
+      - **The card hides itself** when the balance is 0 AND there is no
+        history, matching checkout's `applied > 0`. A spent-to-zero balance
+        still renders, because the history explains where the money went and
+        vanishing would look like it was lost.
     - **Not built:** gift cards (they share this ledger shape — that is why
       `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
       needs no migration), a merchant grant UI (`issueCredit` takes
@@ -4064,8 +4237,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `created_at` ALONE cannot use, so each also wants a plain `created_at`
       index in `supabase/import_export_01_jobs.sql` — a separate
       `CREATE INDEX IF NOT EXISTS`, so re-running the file stays idempotent.
-    - **⚠ The Cloud Scheduler job did not exist when this shipped.** Until it is
-      created, none of the above runs. See the warning in `docs/cron-jobs.md`.
+    - **⚠ The Cloud Scheduler job did not exist when this shipped** — created
+      and verified **2026-08-11**, along with `import-worker`, which was also
+      absent. Both had been documented in `docs/cron-jobs.md` as though they
+      existed: the third recurrence of that failure, found by DIFFING the
+      documented list against `gcloud scheduler jobs list`, which is the only
+      method that has ever caught it.
 
 33. **Logs — five of them, one hub, one permission.** `/dashboard/logs`,
     with `lib/logs/` behind the newest of them.
@@ -4153,6 +4330,162 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **⚠ The activity feed is still day-grouped CARDS** while the other four
       are tables. Left alone deliberately: it is working UI, and a
       chronological event stream reads better as cards than as rows.
+
+34. **Platform → merchant billing (IN PROGRESS — schema only, nothing applied).**
+    Full design: **`docs/billing-architecture.md`**. This is StoreMink billing its
+    OWN merchants, and is distinct from §17 (a merchant invoicing their shopper)
+    and §18 (a merchant's BYO gateway). Greenfield: there are no production
+    customers, so it REPLACES the Razorpay-Subscriptions design rather than
+    migrating it. Phases 1–2 are done; §3 onward is unbuilt.
+    - **★★ THE PRICE MUST NOT LIVE IN A PROVIDER-SIDE PLAN.** Razorpay's own
+      docs: _"You can only update a Subscription authorised using cards and not
+      via UPI and Emandate."_ Every amount change — tier, period, locations —
+      goes through `rzpUpdateSubscription`, so on a UPI or e-mandate mandate
+      `changePlan` AND `changeBilledLocations` are both **dead**, and add-ons
+      (the usual escape hatch) are deprecated. So StoreMink computes the amount
+      and the gateway merely collects it: token-based recurring, not
+      Subscriptions.
+    - **★★ TWO DIFFERENT CEILINGS, AND CONFLATING THEM IS THE COMMON ERROR.**
+      A mandate's registered `max_amount` is the most it may EVER be debited for
+      (₹1,00,000+ on UPI, effectively uncapped on cards). The **AFA-exempt
+      limit** is the most that can be taken without the customer authenticating
+      that specific debit — **₹15,000**, UPI and cards alike (RBI _Digital
+      Payments — E-mandate Framework, 2026_; raised from ₹5,000 on 16 June
+      2022). A ₹2,00,000 mandate does NOT make a ₹50,000 debit automatic, only
+      permitted. `collectionRoute` (`lib/billing/cycle.ts`) is therefore a
+      CONJUNCTION of both, and fails closed on an unrecorded max.
+      ⚠ The ₹1,00,000 AFA exemption is real but reaches only insurance
+      premiums, mutual-fund subscriptions and credit-card bills. A SaaS
+      subscription is none of those.
+    - **★★ THE X+3 RULE RESHAPES THE TIMELINE.** RBI requires a pre-debit
+      notification ≥24h ahead and Razorpay's guidance is that a recurring
+      payment takes **X+3 days** to confirm. So collection starts at
+      **T−4 days**, not at cycle start: the naive loop would expire the 2-day
+      grace **before the payment result was even known** and downgrade merchants
+      whose money was still in flight. A consequence that resolves an
+      ambiguity — the amount freezes at T−4, so a location added at T−2 bills
+      NEXT cycle.
+    - **★ 30 DAYS MEANS 30 DAYS; YEARLY IS 365** (owner, 2026-08-11). A
+      DURATION, never a calendar unit, so February and leap years get no special
+      case — and the tests assert exactly that, in the inverted direction. Two
+      intended consequences: the billing date DRIFTS (1 Aug → 31 Aug → 30 Sep,
+      so "we bill on the 1st" is never true), and a 365-day year is not an
+      anniversary — a cycle starting 1 Jan 2028 ends **31 Dec 2028**.
+    - **★ THE MANDATE COVERS THE RENEWAL, NOT EVERY FUTURE PURCHASE.** A failed
+      renewal costs a grace period and possibly the merchant; an upgrade that
+      needs re-authorisation happens while the merchant is on screen, which is a
+      fine place for friction. The superseded `mandateMaxPaise()` had this
+      backwards — no arguments, one global ₹2,00,000 for everyone, over half of
+      it provisioning locations a Basic plan cannot buy. `mandateSizePaise`
+      sizes on plan + billed locations, ×1.18 tax, ×1.5 reprice headroom
+      (Basic yearly ⇒ **₹27,000**).
+      **★★ The tax provision is applied even while `tax_enabled` is false** —
+      GST turns Basic yearly into ₹17,700, and a mandate sized on the bare price
+      would be REFUSED at the first post-GST renewal for everyone who signed up
+      before the switch.
+    - **★ CONSTRAINTS, NOT APPLICATION LOGIC** (invariant 3). Duplicate renewal
+      invoices are impossible via `unique (store_id, kind, cycle_seq)`; two
+      in-flight payment attempts via a partial unique on `invoice_id`; two
+      active mandates via a partial unique on `store_id`. And
+      `billing_claim_downgrade()` is ONE statement re-checking state, deadline,
+      the comp exemption and whether the invoice was paid — so a payment racing
+      the downgrade, a payment at the exact boundary, and the job running twice
+      all resolve with no lock and no read-then-write window.
+    - **★ OUT-OF-ORDER WEBHOOKS ARE SOLVED BY A MONOTONIC STATE MACHINE**, not
+      by comparing timestamps: `captured`/`refunded` are terminal, so a late
+      `payment.failed` is rejected by the machine itself. `unknown` is a
+      first-class state whose only exit is provider verification — `RzpResult`
+      (`lib/payments/razorpay.ts`) already distinguishes `rejected` from
+      `unknown`, so this needs no new plumbing, only callers that respect it.
+    - **★ A PAYMENT AFTER DOWNGRADE NEVER REACTIVATES THE PLAN**, and it also
+      never takes money for nothing: the invoice becomes `uncollectible` and
+      unpayable, and any money that still arrives becomes an `account_credit` in
+      `billing_credits` against their next subscription.
+    - **★ GST IS OPERATOR-CONFIGURED** (owner, 2026-08-11), in the singleton
+      `platform_billing_settings`. Tax is OFF until a GSTIN exists, a CHECK
+      refuses enabling it without one, and turning it on is NEVER retroactive
+      because finalized invoices are immutable by trigger.
+      **★ `tax_inclusive` (billing_05) picks INCLUSIVE or EXCLUSIVE pricing.**
+      Exclusive (default) = ₹15,000 + 18% = ₹17,700; inclusive = ₹15,000
+      charged, carved as `gross × r / (1 + r)` — **not** `gross × r`, which
+      would under-declare output tax on every invoice. Under inclusive,
+      enabling GST later changes nothing a merchant pays and more plans stay
+      auto-collectable (Basic yearly stays ON the ₹15,000 AFA line rather than
+      over it); under exclusive it raises every bill 18%, which is the whole
+      reason `mandateSizePaise` provisions ×1.18 — a provision it drops when
+      inclusive. ⚠ The mode must match what the pricing page advertises.
+      **⚠ Its own migration file, because `billing_01` is APPLIED** — editing a
+      `CREATE TABLE IF NOT EXISTS` that has already run is a silent no-op
+      (§15b's `subscriptions_02` incident). The document series is
+      gapless per Indian FY, allocated **on finalization** by trigger (a draft
+      that is abandoned must not burn a number — the §28 credit-note reasoning)
+      and routed through `sm_pad()`, never bare `lpad()` (§14).
+    - **★ A COMPED STORE IS NEVER BILLED AND NEVER DOWNGRADED.** It has no
+      mandate and no invoice, so the renewal worker skips it and the downgrade
+      claim excludes it; `billingMayApplyPlan`'s comp-is-a-floor rule survives
+      unchanged.
+    - **★ DOWNGRADE FORCE-CLOSES AN OPEN POS SHIFT** with a system note (owner,
+      2026-08-11), in the same transaction. `posEnabled` goes false, so the till
+      stops; an open shift holds uncounted cash and leaving it open strands the
+      drawer. Closed at `counted = expected` and attributed to the system — a
+      variance invented by a billing event would read as a cashier being short.
+    - **★ THE MERCHANT'S END IS WIRED (`/dashboard/plans`).** Subscribing goes
+      through `startSubscribe` → Razorpay ORDER → `confirmSubscribe`, not
+      `startPlanSubscription`, so the first cycle is a one-time payment on the
+      verified checkout and no amount lives in a provider-side plan. Two things
+      the flow says out loud rather than assuming: a confirm that fails is a
+      `toast.info` carrying the server's own wording (money may have moved —
+      §26's rule), and `autopay: false` is stated plainly, because a merchant who
+      assumes autopay is simply downgraded at the next cycle.
+    - **★★ `OpenInvoices` IS NOT A NICETY — IT IS THE ONLY WAY A RENEWAL GETS
+      PAID.** Automatic collection is gated behind `RECURRING_CHARGE_VERIFIED`,
+      so every invoice the worker writes is settled by hand or not at all; with
+      no surface for it, a merchant is downgraded 48 hours later for a bill they
+      never saw. It renders ABOVE everything on the page and renders NOTHING when
+      nothing is owed. A `processing` invoice shows "payment in progress" instead
+      of a Pay button — offering one would open a second payment against the same
+      money, which the partial unique index would refuse anyway.
+    - **★★ `startEnrolment` REFUSES A STORE ALREADY ON A PAID CYCLE.**
+      `seedSubscription` is an upsert on `store_id`, so without the guard a
+      merchant on Basic could point their `billing_subscriptions` row at Pro and
+      dismiss the payment window: the record moves, the money does not, and the
+      flow then fails confusingly ("already paid for") because cycle 1's invoice
+      was settled months ago. Fails CLOSED on a read error — unable to read means
+      unable to rule out billing the same store twice. Changing tier mid-cycle is
+      a PRORATED plan change, a different operation.
+    - **★★ `lib/billing/invoice-types.ts` EXISTS BECAUSE A `type` EXPORT FROM A
+      `"use server"` FILE FAILS THE BUILD.** Every export of one of those files
+      is registered as a server action, so `export type { PayableInvoice }` emits
+      an action reference for a binding that erasure has already removed —
+      `Export PayableInvoice doesn't exist in target module`. **`tsc` and
+      `eslint` both pass**; only `npm run build` catches it. It cannot live in
+      `manual-pay.ts` either, which is `server-only`. Third instance of this
+      shape in the codebase, after `lib/logs/failure-types.ts` and
+      `EXTRA_LOCATION_KEY` in `lib/plans.ts`.
+    - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
+      `subscription-actions.ts` still drives **cancel** and **plan change** on
+      the plans page, plus (1) **signup enrolment** —
+      `app/platform/signup/page.tsx` calls `startSignupSubscription`, and
+      `startSubscribe` cannot serve it because `getActingStoreId()` does not
+      resolve on the platform host — and (2) **buying an extra location**, where
+      the new system READS `billed_locations` but has no way to change it.
+      Deleting the old actions before those two are rebuilt would break signup
+      and remove a paid feature. Nothing bills twice in the meantime:
+      `startSubscribe` refuses when the old system holds a live mandate, and
+      fails closed on a read error.
+    - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an
+      apply-order dependency (see the tree). The Drizzle types describe tables
+      that do not exist yet: that typechecks and fails at query time.
+    - **⚠ Six Razorpay facts are still unverified** (exact subsequent-charge
+      endpoint signature, recurring webhook event names, retry and
+      payment-failure behaviour, e-mandate specifics, MCC restrictions). Listed
+      in the design doc's §10 rather than guessed; several need a test-mode
+      account to settle.
+    - **13 defects found in the current billing code while mapping it**, two of
+      them live revenue bugs (`confirmSubscription` bypasses the comp floor and
+      can overwrite a comp DOWNWARD; a scheduled location release never lands,
+      so Razorpay bills the cheaper plan while the allowance keeps granting the
+      released slots free). Ten live in code this rebuild deletes.
 
 ## 6. Commands
 
@@ -4333,8 +4666,9 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   `storemink-run@…` SA as a property user, enable the Search Console and Site
   Verification APIs, and create the `storemink-seo-refresh` Cloud Scheduler job.
   `lib/seo/store-indexing.ts` is the single store discovery pipeline: publish
-  paths call it after commit, and `/api/cron/seo-refresh` reconciles every
-  active/launched/non-demo store daily. StoreMink subdomains submit under the
+  paths call it after commit, and `/api/cron/seo-refresh` registers the platform,
+  help, and themes sitemaps before reconciling every active/launched/non-demo
+  store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
   sitemap submission. Attempt/success/error timestamps are persisted;

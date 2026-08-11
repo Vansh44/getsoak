@@ -75,7 +75,7 @@ export function HeroSection({
       src={config.image_url}
       alt={config.heading || "Hero"}
       fill
-      priority
+      preload
       sizes={asBackground ? "100vw" : "(max-width: 860px) 100vw, 50vw"}
       className="home-hero-img"
     />

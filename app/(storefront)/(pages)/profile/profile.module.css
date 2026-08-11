@@ -19,37 +19,83 @@
 }
 
 .content {
-  max-width: 900px;
+  max-width: 1060px;
   margin: 0 auto;
 }
 
+/* ---- Identity header ----------------------------------------------------
+   Who am I looking at? The page used to open with a 40px "Account Overview"
+   over the generic line "Manage your personal information" — a heading that
+   shouted, said nothing, and had become untrue once credit, addresses and
+   activity landed on the same page. */
+
 .header {
-  margin-bottom: 48px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 32px;
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--sm-accent);
+  color: var(--sm-on-accent);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.headerText {
+  min-width: 0;
 }
 
 .title {
-  font-size: 40px;
+  font-size: 30px;
   font-weight: 700;
   color: var(--sm-ink);
-  margin-bottom: 12px;
+  margin-bottom: 4px;
+  line-height: 1.2;
 }
 
 .subtitle {
-  font-size: 16px;
+  font-size: 15px;
   color: var(--sm-ink-soft);
   font-weight: 400;
+  overflow-wrap: anywhere;
 }
 
-.grid {
+/* ---- Two-column shell --------------------------------------------------
+   The wide column holds what you came to EDIT; the narrow one holds what you
+   came to CHECK. Everything was previously one full-width stack — `.grid` was
+   authored as `1fr 1fr` and then overridden to `1fr` inline in the page — so a
+   short form sat in a 900px card and the page ran to four screens. */
+
+.layout {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.mainCol,
+.sideCol {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
 }
 
 .card {
   background: var(--sm-surface);
   border-radius: var(--sm-radius-card);
-  padding: 40px;
+  padding: 30px;
   box-shadow: 0 8px 24px rgba(var(--sm-shadow-rgb), 0.06);
   border: 1px solid var(--sm-border);
   display: flex;
@@ -57,26 +103,50 @@
 }
 
 .cardHeader {
-  margin-bottom: 32px;
+  margin-bottom: 22px;
 }
 
+/* 19px, not 24px: at 24 every card title competed with the page heading, so
+   four cards read as four pages rather than sections of one. */
 .cardTitle {
-  font-size: 24px;
+  font-size: 19px;
   font-weight: 600;
   color: var(--sm-ink);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .cardSubtitle {
   font-size: 14px;
   color: var(--sm-ink-faint);
+  line-height: 1.5;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
   flex-grow: 1;
+}
+
+/* First and last name belong on one line — they are one fact. The address
+   form already paired them (.addrTwoCol); this form never did. */
+.formRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* The button was full-width and accent-coloured, which made "Save Changes" the
+   loudest thing on an account page whose job is mostly reading. */
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--sm-ink-faint);
 }
 
 .inputGroup {
@@ -111,14 +181,18 @@
   background: var(--sm-surface);
 }
 
+/* A read-only field must LOOK read-only. Phone is not editable here, and at
+   `opacity: 0.6` it was indistinguishable from a field you could type in until
+   you tried — so it read as a broken input rather than a fixed value. */
 .input:disabled {
-  opacity: 0.6;
+  background: var(--sm-cream);
+  border-style: dashed;
+  color: var(--sm-ink-soft);
   cursor: not-allowed;
 }
 
 .submitBtn {
-  margin-top: auto;
-  padding: 16px;
+  padding: 13px 28px;
   border-radius: var(--sm-radius-control);
   background: var(--sm-accent);
   color: var(--sm-on-accent);
@@ -339,8 +413,35 @@
 }
 
 @media (max-width: 900px) {
-  .grid {
+  .layout {
     grid-template-columns: 1fr;
+  }
+
+  /* ★ ONE COLUMN MEANS A NEW ORDER, NOT A CONCATENATION. Stacking the two
+     columns as-is gives personal info → addresses → credit → activity, which
+     buries the balance below a form and an address list. `display: contents`
+     dissolves the two wrappers so every card becomes a direct grid item and
+     can be ordered individually; the grid's own `gap` then spaces them, which
+     is why it matches the columns' flex gap exactly. */
+  .mainCol,
+  .sideCol {
+    display: contents;
+  }
+
+  .slotCredit {
+    order: 1;
+  }
+
+  .slotPersonal {
+    order: 2;
+  }
+
+  .slotAddress {
+    order: 3;
+  }
+
+  .slotActivity {
+    order: 4;
   }
 }
 
@@ -350,12 +451,66 @@
   }
 
   .card {
-    padding: 24px;
+    padding: 22px;
+  }
+
+  .header {
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .avatar {
+    width: 50px;
+    height: 50px;
+    font-size: 21px;
   }
 
   .title {
-    font-size: 32px;
+    font-size: 24px;
   }
+
+  .subtitle {
+    font-size: 14px;
+  }
+
+  .formRow {
+    grid-template-columns: 1fr;
+  }
+
+  /* A right-aligned button on a narrow screen is a small target in the corner. */
+  .formActions {
+    justify-content: stretch;
+  }
+
+  .submitBtn {
+    width: 100%;
+  }
+
+  /* ★★ 16px IS NOT A TASTE DECISION. iOS Safari ZOOMS the page when a field
+     with a font-size below 16px takes focus, and it does not zoom back out —
+     so tapping "First name" left the shopper on a magnified, sideways-
+     scrolling page they had to pinch out of. Every input on this page was
+     15px. */
+  .input {
+    font-size: 16px;
+  }
+
+  /* 28px-tall buttons are a miss-and-try-again on a touch screen. */
+  .addrBtn,
+  .addrBtnDanger {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  .addrActions {
+    gap: 8px;
+  }
+
+  /* ⚠ The skeleton's mobile overrides are NOT here. The .skel* base rules are
+     defined at the END of this file, so a same-specificity override placed in
+     this block loses on source order — which is exactly what happened: the
+     button stayed 148px and the avatar stayed 60px on a phone. They live in
+     their own media query after those definitions instead. */
 }
 
 /* ---- Account quick links (orders / notifications) ---- */
@@ -399,4 +554,241 @@
 .quickLink small {
   font-size: 13px;
   color: var(--sm-ink-faint);
+}
+
+/* Store credit ------------------------------------------------------------
+   Fully tokenised on --sm-*, like the rest of this file (§11: no raw hex, so
+   a theme's palette reaches this card without per-component wiring). */
+
+.creditAmountRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.creditIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: var(--sm-radius-control);
+  background: var(--sm-cream);
+  color: var(--sm-accent-deep);
+}
+
+.creditAmount {
+  display: block;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--sm-ink);
+}
+
+.creditAmountCaption {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--sm-ink-faint);
+}
+
+.creditHistoryTitle {
+  margin: 28px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sm-ink-faint);
+}
+
+.creditList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--sm-border);
+}
+
+.creditRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--sm-border);
+}
+
+.creditRowLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.creditRowLabel strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.creditRowLabel small {
+  font-size: 13px;
+  color: var(--sm-ink-faint);
+}
+
+/* Tabular figures so a column of amounts lines up on the decimal. */
+.creditRowAmount {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.creditRowAdded {
+  color: var(--sm-success);
+}
+
+.creditRowSpent {
+  color: var(--sm-ink-soft);
+}
+
+/* Skeleton -----------------------------------------------------------------
+   The page used to show a centred "Loading profile..." on an empty cream
+   field. AuthProvider only clears `loading` once the customer ROW has landed
+   (§4), so that state is held for a full round trip — long enough that the
+   page read as broken rather than busy. The skeleton mirrors the real layout,
+   so the content lands into the shape already on screen instead of replacing
+   an empty page.
+
+   ★ It deliberately mirrors ONLY the cards that always render (personal info,
+   address book, activity). A store-credit skeleton would flash and then
+   vanish for every shopper who has no credit — which is most of them. */
+
+/* ★★ THE SHIMMER IS MIXED FROM `--sm-ink`, NOT FROM THE CREAM TOKENS. Built
+   from `cream-deep → cream → cream-deep` it was INVISIBLE on some themes: a
+   theme is free to set `--sm-cream` equal to `--sm-surface` (basket does —
+   both are #ffffff), so the bright phase of the sweep was pure white on a pure
+   white card and the blocks vanished twice a second. Mixing ink into
+   `transparent` instead darkens whatever surface is behind it, so contrast is
+   guaranteed on every palette rather than on the one it was authored against. */
+.skel {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sm-ink) 10%, transparent) 25%,
+    color-mix(in srgb, var(--sm-ink) 4%, transparent) 37%,
+    color-mix(in srgb, var(--sm-ink) 10%, transparent) 63%
+  );
+  background-size: 200% 100%;
+  animation: skelShimmer 1.4s ease-in-out infinite;
+  border-radius: var(--sm-radius-sm);
+  display: block;
+}
+
+@keyframes skelShimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* A shimmer is decoration; motion sensitivity is not. */
+@media (prefers-reduced-motion: reduce) {
+  .skel {
+    animation: none;
+  }
+}
+
+.skelAvatar {
+  width: 60px;
+  height: 60px;
+  flex: none;
+  border-radius: 999px;
+}
+
+.skelTitle {
+  width: 180px;
+  max-width: 60vw;
+  height: 26px;
+  margin-bottom: 8px;
+}
+
+.skelSub {
+  width: 240px;
+  max-width: 75vw;
+  height: 15px;
+}
+
+.skelCardTitle {
+  width: 170px;
+  height: 19px;
+  margin-bottom: 10px;
+}
+
+.skelCardSub {
+  width: 220px;
+  max-width: 70%;
+  height: 14px;
+}
+
+.skelLabel {
+  width: 88px;
+  height: 11px;
+}
+
+.skelInput {
+  height: 50px;
+  border-radius: var(--sm-radius-control);
+}
+
+.skelButton {
+  width: 148px;
+  height: 46px;
+  border-radius: var(--sm-radius-control);
+}
+
+.skelRow {
+  height: 44px;
+  border-radius: var(--sm-radius-control);
+}
+
+/* .quickLinks separates its rows with border-top, not gap, so the skeleton
+   needs its own spacing container. */
+.skelRows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Visually hidden, still announced — the skeleton needs to say "loading" to a
+   screen reader, which cannot see a shimmer. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Skeleton, small screens. MUST come after the .skel* definitions above —
+   these are same-specificity overrides, so source order is what makes them
+   win. Placing them in the earlier 600px block silently did nothing. */
+@media (max-width: 600px) {
+  .skelAvatar {
+    width: 50px;
+    height: 50px;
+  }
+
+  .skelButton {
+    width: 100%;
+  }
+
+  .skelTitle {
+    height: 22px;
+  }
 }

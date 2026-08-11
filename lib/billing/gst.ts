@@ -85,6 +85,45 @@ export function splitGst(taxAmount: number, intraState: boolean): GstSplit {
   return { cgst, sgst, igst: 0, intraState: true };
 }
 
+/** CGST/SGST/IGST in integer paise. */
+export interface GstSplitPaise {
+  cgstPaise: number;
+  sgstPaise: number;
+  igstPaise: number;
+  intraState: boolean;
+}
+
+/**
+ * The paise-exact counterpart of splitGst, for platform → merchant invoices
+ * (§34), where every amount is an integer number of paise.
+ *
+ * ★ A SEPARATE FUNCTION, deliberately — not a wrapper. `splitGst` rounds to two
+ * decimals because it works in RUPEES, so routing paise through it would divide
+ * by 100 and back and reintroduce exactly the float error integer paise exist to
+ * prevent. Same remainder trick, different unit.
+ *
+ * sgst takes the remainder, so cgst + sgst === the input for odd paise too
+ * (₹0.05 = 5p → 3p + 2p).
+ */
+export function splitGstPaise(
+  taxPaise: number,
+  intraState: boolean,
+): GstSplitPaise {
+  const total = Number.isFinite(taxPaise)
+    ? Math.max(0, Math.round(taxPaise))
+    : 0;
+  if (!intraState) {
+    return { cgstPaise: 0, sgstPaise: 0, igstPaise: total, intraState: false };
+  }
+  const cgstPaise = Math.floor(total / 2);
+  return {
+    cgstPaise,
+    sgstPaise: total - cgstPaise,
+    igstPaise: 0,
+    intraState: true,
+  };
+}
+
 export interface GstRateBucket {
   /** The full GST rate for this bucket (e.g. 18 for 9% + 9%). */
   rate: number;

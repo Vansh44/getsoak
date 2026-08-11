@@ -24,7 +24,7 @@ const preset: ThemePreset = {
       surface: "#fffdf7",
       ink: "#171715",
       inkSoft: "#666259",
-      inkFaint: "#9d988d",
+      inkFaint: "#716d65",
       taupe: "#d8d0c1",
       sand: "#e6e0d4",
       butter: "#f1c66a",

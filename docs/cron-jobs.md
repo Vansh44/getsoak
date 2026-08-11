@@ -25,14 +25,15 @@ stores, 0 orders, 0 lapsed plans, 0 pending razorpay orders, 0 campaign
 recipients.** Nothing was lost, because production has no real traffic yet — but
 each job is a landmine the moment it does:
 
-| Job                       | What its absence would have cost under real traffic                                                                                                         |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send-emails`             | Coupon email campaigns never send.                                                                                                                          |
-| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).             |
-| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                              |
-| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                  |
-| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices. |
-| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                  |
+| Job                       | What its absence would have cost under real traffic                                                                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                       |
+| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                          |
+| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                                                                                                           |
+| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                               |
+| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices.                                                                              |
+| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                               |
+| `billing`                 | **No merchant is ever charged.** No renewal invoice is issued, no cycle advances, no grace window opens and no unpaid plan is downgraded — the entire subscription business stops silently, looking exactly like nobody has renewed yet. |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -51,13 +52,21 @@ each job is a landmine the moment it does:
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
+| `storemink-billing` ⚠ NOT CREATED   | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
-All seven: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
+deadline are wall-clock instants, so the interval IS the resolution of the whole
+system: on a daily schedule some merchants would get nearly a day of unearned
+service and others nearly a day less notice than the 48 hours they are promised.
+It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
+
+Seven exist; `billing` is intentionally not created yet (see Verifying). All of
+them: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
-`seo-refresh` registers the platform/help sitemaps, retries sitemap coverage for
-every launched store, and automatically verifies Search Console URL-prefix
+`seo-refresh` registers the platform/help/themes sitemaps, retries sitemap
+coverage for every launched store, and automatically verifies Search Console URL-prefix
 properties for connected custom domains. It returns **503 on any partial
 failure**, so Scheduler retries are part of its reliability contract. Enable
 the Google Search Console + Site Verification APIs and configure the runtime
@@ -165,6 +174,39 @@ It answers **200 even when an import failed** — a failed import is a recorded
 outcome on the job that the merchant reads in the log, not an outage, and a 5xx
 would make Scheduler retry a job that has already given up.
 
+### `billing` — the subscription heartbeat
+
+```bash
+gcloud scheduler jobs create http storemink-billing \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="20 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/billing" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+Runs the three renewal passes **in one request, in order** — collect at T−4d,
+evaluate at the cycle turn, downgrade after the 48-hour grace. Splitting them
+across jobs would leave each pass a full interval behind the one before it, so a
+merchant's buffer would quietly become 48 hours plus two intervals.
+
+**Its status contract, which differs from the others in one important way:**
+
+| Situation                             | Status  | Why                                                                                                                            |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| A merchant's payment was **declined** | **200** | Not an outage. That merchant has not paid, which the grace window already handles; a 5xx would make Scheduler retry a decline. |
+| A merchant was **downgraded**         | **200** | The system working as designed.                                                                                                |
+| Collection is **unconfigured**        | **200** | See below — it is a known state, not a failure.                                                                                |
+| A pass threw, or a store errored      | **503** | Money was not collected or a plan was not applied. Worth retrying.                                                             |
+
+⚠ **`collectionSkipped` in the response body is the one to watch.** While the
+Razorpay subsequent-charge endpoint is unverified (`lib/billing/gateway.ts`),
+pass 1 is **skipped entirely** rather than attempted — a stub that always failed
+would create payment attempts that can never settle, and because an unreachable
+provider is an _unknown_ outcome rather than a decline, each would sit in
+reconciliation forever. So a green run with `collectionSkipped` set means
+**nobody is being charged**. That is deliberate and safe, but it is not "working".
+
 ### What `prune-logs` closes
 
 Three tables grew without bound because their retention policy was written down
@@ -245,21 +287,44 @@ The original three were verified this way on 2026-07-30.
 
 `storemink-seo-refresh` was created and verified on **2026-08-06** — it had never
 existed, so sitemap submission had never run on a schedule. Verified by calling
-the endpoint directly (`200 {"ok":true}`, both roots registered, both eligible
-stores ready) after enabling the two APIs above.
+the endpoint directly (`200 {"ok":true}`, the then-configured platform/help
+roots registered, both eligible stores ready) after enabling the two APIs above.
+The themes catalog joined that same retry-backed root registration in Phase 4;
+the response names each root so a rejected themes sitemap is visible rather
+than an ambiguous array position.
 
 `storemink-domain-reconcile` was created on **2026-08-06** alongside the fix it
 backs. Its route ships in the same change, so verify its **response** once that
 reaches production — the job authenticates (its baked-in header matches the
 current `CRON_SECRET`) but will 404 until the deploy lands.
 
-> **⚠ `storemink-prune-logs` HAS NOT BEEN CREATED.** The route ships in this
-> change; the Cloud Scheduler job does not exist yet, and until someone runs the
-> `gcloud` command above **no retention runs at all** — which is exactly the
-> state this change set out to fix, and exactly the failure this file has now
-> recorded three times. Create it, then verify the response and record the date
-> here. Expect `{"ok":true,...}` with a large first `deleted` count and possibly
-> `"incomplete":true` for the first few nights while the backlog drains.
+`storemink-prune-logs` and `storemink-import-worker` were created on
+**2026-08-11**. Both had been listed in this file as though they existed and were
+absent from Cloud Scheduler in **every** region — the failure this file records,
+for the **third** time. Found by diffing the documented list against
+`gcloud scheduler jobs list` rather than by reading the file, which is the only
+method that has ever caught it.
+
+Verified by triggering `storemink-import-worker` by hand: Cloud Run answered
+**200** to `Google-Cloud-Scheduler`, which also proves the baked-in header
+matches the current `CRON_SECRET` — and since all jobs share that secret, it
+clears the auth path for every one of them. `import-worker` was chosen for the
+probe deliberately: with no queued import it is a no-op, whereas triggering
+`prune-logs` deletes rows.
+
+⚠ `prune-logs` has NOT been triggered by hand — its first run is its scheduled
+03:00 UTC one. Expect `{"ok":true,...}` with a large first `deleted` count and
+possibly `"incomplete":true` for a few nights while the backlog drains, since
+retention has never run.
+
+> **⚠ `storemink-billing` HAS NOT BEEN CREATED, deliberately.** The route ships,
+> but `RECURRING_CHARGE_VERIFIED` in `lib/billing/gateway.ts` is `false` and
+> `billing_subscriptions` is empty, so the job would report green hourly while
+> charging nobody — a signal that means less than it looks like. Create it in the
+> SAME sitting as verifying the Razorpay subsequent-charge endpoint and flipping
+> that flag; the three only mean anything together. Until then this row is the
+> reminder, and per the top of this file a written reminder is not one anybody
+> receives — so treat it as a task, not a note.
 
 ## Staging
 

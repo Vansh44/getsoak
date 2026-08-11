@@ -4,7 +4,7 @@ import { withService } from "@/lib/db/client";
 import { logError } from "@/lib/observability/logger";
 import { submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { ensureGoogleCoverageForStore } from "@/lib/seo/store-indexing";
-import { HELP_URL, PLATFORM_URL } from "@/lib/site";
+import { HELP_URL, PLATFORM_URL, THEMES_URL } from "@/lib/site";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 import { isStoreLaunched } from "@/lib/store/launch";
 
@@ -13,6 +13,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 const CONCURRENCY = 4;
+
+const ROOT_SITEMAPS = [
+  { site: "platform", url: `${PLATFORM_URL}/sitemap.xml` },
+  { site: "help", url: `${HELP_URL}/sitemap.xml` },
+  { site: "themes", url: `${THEMES_URL}/sitemap.xml` },
+] as const;
 
 function authorised(request: Request): boolean {
   const secret = process.env.CRON_SECRET;
@@ -47,13 +53,12 @@ async function handle(request: Request): Promise<Response> {
   }
 
   try {
-    // Root properties are cheap, fixed registrations. Repeating these two PUTs
+    // Root properties are cheap, fixed registrations. Repeating these PUTs
     // daily is intentional: a missing IAM grant or transient Google failure
     // self-heals without a human remembering a one-time deployment step.
-    const rootResults = await Promise.all([
-      submitSitemapToGoogle(`${PLATFORM_URL}/sitemap.xml`),
-      submitSitemapToGoogle(`${HELP_URL}/sitemap.xml`),
-    ]);
+    const rootResults = await Promise.all(
+      ROOT_SITEMAPS.map(({ url }) => submitSitemapToGoogle(url)),
+    );
 
     const rows = await withService((db) =>
       db
@@ -80,7 +85,9 @@ async function handle(request: Request): Promise<Response> {
     return Response.json(
       {
         ok,
-        roots: rootResults.map((result) => ({
+        roots: rootResults.map((result, index) => ({
+          site: ROOT_SITEMAPS[index].site,
+          sitemap: ROOT_SITEMAPS[index].url,
           ok: result.ok,
           ...(!result.ok ? { error: result.error } : {}),
         })),

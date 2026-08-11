@@ -5,7 +5,7 @@ import Footer from "@/app/(storefront)/components/footer/Footer";
 import AuthProvider from "@/app/(storefront)/components/auth/AuthProvider";
 import CartProvider from "@/app/(storefront)/components/cart/CartProvider";
 import CartDrawer from "@/app/(storefront)/components/cart/CartDrawer";
-import AuthModal from "@/app/(storefront)/components/auth/AuthModal";
+import AuthModalLoader from "@/app/(storefront)/components/auth/auth-modal-loader";
 import { BrandProvider } from "@/app/(storefront)/components/brand-provider";
 import { ChromeProvider } from "@/app/(storefront)/components/chrome-provider";
 import { notFound } from "next/navigation";
@@ -139,7 +139,7 @@ export default async function StorefrontLayout({
             </div>
           </ChromeProvider>
         </BrandProvider>
-        <AuthModal />
+        <AuthModalLoader />
         <CartDrawer />
         <Toaster richColors />
       </CartProvider>

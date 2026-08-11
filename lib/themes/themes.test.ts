@@ -188,15 +188,15 @@ describe("theme registry", () => {
     expect(isThemeSelectable(basketMeta)).toBe(true);
     expect(canPreviewTheme(basketMeta)).toBe(false);
     const studioMeta = THEME_META.find((theme) => theme.id === "studio")!;
-    expect(studioMeta.release.status).toBe("draft");
+    expect(studioMeta.release.status).toBe("blocked");
     expect(studioMeta.catalog.visibility).toBe("hidden");
     expect(isThemeSelectable(studioMeta)).toBe(false);
-    expect(canPreviewTheme(studioMeta)).toBe(false);
+    expect(canPreviewTheme(studioMeta)).toBe(true);
     const ritualMeta = THEME_META.find((theme) => theme.id === "ritual")!;
-    expect(ritualMeta.release.status).toBe("draft");
+    expect(ritualMeta.release.status).toBe("blocked");
     expect(ritualMeta.catalog.visibility).toBe("hidden");
     expect(isThemeSelectable(ritualMeta)).toBe(false);
-    expect(canPreviewTheme(ritualMeta)).toBe(false);
+    expect(canPreviewTheme(ritualMeta)).toBe(true);
   });
 
   it("reads pinned installations and legacy template ids", () => {

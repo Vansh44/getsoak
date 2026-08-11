@@ -200,13 +200,661 @@ export const aiCreditPurchases = pgTable(
   ],
 );
 
-export const billingWebhookEvents = pgTable("billing_webhook_events", {
-  eventId: text("event_id").primaryKey().notNull(),
-  eventType: text("event_type"),
-  receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" })
-    .defaultNow()
-    .notNull(),
-});
+// ─── Billing (docs/billing-architecture.md) ──────────────────────────────────
+// Money is bigint PAISE everywhere, mode:"number" — JS integers are exact to
+// 2^53, which is ₹90 trillion. Never numeric, never a float.
+// All of these are service-role only (RLS on, no policies): they are financial
+// records and carry merchant legal identity.
+
+export const billingAccounts = pgTable(
+  "billing_accounts",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    billingEmail: text("billing_email"),
+    legalName: text("legal_name"),
+    address: jsonb().default({}).notNull(),
+    /** The MERCHANT's GSTIN — printed on their invoice so they can claim ITC. */
+    gstin: text(),
+    stateCode: text("state_code"),
+    currency: text().default("INR").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_accounts_store_id_fkey",
+    }).onDelete("cascade"),
+    check("billing_accounts_currency_check", sql`currency = 'INR'::text`),
+    // ★★ NUMERIC GST state code ("07", "29"), never "DL"/"KA". A rejected code
+    // makes isIntraState fall back to INTRA-state — the wrong tax head for
+    // platform billing, silently, on every invoice.
+    check(
+      "billing_accounts_state_code_numeric",
+      sql`(state_code IS NULL) OR (state_code ~ '^[0-9]{2}$'::text)`,
+    ),
+  ],
+);
+
+/** Append-only account credits. Chiefly: money that arrived AFTER a downgrade,
+ *  which settles no service period and becomes credit instead (§7). */
+export const billingCredits = pgTable(
+  "billing_credits",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    deltaPaise: bigint("delta_paise", { mode: "number" }).notNull(),
+    kind: text().notNull(),
+    ref: text(),
+    note: text(),
+    invoiceId: uuid("invoice_id"),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_credits_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    // A replayed webhook credits once.
+    uniqueIndex("billing_credits_ref_key")
+      .using(
+        "btree",
+        table.storeId.asc().nullsLast().op("uuid_ops"),
+        table.kind.asc().nullsLast().op("text_ops"),
+        table.ref.asc().nullsLast().op("text_ops"),
+      )
+      .where(sql`(ref IS NOT NULL)`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_credits_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [billingInvoices.id],
+      name: "billing_credits_invoice_id_fkey",
+    }).onDelete("set null"),
+    check("billing_credits_delta_paise_check", sql`delta_paise <> 0`),
+    check(
+      "billing_credits_kind_check",
+      sql`kind = ANY (ARRAY['late_payment'::text, 'goodwill'::text, 'adjustment'::text, 'applied'::text])`,
+    ),
+  ],
+);
+
+/** Gapless GST document series, one counter per Indian financial year. */
+export const billingInvoiceCounters = pgTable(
+  "billing_invoice_counters",
+  {
+    fyLabel: text("fy_label").primaryKey().notNull(),
+    nextSeq: integer("next_seq").default(1).notNull(),
+  },
+  () => [check("billing_invoice_counters_next_seq_check", sql`next_seq >= 1`)],
+);
+
+export const billingInvoiceItems = pgTable(
+  "billing_invoice_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    kind: text().notNull(),
+    description: text().notNull(),
+    quantity: integer().default(1).notNull(),
+    unitAmountPaise: bigint("unit_amount_paise", { mode: "number" }).notNull(),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_invoice_items_invoice_idx").using(
+      "btree",
+      table.invoiceId.asc().nullsLast().op("uuid_ops"),
+      table.sortOrder.asc().nullsLast().op("int4_ops"),
+    ),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [billingInvoices.id],
+      name: "billing_invoice_items_invoice_id_fkey",
+    }).onDelete("cascade"),
+    check("billing_invoice_items_quantity_check", sql`quantity > 0`),
+    check(
+      "billing_invoice_items_kind_check",
+      sql`kind = ANY (ARRAY['base_plan'::text, 'location'::text, 'addon'::text, 'proration'::text, 'discount'::text, 'tax'::text, 'account_credit'::text, 'ai_credits'::text])`,
+    ),
+  ],
+);
+
+export const billingInvoices = pgTable(
+  "billing_invoices",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    /** 'subscription' | 'ai_credits' — never the same document (spec §1). */
+    kind: text().notNull(),
+    status: text().default("draft").notNull(),
+    subtotalPaise: bigint("subtotal_paise", { mode: "number" })
+      .default(0)
+      .notNull(),
+    discountPaise: bigint("discount_paise", { mode: "number" })
+      .default(0)
+      .notNull(),
+    taxPaise: bigint("tax_paise", { mode: "number" }).default(0).notNull(),
+    totalPaise: bigint("total_paise", { mode: "number" }).default(0).notNull(),
+    currency: text().default("INR").notNull(),
+    /** Null until finalized. Allocated by trigger, never by app code (§6). */
+    invoiceNo: integer("invoice_no"),
+    invoiceRef: text("invoice_ref"),
+    fyLabel: text("fy_label"),
+    /** The renewal invoice's idempotency key. Null for ai_credits. */
+    cycleSeq: integer("cycle_seq"),
+    periodStart: timestamp("period_start", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    periodEnd: timestamp("period_end", { withTimezone: true, mode: "string" }),
+    taxRateBps: integer("tax_rate_bps"),
+    placeOfSupply: text("place_of_supply"),
+    supplierGstin: text("supplier_gstin"),
+    customerGstin: text("customer_gstin"),
+    finalizedAt: timestamp("finalized_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    dueAt: timestamp("due_at", { withTimezone: true, mode: "string" }),
+    paidAt: timestamp("paid_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_invoices_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    index("billing_invoices_open_idx")
+      .using("btree", table.dueAt.asc().nullsLast().op("timestamptz_ops"))
+      .where(sql`(status = ANY (ARRAY['open'::text, 'processing'::text]))`),
+    // ★ Two renewal workers cannot both create an invoice for one cycle (§35).
+    uniqueIndex("billing_invoices_one_per_cycle")
+      .using(
+        "btree",
+        table.storeId.asc().nullsLast().op("uuid_ops"),
+        table.kind.asc().nullsLast().op("text_ops"),
+        table.cycleSeq.asc().nullsLast().op("int4_ops"),
+      )
+      .where(sql`(cycle_seq IS NOT NULL)`),
+    uniqueIndex("billing_invoices_ref_key")
+      .using("btree", table.invoiceRef.asc().nullsLast().op("text_ops"))
+      .where(sql`(invoice_ref IS NOT NULL)`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_invoices_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "billing_invoices_kind_check",
+      sql`kind = ANY (ARRAY['subscription'::text, 'ai_credits'::text])`,
+    ),
+    check(
+      "billing_invoices_status_check",
+      sql`status = ANY (ARRAY['draft'::text, 'open'::text, 'processing'::text, 'paid'::text, 'uncollectible'::text, 'void'::text, 'refunded'::text, 'partially_refunded'::text])`,
+    ),
+    check("billing_invoices_currency_check", sql`currency = 'INR'::text`),
+    check("billing_invoices_subtotal_paise_check", sql`subtotal_paise >= 0`),
+    check("billing_invoices_discount_paise_check", sql`discount_paise >= 0`),
+    check("billing_invoices_tax_paise_check", sql`tax_paise >= 0`),
+    check("billing_invoices_total_paise_check", sql`total_paise >= 0`),
+    check(
+      "billing_invoices_cycle_seq_check",
+      sql`(cycle_seq IS NULL) OR (cycle_seq >= 0)`,
+    ),
+    // A finalized invoice HAS a number; a draft does not. Both directions.
+    check(
+      "billing_invoices_number_iff_finalized",
+      sql`(finalized_at IS NULL) = (invoice_ref IS NULL)`,
+    ),
+    check(
+      "billing_invoices_total_adds_up",
+      sql`total_paise = ((subtotal_paise - discount_paise) + tax_paise)`,
+    ),
+    check(
+      "billing_invoices_kind_shape",
+      sql`((kind = 'subscription'::text) AND (cycle_seq IS NOT NULL)) OR ((kind = 'ai_credits'::text) AND (cycle_seq IS NULL))`,
+    ),
+  ],
+);
+
+export const billingMandates = pgTable(
+  "billing_mandates",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    provider: text().default("razorpay").notNull(),
+    providerCustomerId: text("provider_customer_id"),
+    providerTokenId: text("provider_token_id"),
+    /** card | upi | emandate | nach | unknown. `unknown` means VERIFY (§17). */
+    method: text().default("unknown").notNull(),
+    status: text().default("pending").notNull(),
+    /** Read back from the token, never computed by us. */
+    maxAmountPaise: bigint("max_amount_paise", { mode: "number" }),
+    authenticatedAt: timestamp("authenticated_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true, mode: "string" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true, mode: "string" }),
+    /** Reconciliation fields only. NEVER credentials or card data. */
+    providerMetadata: jsonb("provider_metadata").default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_mandates_store_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    uniqueIndex("billing_mandates_token_key")
+      .using(
+        "btree",
+        table.provider.asc().nullsLast().op("text_ops"),
+        table.providerTokenId.asc().nullsLast().op("text_ops"),
+      )
+      .where(sql`(provider_token_id IS NOT NULL)`),
+    // ★ At most one active mandate per store — otherwise nothing knows which
+    // instrument to debit.
+    uniqueIndex("billing_mandates_one_active")
+      .using("btree", table.storeId.asc().nullsLast().op("uuid_ops"))
+      .where(sql`(status = 'active'::text)`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_mandates_store_id_fkey",
+    }).onDelete("cascade"),
+    check("billing_mandates_provider_check", sql`provider = 'razorpay'::text`),
+    check(
+      "billing_mandates_method_check",
+      sql`method = ANY (ARRAY['card'::text, 'upi'::text, 'emandate'::text, 'nach'::text, 'unknown'::text])`,
+    ),
+    check(
+      "billing_mandates_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'active'::text, 'expired'::text, 'revoked'::text, 'failed'::text, 'unknown'::text])`,
+    ),
+    check(
+      "billing_mandates_max_amount_paise_check",
+      sql`(max_amount_paise IS NULL) OR (max_amount_paise > 0)`,
+    ),
+  ],
+);
+
+export const billingPaymentAttempts = pgTable(
+  "billing_payment_attempts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    invoiceId: uuid("invoice_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    /** OURS, minted BEFORE the gateway call — you cannot key on a provider id
+     *  you do not have yet, and a timeout looks like a success you never read. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    mode: text().notNull(),
+    /** Monotonic: captured/refunded are terminal, so a late `failed` is
+     *  rejected by the state machine rather than by comparing clocks (§4). */
+    state: text().default("created").notNull(),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    currency: text().default("INR").notNull(),
+    mandateId: uuid("mandate_id"),
+    provider: text().default("razorpay").notNull(),
+    providerOrderId: text("provider_order_id"),
+    providerPaymentId: text("provider_payment_id"),
+    providerTokenId: text("provider_token_id"),
+    failureCode: text("failure_code"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp("resolved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+  },
+  (table) => [
+    index("billing_payment_attempts_invoice_idx").using(
+      "btree",
+      table.invoiceId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    index("billing_payment_attempts_unresolved_idx")
+      .using("btree", table.updatedAt.asc().nullsLast().op("timestamptz_ops"))
+      .where(
+        sql`(state = ANY (ARRAY['processing'::text, 'authorized'::text, 'unknown'::text]))`,
+      ),
+    // ★★ Three clicks on Pay, or a retry racing a manual payment, cannot make
+    // two in-flight attempts — the second INSERT fails (§28, §36).
+    uniqueIndex("billing_payment_attempts_one_in_flight")
+      .using("btree", table.invoiceId.asc().nullsLast().op("uuid_ops"))
+      .where(
+        sql`(state = ANY (ARRAY['created'::text, 'processing'::text, 'authorized'::text]))`,
+      ),
+    uniqueIndex("billing_payment_attempts_provider_payment_key")
+      .using(
+        "btree",
+        table.provider.asc().nullsLast().op("text_ops"),
+        table.providerPaymentId.asc().nullsLast().op("text_ops"),
+      )
+      .where(sql`(provider_payment_id IS NOT NULL)`),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [billingInvoices.id],
+      name: "billing_payment_attempts_invoice_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_payment_attempts_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.mandateId],
+      foreignColumns: [billingMandates.id],
+      name: "billing_payment_attempts_mandate_id_fkey",
+    }).onDelete("set null"),
+    unique("billing_payment_attempts_idempotency_key_key").on(
+      table.idempotencyKey,
+    ),
+    check(
+      "billing_payment_attempts_mode_check",
+      sql`mode = ANY (ARRAY['automatic'::text, 'manual'::text])`,
+    ),
+    check(
+      "billing_payment_attempts_state_check",
+      sql`state = ANY (ARRAY['created'::text, 'processing'::text, 'authorized'::text, 'captured'::text, 'failed'::text, 'cancelled'::text, 'refunded'::text, 'unknown'::text])`,
+    ),
+    check(
+      "billing_payment_attempts_currency_check",
+      sql`currency = 'INR'::text`,
+    ),
+    check(
+      "billing_payment_attempts_provider_check",
+      sql`provider = 'razorpay'::text`,
+    ),
+    check("billing_payment_attempts_amount_paise_check", sql`amount_paise > 0`),
+    check(
+      "billing_payment_attempts_resolved_shape",
+      sql`((state = ANY (ARRAY['captured'::text, 'failed'::text, 'cancelled'::text, 'refunded'::text])) AND (resolved_at IS NOT NULL)) OR ((state = ANY (ARRAY['created'::text, 'processing'::text, 'authorized'::text, 'unknown'::text])) AND (resolved_at IS NULL))`,
+    ),
+  ],
+);
+
+/** Ambiguity lands here and is never guessed (Rule 10). */
+export const billingReconciliationItems = pgTable(
+  "billing_reconciliation_items",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    /** Nullable: an orphan gateway payment may map to no store yet, which is
+     *  exactly why it needs reviewing (§46, §47). */
+    storeId: uuid("store_id"),
+    kind: text().notNull(),
+    status: text().default("open").notNull(),
+    invoiceId: uuid("invoice_id"),
+    attemptId: uuid("attempt_id"),
+    providerPaymentId: text("provider_payment_id"),
+    providerOrderId: text("provider_order_id"),
+    expectedPaise: bigint("expected_paise", { mode: "number" }),
+    observedPaise: bigint("observed_paise", { mode: "number" }),
+    detail: jsonb().default({}).notNull(),
+    resolvedBy: text("resolved_by"),
+    resolvedAt: timestamp("resolved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resolutionNote: text("resolution_note"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_reconciliation_open_idx")
+      .using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops"))
+      .where(sql`(status = ANY (ARRAY['open'::text, 'manual_review'::text]))`),
+    // The detectors re-run continuously; without this one unresolved mismatch
+    // would create a row every pass and bury the queue it exists to surface.
+    uniqueIndex("billing_reconciliation_open_key")
+      .using(
+        "btree",
+        table.kind.asc().nullsLast().op("text_ops"),
+        table.providerPaymentId.asc().nullsLast().op("text_ops"),
+      )
+      .where(
+        sql`((status = 'open'::text) AND (provider_payment_id IS NOT NULL))`,
+      ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_reconciliation_items_store_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.invoiceId],
+      foreignColumns: [billingInvoices.id],
+      name: "billing_reconciliation_items_invoice_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.attemptId],
+      foreignColumns: [billingPaymentAttempts.id],
+      name: "billing_reconciliation_items_attempt_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "billing_reconciliation_items_kind_check",
+      sql`kind = ANY (ARRAY['unknown_payment'::text, 'orphan_payment'::text, 'amount_mismatch'::text, 'missing_webhook'::text, 'state_conflict'::text, 'wrong_association'::text, 'credit_grant_failed'::text])`,
+    ),
+    check(
+      "billing_reconciliation_items_status_check",
+      sql`status = ANY (ARRAY['open'::text, 'resolved'::text, 'manual_review'::text, 'ignored'::text])`,
+    ),
+    check(
+      "billing_reconciliation_resolved_shape",
+      sql`(status = 'resolved'::text) = (resolved_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const billingSubscriptions = pgTable(
+  "billing_subscriptions",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    plan: text().notNull(),
+    period: text().default("monthly").notNull(),
+    /** OUR state machine, not Razorpay's (§4). */
+    state: text().default("free").notNull(),
+    /** Monotonic. The renewal invoice's idempotency key. */
+    currentCycleSeq: integer("current_cycle_seq").default(0).notNull(),
+    currentPeriodStart: timestamp("current_period_start", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    currentPeriodEnd: timestamp("current_period_end", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    billedLocations: integer("billed_locations").default(0).notNull(),
+    scheduledPlan: text("scheduled_plan"),
+    scheduledPeriod: text("scheduled_period"),
+    scheduledLocations: integer("scheduled_locations"),
+    cancelAtPeriodEnd: boolean("cancel_at_period_end").default(false).notNull(),
+    /** Set when a payment is KNOWN to have failed — never on invoice creation
+     *  (§68) and never on an `unknown` outcome (Rule 6). */
+    graceStartedAt: timestamp("grace_started_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    graceEndsAt: timestamp("grace_ends_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    downgradedAt: timestamp("downgraded_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    mandateId: uuid("mandate_id"),
+    /** A comped store has no mandate and no invoice: the renewal worker skips
+     *  it and the downgrade claim excludes it. */
+    planSource: text("plan_source").default("comp").notNull(),
+    planExpiresAt: timestamp("plan_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("billing_subscriptions_renewal_idx")
+      .using(
+        "btree",
+        table.currentPeriodStart.asc().nullsLast().op("timestamptz_ops"),
+      )
+      .where(
+        sql`(state = ANY (ARRAY['active'::text, 'past_due'::text, 'grace'::text]))`,
+      ),
+    index("billing_subscriptions_grace_idx")
+      .using("btree", table.graceEndsAt.asc().nullsLast().op("timestamptz_ops"))
+      .where(sql`(state = ANY (ARRAY['past_due'::text, 'grace'::text]))`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "billing_subscriptions_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.mandateId],
+      foreignColumns: [billingMandates.id],
+      name: "billing_subscriptions_mandate_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "billing_subscriptions_plan_check",
+      sql`plan = ANY (ARRAY['free'::text, 'basic'::text, 'pro'::text])`,
+    ),
+    check(
+      "billing_subscriptions_period_check",
+      sql`period = ANY (ARRAY['monthly'::text, 'yearly'::text])`,
+    ),
+    check(
+      "billing_subscriptions_state_check",
+      sql`state = ANY (ARRAY['free'::text, 'active'::text, 'past_due'::text, 'grace'::text, 'downgraded'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "billing_subscriptions_plan_source_check",
+      sql`plan_source = ANY (ARRAY['comp'::text, 'paid'::text, 'trial'::text])`,
+    ),
+    check(
+      "billing_subscriptions_current_cycle_seq_check",
+      sql`current_cycle_seq >= 0`,
+    ),
+    check(
+      "billing_subscriptions_billed_locations_check",
+      sql`(billed_locations >= 0) AND (billed_locations <= 50)`,
+    ),
+    check(
+      "billing_subscriptions_scheduled_plan_check",
+      sql`(scheduled_plan IS NULL) OR (scheduled_plan = ANY (ARRAY['free'::text, 'basic'::text, 'pro'::text]))`,
+    ),
+    check(
+      "billing_subscriptions_scheduled_period_check",
+      sql`(scheduled_period IS NULL) OR (scheduled_period = ANY (ARRAY['monthly'::text, 'yearly'::text]))`,
+    ),
+    check(
+      "billing_subscriptions_scheduled_locations_check",
+      sql`(scheduled_locations IS NULL) OR ((scheduled_locations >= 0) AND (scheduled_locations <= 50))`,
+    ),
+    // Grace timestamps travel together or not at all.
+    check(
+      "billing_subscriptions_grace_pair",
+      sql`(grace_started_at IS NULL) = (grace_ends_at IS NULL)`,
+    ),
+    // A paid state must have a cycle, or nothing could decide when to renew it.
+    // ⚠ `<> ALL`, not `NOT (… = ANY …)`: Postgres NORMALISES the latter into the
+    // former, so writing it the other way makes every future `drizzle-kit
+    // introspect` report spurious drift on this constraint. Verified against the
+    // applied schema — see supabase/billing_verify.sql.
+    check(
+      "billing_subscriptions_cycle_present",
+      sql`(state <> ALL (ARRAY['active'::text, 'past_due'::text, 'grace'::text])) OR ((current_period_start IS NOT NULL) AND (current_period_end IS NOT NULL))`,
+    ),
+    check(
+      "billing_subscriptions_cycle_order",
+      sql`(current_period_end IS NULL) OR (current_period_start IS NULL) OR (current_period_end > current_period_start)`,
+    ),
+  ],
+);
+
+export const billingWebhookEvents = pgTable(
+  "billing_webhook_events",
+  {
+    eventId: text("event_id").primaryKey().notNull(),
+    eventType: text("event_type"),
+    receivedAt: timestamp("received_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    // ── billing_04_payments.sql: what makes the marker row a QUEUE row. ──
+    /** Without the payload an event can be re-received but never REPLAYED. */
+    payload: jsonb().default({}).notNull(),
+    signatureVerified: boolean("signature_verified").default(false).notNull(),
+    status: text().default("received").notNull(),
+    attempts: integer().default(0).notNull(),
+    lastError: text("last_error"),
+    processedAt: timestamp("processed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    leaseUntil: timestamp("lease_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+  },
+  (table) => [
+    // The worker's claim scan (the data_jobs lease pattern). Processing moves
+    // OFF the webhook request, so a failure just leaves the row claimable
+    // rather than needing a compensating delete that can itself fail.
+    index("billing_webhook_events_claimable_idx")
+      .using("btree", table.receivedAt.asc().nullsLast().op("timestamptz_ops"))
+      .where(sql`(status = ANY (ARRAY['received'::text, 'failed'::text]))`),
+    // Retention: the original table had no timestamp index, so §32 had nothing
+    // to sweep with and it grew forever.
+    index("billing_webhook_events_received_idx").using(
+      "btree",
+      table.receivedAt.asc().nullsLast().op("timestamptz_ops"),
+    ),
+    check(
+      "billing_webhook_events_status_check",
+      sql`status = ANY (ARRAY['received'::text, 'processed'::text, 'failed'::text, 'ignored'::text])`,
+    ),
+  ],
+);
 
 export const blogCategories = pgTable(
   "blog_categories",
@@ -1404,6 +2052,72 @@ export const platformAdmins = pgTable(
     check(
       "platform_admins_role_check",
       sql`role = ANY (ARRAY['superadmin'::text, 'member'::text])`,
+    ),
+  ],
+);
+
+/**
+ * StoreMink's OWN tax identity, edited by an operator (owner decision: GST is
+ * operator-configured, not merchant-facing).
+ *
+ * One row, enforced by a boolean PK with a CHECK — the cheapest singleton in
+ * Postgres, and a second insert cannot defeat it.
+ *
+ * ★ `taxEnabled` defaults FALSE: there is no platform GSTIN yet, so invoices
+ * must render correctly with no tax and no GSTIN block. Turning it on is NEVER
+ * retroactive — invoices are immutable once finalized, so an April invoice
+ * cannot sprout GST in September.
+ */
+export const platformBillingSettings = pgTable(
+  "platform_billing_settings",
+  {
+    id: boolean().default(true).primaryKey().notNull(),
+    legalName: text("legal_name"),
+    gstin: text(),
+    address: jsonb().default({}).notNull(),
+    /** Place-of-supply ORIGIN, compared against the merchant's state to decide
+     *  CGST+SGST (intra) vs IGST (inter). */
+    stateCode: text("state_code"),
+    taxEnabled: boolean("tax_enabled").default(false).notNull(),
+    /**
+     * true = listed plan prices already include GST (carve it out);
+     * false = GST is added on top. billing_05_tax_mode.sql.
+     *
+     * ★ Under INCLUSIVE, enabling GST later changes nothing a merchant pays.
+     * Under EXCLUSIVE the same switch raises every bill 18%, which is why
+     * `mandateSizePaise` provisions for tax only in that mode.
+     */
+    taxInclusive: boolean("tax_inclusive").default(false).notNull(),
+    /** Basis points, so 18% is 1800 and no float touches a tax rate. */
+    taxRateBps: integer("tax_rate_bps").default(1800).notNull(),
+    invoicePrefix: text("invoice_prefix").default("SM").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  () => [
+    check("platform_billing_settings_id_check", sql`id`),
+    check(
+      "platform_billing_settings_tax_rate_bps_check",
+      sql`(tax_rate_bps >= 0) AND (tax_rate_bps <= 10000)`,
+    ),
+    check(
+      "platform_billing_settings_invoice_prefix_check",
+      sql`invoice_prefix <> ''::text`,
+    ),
+    // ★ Tax cannot be enabled without a GSTIN: an invoice charging GST while
+    // naming no GSTIN is not a valid tax invoice, and the merchant cannot claim
+    // input tax credit against it. A data-integrity rule, not a UI nicety.
+    check(
+      "platform_billing_tax_needs_gstin",
+      sql`(tax_enabled = false) OR ((gstin IS NOT NULL) AND (gstin <> ''::text))`,
+    ),
+    // ★★ See billing_accounts_state_code_numeric — the same hazard, on the
+    // supplier side of the same comparison.
+    check(
+      "platform_billing_state_code_numeric",
+      sql`(state_code IS NULL) OR (state_code ~ '^[0-9]{2}$'::text)`,
     ),
   ],
 );

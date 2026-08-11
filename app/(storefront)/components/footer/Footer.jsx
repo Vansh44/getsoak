@@ -247,7 +247,7 @@ export default function Footer() {
           {/* Link columns (per-store, from the navigation menu builder) */}
           {footerGroups.map((group, gi) => (
             <div key={`${group.title}|${gi}`} className={styles.linkCol}>
-              <h4 className={styles.columnTitle}>{group.title}</h4>
+              <h2 className={styles.columnTitle}>{group.title}</h2>
               <nav className={styles.linkList}>
                 {group.links.map((link) => (
                   <Link key={`${link.href}|${link.label}`} href={link.href}>

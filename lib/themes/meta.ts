@@ -171,10 +171,10 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-editorial", version: 1 },
     release: {
       version: "0.1.0",
-      status: "draft",
+      status: "blocked",
       notes: [
-        "Initial hidden Studio package for Phase 4 implementation and review.",
-        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+        "Production route and responsive audit passed on 2026-08-11.",
+        "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
       ],
     },
     catalog: {
@@ -210,9 +210,8 @@ export const THEME_META: readonly ThemeMeta[] = [
     },
     demo: {
       slug: "demo-studio",
-      status: "provisioning",
-      unavailableReason:
-        "Studio is a hidden draft and does not have a public demo yet.",
+      status: "healthy",
+      checkedAt: "2026-08-11",
     },
   },
   {
@@ -223,10 +222,10 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-editorial", version: 1 },
     release: {
       version: "0.1.0",
-      status: "draft",
+      status: "blocked",
       notes: [
-        "Initial hidden Ritual package for Phase 4 implementation and review.",
-        "Not merchant-selectable until its demo and complete acceptance evidence pass.",
+        "Production route and responsive audit passed on 2026-08-11.",
+        "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
       ],
     },
     catalog: {
@@ -255,9 +254,8 @@ export const THEME_META: readonly ThemeMeta[] = [
     },
     demo: {
       slug: "demo-ritual",
-      status: "provisioning",
-      unavailableReason:
-        "Ritual is a hidden draft and does not have a public demo yet.",
+      status: "healthy",
+      checkedAt: "2026-08-11",
     },
   },
 ] as const;

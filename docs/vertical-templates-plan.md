@@ -1,7 +1,7 @@
 # Vertical Store Templates — Implementation Plan
 
 > **Current expansion phase:** **Quality Phases 1–2 and Capability Phase 3
-> DONE; Phase 4 IN PROGRESS (2026-08-05)** — the
+> DONE; Phase 4 IN PROGRESS (2026-08-11)** — the
 > catalog release bar lives in `docs/theme-acceptance.md`; objective package
 > requirements are enforced in `lib/themes/themes.test.ts`; and the versioned
 > engine → immutable preset → merchant-owned content contract now lives in
@@ -15,22 +15,20 @@
 > `themes.storemink.com`: reserved host routing, a responsive metadata-driven
 > gallery, truthful release/demo/plan states, independent SEO metadata, and a
 > discoverable link from the platform site.
-> Studio and Ritual `0.1.0` are implemented as deliberately hidden drafts:
+> Studio and Ritual `0.1.0` are implemented as deliberately hidden releases:
 > distinct editorial home-design and botanical-wellness art direction, complete
 > three-page presets, eight credible sample products each, twenty optimized
 > generated assets, and automated package coverage. They remain absent from
-> signup/catalog until their live demos and review evidence pass.
+> signup/catalog until their complete review evidence passes.
 > Local demo smoke now passes for Basket, Studio and Ritual across homepage,
 > shop, PDP, cart, content and themed 404 routes; Ritual's variant add-to-cart
 > and totals also pass. Studio and Ritual production demos are now provisioned.
-> Their first production visual review exposed low-contrast linked CTAs,
-> oversized editorial PDP actions and homepage galleries, an off-centre
-> compact cart, and Ritual's full-pill order summary; the shared CSS fixes pass
-> local desktop/mobile checks and await deployment. Studio's black-heavy first
-> composition is also rebalanced around light framed product cards, a
-> pale-cobalt material story, a warm light newsletter, and the light minimal
-> footer. Manifest health, full
-> browser gates, and the two-reviewer release gate remain outstanding.
+> A full production desktop/tablet/mobile route and commerce sweep passed on
+> 2026-08-11, and the `f1` manifest now records both demo hosts healthy. Mobile Lighthouse then
+> exposed release-blocking contrast/semantics and LCP/performance gaps. The
+> `f1` candidate fixes the automated accessibility findings and LCP image
+> priority, but must be deployed, both demos must be reseeded, and all TA-4
+> thresholds rerun. The two-reviewer release gate also remains outstanding.
 > Basket remains the default implementation, but it is **blocked from approval**
 > until its missing live demo is repaired and the browser, accessibility,
 > performance, and two-reviewer gates are recorded.
@@ -342,9 +340,11 @@ Biz screenshots), not the artisanal farm-to-table draft. Spec:
   foundation is built from `THEME_META`, with reserved host routing, industry
   filters, canonical/robots/sitemap/OG metadata, and demo links gated by live
   health. Studio and Ritual `0.1.0` now pass the automated package gate as hidden
-  drafts, have their asset provenance recorded, and pass local route smoke.
-  Next provision and review both public demos, restore Basket's production
-  demo/release evidence, then author subsequent
+  blocked releases, have their asset provenance recorded, and pass the
+  production route/responsive/commerce sweep. Next deploy and reseed both
+  demos, close the recorded accessibility/performance failures, obtain two
+  independent approvals, restore Basket's production demo/release evidence,
+  then author subsequent
   vertical presets against the completed shared capability contract. A preset is
   not done until every applicable acceptance story and two-reviewer gate is
   recorded.
