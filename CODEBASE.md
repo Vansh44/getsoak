@@ -716,6 +716,23 @@ wholesip/
 │   │                          # rather than becoming a failed attempt. The
 │   │                          # gateway call is INJECTED, because the Razorpay
 │   │                          # subsequent-charge signature is still unverified.
+│   │                          # ★ renewal-worker.ts (server-only): three passes.
+│   │                          # COLLECT at T−4d (the X+3 rule), EVALUATE at T0,
+│   │                          # DOWNGRADE at T0+48h. ★★ A PROCESSING invoice at
+│   │                          # the boundary does NOTHING — no advance, no
+│   │                          # grace, no clock. With the X+3 window that is
+│   │                          # the ORDINARY state, so treating it as unpaid
+│   │                          # would downgrade paying merchants routinely.
+│   │                          # Grace is measured from the OBSERVATION, not the
+│   │                          # cycle boundary, so an outage on our side cannot
+│   │                          # eat a merchant's 48h notice. Downgrade
+│   │                          # force-closes an open POS shift at ZERO variance
+│   │                          # in the SAME transaction — a variance invented
+│   │                          # by a billing event reads as a cashier being
+│   │                          # short. ⚠ Pass 1 takes NO row lock on purpose:
+│   │                          # it would expire before the gateway call it
+│   │                          # looked like it protected. The constraints are
+│   │                          # the guarantee.
 │   │                          # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
 │   │                          # cycle (a DURATION, never a calendar unit), the
 │   │                          # X+3 collection lead, the 48h grace window,

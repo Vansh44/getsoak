@@ -99,6 +99,17 @@ export function collectionStartsAt(cycleStart: Date): Date {
 }
 
 /**
+ * The latest cycle start that is due for collection at `now` — i.e. the upper
+ * bound for a worker's "which subscriptions do I bill?" query.
+ *
+ * The inverse of `collectionStartsAt`, expressed the way a WHERE clause needs
+ * it: a cycle beginning at or before this instant should already be collected.
+ */
+export function collectionCutoff(now: Date): Date {
+  return new Date(now.getTime() + days(COLLECTION_LEAD_DAYS));
+}
+
+/**
  * Is it time to finalize and collect for a cycle starting at `cycleStart`?
  * Inclusive, so a worker firing exactly on the boundary does the work rather
  * than waiting a full tick.
