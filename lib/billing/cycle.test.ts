@@ -210,6 +210,25 @@ describe("mandateSizePaise", () => {
     expect(mandateSizePaise({ planPaise, locationsPaise })).toBe(expected);
   });
 
+  it("★ provisions for tax ONLY under exclusive pricing", () => {
+    // Exclusive: ₹15,000 → ₹17,700 when GST is switched on, so the ceiling
+    // must already cover it. Inclusive: the charge never moves, so provisioning
+    // would quote a needlessly alarming number on the authorisation screen.
+    const excl = mandateSizePaise({ planPaise: 15_000_00 });
+    const incl = mandateSizePaise({ planPaise: 15_000_00, taxInclusive: true });
+    expect(excl).toBe(27_000_00);
+    expect(incl).toBe(23_000_00); // 15,000 × 1.5, rounded up to the nearest ₹1,000
+    expect(incl).toBeLessThan(excl);
+  });
+
+  it("★ an inclusive mandate still covers the renewal it has to pay", () => {
+    for (const plan of [1_500_00, 5_000_00, 15_000_00, 50_000_00]) {
+      expect(
+        mandateSizePaise({ planPaise: plan, taxInclusive: true }),
+      ).toBeGreaterThanOrEqual(plan);
+    }
+  });
+
   it("★ always provisions for tax, so a later GST switch cannot refuse a renewal", () => {
     // Basic yearly is ₹15,000 today and ₹17,700 once GST is on. A mandate
     // sized on the bare price would be refused at that renewal.

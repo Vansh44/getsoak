@@ -52,6 +52,20 @@ alter table public.platform_billing_settings
   add constraint platform_billing_tax_needs_gstin
   check (tax_enabled = false or (gstin is not null and gstin <> ''));
 
+-- ★★ STATE CODES ARE NUMERIC GST CODES ("07" Delhi, "29" Karnataka), never
+-- two-letter abbreviations. lib/billing/gst.ts `normalizeStateCode` rejects
+-- anything non-numeric, and `isIntraState` then falls back to INTRA-state — a
+-- sensible default for a POS walk-in, and the WRONG one here: StoreMink sits in
+-- one state while merchants are nationwide, so inter-state is the common case.
+-- An operator typing "DL" would silently charge CGST+SGST instead of IGST on
+-- every invoice: the wrong tax, filed wrongly, with no error anywhere. So the
+-- format is enforced by the database rather than trusted to a text input.
+alter table public.platform_billing_settings
+  drop constraint if exists platform_billing_state_code_numeric;
+alter table public.platform_billing_settings
+  add constraint platform_billing_state_code_numeric
+  check (state_code is null or state_code ~ '^[0-9]{2}$');
+
 insert into public.platform_billing_settings (id) values (true)
   on conflict (id) do nothing;
 
@@ -72,6 +86,14 @@ create table if not exists public.billing_accounts (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
+
+-- Same numeric-GST-code rule as the platform side, and for the same reason:
+-- this is the PLACE OF SUPPLY, so a malformed value picks the wrong tax head.
+alter table public.billing_accounts
+  drop constraint if exists billing_accounts_state_code_numeric;
+alter table public.billing_accounts
+  add constraint billing_accounts_state_code_numeric
+  check (state_code is null or state_code ~ '^[0-9]{2}$');
 
 -- ── Mandates ────────────────────────────────────────────────────────────────
 -- An authorised payment instrument. One row per authorisation attempt, so the

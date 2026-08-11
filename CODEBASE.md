@@ -685,7 +685,14 @@ wholesip/
 │   │                          # the status map, the gateway matcher; tested) +
 │   │                          # refund-reconcile.ts (settles refunds whose gateway
 │   │                          # answer never arrived: reconcile-on-read + cron sweep)
-│   ├── billing/               # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
+│   ├── billing/               # ★ invoice.ts (§34, PURE + tested): line items,
+│   │                          # tax in BOTH modes (inclusive carves
+│   │                          # gross×r/(1+r), NOT gross×r), GST split,
+│   │                          # proration, amountDuePaise. ★ payment-state.ts:
+│   │                          # the MONOTONIC attempt machine — captured is
+│   │                          # terminal, so a late payment.failed is rejected
+│   │                          # by the machine rather than by comparing clocks.
+│   │                          # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
 │   │                          # cycle (a DURATION, never a calendar unit), the
 │   │                          # X+3 collection lead, the 48h grace window,
 │   │                          # collectionRoute (mandate max AND the AFA-exempt
@@ -800,6 +807,19 @@ wholesip/
 │   │                          # billing_02's function is ever CALLED — plpgsql
 │   │                          # resolves table names at call time, so the wrong
 │   │                          # order succeeds and then fails at runtime
+│   ├── billing_05_tax_mode.sql # ★ §34 platform_billing_settings.tax_inclusive.
+│   │                          # ⚠ Its OWN file because billing_01 is APPLIED —
+│   │                          # editing an applied CREATE TABLE IF NOT EXISTS
+│   │                          # is a silent no-op (§15b's subscriptions_02)
+│   ├── billing_verify.sql     # ★ §34 adversarial check of the APPLIED schema
+│   │                          # (26 checks). Mutations run in a plpgsql
+│   │                          # SUBTRANSACTION that is rolled back, so nothing
+│   │                          # persists — not even a burned invoice number —
+│   │                          # while the results survive in plpgsql ARRAYS,
+│   │                          # which are memory rather than transactional
+│   │                          # state. Asserts 26-of-26 RAN, so an empty or
+│   │                          # half-dead run can never render as green.
+│   │                          # No psql meta-commands: runs in Cloud SQL Studio
 │   ├── billing_04_payments.sql # ★ §34 billing_payment_attempts (ONE in flight per
 │   │                          # invoice, partial unique) + billing_credits +
 │   │                          # billing_reconciliation_items + the additive
@@ -4280,7 +4300,19 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **★ GST IS OPERATOR-CONFIGURED** (owner, 2026-08-11), in the singleton
       `platform_billing_settings`. Tax is OFF until a GSTIN exists, a CHECK
       refuses enabling it without one, and turning it on is NEVER retroactive
-      because finalized invoices are immutable by trigger. The document series is
+      because finalized invoices are immutable by trigger.
+      **★ `tax_inclusive` (billing_05) picks INCLUSIVE or EXCLUSIVE pricing.**
+      Exclusive (default) = ₹15,000 + 18% = ₹17,700; inclusive = ₹15,000
+      charged, carved as `gross × r / (1 + r)` — **not** `gross × r`, which
+      would under-declare output tax on every invoice. Under inclusive,
+      enabling GST later changes nothing a merchant pays and more plans stay
+      auto-collectable (Basic yearly stays ON the ₹15,000 AFA line rather than
+      over it); under exclusive it raises every bill 18%, which is the whole
+      reason `mandateSizePaise` provisions ×1.18 — a provision it drops when
+      inclusive. ⚠ The mode must match what the pricing page advertises.
+      **⚠ Its own migration file, because `billing_01` is APPLIED** — editing a
+      `CREATE TABLE IF NOT EXISTS` that has already run is a silent no-op
+      (§15b's `subscriptions_02` incident). The document series is
       gapless per Indian FY, allocated **on finalization** by trigger (a draft
       that is abandoned must not burn a number — the §28 credit-note reasoning)
       and routed through `sm_pad()`, never bare `lpad()` (§14).

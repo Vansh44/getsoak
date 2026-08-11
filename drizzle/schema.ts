@@ -231,6 +231,13 @@ export const billingAccounts = pgTable(
       name: "billing_accounts_store_id_fkey",
     }).onDelete("cascade"),
     check("billing_accounts_currency_check", sql`currency = 'INR'::text`),
+    // ★★ NUMERIC GST state code ("07", "29"), never "DL"/"KA". A rejected code
+    // makes isIntraState fall back to INTRA-state — the wrong tax head for
+    // platform billing, silently, on every invoice.
+    check(
+      "billing_accounts_state_code_numeric",
+      sql`(state_code IS NULL) OR (state_code ~ '^[0-9]{2}$'::text)`,
+    ),
   ],
 );
 
@@ -790,9 +797,13 @@ export const billingSubscriptions = pgTable(
       sql`(grace_started_at IS NULL) = (grace_ends_at IS NULL)`,
     ),
     // A paid state must have a cycle, or nothing could decide when to renew it.
+    // ⚠ `<> ALL`, not `NOT (… = ANY …)`: Postgres NORMALISES the latter into the
+    // former, so writing it the other way makes every future `drizzle-kit
+    // introspect` report spurious drift on this constraint. Verified against the
+    // applied schema — see supabase/billing_verify.sql.
     check(
       "billing_subscriptions_cycle_present",
-      sql`(NOT (state = ANY (ARRAY['active'::text, 'past_due'::text, 'grace'::text]))) OR ((current_period_start IS NOT NULL) AND (current_period_end IS NOT NULL))`,
+      sql`(state <> ALL (ARRAY['active'::text, 'past_due'::text, 'grace'::text])) OR ((current_period_start IS NOT NULL) AND (current_period_end IS NOT NULL))`,
     ),
     check(
       "billing_subscriptions_cycle_order",
@@ -2068,6 +2079,15 @@ export const platformBillingSettings = pgTable(
      *  CGST+SGST (intra) vs IGST (inter). */
     stateCode: text("state_code"),
     taxEnabled: boolean("tax_enabled").default(false).notNull(),
+    /**
+     * true = listed plan prices already include GST (carve it out);
+     * false = GST is added on top. billing_05_tax_mode.sql.
+     *
+     * ★ Under INCLUSIVE, enabling GST later changes nothing a merchant pays.
+     * Under EXCLUSIVE the same switch raises every bill 18%, which is why
+     * `mandateSizePaise` provisions for tax only in that mode.
+     */
+    taxInclusive: boolean("tax_inclusive").default(false).notNull(),
     /** Basis points, so 18% is 1800 and no float touches a tax rate. */
     taxRateBps: integer("tax_rate_bps").default(1800).notNull(),
     invoicePrefix: text("invoice_prefix").default("SM").notNull(),
@@ -2092,6 +2112,12 @@ export const platformBillingSettings = pgTable(
     check(
       "platform_billing_tax_needs_gstin",
       sql`(tax_enabled = false) OR ((gstin IS NOT NULL) AND (gstin <> ''::text))`,
+    ),
+    // ★★ See billing_accounts_state_code_numeric — the same hazard, on the
+    // supplier side of the same comparison.
+    check(
+      "platform_billing_state_code_numeric",
+      sql`(state_code IS NULL) OR (state_code ~ '^[0-9]{2}$'::text)`,
     ),
   ],
 );

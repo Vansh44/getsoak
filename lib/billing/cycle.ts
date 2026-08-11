@@ -257,12 +257,25 @@ export function mandateSizePaise(input: {
   /** Cost of the locations this merchant is billed for TODAY. 0 for a plan
    *  with no POS, which cannot buy them at all. */
   locationsPaise?: number;
+  /**
+   * Do the listed prices already include tax
+   * (`platform_billing_settings.tax_inclusive`)?
+   *
+   * ★ The tax provision exists ONLY for exclusive pricing, where switching GST
+   * on later raises every bill by 18% against a ceiling that was authorised
+   * before the switch. Under inclusive pricing the charge never moves, so
+   * provisioning for it would quote the merchant a needlessly alarming number
+   * on the authorisation screen — which is the thing this function was rewritten
+   * to stop doing.
+   */
+  taxInclusive?: boolean;
 }): number {
   const base =
     Math.max(0, Math.round(input.planPaise)) +
     Math.max(0, Math.round(input.locationsPaise ?? 0));
+  const taxBps = input.taxInclusive ? 10_000 : TAX_PROVISION_BPS;
   const provisioned = Math.ceil(
-    (base * TAX_PROVISION_BPS * REPRICE_HEADROOM_BPS) / (10_000 * 10_000),
+    (base * taxBps * REPRICE_HEADROOM_BPS) / (10_000 * 10_000),
   );
   return roundUpTo(provisioned, MANDATE_ROUNDING_PAISE);
 }

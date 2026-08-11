@@ -414,6 +414,7 @@ create table platform_billing_settings (
   address         jsonb,
   state_code      text,                    -- place of supply origin
   tax_enabled     boolean not null default false,
+  tax_inclusive   boolean not null default false,  -- billing_05_tax_mode.sql
   tax_rate_bps    integer not null default 1800,   -- 18.00%
   invoice_prefix  text not null default 'SM',
   updated_at      timestamptz not null default now(),
@@ -421,6 +422,21 @@ create table platform_billing_settings (
 );
 ```
 
+- **★ `tax_inclusive` is the operator's choice, and it changes more than the
+  arithmetic.** EXCLUSIVE (the default) means ₹15,000 + 18% = ₹17,700 charged;
+  INCLUSIVE means ₹15,000 charged, of which ₹2,288.14 is GST — carved out as
+  `gross × r / (1 + r)`, **not** `gross × r`. Three consequences:
+  - **Under inclusive, switching GST on later changes nothing a merchant pays.**
+    Under exclusive the same switch raises every bill 18%, against a mandate
+    ceiling authorised before it — which is the entire reason
+    `mandateSizePaise` provisions ×1.18, and that provision is dropped in
+    inclusive mode (`taxInclusive: true`).
+  - **Inclusive keeps more plans auto-collectable.** Basic yearly stays at
+    ₹15,000, on the AFA line, instead of ₹17,700, over it (§2a).
+  - **It must match what the pricing page advertises.** The page derives from
+    `PLAN_META`, so a merchant reading "₹1,500" and being debited ₹1,770 will
+    say so. Exclusive is the ordinary Indian B2B convention and lets them claim
+    input tax credit cleanly; inclusive is the honest-headline-price option.
 - **`tax_enabled = false` until a GSTIN exists.** Invoices then carry
   `tax_paise = 0`, render no GSTIN block, and state that tax is not applicable.
 - **Turning tax on is never retroactive.** It applies to invoices finalized
