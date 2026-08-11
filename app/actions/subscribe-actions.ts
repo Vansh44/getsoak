@@ -27,6 +27,7 @@ import {
   getPlanPricingLive,
 } from "@/lib/plans/pricing";
 import { PLAN_IDS, type Plan } from "@/lib/plans";
+import type { PayableInvoice } from "@/lib/billing/invoice-types";
 import {
   confirmInvoicePayment,
   listPayableInvoices,
@@ -241,7 +242,7 @@ export type PayInvoiceConfirm =
   | { ok: false; error: string };
 
 /** What this store still owes, for a "pay now" surface. */
-export async function getPayableInvoices() {
+export async function getPayableInvoices(): Promise<PayableInvoice[]> {
   const userId = await getManagerUserId("ai");
   if (!userId) return [];
   const storeId = await getActingStoreId();

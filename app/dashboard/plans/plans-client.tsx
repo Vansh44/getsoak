@@ -24,17 +24,19 @@ import {
   type AiUsagePageData,
 } from "@/app/actions/ai-credit-actions";
 import {
-  startPlanSubscription,
-  confirmSubscription,
   cancelSubscription,
   changePlan,
   type SubscriptionState,
 } from "@/app/actions/subscription-actions";
-import type { CreditPack } from "@/lib/ai/credits";
+// ★ Subscribing now goes through the NEW billing system (§34). cancel + change
+// still use the old path until location purchase and signup enrolment are
+// rebuilt on it — see docs/billing-architecture.md.
 import {
-  openRazorpayModal,
-  openRazorpaySubscriptionModal,
-} from "@/lib/payments/razorpay-client";
+  confirmSubscribe,
+  startSubscribe,
+} from "@/app/actions/subscribe-actions";
+import type { CreditPack } from "@/lib/ai/credits";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import {
   PLAN_IDS,
   PLAN_LIMITS,
@@ -797,38 +799,50 @@ function UpgradeModal({
   const isPlanChange = hasActiveSubscription && purchasesAvailable;
   const isNewSubscription = !hasActiveSubscription && purchasesAvailable;
 
+  // ★ THE NEW BILLING SYSTEM (§34). The first cycle is a one-time ORDER paid on
+  // session, not a Razorpay Subscription — StoreMink computes the amount and the
+  // gateway only collects it, so a later price change needs nothing updated at
+  // the provider. See docs/billing-architecture.md §2.
   async function subscribe() {
     setWorking(true);
-    const start = await startPlanSubscription(plan, period);
-    if ("error" in start) {
+    const start = await startSubscribe(plan, period);
+    if (!start.ok) {
       toast.error(start.error);
       setWorking(false);
       return;
     }
-    const opened = await openRazorpaySubscriptionModal({
+    const opened = await openRazorpayModal({
       keyId: start.keyId,
-      subscriptionId: start.subscriptionId,
+      rzpOrderId: start.providerOrderId,
+      amountPaise: start.amountPaise,
       name: "StoreMink",
-      description: `${start.planName} plan — ${period} autopay`,
+      description: `${meta.name} plan — first ${period === "yearly" ? "year" : "month"}`,
       onSuccess: async (res) => {
-        const confirmed = await confirmSubscription(
+        const confirmed = await confirmSubscribe(
+          start.invoiceId,
           res.razorpay_payment_id,
-          res.razorpay_subscription_id,
           res.razorpay_signature,
         );
         setWorking(false);
-        if (confirmed.error) {
-          toast.info(
-            "Mandate authorised — your plan will activate here shortly.",
-          );
-        } else {
+        if (!confirmed.ok) {
+          // ★ Deliberately NOT an error toast. confirmSubscribe already
+          // distinguishes "money in but plan not moved" from a decline, and its
+          // message says not to pay again — surfacing it verbatim is the point.
+          toast.info(confirmed.error);
+        } else if (confirmed.autopay) {
           toast.success(`You're on the ${meta.name} plan!`);
+        } else {
+          // ⚠ Say so plainly. Without a mandate the next cycle needs paying by
+          // hand, and a merchant who assumes autopay will simply be downgraded.
+          toast.success(
+            `You're on the ${meta.name} plan. Autopay isn't set up yet, so we'll ask you to pay each renewal.`,
+          );
         }
         onActivated();
       },
       onDismiss: () => {
         setWorking(false);
-        toast.error("Autopay setup wasn't completed.");
+        toast.error("Payment wasn't completed.");
       },
     });
     if (!opened) {

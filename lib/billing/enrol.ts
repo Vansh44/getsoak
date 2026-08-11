@@ -58,6 +58,9 @@ type BillingPeriod = "monthly" | "yearly";
 /** The first cycle a subscription ever has. */
 const FIRST_CYCLE = 1;
 
+/** States in which the store is already ON a paid cycle we are billing for. */
+const LIVE_STATES = ["active", "past_due", "grace"] as const;
+
 export interface EnrolmentStart {
   invoiceId: string;
   attemptId: string;
@@ -154,6 +157,25 @@ export async function startEnrolment(input: {
   const creds = getPlatformRazorpayCreds();
   if (!creds) {
     return { ok: false, error: "Subscriptions aren't available right now." };
+  }
+
+  // ★★ REFUSE IF THIS STORE IS ALREADY ON A PAID CYCLE. Without this,
+  // `seedSubscription`'s upsert rewrites `plan`/`period` on a LIVE subscription
+  // before anything is paid — a merchant on Basic could point their record at
+  // Pro and dismiss the payment window. The flow would then fail confusingly
+  // ("already paid for") because cycle 1's invoice is long settled, leaving the
+  // record changed and the money not taken. Changing tier mid-cycle is a
+  // PRORATED plan change, a different operation from enrolling.
+  const existing = await currentState(input.storeId);
+  if (existing === null) {
+    // Fails closed: unable to read means unable to rule out double-billing.
+    return { ok: false, error: "Couldn't check your subscription. Try again." };
+  }
+  if (LIVE_STATES.includes(existing as (typeof LIVE_STATES)[number])) {
+    return {
+      ok: false,
+      error: "This store already has a subscription.",
+    };
   }
 
   const price = await input.priceFor(input.plan, input.period);
@@ -263,6 +285,28 @@ export async function startEnrolment(input: {
       }),
     },
   };
+}
+
+/**
+ * This store's subscription state, or "" when it has none.
+ *
+ * Returns NULL on a read failure — distinct from "no subscription", because the
+ * caller must fail closed rather than treat a database blip as a free pass.
+ */
+async function currentState(storeId: string): Promise<string | null> {
+  try {
+    return await withService(async (db) => {
+      const [row] = await db
+        .select({ state: billingSubscriptions.state })
+        .from(billingSubscriptions)
+        .where(eq(billingSubscriptions.storeId, storeId))
+        .limit(1);
+      return row?.state ?? "";
+    });
+  } catch (err) {
+    logError("billing.current_state", err, { storeId });
+    return null;
+  }
 }
 
 /** Create the subscription row in a state that grants NOTHING. */

@@ -4429,6 +4429,50 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       stops; an open shift holds uncounted cash and leaving it open strands the
       drawer. Closed at `counted = expected` and attributed to the system — a
       variance invented by a billing event would read as a cashier being short.
+    - **★ THE MERCHANT'S END IS WIRED (`/dashboard/plans`).** Subscribing goes
+      through `startSubscribe` → Razorpay ORDER → `confirmSubscribe`, not
+      `startPlanSubscription`, so the first cycle is a one-time payment on the
+      verified checkout and no amount lives in a provider-side plan. Two things
+      the flow says out loud rather than assuming: a confirm that fails is a
+      `toast.info` carrying the server's own wording (money may have moved —
+      §26's rule), and `autopay: false` is stated plainly, because a merchant who
+      assumes autopay is simply downgraded at the next cycle.
+    - **★★ `OpenInvoices` IS NOT A NICETY — IT IS THE ONLY WAY A RENEWAL GETS
+      PAID.** Automatic collection is gated behind `RECURRING_CHARGE_VERIFIED`,
+      so every invoice the worker writes is settled by hand or not at all; with
+      no surface for it, a merchant is downgraded 48 hours later for a bill they
+      never saw. It renders ABOVE everything on the page and renders NOTHING when
+      nothing is owed. A `processing` invoice shows "payment in progress" instead
+      of a Pay button — offering one would open a second payment against the same
+      money, which the partial unique index would refuse anyway.
+    - **★★ `startEnrolment` REFUSES A STORE ALREADY ON A PAID CYCLE.**
+      `seedSubscription` is an upsert on `store_id`, so without the guard a
+      merchant on Basic could point their `billing_subscriptions` row at Pro and
+      dismiss the payment window: the record moves, the money does not, and the
+      flow then fails confusingly ("already paid for") because cycle 1's invoice
+      was settled months ago. Fails CLOSED on a read error — unable to read means
+      unable to rule out billing the same store twice. Changing tier mid-cycle is
+      a PRORATED plan change, a different operation.
+    - **★★ `lib/billing/invoice-types.ts` EXISTS BECAUSE A `type` EXPORT FROM A
+      `"use server"` FILE FAILS THE BUILD.** Every export of one of those files
+      is registered as a server action, so `export type { PayableInvoice }` emits
+      an action reference for a binding that erasure has already removed —
+      `Export PayableInvoice doesn't exist in target module`. **`tsc` and
+      `eslint` both pass**; only `npm run build` catches it. It cannot live in
+      `manual-pay.ts` either, which is `server-only`. Third instance of this
+      shape in the codebase, after `lib/logs/failure-types.ts` and
+      `EXTRA_LOCATION_KEY` in `lib/plans.ts`.
+    - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
+      `subscription-actions.ts` still drives **cancel** and **plan change** on
+      the plans page, plus (1) **signup enrolment** —
+      `app/platform/signup/page.tsx` calls `startSignupSubscription`, and
+      `startSubscribe` cannot serve it because `getActingStoreId()` does not
+      resolve on the platform host — and (2) **buying an extra location**, where
+      the new system READS `billed_locations` but has no way to change it.
+      Deleting the old actions before those two are rebuilt would break signup
+      and remove a paid feature. Nothing bills twice in the meantime:
+      `startSubscribe` refuses when the old system holds a live mandate, and
+      fails closed on a read error.
     - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an
       apply-order dependency (see the tree). The Drizzle types describe tables
       that do not exist yet: that typechecks and fails at query time.

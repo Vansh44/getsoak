@@ -32,6 +32,7 @@ import {
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { beginAttempt, settleAttempt } from "./collect";
+import type { PayableInvoice } from "./invoice-types";
 import {
   amountDueForInvoice,
   finalizeInvoice,
@@ -264,7 +265,9 @@ export async function confirmInvoicePayment(input: {
  * Excludes `uncollectible` and `void`: both are closed decisions, and offering
  * to pay one would take money for a period the merchant never received.
  */
-export async function listPayableInvoices(storeId: string) {
+export async function listPayableInvoices(
+  storeId: string,
+): Promise<PayableInvoice[]> {
   try {
     return await withService(async (db) =>
       db

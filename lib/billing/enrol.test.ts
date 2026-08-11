@@ -126,6 +126,43 @@ describe("startEnrolment", () => {
     expect(arg.periodEnd.toISOString()).toBe(CYCLE_END);
   });
 
+  it.each(["active", "past_due", "grace"])(
+    "★★ refuses when the store is already on a %s cycle",
+    async (state) => {
+      // seedSubscription's upsert would otherwise rewrite plan/period on a LIVE
+      // subscription before a rupee is paid — point the record at Pro, dismiss
+      // the payment window. Changing tier mid-cycle is a prorated plan change,
+      // a different operation from enrolling.
+      seed([[{ state }]]);
+      const res = await startEnrolment(args);
+      expect(res.ok).toBe(false);
+      expect(store.ensureRenewalInvoice).not.toHaveBeenCalled();
+      expect(collect.beginAttempt).not.toHaveBeenCalled();
+      expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["free", "cancelled", "downgraded"])(
+    "allows re-subscribing from %s",
+    async (state) => {
+      // A lapsed subscription is exactly who we want back.
+      seed([[{ state }]]);
+      expect((await startEnrolment(args)).ok).toBe(true);
+    },
+  );
+
+  it("★ fails CLOSED when the subscription state can't be read", async () => {
+    // Unable to read means unable to rule out billing the same store twice.
+    dbHolder.current = makeDbMock({ selectQueue: [] });
+    const err = new Error("db down");
+    dbHolder.current.db.select = () => {
+      throw err;
+    };
+    const res = await startEnrolment(args);
+    expect(res.ok).toBe(false);
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
   it("★ never bills locations on a first cycle", async () => {
     // Extra shops are bought after a plan is live, so charging for them here
     // would bill for something nobody has.

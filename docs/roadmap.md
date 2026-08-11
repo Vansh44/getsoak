@@ -32,6 +32,7 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
 | **3**  | **Pickup end to end: collection code, QR, role split**         | L    | ◐ part  |
@@ -44,7 +45,10 @@ sequence AND the spec for everything still to build.
 | **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
 | **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
 
-**Where we actually are.** Everything in the top block works. **Pickup is the
+**Where we actually are.** Everything in the top block works. **Step 0 is
+numbered 0 because it is not optional and not sequenced with the rest** — it is
+how StoreMink gets paid, and the old path cannot change an amount on a UPI or
+e-mandate mandate at all (`docs/billing-architecture.md` §2). **Pickup is the
 outlier**: every piece exists — holds, routing, the collection queue, tender
 capture at hand-over, four email events — and _none of it has ever been run end
 to end in a browser_. Steps 1 and 3 finish it.
@@ -498,6 +502,46 @@ and refunds exist to unwind the loser.
 
 Ship-from-store, endless aisle, inter-state IGST across locations, and unified
 customer history spanning till and website.
+
+---
+
+## Step 0 — Platform → merchant billing rebuild _(XL, in progress)_
+
+Spec: **`docs/billing-architecture.md`**. StoreMink billing its OWN merchants —
+distinct from a merchant invoicing a shopper (§17) and from a merchant's BYO
+gateway (§18). Greenfield: one live subscriber, so the cutover is a migration
+rather than a project.
+
+**Why it is a rebuild, not a fix.** Razorpay Subscriptions cannot be updated on
+UPI or e-mandate — every amount change (tier, period, locations) goes through
+`rzpUpdateSubscription`, so `changePlan` and `changeBilledLocations` are both
+dead for most Indian merchants, and add-ons are deprecated. StoreMink computes
+the amount; the gateway only collects it.
+
+| Phase                                                | State                               |
+| ---------------------------------------------------- | ----------------------------------- |
+| 1 · Architecture + the 13 defects it replaces        | ✅ done                             |
+| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging               |
+| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                             |
+| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                             |
+| 4 · Signup enrolment on the new system               | ⏭ **blocks deleting the old path** |
+| 5 · Buying an extra location on the new system       | ⏭ **blocks deleting the old path** |
+| 6 · Webhook processor off the request path           | ⏳                                  |
+| 7 · Reconciliation detectors + dunning notifications | ⏳                                  |
+| 8 · AI-credit invoicing                              | ⏳                                  |
+| 9 · Delete `subscription-actions.ts` + the rzp plans | ⏳ after 4 and 5                    |
+
+**★ AUTOMATIC COLLECTION IS SWITCHED OFF, AND A GREEN CRON RUN MEANS NOBODY IS
+BEING CHARGED.** `RECURRING_CHARGE_VERIFIED` is false because the Razorpay
+subsequent-charge signature is unverified, so the worker sets
+`collectionSkipped` and every renewal is settled by hand on
+`/dashboard/plans`. Six Razorpay facts need a test-mode account to settle; they
+are listed in the spec's §10 rather than guessed.
+
+**★ THE MIGRATION NEEDS A HUMAN FIRST.** `billing_06` moves our records only —
+Razorpay keeps charging an `active` subscription on its own timer, so the
+gateway subscription must be cancelled before it runs or the store is billed
+twice, from two systems, with no single place to stop it.
 
 ---
 
