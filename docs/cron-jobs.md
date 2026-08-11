@@ -52,7 +52,7 @@ each job is a landmine the moment it does:
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
-| `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
+| `storemink-billing` ⚠ NOT CREATED   | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
@@ -60,7 +60,8 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-All eight: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+Seven exist; `billing` is intentionally not created yet (see Verifying). All of
+them: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -294,13 +295,33 @@ backs. Its route ships in the same change, so verify its **response** once that
 reaches production — the job authenticates (its baked-in header matches the
 current `CRON_SECRET`) but will 404 until the deploy lands.
 
-> **⚠ `storemink-prune-logs` HAS NOT BEEN CREATED.** The route ships in this
-> change; the Cloud Scheduler job does not exist yet, and until someone runs the
-> `gcloud` command above **no retention runs at all** — which is exactly the
-> state this change set out to fix, and exactly the failure this file has now
-> recorded three times. Create it, then verify the response and record the date
-> here. Expect `{"ok":true,...}` with a large first `deleted` count and possibly
-> `"incomplete":true` for the first few nights while the backlog drains.
+`storemink-prune-logs` and `storemink-import-worker` were created on
+**2026-08-11**. Both had been listed in this file as though they existed and were
+absent from Cloud Scheduler in **every** region — the failure this file records,
+for the **third** time. Found by diffing the documented list against
+`gcloud scheduler jobs list` rather than by reading the file, which is the only
+method that has ever caught it.
+
+Verified by triggering `storemink-import-worker` by hand: Cloud Run answered
+**200** to `Google-Cloud-Scheduler`, which also proves the baked-in header
+matches the current `CRON_SECRET` — and since all jobs share that secret, it
+clears the auth path for every one of them. `import-worker` was chosen for the
+probe deliberately: with no queued import it is a no-op, whereas triggering
+`prune-logs` deletes rows.
+
+⚠ `prune-logs` has NOT been triggered by hand — its first run is its scheduled
+03:00 UTC one. Expect `{"ok":true,...}` with a large first `deleted` count and
+possibly `"incomplete":true` for a few nights while the backlog drains, since
+retention has never run.
+
+> **⚠ `storemink-billing` HAS NOT BEEN CREATED, deliberately.** The route ships,
+> but `RECURRING_CHARGE_VERIFIED` in `lib/billing/gateway.ts` is `false` and
+> `billing_subscriptions` is empty, so the job would report green hourly while
+> charging nobody — a signal that means less than it looks like. Create it in the
+> SAME sitting as verifying the Razorpay subsequent-charge endpoint and flipping
+> that flag; the three only mean anything together. Until then this row is the
+> reminder, and per the top of this file a written reminder is not one anybody
+> receives — so treat it as a task, not a note.
 
 ## Staging
 

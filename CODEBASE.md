@@ -4191,8 +4191,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `created_at` ALONE cannot use, so each also wants a plain `created_at`
       index in `supabase/import_export_01_jobs.sql` — a separate
       `CREATE INDEX IF NOT EXISTS`, so re-running the file stays idempotent.
-    - **⚠ The Cloud Scheduler job did not exist when this shipped.** Until it is
-      created, none of the above runs. See the warning in `docs/cron-jobs.md`.
+    - **⚠ The Cloud Scheduler job did not exist when this shipped** — created
+      and verified **2026-08-11**, along with `import-worker`, which was also
+      absent. Both had been documented in `docs/cron-jobs.md` as though they
+      existed: the third recurrence of that failure, found by DIFFING the
+      documented list against `gcloud scheduler jobs list`, which is the only
+      method that has ever caught it.
 
 33. **Logs — five of them, one hub, one permission.** `/dashboard/logs`,
     with `lib/logs/` behind the newest of them.
