@@ -702,6 +702,20 @@ wholesip/
 │   │                          # charge; amountDueForInvoice returns NULL rather
 │   │                          # than the full total, since guessing when credit
 │   │                          # may be applied would double-charge.
+│   │                          # ★★ collect.ts (server-only): the ONLY place
+│   │                          # money moves. issue-refund.ts generalised —
+│   │                          # attempt row FIRST with OUR idempotency key,
+│   │                          # THEN the gateway, THEN claim the outcome. A
+│   │                          # UNIQUE violation on begin means "already
+│   │                          # collecting", not an error. An UNKNOWN outcome
+│   │                          # (5xx, timeout, THROW, or an unrecognised
+│   │                          # gateway status) is NEVER a failure and is never
+│   │                          # retried — a failure starts the grace clock.
+│   │                          # Eligibility is checked BEFORE anything is
+│   │                          # written, so an over-AFA amount routes to manual
+│   │                          # rather than becoming a failed attempt. The
+│   │                          # gateway call is INJECTED, because the Razorpay
+│   │                          # subsequent-charge signature is still unverified.
 │   │                          # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
 │   │                          # cycle (a DURATION, never a calendar unit), the
 │   │                          # X+3 collection lead, the 48h grace window,
