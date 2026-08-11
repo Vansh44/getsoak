@@ -468,7 +468,31 @@ export async function pairDevice(
   }
   if (!claimed) return { error: "That code is invalid or has expired." };
 
-  return registerDevice(storeId, claimed.location_id, "pairing_code");
+  // ★ THE CODE IS SPENT BY NOW, SO SAY SO WHEN THE CAP REFUSES IT.
+  //
+  // The claim above is a single conditional UPDATE — it has to be, or two
+  // devices could redeem one code — which means `used_at` is already set when
+  // registerDevice then finds the location full. The owner got "this location
+  // already has 5 authorized devices", went and revoked one, came back, and
+  // found their code no longer worked either: it was burned by the attempt
+  // that failed. Nothing says so, so it reads as the feature being broken.
+  //
+  // The cap is deliberately NOT pre-checked to avoid this. A pre-check is a
+  // TOCTOU — the fifth device can register in the gap — so it would only narrow
+  // the window while making the code look reusable when it isn't. Better to
+  // spend it once and be honest about it. createPairingCode already refuses to
+  // issue a code into a full location, so this is the race, not the usual path.
+  const res = await registerDevice(
+    storeId,
+    claimed.location_id,
+    "pairing_code",
+  );
+  if (res.error) {
+    return {
+      error: `${res.error} This code has now been used — generate a new one after freeing a slot.`,
+    };
+  }
+  return res;
 }
 
 // ---- Staff: PIN login on an authorized device -----------------------------

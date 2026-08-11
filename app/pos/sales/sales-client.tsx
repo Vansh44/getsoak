@@ -11,6 +11,12 @@ import Link from "next/link";
 import { Receipt, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { listPosSales, type PosSaleRow } from "@/app/actions/pos-sale-actions";
+import {
+  DEFAULT_POS_DATE_RANGE,
+  POS_DATE_RANGES,
+  posDateRangePhrase,
+  type PosDateRangeKey,
+} from "@/lib/pos/date-range";
 import { ReceiptOverlay } from "../sell/receipt-overlay";
 import { PosScreen } from "../pos-screen";
 
@@ -53,17 +59,32 @@ export function SalesClient({
 }) {
   const [sales, setSales] = useState(initial);
   const [query, setQuery] = useState("");
+  const [range, setRange] = useState<PosDateRangeKey>(DEFAULT_POS_DATE_RANGE);
   const [openId, setOpenId] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  const search = (q: string) => {
-    setQuery(q);
+  // ONE fetch for both controls. Searching and filtering are the same query
+  // with different arguments, so they must not be two paths that can disagree
+  // about which is currently applied.
+  const load = (q: string, r: PosDateRangeKey) => {
     start(async () => {
-      const res = await listPosSales(q);
+      const res = await listPosSales(q, r);
       if (res.error) toast.error(res.error);
       else setSales(res.sales);
     });
   };
+
+  const search = (q: string) => {
+    setQuery(q);
+    load(q, range);
+  };
+
+  const pickRange = (r: PosDateRangeKey) => {
+    setRange(r);
+    load(query, r);
+  };
+
+  const phrase = posDateRangePhrase(range);
 
   return (
     // Chrome from PosScreen: no hand-rolled back arrow (the rail is the way
@@ -72,7 +93,7 @@ export function SalesClient({
     // so the app had two darks depending which screen you were on.
     <PosScreen title="Sales" subtitle={`${sales.length} shown`}>
       <form
-        className="relative mb-4"
+        className="relative mb-3"
         onSubmit={(e) => {
           e.preventDefault();
           search(query);
@@ -87,6 +108,28 @@ export function SalesClient({
         />
       </form>
 
+      {/* Preset chips, not a date picker. At a counter the question is almost
+          always "today" — reconciling a drawer, or finding the bill from ten
+          minutes ago — and two calendar popovers to answer it is the wrong
+          trade. A custom range can be added if anyone actually asks. */}
+      <div className="mb-4 flex flex-wrap gap-2">
+        {POS_DATE_RANGES.map((r) => (
+          <button
+            key={r.key}
+            type="button"
+            onClick={() => pickRange(r.key)}
+            aria-pressed={range === r.key}
+            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              range === r.key
+                ? "bg-white text-[#0b0f14]"
+                : "bg-white/10 text-white/70 hover:bg-white/20 hover:text-white"
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
       {error && (
         <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
           {error}
@@ -95,7 +138,14 @@ export function SalesClient({
 
       {!error && sales.length === 0 && (
         <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center text-sm text-white/60">
-          {query ? `Nothing matches “${query}”.` : "No sales yet at this shop."}
+          {/* Naming the filter matters: "No sales yet at this shop" under a
+              Today chip reads as "this till has never sold anything", which
+              for a shop that opened an hour ago is alarming and wrong. */}
+          {query
+            ? `Nothing matches “${query}”${phrase ? ` ${phrase}` : ""}.`
+            : phrase
+              ? `No sales ${phrase}.`
+              : "No sales yet at this shop."}
         </p>
       )}
 

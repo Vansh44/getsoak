@@ -38,6 +38,28 @@ export function newDeviceNonce(): string {
 const PREV_NONCE_GRACE_MS = 2 * 60 * 1000;
 
 /**
+ * ★ `last_seen_at` MEANS LAST USED, AND IT DIDN'T.
+ *
+ * It was written in exactly two places — when a device is authorized, and when
+ * an operator signs in with a PIN (rotateDeviceNonce) — and nowhere else, even
+ * though getAuthorizedDevice runs on EVERY POS request. Two consequences:
+ *
+ *   1. The dashboard's "last used <date>" was wrong for every device. An OWNER
+ *      is resolved from their dashboard session and never does a PIN sign-in,
+ *      so their till read "last used" as the day it was authorized — forever.
+ *      A cashier's till that sold all week showed the date they last signed in.
+ *   2. Anything that reasons about which device is idle — picking one to
+ *      retire, spotting a till nobody uses — was reading a field that does not
+ *      track use, and would have retired the busiest register in the shop.
+ *
+ * Throttled rather than written per request: at ~46 ms a round trip and one
+ * resolve per render, an unthrottled UPDATE would add a write to every page
+ * load to make a column that is displayed as a DATE more precise. Fifteen
+ * minutes is far finer than anything that reads it.
+ */
+const LAST_SEEN_THROTTLE_MS = 15 * 60 * 1000;
+
+/**
  * The current browser's authorized device for this store, or null. Verifies:
  *   1. the cookie's HMAC signature and store binding,
  *   2. the device row still exists and is not revoked,
@@ -61,6 +83,7 @@ export async function getAuthorizedDevice(
         token_nonce: posDevices.tokenNonce,
         prev_nonce: posDevices.prevNonce,
         prev_nonce_until: posDevices.prevNonceUntil,
+        last_seen_at: posDevices.lastSeenAt,
       })
       .from(posDevices)
       .where(
@@ -120,7 +143,34 @@ export async function getAuthorizedDevice(
     }
   }
 
+  await touchLastSeen(storeId, row.id, row.last_seen_at);
   return { deviceId: row.id, locationId: row.location_id };
+}
+
+/**
+ * Record that this device was used, at most once per LAST_SEEN_THROTTLE_MS.
+ *
+ * Best-effort and never awaited for correctness: a device that fails to record
+ * its own liveness must still be able to sell. Fire-and-forget would be a
+ * floating promise the request can outlive, so it is awaited but swallowed.
+ */
+async function touchLastSeen(
+  storeId: string,
+  deviceId: string,
+  lastSeenAt: string | Date | null,
+): Promise<void> {
+  const previous = lastSeenAt ? new Date(lastSeenAt).getTime() : 0;
+  if (
+    Number.isFinite(previous) &&
+    Date.now() - previous < LAST_SEEN_THROTTLE_MS
+  )
+    return;
+  await withService((db) =>
+    db
+      .update(posDevices)
+      .set({ lastSeenAt: new Date().toISOString() })
+      .where(and(eq(posDevices.id, deviceId), eq(posDevices.storeId, storeId))),
+  ).catch(() => {});
 }
 
 /**

@@ -53,6 +53,22 @@ const TONE_CLS: Record<string, string> = {
 const INPUT_CLS =
   "rounded-lg border border-[rgba(17,24,39,0.12)] bg-white px-3 py-2 text-sm text-[#111827] outline-none transition-colors focus:border-[#111827]";
 
+/**
+ * How many revoked devices and audit rows this page shows.
+ *
+ * ★ THIS PAGE IS FOR ACTING, NOT FOR AUDITING. What needs attention is at the
+ * top — the devices that work, and any that were revoked automatically. Below
+ * them sat an unbounded revoked list and 30 rows of routine sign-ins, so the
+ * two things worth reading were pushed off the screen by the thing that wasn't.
+ * Five is enough to answer "what just happened?"; anything older is history,
+ * and history has its own place (activity logs).
+ *
+ * Exported so app/dashboard/pos/devices/page.tsx fetches exactly one more than
+ * this — enough to know whether to say "there are more", never a second number
+ * to keep in step.
+ */
+export const RECENT_LIMIT = 5;
+
 export function DevicesClient({
   initialDevices,
   events,
@@ -73,7 +89,13 @@ export function DevicesClient({
   const locName = (id: string) =>
     locations.find((l) => l.id === id)?.name ?? "";
   const active = initialDevices.filter((d) => !d.revoked);
-  const revoked = initialDevices.filter((d) => d.revoked);
+  // Newest first, then capped. Unsorted, "the first 5" would be whatever order
+  // the query happened to return — and the one you need is the most recent.
+  const allRevoked = initialDevices
+    .filter((d) => d.revoked)
+    .sort((a, b) => (b.revokedAt ?? "").localeCompare(a.revokedAt ?? ""));
+  const revoked = allRevoked.slice(0, RECENT_LIMIT);
+  const recentEvents = events.slice(0, RECENT_LIMIT);
   const when = (iso: string | null) =>
     iso ? new Date(iso).toLocaleString() : "";
 
@@ -238,8 +260,13 @@ export function DevicesClient({
             answer. A clone-detected auto-revoke would otherwise be invisible. */}
         {revoked.length > 0 && (
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-[#111827]">
+            <h2 className="mb-2 flex items-baseline gap-2 text-sm font-semibold text-[#111827]">
               Revoked devices
+              {allRevoked.length > revoked.length && (
+                <span className="text-xs font-normal text-[#9aa1ab]">
+                  {revoked.length} most recent of {allRevoked.length}
+                </span>
+              )}
             </h2>
             <div className="space-y-3">
               {revoked.map((d) => {
@@ -291,16 +318,21 @@ export function DevicesClient({
 
         {/* Security activity */}
         <div>
-          <h2 className="mb-2 text-sm font-semibold text-[#111827]">
+          <h2 className="mb-2 flex items-baseline gap-2 text-sm font-semibold text-[#111827]">
             Recent activity
+            {events.length > recentEvents.length && (
+              <span className="text-xs font-normal text-[#9aa1ab]">
+                last {recentEvents.length}
+              </span>
+            )}
           </h2>
-          {events.length === 0 ? (
+          {recentEvents.length === 0 ? (
             <p className="rounded-xl border border-dashed border-[#e5e5e5] bg-white p-6 text-center text-sm text-[#9aa1ab]">
               Nothing yet. Device authorizations and staff sign-ins appear here.
             </p>
           ) : (
             <div className="overflow-hidden rounded-xl border border-[#e5e5e5] bg-white">
-              {events.map((e, i) => {
+              {recentEvents.map((e, i) => {
                 const meta = EVENT_META[e.event] ?? {
                   label: e.event,
                   tone: "info" as const,
