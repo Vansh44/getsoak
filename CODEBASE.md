@@ -692,6 +692,16 @@ wholesip/
 │   │                          # the MONOTONIC attempt machine — captured is
 │   │                          # terminal, so a late payment.failed is rejected
 │   │                          # by the machine rather than by comparing clocks.
+│   │                          # ★ invoice-store.ts (server-only): the repository.
+│   │                          # ensureRenewalInvoice is ON CONFLICT DO NOTHING +
+│   │                          # read-the-WINNER, so a lost race never creates a
+│   │                          # second obligation; lines are written BEFORE
+│   │                          # finalize (the trigger freezes them after);
+│   │                          # loadTaxContext falls back to tax-OFF on a read
+│   │                          # failure, because a blip must never invent a tax
+│   │                          # charge; amountDueForInvoice returns NULL rather
+│   │                          # than the full total, since guessing when credit
+│   │                          # may be applied would double-charge.
 │   │                          # ★ cycle.ts (§34, PURE + tested): the 30-day/365-day
 │   │                          # cycle (a DURATION, never a calendar unit), the
 │   │                          # X+3 collection lead, the 48h grace window,
