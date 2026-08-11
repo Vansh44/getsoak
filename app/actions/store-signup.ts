@@ -116,6 +116,8 @@ export interface SignupResume {
   slug?: string;
   /** Whether the account's phone is OTP-verified already. */
   phoneConfirmed: boolean;
+  /** Google verifies this itself; password signup verifies it with our OTP. */
+  emailConfirmed: boolean;
   email?: string;
   /** Name prefill (from Google profile metadata when signing in with Google). */
   firstName?: string;
@@ -131,7 +133,12 @@ export interface SignupResume {
 export async function getSignupResumeInfo(): Promise<SignupResume> {
   const user = await getServerUser();
   if (!user) {
-    return { authenticated: false, hasStore: false, phoneConfirmed: false };
+    return {
+      authenticated: false,
+      hasStore: false,
+      phoneConfirmed: false,
+      emailConfirmed: false,
+    };
   }
 
   let storeIdOwned: string | undefined;
@@ -174,6 +181,7 @@ export async function getSignupResumeInfo(): Promise<SignupResume> {
     hasStore: !!storeIdOwned,
     slug,
     phoneConfirmed: user.phoneConfirmed,
+    emailConfirmed: user.emailConfirmed,
     email: user.email ?? undefined,
     firstName,
     lastName,
@@ -229,10 +237,14 @@ export async function createStore(
   if (!user) {
     return { error: "Please sign in before creating a store." };
   }
-  // The client wizard tracks verification in React state, which a caller can
-  // bypass by invoking this action directly. Phone is the authoritative
-  // verification (email confirmation is disabled — signup is phone-only), so a
-  // store can't be provisioned without a confirmed phone number.
+  // Client steps are an affordance, never the security boundary. Both contact
+  // channels are authoritative server-side requirements: Google supplies a
+  // verified email claim; password signup earns it through signup-email-otp.
+  if (!user.emailConfirmed) {
+    return {
+      error: "Please verify your email address before creating a store.",
+    };
+  }
   if (!user.phoneConfirmed) {
     return {
       error: "Please verify your phone number before creating a store.",

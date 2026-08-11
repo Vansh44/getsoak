@@ -29,6 +29,7 @@ export default function Header() {
   const [searchQuery, setSearchQuery] = useState("");
   const router = useRouter();
   const profileRef = useRef(null);
+  const profileButtonRef = useRef(null);
   const closeTimerRef = useRef(null);
   const { user, customer, loading, openAuthModal, signOut } = useAuth();
   const { totalItems, hydrated: cartHydrated, openCart } = useCart();
@@ -97,17 +98,8 @@ export default function Header() {
     };
   }, []);
 
-  // Open the dropdown on hover (cancel any pending close)
-  const openProfile = () => {
-    if (loading) return;
-    if (closeTimerRef.current) {
-      clearTimeout(closeTimerRef.current);
-      closeTimerRef.current = null;
-    }
-    setIsProfileOpen(true);
-  };
-
-  // Close after a short grace period so the cursor can travel into the panel
+  // Close after a short grace period so the cursor can travel through the
+  // account panel without making it linger after pointer use.
   const scheduleCloseProfile = () => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     closeTimerRef.current = setTimeout(() => setIsProfileOpen(false), 160);
@@ -208,15 +200,25 @@ export default function Header() {
           <div
             className={styles.profileWrapper}
             ref={profileRef}
-            onMouseEnter={openProfile}
             onMouseLeave={scheduleCloseProfile}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && isProfileOpen) {
+                event.preventDefault();
+                setIsProfileOpen(false);
+                profileButtonRef.current?.focus();
+              }
+            }}
           >
             <button
+              ref={profileButtonRef}
               className={`${styles.userIcon} ${isLoggedIn ? styles.userIconLoggedIn : ""}`}
-              // onClick={handleProfileClick}
+              onClick={() => {
+                if (!loading) setIsProfileOpen((open) => !open);
+              }}
               aria-label={isLoggedIn ? "Open profile menu" : "Sign in"}
               aria-haspopup="menu"
               aria-expanded={isProfileOpen}
+              aria-controls={isProfileOpen ? "profile-dropdown" : undefined}
               id="header-profile-btn"
             >
               {isLoggedIn ? (

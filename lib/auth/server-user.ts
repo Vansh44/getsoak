@@ -24,6 +24,8 @@ export interface ServerUser {
   id: string;
   /** Used by platform-admin checks (`auth.email()` → GUC in the RLS shim). */
   email: string | null;
+  /** True after Google verification or the signup email OTP succeeds. */
+  emailConfirmed: boolean;
   phone: string | null;
   /** True once the phone is OTP-verified (the signup wizard gates on this). */
   phoneConfirmed: boolean;
@@ -43,6 +45,7 @@ export async function getServerUser(): Promise<ServerUser | null> {
   return {
     id: fb.uid,
     email: fb.email,
+    emailConfirmed: fb.emailConfirmed,
     phone: fb.phone,
     phoneConfirmed: fb.phoneConfirmed,
     // Mirror the Supabase user_metadata name fields the signup wizard reads.

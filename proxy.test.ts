@@ -44,6 +44,7 @@ function signedIn(claims: {
   vi.mocked(verifySessionCookie).mockResolvedValue({
     uid: "u1",
     email: "a@b.com",
+    emailConfirmed: true,
     phone: null,
     phoneConfirmed: false,
     name: null,

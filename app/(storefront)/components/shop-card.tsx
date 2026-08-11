@@ -41,11 +41,17 @@ export type ShopCardProduct = Omit<PricedLike, "variants"> & {
 export function ShopCard({
   product: p,
   storeLowStockThreshold = 0,
+  headingLevel = 3,
 }: {
   product: ShopCardProduct;
   storeLowStockThreshold?: number;
+  /** Shop grids sit directly below the page h1; homepage/related carousels
+   * sit below a section h2. Keep the shared card's heading hierarchy valid in
+   * both contexts. */
+  headingLevel?: 2 | 3;
 }) {
   const pr = effectivePricing(p);
+  const NameHeading = headingLevel === 2 ? "h2" : "h3";
 
   // Stock status via the shared resolver so cards, the detail page, and the
   // dashboard agree (sold-out wins over low; low uses the effective threshold).
@@ -84,7 +90,7 @@ export function ShopCard({
         <div className="flex items-start justify-between">
           <div className="min-w-0">
             {p.category && <span className="shop-card-cat">{p.category}</span>}
-            <h3 className="shop-card-name">{p.name}</h3>
+            <NameHeading className="shop-card-name">{p.name}</NameHeading>
           </div>
           <div className="shrink-0 ml-2 flex flex-col items-end gap-1">
             {isOutOfStock ? (

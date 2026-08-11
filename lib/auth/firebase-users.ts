@@ -70,6 +70,7 @@ export async function updateAuthUser(
   updates: {
     password?: string;
     email?: string;
+    emailVerified?: boolean;
     phone?: string;
     disabled?: boolean;
   },
@@ -79,6 +80,9 @@ export async function updateAuthUser(
   await auth.updateUser(uid, {
     ...(updates.password !== undefined ? { password: updates.password } : {}),
     ...(updates.email !== undefined ? { email: updates.email } : {}),
+    ...(updates.emailVerified !== undefined
+      ? { emailVerified: updates.emailVerified }
+      : {}),
     ...(updates.phone !== undefined ? { phoneNumber: updates.phone } : {}),
     ...(updates.disabled !== undefined ? { disabled: updates.disabled } : {}),
   });

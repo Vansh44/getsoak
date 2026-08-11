@@ -12,12 +12,19 @@ describe("public theme catalog", () => {
       }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "Studio" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Ritual" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Home & Decor" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Beauty" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Studio" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Ritual" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Home & Decor" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Beauty" })).toBeVisible();
     expect(screen.getByText("Live preview being restored")).toBeVisible();
-    expect(screen.queryByRole("link", { name: /view live store/i })).toBeNull();
+    expect(
+      screen
+        .getAllByRole("link", { name: /view live store/i })
+        .map((link) => link.getAttribute("href")),
+    ).toEqual([
+      "https://demo-studio.storemink.com",
+      "https://demo-ritual.storemink.com",
+    ]);
     expect(
       screen.getByRole("link", { name: /start with basket/i }),
     ).toHaveAttribute("href", "https://storemink.com/signup");

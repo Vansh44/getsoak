@@ -39,6 +39,7 @@ describe("getServerUser", () => {
     vi.mocked(verifySessionCookie).mockResolvedValue({
       uid: "u-123",
       email: "a@b.com",
+      emailConfirmed: true,
       phone: "+911234567890",
       phoneConfirmed: true,
       name: "Ada",
@@ -48,6 +49,7 @@ describe("getServerUser", () => {
     expect(await getServerUser()).toEqual({
       id: "u-123",
       email: "a@b.com",
+      emailConfirmed: true,
       phone: "+911234567890",
       phoneConfirmed: true,
       metadata: { name: "Ada", full_name: "Ada" },
@@ -59,6 +61,7 @@ describe("getServerUser", () => {
     vi.mocked(verifySessionCookie).mockResolvedValue({
       uid: "u-1",
       email: null,
+      emailConfirmed: false,
       phone: null,
       phoneConfirmed: false,
       name: null,
@@ -68,6 +71,7 @@ describe("getServerUser", () => {
     expect(u).toEqual({
       id: "u-1",
       email: null,
+      emailConfirmed: false,
       phone: null,
       phoneConfirmed: false,
       metadata: {},
@@ -78,6 +82,7 @@ describe("getServerUser", () => {
     vi.mocked(verifySessionCookie).mockResolvedValue({
       uid: "u-9",
       email: null,
+      emailConfirmed: false,
       phone: null,
       phoneConfirmed: false,
       name: null,

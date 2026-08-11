@@ -23,6 +23,7 @@ const dashMono = JetBrains_Mono({
 export async function generateMetadata() {
   return {
     title: `StoreMink Admin`,
+    icons: { icon: "/brand/storemink-mark.png" },
   };
 }
 
@@ -42,6 +43,11 @@ export default async function PlatformDashboardLayout({
       group: "WORKSPACE" as SectionGroup,
       items: [
         { href: "/dashboard", label: "Stores", icon: "dashboard" as const },
+        {
+          href: "/dashboard/email-logs",
+          label: "Email logs",
+          icon: "mail" as const,
+        },
         {
           // Cross-store failures. Workspace rather than Administration: it is
           // something an operator watches, not something they configure.

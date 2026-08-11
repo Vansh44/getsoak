@@ -9,7 +9,7 @@ import AuthModalLoader from "@/app/(storefront)/components/auth/auth-modal-loade
 import { BrandProvider } from "@/app/(storefront)/components/brand-provider";
 import { ChromeProvider } from "@/app/(storefront)/components/chrome-provider";
 import { notFound } from "next/navigation";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
 import { resolveStorefrontAppearance } from "@/lib/chrome/types";
@@ -20,6 +20,7 @@ import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
 import { GOOGLE_VERIFICATION_TOKEN_KEY } from "@/lib/seo/store-indexing";
+import { SESSION_COOKIE } from "@/lib/auth/constants";
 import "./storefront-theme.css";
 
 // Per-store default title/template + canonical origin. Individual pages may set
@@ -65,6 +66,11 @@ export default async function StorefrontLayout({
   // one guard covers every storefront page (they all render inside this layout).
   const store = await getCurrentStoreOrNull();
   if (!store) notFound();
+
+  // Anonymous storefronts do not need Firebase's browser SDK on their initial
+  // route. A server cookie means identity must be restored immediately; with
+  // no cookie the provider starts Firebase only if the account UI is opened.
+  const hasCustomerSession = (await cookies()).has(SESSION_COOKIE);
 
   // Chrome: the PUBLISHED header/footer, except inside the builder's preview
   // iframe where the admin is shown their unsaved draft.
@@ -124,7 +130,7 @@ export default async function StorefrontLayout({
     .join(" ");
 
   return (
-    <AuthProvider>
+    <AuthProvider initialHasSession={hasCustomerSession}>
       <CartProvider>
         <BrandProvider brand={brand}>
           <ChromeProvider

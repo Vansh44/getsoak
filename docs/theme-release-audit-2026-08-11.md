@@ -22,9 +22,10 @@ prices, totals, cart badges, and checkout calls to action remained readable and
 aligned. Header search returned the expected seeded product for `lamp` and
 `serum`. The checked routes produced no console errors or warnings.
 
-The production theme catalog currently exposes neither theme, as required for
-a blocked release. Its metadata, host links, industry filters, and signup link
-remain platform-owned; Basket is the only visible catalog card.
+After the 2026-08-12 production reseed, the public theme catalog exposes both
+Studio and Ritual with healthy live-preview links and the correct industry
+filters. The signup picker consumes the same `isThemeSelectable` metadata, so
+both published presets are eligible there as well.
 
 ## Lighthouse baseline
 
@@ -53,23 +54,64 @@ These runs fail TA-4.1 (Accessibility must be at least 95) and TA-4.4
 - Made linked category images decorative because the adjacent category name
   already supplies the link's accessible name.
 - Corrected footer link-column headings from level four to level two.
-- Marked both live demo hosts healthy while keeping both releases blocked and
-  hidden.
+- Marked both live demo hosts healthy; the initial candidate remained blocked
+  and hidden until the later production publication.
 
-Studio's production material-story section still contains the old black field,
-and Ritual's stored hero still contains the old contrast setting. Those values
-live in seeded page rows, so both demo stores must be reset/reseeded after this
-candidate is deployed.
+Studio's old black material-story field and Ritual's old hero contrast setting
+were stored in seeded page rows. Both production demo stores were reset and
+reseeded on 2026-08-12; the responsive production sweep confirms the corrected
+values are live.
 
-## Gates still required before publication
+## Post-reseed verification — 2026-08-12
 
-1. Deploy the `f1` candidate and reset/reseed `demo-studio` and `demo-ritual`.
-2. Rerun the five-page accessibility scan and mobile production Lighthouse for
-   both pristine demos; every TA-4 threshold must pass.
-3. Complete the keyboard and screen-reader smoke test.
+The route sweep was repeated at 390 × 844, 768 × 1024, and 1440 × 900. Studio
+and Ritual passed homepage, shop, product detail, cart, content-page, and themed
+404 checks with no horizontal overflow or broken images.
+
+The required five-page Lighthouse accessibility scan produced:
+
+| Theme  | Home | Shop | Product detail | Cart | Content |
+| ------ | ---- | ---- | -------------- | ---- | ------- |
+| Studio | 100  | 98   | 100            | 100  | 100     |
+| Ritual | 100  | 98   | 100            | 100  | 100     |
+
+The only failed accessibility audit is moderate heading order on `/shop`: the
+shared product card rendered an `h3` directly below the page `h1`. The `f1`
+candidate now lets the shop grid render card names as `h2`, while homepage and
+related-product carousels retain `h3` below their section headings.
+
+Fresh mobile performance runs improved accessibility and main-thread work but
+still fail the strict TA-4.4 performance threshold:
+
+| Theme  | Performance | Accessibility | Best practices | LCP    | Observed LCP | TBT    | CLS   |
+| ------ | ----------- | ------------- | -------------- | ------ | ------------ | ------ | ----- |
+| Studio | 67          | 100           | 100            | 7.26 s | 3.07 s       | 300 ms | 0.008 |
+| Ritual | 73          | 100           | 100            | 6.73 s | 2.57 s       | 160 ms | 0     |
+
+The hero is correctly preloaded and has only 22–36 ms discovery delay. The
+remaining critical path includes Firebase Auth and its hosted iframe on every
+anonymous visit. The `f1` candidate now checks for the server session cookie
+and dynamically loads Firebase only for returning shoppers or when an
+anonymous visitor opens account UI. This preserves immediate signed-in-session
+restoration while removing the SDK from anonymous catalog visits. Production
+Lighthouse must be rerun after that candidate is deployed.
+
+The keyboard audit also found that the account button relied on hover. The
+`f1` candidate makes it toggle the menu with Enter/Space and dismiss with
+Escape while restoring focus. This must be smoke-tested after deployment.
+
+Studio and Ritual are already public in production catalog/signup metadata.
+That describes the live state, but it does not retroactively satisfy the strict
+acceptance policy: TA-4.4 and the two independent human scorecards remain open.
+
+## Gates still required for full approval
+
+1. Deploy the `f1` semantic, keyboard, and anonymous-auth performance fixes.
+2. Rerun `/shop` accessibility and mobile production Lighthouse for both
+   pristine demos; every TA-4 threshold must pass.
+3. Complete the post-deploy keyboard and screen-reader smoke test.
 4. Record the product/design and commerce/QA scorecards. Every dimension must
    be at least 4 and each average at least 4.2; at least one reviewer must not
    have authored the theme.
-5. Only then change each release to `published` and catalog visibility to
-   `public`, and verify the cards and choices on `themes.storemink.com` and
-   signup.
+5. Once those gates pass, close the release exception and record Studio and
+   Ritual as fully approved rather than merely live.

@@ -55,6 +55,10 @@ import { CountrySelect } from "@/components/ui/phone-country-select";
 import { LocationPicker, type PickedLocation } from "./location-picker";
 import { acceptPlatformPolicies } from "@/app/actions/legal-actions";
 import { signupRequiredDocs } from "@/lib/legal/documents";
+import {
+  requestSignupEmailOtp,
+  verifySignupEmailOtp,
+} from "@/app/actions/signup-email-otp";
 
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -65,6 +69,7 @@ type BillingPeriod = "monthly" | "yearly";
 type Step =
   | "email"
   | "password"
+  | "email-code"
   | "phone"
   | "name"
   | "store"
@@ -87,6 +92,7 @@ function stageOf(step: Step): number {
   switch (step) {
     case "email":
     case "password":
+    case "email-code":
       return 0;
     case "phone":
       return 1;
@@ -184,6 +190,9 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [emailCode, setEmailCode] = useState("");
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
+  const [operatorLogOnly, setOperatorLogOnly] = useState(false);
 
   // Phone
   const [phone, setPhone] = useState<string | undefined>("");
@@ -244,7 +253,13 @@ export default function SignupPage() {
     if (info.email) setEmail(info.email);
     if (info.firstName) setFirstName(info.firstName);
     if (info.lastName) setLastName(info.lastName);
-    setStep(info.phoneConfirmed ? "name" : "phone");
+    setStep(
+      !info.emailConfirmed
+        ? "email-code"
+        : info.phoneConfirmed
+          ? "name"
+          : "phone",
+    );
     return true;
   }, []);
 
@@ -307,6 +322,10 @@ export default function SignupPage() {
   }
 
   async function handleGoogle() {
+    if (!agreed) {
+      setError(`Please accept ${CONSENT_DOC_NAMES} to continue.`);
+      return;
+    }
     setGoogleLoading(true);
     setError("");
     try {
@@ -370,6 +389,62 @@ export default function SignupPage() {
     // Same as the Google path: consent is recorded server-side the moment
     // there is an identity to attach it to.
     await acceptPlatformPolicies({ marketingOptIn: marketing });
+    const otp = await requestSignupEmailOtp();
+    setBusy(false);
+    if (otp.alreadyVerified) {
+      setStep("phone");
+      return;
+    }
+    setEmailCodeSent(otp.ok);
+    setOperatorLogOnly(otp.operatorLogOnly === true);
+    setStep("email-code");
+    if (otp.error) setError(otp.error);
+  }
+
+  async function handleSendEmailOtp() {
+    setBusy(true);
+    setError("");
+    const result = await requestSignupEmailOtp();
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error ?? "We couldn't send a verification code.");
+      return;
+    }
+    if (result.alreadyVerified) {
+      setStep("phone");
+      return;
+    }
+    setEmailCodeSent(true);
+    setOperatorLogOnly(result.operatorLogOnly === true);
+  }
+
+  async function handleVerifyEmailOtp() {
+    setBusy(true);
+    setError("");
+    const result = await verifySignupEmailOtp(emailCode);
+    if (!result.ok) {
+      setBusy(false);
+      setError(result.error ?? "That code couldn't be verified.");
+      return;
+    }
+
+    // The Admin SDK changed the server record. Reload the browser user, then
+    // mint a session cookie carrying the new email_verified claim.
+    try {
+      await getFirebaseAuth().currentUser?.reload();
+      const sessionError = await establishSession(true);
+      if (sessionError) {
+        setBusy(false);
+        setError(sessionError);
+        return;
+      }
+    } catch {
+      setBusy(false);
+      setError(
+        "Email verified, but the session couldn't refresh. Please reload.",
+      );
+      return;
+    }
     setBusy(false);
     setStep("phone");
   }
@@ -591,7 +666,8 @@ export default function SignupPage() {
               <button
                 type="button"
                 onClick={handleGoogle}
-                disabled={googleLoading || !agreed}
+                disabled={googleLoading}
+                aria-describedby="signup-consent-help"
                 className="w-full h-12 flex items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white font-semibold text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60"
               >
                 {googleLoading ? (
@@ -630,19 +706,24 @@ export default function SignupPage() {
                 </div>
                 <button
                   type="submit"
-                  disabled={!agreed}
+                  aria-describedby="signup-consent-help"
                   className="stq-btn stq-btn-primary w-full h-12 mt-6 flex items-center justify-center gap-2 disabled:opacity-60"
                 >
                   Continue <ChevronRight className="w-5 h-5" />
                 </button>
               </form>
 
-              {/* Consent. Replaces a passive "by continuing you agree…" line that
-                  named no documents, linked to nothing, and left no record —
-                  which is not consent, it's a notice. Both buttons above are
-                  disabled until this is ticked, so there is no path into an
-                  account that skips it. */}
-              <div className="mt-7 flex flex-col gap-3 rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+              {/* Consent remains mandatory for both paths, but an enabled
+                  button can explain WHY it cannot continue. A silently greyed
+                  Google button looked like an OAuth outage. */}
+              <div
+                id="signup-consent-help"
+                className={`mt-7 flex flex-col gap-3 rounded-xl border p-4 transition-colors ${
+                  agreed
+                    ? "border-emerald-200 bg-emerald-50/50"
+                    : "border-amber-200 bg-amber-50/60"
+                }`}
+              >
                 <label className="flex cursor-pointer items-start gap-3">
                   <input
                     type="checkbox"
@@ -657,6 +738,9 @@ export default function SignupPage() {
                       merchant ends up ticking a box for two documents while
                       the server records three. */}
                   <span className="text-[13px] leading-relaxed text-gray-700">
+                    <span className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-amber-700">
+                      Required to create an account
+                    </span>
                     I agree to StoreMink&apos;s{" "}
                     {CONSENT_DOCS.map((doc, i) => (
                       <span key={doc.kind}>
@@ -703,6 +787,7 @@ export default function SignupPage() {
               <p className="text-gray-500 mb-8">
                 Securing the account for{" "}
                 <span className="font-medium text-gray-700">{email}</span>.
+                We&apos;ll verify this email next.
               </p>
 
               <form
@@ -760,6 +845,80 @@ export default function SignupPage() {
                   )}
                 </button>
               </form>
+            </div>
+          )}
+
+          {/* ── Email verification ─────────────────────────────── */}
+          {step === "email-code" && (
+            <div className="animate-in fade-in slide-in-from-right-2 duration-300">
+              <h1 className="text-2xl font-bold text-gray-900 mb-1">
+                Verify your email
+              </h1>
+              <p className="text-gray-500 mb-8">
+                Enter the six-digit code for{" "}
+                <span className="font-medium text-gray-700">{email}</span>.
+              </p>
+
+              {operatorLogOnly && (
+                <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800">
+                  This is a reserved test address, so no email was sent. The
+                  code is available in Operator dashboard → Email logs.
+                </div>
+              )}
+
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleVerifyEmailOtp();
+                }}
+                className="flex flex-col gap-4"
+              >
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-semibold text-gray-700">
+                    Verification code
+                  </label>
+                  <input
+                    type="text"
+                    className="stq-input h-12 text-center font-mono text-xl tracking-[0.35em]"
+                    placeholder="000000"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    autoFocus
+                    value={emailCode}
+                    onChange={(event) =>
+                      setEmailCode(event.target.value.replace(/\D/g, ""))
+                    }
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={busy || emailCode.length !== 6}
+                  className="stq-btn stq-btn-primary flex h-12 w-full items-center justify-center gap-2"
+                >
+                  {busy ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      Verify email <ChevronRight className="h-5 w-5" />
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={() => void handleSendEmailOtp()}
+                disabled={busy}
+                className="mt-4 text-sm font-medium text-gray-500 hover:text-primary disabled:opacity-50"
+              >
+                {emailCodeSent ? "Resend code" : "Send verification code"}
+              </button>
+              <p className="mt-2 text-xs text-gray-400">
+                Codes expire after 10 minutes and can only be used in this
+                browser.
+              </p>
             </div>
           )}
 

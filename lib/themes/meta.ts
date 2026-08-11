@@ -173,8 +173,8 @@ export const THEME_META: readonly ThemeMeta[] = [
       version: "0.1.0",
       status: "published",
       notes: [
-        "Production route and responsive audit passed on 2026-08-11.",
-        "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
+        "Production route and responsive audit passed after the pristine demo reseed on 2026-08-12.",
+        "Published to the catalog and signup; the strict performance target and two-reviewer scorecard remain open release follow-ups.",
       ],
     },
     catalog: {
@@ -211,7 +211,7 @@ export const THEME_META: readonly ThemeMeta[] = [
     demo: {
       slug: "demo-studio",
       status: "healthy",
-      checkedAt: "2026-08-11",
+      checkedAt: "2026-08-12",
     },
   },
   {
@@ -224,8 +224,8 @@ export const THEME_META: readonly ThemeMeta[] = [
       version: "0.1.0",
       status: "published",
       notes: [
-        "Production route and responsive audit passed on 2026-08-11.",
-        "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
+        "Production route and responsive audit passed after the pristine demo reseed on 2026-08-12.",
+        "Published to the catalog and signup; the strict performance target and two-reviewer scorecard remain open release follow-ups.",
       ],
     },
     catalog: {
@@ -255,7 +255,7 @@ export const THEME_META: readonly ThemeMeta[] = [
     demo: {
       slug: "demo-ritual",
       status: "healthy",
-      checkedAt: "2026-08-11",
+      checkedAt: "2026-08-12",
     },
   },
 ] as const;
