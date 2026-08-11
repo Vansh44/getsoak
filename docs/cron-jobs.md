@@ -25,14 +25,15 @@ stores, 0 orders, 0 lapsed plans, 0 pending razorpay orders, 0 campaign
 recipients.** Nothing was lost, because production has no real traffic yet — but
 each job is a landmine the moment it does:
 
-| Job                       | What its absence would have cost under real traffic                                                                                                         |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send-emails`             | Coupon email campaigns never send.                                                                                                                          |
-| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).             |
-| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                              |
-| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                  |
-| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices. |
-| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                  |
+| Job                       | What its absence would have cost under real traffic                                                                                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                       |
+| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                          |
+| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                                                                                                           |
+| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                               |
+| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices.                                                                              |
+| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                               |
+| `billing`                 | **No merchant is ever charged.** No renewal invoice is issued, no cycle advances, no grace window opens and no unpaid plan is downgraded — the entire subscription business stops silently, looking exactly like nobody has renewed yet. |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -51,8 +52,15 @@ each job is a landmine the moment it does:
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
+| `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
-All seven: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
+deadline are wall-clock instants, so the interval IS the resolution of the whole
+system: on a daily schedule some merchants would get nearly a day of unearned
+service and others nearly a day less notice than the 48 hours they are promised.
+It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
+
+All eight: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -164,6 +172,39 @@ gcloud scheduler jobs create http storemink-import-worker \
 It answers **200 even when an import failed** — a failed import is a recorded
 outcome on the job that the merchant reads in the log, not an outage, and a 5xx
 would make Scheduler retry a job that has already given up.
+
+### `billing` — the subscription heartbeat
+
+```bash
+gcloud scheduler jobs create http storemink-billing \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="20 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/billing" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+Runs the three renewal passes **in one request, in order** — collect at T−4d,
+evaluate at the cycle turn, downgrade after the 48-hour grace. Splitting them
+across jobs would leave each pass a full interval behind the one before it, so a
+merchant's buffer would quietly become 48 hours plus two intervals.
+
+**Its status contract, which differs from the others in one important way:**
+
+| Situation                             | Status  | Why                                                                                                                            |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| A merchant's payment was **declined** | **200** | Not an outage. That merchant has not paid, which the grace window already handles; a 5xx would make Scheduler retry a decline. |
+| A merchant was **downgraded**         | **200** | The system working as designed.                                                                                                |
+| Collection is **unconfigured**        | **200** | See below — it is a known state, not a failure.                                                                                |
+| A pass threw, or a store errored      | **503** | Money was not collected or a plan was not applied. Worth retrying.                                                             |
+
+⚠ **`collectionSkipped` in the response body is the one to watch.** While the
+Razorpay subsequent-charge endpoint is unverified (`lib/billing/gateway.ts`),
+pass 1 is **skipped entirely** rather than attempted — a stub that always failed
+would create payment attempts that can never settle, and because an unreachable
+provider is an _unknown_ outcome rather than a decline, each would sit in
+reconciliation forever. So a green run with `collectionSkipped` set means
+**nobody is being charged**. That is deliberate and safe, but it is not "working".
 
 ### What `prune-logs` closes
 
