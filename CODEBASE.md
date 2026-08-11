@@ -1333,10 +1333,10 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     bundled under `public/themes/{id}/`; **basket** is the grocery/F&B
     reference template with real Unsplash photography, per
     docs/vertical-templates-plan.md §9.1, and the default theme; **studio** and
-    **ritual** are hidden `0.1.0` editorial home-design and botanical-wellness
-    drafts with generated, provenance-logged imagery and cannot appear in signup
-    or the public catalog until approved — the Arcade/Fresko placeholders were
-    retired 2026-07-04),
+    **ritual** are published `0.1.0` editorial home-design and botanical-wellness
+    themes with generated, provenance-logged imagery, available in signup and
+    the public catalog after their 2026-08-12 production/demo audits — the
+    Arcade/Fresko placeholders were retired 2026-07-04),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
