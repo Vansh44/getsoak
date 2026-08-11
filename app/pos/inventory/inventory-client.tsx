@@ -8,10 +8,7 @@
 // here, and let me fix it".
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import Link from "next/link";
 import {
-  ArrowLeft,
-  Boxes,
   Loader2,
   Minus,
   Package,
@@ -20,6 +17,7 @@ import {
   Send,
   TriangleAlert,
 } from "lucide-react";
+import { PosScreen } from "../pos-screen";
 import {
   adjustPosStock,
   countPosStock,
@@ -84,24 +82,9 @@ export function InventoryClient({
   };
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Boxes className="h-5 w-5 shrink-0" strokeWidth={2} />
-          <h1 className="truncate text-lg font-semibold">Stock</h1>
-          <span className="truncate text-sm text-white/50">
-            · {locationName}
-          </span>
-        </div>
-        <Link
-          href="/pos/sell"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-white/20"
-        >
-          <ArrowLeft className="h-4 w-4" strokeWidth={2} />
-          Back to register
-        </Link>
-      </div>
-
+    // Chrome from PosScreen — the "Back to register" button is gone with it:
+    // the rail goes to the register, or anywhere else, in the same one tap.
+    <PosScreen title="Stock" subtitle={locationName} width="narrow">
       <div className="mb-3 flex gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
@@ -166,7 +149,7 @@ export function InventoryClient({
           </p>
         )}
       </div>
-    </div>
+    </PosScreen>
   );
 }
 

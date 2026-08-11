@@ -1,10 +1,13 @@
 import { notFound } from "next/navigation";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
-import { getPosState } from "@/lib/pos/locations";
+import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { isIdleLockExempt } from "@/lib/pos/permissions";
+import { posNavFor } from "@/lib/pos/nav";
+import { countPickupsWaiting } from "@/lib/pos/pickup-count";
 import { IdleLock } from "./idle-lock";
+import { PosNav } from "./pos-nav";
 
 export const metadata = { title: "Register — Point of Sale" };
 
@@ -49,15 +52,49 @@ export default async function PosLayout({
   // how you get a loop. The superadmin stays exempt (isIdleLockExempt): it is
   // their own shop, and posLock would sign them out of the dashboard too.
   const operator = await resolvePosOperator();
-  const locking = !!operator && !isIdleLockExempt(operator.role);
-  const idleLockMinutes = locking
-    ? Number((await getStoreSettings())["pos.idleLockMinutes"]) || 10
+
+  // ★ AND SO DOES THE NAVIGATION, FOR THE IDENTICAL REASON. Every screen used
+  // to carry its own: /pos/sell had four links crammed into its header beside
+  // six other controls, the other five had a back arrow to /pos and nothing
+  // else, and /pos was a launcher whose entire content was "You're signed in".
+  // Stock to the cash drawer took three taps, and the collections queue was
+  // reachable only from a tile that rendered when it was non-empty — so a
+  // manager could not open it to mark the box in their hands as ready.
+  //
+  // Signed out, there is nothing to navigate: the login, registration and reset
+  // screens get the plain shell, exactly as the idle lock does.
+  if (!operator) {
+    return (
+      <div className="min-h-screen bg-[#0b0f14] text-white">{children}</div>
+    );
+  }
+
+  const locking = !isIdleLockExempt(operator.role);
+  const [settings, locations, ordersWaiting] = await Promise.all([
+    locking ? getStoreSettings() : Promise.resolve(null),
+    getStoreLocations(operator.storeId),
+    // One indexed COUNT, deliberately — see lib/pos/pickup-count.ts. This runs
+    // on every POS page load including /pos/sell, so it must not become the
+    // queue read.
+    countPickupsWaiting(operator.storeId, operator.locationId),
+  ]);
+  const idleLockMinutes = settings
+    ? Number(settings["pos.idleLockMinutes"]) || 10
     : 0;
+  const locationName =
+    locations.find((l) => l.id === operator.locationId)?.name ?? "Location";
 
   return (
-    <div className="min-h-screen bg-[#0b0f14] text-white">
+    <PosNav
+      items={posNavFor(operator.role)}
+      operatorName={operator.name}
+      role={operator.role}
+      locationName={locationName}
+      source={operator.source}
+      ordersWaiting={ordersWaiting}
+    >
       {locking && <IdleLock minutes={idleLockMinutes} />}
       {children}
-    </div>
+    </PosNav>
   );
 }

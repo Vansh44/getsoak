@@ -94,25 +94,33 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
     });
 
   return (
-    <div className="min-h-dvh bg-neutral-950 pb-32 text-white">
-      <header className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
+    // ★ THE ONE SCREEN THAT KEEPS A BACK ARROW. Everywhere else it was a
+    // redundant second exit next to the rail — but this is a STEP IN A FLOW, not
+    // a destination: you arrived from a specific order and the way out is back
+    // to the counter, not sideways to another part of the till. It has no rail
+    // entry of its own for the same reason (Orders stays lit — see
+    // activePosNavKey).
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <Link
-          href="/pos/sales"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20"
-          aria-label="Back to sales"
+          href="/pos/orders"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20"
+          aria-label="Back to orders"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold">Return</h1>
-          <p className="font-mono text-xs text-white/50">{sale.receiptNo}</p>
+          <h1 className="text-lg font-semibold leading-tight">Return</h1>
+          <p className="truncate font-mono text-xs text-white/50">
+            {sale.receiptNo}
+          </p>
         </div>
-        <span className="ml-auto text-sm text-white/50">
+        <span className="ml-auto shrink-0 text-sm text-white/50">
           {money(sale.total)}
         </span>
       </header>
 
-      <div className="space-y-3 px-4 py-4">
+      <div className="mx-auto w-full max-w-3xl min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {!anythingLeft && (
           <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-white/60">
             Everything on this sale has already been returned.
@@ -249,8 +257,13 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
               />
             </div>
 
-            <div className="fixed inset-x-0 bottom-0 border-t border-white/10 bg-neutral-950/95 p-4 backdrop-blur">
-              <div className="mx-auto flex max-w-3xl items-center gap-4">
+            {/* STICKY, not FIXED. `fixed inset-x-0` is measured against the
+                viewport, so with the rail on screen the bar ran underneath it;
+                sticking it to the bottom of its own scroll container keeps it
+                inside the content column, and drops the `pb-32` spacer that
+                only existed to stop the fixed bar covering the last card. */}
+            <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-white/10 bg-[#0b0f14]/95 p-4 backdrop-blur">
+              <div className="flex items-center gap-4">
                 <div className="min-w-0">
                   <div className="text-xs text-white/50">Refund</div>
                   <div className="text-2xl font-bold tabular-nums">

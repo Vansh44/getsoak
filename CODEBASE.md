@@ -2460,6 +2460,76 @@ group, span}` (span = columns of the 4-wide desktop grid),
       - Adjustments feed `reportStockChanges`, so a manual correction to zero
         still fires the low/out-of-stock crossing (§22) rather than alerting
         nobody.
+    - **★ THE SHELL (done) = one navigation, and one counter.** The screens were
+      built one at a time and each brought its own chrome; this is the pass that
+      made them one app. Nothing about permissions, money or stock changed.
+      - **★★ THE NAVIGATION IS IN THE LAYOUT, FOR THE IDLE LOCK'S REASON.**
+        `app/pos/pos-nav.tsx` is mounted once in `app/pos/layout.tsx` and takes
+        `children` — it IS the shell, because the rail and the small-screen top
+        bar sit at different points in the tree and a component rendering only
+        one would leave each screen to place the other. That is per-page opt-in,
+        which is exactly how the lock ended up missing from five of seven
+        screens. Before: `/pos/sell`'s header held TEN things (four links, cache
+        chip, coverage, Edit layout, location, operator, Lock) and hid every
+        label below `sm`, so it degraded to a row of anonymous icons; the other
+        five screens had a back arrow to `/pos` and nothing else, in three
+        different hand-rolled forms; Stock → Drawer was three taps through a
+        page whose entire content was "You're signed in".
+      - **★ RAIL ON WIDE, DRAWER ON NARROW.** A hidden menu costs a tap on every
+        switch and till work is muscle memory, so above `lg` the destinations
+        stay on screen (76px rail); below it the same list is the hamburger
+        drawer, because a portrait tablet cannot spare the product grid.
+      - **★ `lib/pos/nav.ts` IS THE REGISTRY** — pure and icon-free (icons live
+        in the client component, keyed by `key`, the `lib/logs/failure-types.ts`
+        split) so a server component and a test can import it. `posNavFor(role)`
+        filters on the SAME `posCan` the pages redirect on, so the rail and the
+        gate cannot drift. **A destination's `cap` is the capability that opens
+        the SCREEN, never the strongest action on it**: Orders is `sell`,
+        because handing a collection over is a cashier's job with the customer
+        standing there — gating that door on `refund` would hide the queue from
+        the person who works it. Tested, both directions.
+      - **★★ COLLECTIONS AND RETURNS MERGED INTO `/pos/orders`.** They were two
+        search screens for one physical moment — a customer at the counter with
+        an order that already exists. `/pos/pickups` searched a collection code
+        or an order number; `/pos/returns` searched an order number, a phone or
+        an email; **neither could find what the other could**, so a cashier had
+        to know which kind of visit it was BEFORE they knew which order it was.
+        One box now takes all of it and each row offers what that order can do
+        AND what this operator may do (`Mark ready` = `fulfil_pickup`,
+        `Hand over` = `sell`, `Take return` = `refund`, every one re-checked in
+        the action). It is `/pos/pickups`'s own ONE-BOX-TAKES-BOTH rule carried
+        one step further. Only the operator's permitted lookups fire — a cashier
+        has no `refund`, so `findOrderForReturn` is never called for them.
+      - **The old paths still resolve** (`/pos/pickups`, `/pos/returns` → 307),
+        because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
+        **307, not 308** — a permanent redirect is cached by browsers
+        indefinitely and there are no SEO signals to consolidate behind a login
+        (the trap `proxy.ts` works around with `Cache-Control: no-store`, §30).
+        The return DETAIL screen stays at `/pos/returns/[orderId]`; only the
+        front door moved, and `activePosNavKey` keeps Orders lit on it.
+      - **`/pos` OPENS THE REGISTER.** It redirects to `/pos/sell`; the only
+        screen left there is the device-authorization prompt
+        (`authorize-client.tsx`), and staff cannot resolve as an operator
+        without an authorized device, so whoever sees it can fix it.
+        `register-home.tsx` is deleted.
+      - **★ THE BADGE IS A COUNT, NOT THE QUEUE READ** (`lib/pos/pickup-count.ts`).
+        It is drawn by the layout, so it runs on EVERY POS page load including
+        `/pos/sell`, whose whole design goal is a register that opens without
+        waiting on the network — one indexed COUNT, not two queries and 100 rows
+        with their line-item counts. It **fails to zero rather than throwing**: a
+        blip must cost a badge, not the ability to serve a customer. NOT a
+        `"use server"` file — it takes a store and a location as arguments, the
+        exact shape that must never be publicly callable. `pickup-count.test.ts`
+        pins its predicate to `getPickupQueue`'s, because a badge that disagrees
+        with the list under it is worse than no badge.
+      - `app/pos/pos-screen.tsx` is the shared chrome for every screen that is
+        not the register (title, subtitle, scroll body). **No back button**, by
+        design — the rail goes anywhere in one tap, and back-to-`/pos` was what
+        made every switch a three-tap trip. The ONE exception is the return
+        detail: that is a step in a flow, not a destination. Three screens also
+        stopped painting `bg-neutral-950` over the shell's `bg-[#0b0f14]`, and
+        the return detail's action bar went `fixed inset-x-0` → `sticky`, which
+        with a rail on screen had been running underneath it.
 23. **Locations own capabilities; POS is one of them.** Locations used to live
     under Point of Sale. They don't: a warehouse is a location with POS
     switched off, and pickup/online-fulfilment/returns are storefront features
@@ -2567,7 +2637,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       because a pickup IS an order (same money, items, invoice, history) and a
       side table would mean every order read either joins it or silently
       ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
-      where; `/pos/pickups` hands it over; the sweep rides on
+      where; `/pos/orders` hands it over; the sweep rides on
       `/api/cron/expire-pending-payments`. Config:
       `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
       `locations`, rendered on Locations → Online fulfilment).
@@ -2644,7 +2714,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         hand over a card. Booking every collection as cash would put card money
         into expected cash and report the drawer SHORT: the same defect pointed
         the other way, and worse, because "over on cash, short on card" cannot
-        be attributed to anything. `/pos/pickups` shows the amount owed on the
+        be attributed to anything. `/pos/orders` shows the amount owed on the
         row and opens the register's own `TenderPanel` (cash/card/UPI, split
         tenders, change) before handing over. It is the rule §26 and §28
         already state for refunds, read backwards: **the tender decides where
@@ -2712,7 +2782,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         change who hears about ordinary orders for every existing store
         (invariant 1). A merchant's own stored choice always beats the default;
         the fallback only applies when they have chosen nothing.
-      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/orders` resolves a
         scanned collection code OR a typed order number from the same input —
         a hardware scanner is a keyboard, and making someone pick a field first
         is exactly the friction the code was meant to remove.
@@ -3589,7 +3659,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         advance exchange needs a card hold, and there is no hold primitive),
         and cross-product swaps.
     - **★ BORIS — RETURNING AN ONLINE ORDER AT A COUNTER**
-      (`lib/returns/in-store.ts`, `/pos/returns`). This is what finally reads
+      (`lib/returns/in-store.ts`, `/pos/orders`). This is what finally reads
       the `returns` location capability, in the registry unused since Phase 0.
       - **The bug that made it impossible:** `getReturnableSale` filtered on
         `orders.location_id = op.locationId`, and an online order's location is

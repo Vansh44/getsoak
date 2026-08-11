@@ -226,11 +226,11 @@ proper nav rather than more buttons.
 /pos/shift        Cash drawer
 ```
 
-**`/pos/pickups`** — a queue, newest first. Search or scan the order code,
+**`/pos/orders`** — a queue, newest first (merged with returns; see CODEBASE.md §22 "the shell"). Search or scan the order code,
 verify the customer, hand over, mark collected. Badge count in the nav so staff
 see waiting orders without looking.
 
-**`/pos/returns`** — scan the receipt or order reference, choose lines and
+**`/pos/orders`** (detail at `/pos/returns/[orderId]`) — scan the receipt or order reference, choose lines and
 quantities (partial returns are the norm), pick the refund method, and decide
 where the stock goes: **back to sellable** or **damaged**. That last choice is
 the one the spec is right to insist on — returned goods must not silently
@@ -300,7 +300,7 @@ server-side, not merely hidden.
 4. Fulfilment priority + retire the default-location `reserve_stock` wrapper
    — this is what fixes "website advertises the total, sells only from default"
 5. Real reservations (`inventory_levels.reserved`, currently unused)
-6. Pickup: checkout option → `/pos/pickups` → hold-expiry sweep
+6. Pickup: checkout option → `/pos/orders` → hold-expiry sweep
 7. Returns (POS Phase 5) → returns-in-store → damaged bucket
 
 Steps 1–4 are the ones that pay for themselves immediately. 5 onward depends on
