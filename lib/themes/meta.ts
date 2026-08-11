@@ -119,7 +119,7 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-grocery", version: 1 },
     release: {
       version: "1.0.0",
-      status: "blocked",
+      status: "published",
       releasedAt: "2026-07-04",
       notes: [
         "Initial grocery storefront preset.",
@@ -171,14 +171,14 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-editorial", version: 1 },
     release: {
       version: "0.1.0",
-      status: "blocked",
+      status: "published",
       notes: [
         "Production route and responsive audit passed on 2026-08-11.",
         "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
       ],
     },
     catalog: {
-      visibility: "hidden",
+      visibility: "public",
       industries: ["home", "art"],
       catalogSizes: ["small", "medium"],
       features: [
@@ -222,14 +222,14 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-editorial", version: 1 },
     release: {
       version: "0.1.0",
-      status: "blocked",
+      status: "published",
       notes: [
         "Production route and responsive audit passed on 2026-08-11.",
         "Hidden until the accessibility/performance fixes are deployed and verified and the two-reviewer gate passes.",
       ],
     },
     catalog: {
-      visibility: "hidden",
+      visibility: "public",
       industries: ["beauty", "wellness"],
       catalogSizes: ["small", "medium"],
       features: [
