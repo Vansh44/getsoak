@@ -63,9 +63,9 @@ function Harness() {
   );
 }
 
-function renderAuth() {
+function renderAuth(initialHasSession = true) {
   return render(
-    <AuthProvider>
+    <AuthProvider initialHasSession={initialHasSession}>
       <Harness />
     </AuthProvider>,
   );
@@ -114,6 +114,20 @@ describe("AuthProvider", () => {
     expect(getMyCustomerSession).not.toHaveBeenCalled();
   });
 
+  it("defers Firebase for an anonymous storefront until account UI opens", async () => {
+    const user = userEvent.setup();
+    renderAuth(false);
+
+    expect(screen.getByTestId("loading")).toHaveTextContent("false");
+    expect(onAuthStateChanged).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("open"));
+
+    expect(screen.getByTestId("modal")).toHaveTextContent("true");
+    await waitFor(() => expect(onAuthStateChanged).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("loading")).toHaveTextContent("false");
+  });
+
   it("initial load with a session populates the user and fetches the customer row", async () => {
     currentFbUser = FB_USER;
     customerRow = CUSTOMER;
@@ -143,7 +157,9 @@ describe("AuthProvider", () => {
     renderAuth();
 
     // Firebase has answered — the user is populated — but the row is in flight.
-    expect(screen.getByTestId("user")).toHaveTextContent("u-1");
+    await waitFor(() =>
+      expect(screen.getByTestId("user")).toHaveTextContent("u-1"),
+    );
     expect(screen.getByTestId("customer")).toHaveTextContent("");
     expect(screen.getByTestId("loading")).toHaveTextContent("true");
 

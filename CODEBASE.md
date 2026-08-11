@@ -164,6 +164,11 @@ wholesip/
 │   │       │                  # `unavailable` (a DB blip) must NOT re-mint, or
 │   │       │                  # every page load pays a wasted round-trip.
 │   │       │                  # getMyCustomer() still returns just the row.
+│   │       │                  # ★ Anonymous storefront requests do NOT start
+│   │       │                  # Firebase Auth: the server layout passes whether
+│   │       │                  # `sm_session` exists, so returning shoppers restore
+│   │       │                  # immediately while anonymous visitors dynamically
+│   │       │                  # import the Web SDK only when account UI opens.
 │   │       ├── cart/          # CartProvider, CartDrawer, CouponField
 │   │       ├── header/ footer/  # nav from store_menus via MenuProvider (§11 menu builder)
 │   │       ├── homepage/      # Shared per-section renderer (featured products,
@@ -624,7 +629,9 @@ wholesip/
 │   │                          # place server code reads the authed user; feeds withUser),
 │   │                          # now verifies the Firebase SESSION COOKIE (no Supabase).
 │   │                          # firebase-admin.ts (lazy Admin SDK), session-cookie.ts
-│   │                          # (mint/verify + .storemink.com cookie), firebase-claims.ts
+│   │                          # (mint/verify + .storemink.com cookie), constants.ts
+│   │                          # (dependency-free shared session-cookie name),
+│   │                          # firebase-claims.ts
 │   │                          # (role/force_password_reset custom claims — replaces the
 │   │                          # custom_access_token_hook), firebase-users.ts (admin
 │   │                          # create/delete/update + REST password reverify + reset link),

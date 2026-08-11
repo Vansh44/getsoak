@@ -214,6 +214,7 @@ export default function ShopClient({
                         key={p.id}
                         product={p}
                         storeLowStockThreshold={storeLowStockThreshold}
+                        headingLevel={2}
                       />
                     ))}
                   </div>

@@ -188,14 +188,14 @@ describe("theme registry", () => {
     expect(isThemeSelectable(basketMeta)).toBe(true);
     expect(canPreviewTheme(basketMeta)).toBe(false);
     const studioMeta = THEME_META.find((theme) => theme.id === "studio")!;
-    expect(studioMeta.release.status).toBe("blocked");
-    expect(studioMeta.catalog.visibility).toBe("hidden");
-    expect(isThemeSelectable(studioMeta)).toBe(false);
+    expect(studioMeta.release.status).toBe("published");
+    expect(studioMeta.catalog.visibility).toBe("public");
+    expect(isThemeSelectable(studioMeta)).toBe(true);
     expect(canPreviewTheme(studioMeta)).toBe(true);
     const ritualMeta = THEME_META.find((theme) => theme.id === "ritual")!;
-    expect(ritualMeta.release.status).toBe("blocked");
-    expect(ritualMeta.catalog.visibility).toBe("hidden");
-    expect(isThemeSelectable(ritualMeta)).toBe(false);
+    expect(ritualMeta.release.status).toBe("published");
+    expect(ritualMeta.catalog.visibility).toBe("public");
+    expect(isThemeSelectable(ritualMeta)).toBe(true);
     expect(canPreviewTheme(ritualMeta)).toBe(true);
   });
 

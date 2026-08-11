@@ -14,10 +14,11 @@
 
 import { cookieDomainForHost } from "@/lib/store/host";
 import { getFirebaseAdminAuth } from "./firebase-admin";
+import { SESSION_COOKIE } from "./constants";
 
 /** Cross-subdomain session cookie name (distinct from Supabase's sb-* cookies
  *  so both can coexist during the migration). */
-export const SESSION_COOKIE = "sm_session";
+export { SESSION_COOKIE };
 
 // Firebase session cookies max out at 14 days.
 const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
