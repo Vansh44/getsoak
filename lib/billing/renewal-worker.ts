@@ -389,29 +389,13 @@ export async function evaluateCycleTurns(
         }
 
         if (invoice.status === "paid") {
-          const period: BillingPeriod =
-            row.period === "yearly" ? "yearly" : "monthly";
-          const start = new Date(row.currentPeriodEnd!);
-          const next = cycleFrom(start, period, nextSeq);
-          await db
-            .update(billingSubscriptions)
-            .set({
-              currentCycleSeq: next.seq,
-              currentPeriodStart: next.start.toISOString(),
-              currentPeriodEnd: next.end.toISOString(),
-              state: "active",
-              graceStartedAt: null,
-              graceEndsAt: null,
-              updatedAt: now.toISOString(),
-            })
-            .where(
-              and(
-                eq(billingSubscriptions.storeId, row.storeId),
-                // Claim on the cycle we read, so a concurrent advance cannot
-                // double-advance the subscription.
-                eq(billingSubscriptions.currentCycleSeq, row.currentCycleSeq),
-              ),
-            );
+          await advanceCycle(db, {
+            storeId: row.storeId,
+            period: row.period,
+            fromCycleSeq: row.currentCycleSeq,
+            fromPeriodEnd: row.currentPeriodEnd!,
+            now,
+          });
           summary.advanced += 1;
           continue;
         }
@@ -443,6 +427,122 @@ export async function evaluateCycleTurns(
     summary.errors += 1;
   }
   return summary;
+}
+
+/**
+ * Move a subscription into its next cycle.
+ *
+ * ★ ONE implementation, shared by the worker's evaluate pass and by manual
+ * payment. A second hand-written copy would drift, and the failure mode is
+ * silent: a merchant's cycle dates would depend on which route settled their
+ * invoice.
+ *
+ * ★ Claims on the cycle it was told about, so two concurrent advances cannot
+ * double-advance a subscription. Returns whether it actually moved.
+ */
+async function advanceCycle(
+  db: Db,
+  input: {
+    storeId: string;
+    period: string;
+    fromCycleSeq: number;
+    fromPeriodEnd: string;
+    now: Date;
+  },
+): Promise<boolean> {
+  const period: BillingPeriod =
+    input.period === "yearly" ? "yearly" : "monthly";
+  const next = cycleFrom(
+    new Date(input.fromPeriodEnd),
+    period,
+    input.fromCycleSeq + 1,
+  );
+  const claimed = await db
+    .update(billingSubscriptions)
+    .set({
+      currentCycleSeq: next.seq,
+      currentPeriodStart: next.start.toISOString(),
+      currentPeriodEnd: next.end.toISOString(),
+      state: "active",
+      graceStartedAt: null,
+      graceEndsAt: null,
+      updatedAt: input.now.toISOString(),
+    })
+    .where(
+      and(
+        eq(billingSubscriptions.storeId, input.storeId),
+        eq(billingSubscriptions.currentCycleSeq, input.fromCycleSeq),
+      ),
+    )
+    .returning({ storeId: billingSubscriptions.storeId });
+  return claimed.length > 0;
+}
+
+/**
+ * Advance one store immediately, because its next-cycle invoice was just paid.
+ *
+ * ★★ CALLED BY MANUAL PAYMENT so a merchant who pays during grace gets their
+ * plan back at once. Leaving it to the hourly worker would keep someone who has
+ * just paid locked out of their own till for up to an hour, while they watch the
+ * screen. It re-reads and re-checks everything rather than trusting the caller —
+ * the invoice really is paid, the subscription really is theirs, and the cycle
+ * really has turned.
+ *
+ * Returns true only when a cycle actually advanced, so the caller can tell the
+ * merchant something true.
+ */
+export async function advanceAfterPayment(
+  storeId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  try {
+    return await withService(async (db) => {
+      const [sub] = await db
+        .select({
+          storeId: billingSubscriptions.storeId,
+          period: billingSubscriptions.period,
+          currentCycleSeq: billingSubscriptions.currentCycleSeq,
+          currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
+          state: billingSubscriptions.state,
+        })
+        .from(billingSubscriptions)
+        .where(eq(billingSubscriptions.storeId, storeId))
+        .limit(1);
+
+      if (!sub?.currentPeriodEnd) return false;
+      // Only a subscription whose cycle has ENDED can advance. Paying an invoice
+      // early — the T−4d collection window — settles it without moving the
+      // cycle; the boundary is what moves it, and the worker will.
+      if (new Date(sub.currentPeriodEnd).getTime() > now.getTime())
+        return false;
+      if (!["active", "past_due", "grace"].includes(sub.state)) return false;
+
+      const nextSeq = sub.currentCycleSeq + 1;
+      const [invoice] = await db
+        .select({ status: billingInvoices.status })
+        .from(billingInvoices)
+        .where(
+          and(
+            eq(billingInvoices.storeId, storeId),
+            eq(billingInvoices.kind, "subscription"),
+            eq(billingInvoices.cycleSeq, nextSeq),
+          ),
+        )
+        .limit(1);
+      if (invoice?.status !== "paid") return false;
+
+      return advanceCycle(db, {
+        storeId,
+        period: sub.period,
+        fromCycleSeq: sub.currentCycleSeq,
+        fromPeriodEnd: sub.currentPeriodEnd,
+        now,
+      });
+    });
+  } catch (err) {
+    logError("billing.advance_after_payment", err, { storeId });
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------

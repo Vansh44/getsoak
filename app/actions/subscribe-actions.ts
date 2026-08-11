@@ -28,6 +28,12 @@ import {
 } from "@/lib/plans/pricing";
 import { PLAN_IDS, type Plan } from "@/lib/plans";
 import {
+  confirmInvoicePayment,
+  listPayableInvoices,
+  startInvoicePayment,
+  type PaymentStart,
+} from "@/lib/billing/manual-pay";
+import {
   auditEnrolment,
   confirmEnrolment,
   ensureBillingAccount,
@@ -214,4 +220,83 @@ export async function confirmSubscribe(
     periodEnd: confirmed.data.periodEnd,
     autopay: confirmed.data.mandateActivated,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Manual payment — settling an invoice the merchant already owes.
+//
+// ★ Today this is the ONLY way a renewal gets paid, because automatic
+// collection is gated behind an unverified endpoint (lib/billing/gateway.ts).
+// Not a fallback: spec §18 makes it a first-class path, and it stays one after
+// the recurring charge lands, for amounts over the AFA limit and for merchants
+// with no live mandate.
+// ---------------------------------------------------------------------------
+
+export type PayInvoiceStart =
+  | ({ ok: true } & PaymentStart)
+  | { ok: false; error: string };
+
+export type PayInvoiceConfirm =
+  | { ok: true; planRestored: boolean }
+  | { ok: false; error: string };
+
+/** What this store still owes, for a "pay now" surface. */
+export async function getPayableInvoices() {
+  const userId = await getManagerUserId("ai");
+  if (!userId) return [];
+  const storeId = await getActingStoreId();
+  return listPayableInvoices(storeId);
+}
+
+export async function startPayInvoice(
+  invoiceId: unknown,
+): Promise<PayInvoiceStart> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (typeof invoiceId !== "string" || !invoiceId) {
+    return { ok: false, error: "We couldn't find that invoice." };
+  }
+
+  // ★ The store comes from the SESSION, never the caller. startInvoicePayment
+  // then refuses any invoice that does not belong to it, so an invoice id from
+  // another tenant finds nothing rather than becoming payable.
+  const storeId = await getActingStoreId();
+  const started = await startInvoicePayment({ storeId, invoiceId });
+  if (!started.ok) return { ok: false, error: started.error };
+  return { ok: true, ...started.data };
+}
+
+export async function confirmPayInvoice(
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<PayInvoiceConfirm> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (
+    typeof invoiceId !== "string" ||
+    typeof providerPaymentId !== "string" ||
+    typeof signature !== "string" ||
+    !invoiceId ||
+    !providerPaymentId ||
+    !signature
+  ) {
+    return { ok: false, error: "That payment couldn't be confirmed." };
+  }
+
+  const storeId = await getActingStoreId();
+  const done = await confirmInvoicePayment({
+    storeId,
+    invoiceId,
+    providerPaymentId,
+    signature,
+  });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  // A restored plan changes entitlement, so every gate must see it.
+  if (done.data.planRestored) revalidateTag(STORE_TAG, "max");
+
+  return { ok: true, planRestored: done.data.planRestored };
 }

@@ -723,6 +723,17 @@ wholesip/
 │   │                          # charge; amountDueForInvoice returns NULL rather
 │   │                          # than the full total, since guessing when credit
 │   │                          # may be applied would double-charge.
+│   │                          # ★★ manual-pay.ts (server-only): paying an open
+│   │                          # invoice on session — TODAY the only way a
+│   │                          # renewal is paid, since automatic collection is
+│   │                          # gated on an unverified endpoint. Refuses a
+│   │                          # cross-tenant invoice id, and refuses an
+│   │                          # UNCOLLECTIBLE/VOID one: those belong to a cycle
+│   │                          # the merchant was already downgraded for, so
+│   │                          # taking money would charge for service never
+│   │                          # received. Paying during grace restores the plan
+│   │                          # AT ONCE via advanceAfterPayment — the SAME
+│   │                          # advance the worker uses, never a second copy.
 │   │                          # ★★ enrol.ts (server-only): a merchant's FIRST
 │   │                          # paid cycle. Works WITHOUT the unverified
 │   │                          # recurring endpoint — cycle 1 is collected ON
@@ -885,6 +896,17 @@ wholesip/
 │   │                          # billing_02's function is ever CALLED — plpgsql
 │   │                          # resolves table names at call time, so the wrong
 │   │                          # order succeeds and then fails at runtime
+│   ├── billing_06_migrate_legacy.sql # ★ §34 the CUTOVER: moves live
+│   │                          # store_subscriptions rows onto the new tables
+│   │                          # (one in prod). ⚠ The mandate CANNOT come with
+│   │                          # them — a Razorpay Subscription's mandate is a
+│   │                          # different product from a recurring token — so
+│   │                          # they re-authorise or pay manually next cycle.
+│   │                          # No invoice for the already-paid cycle (it would
+│   │                          # burn a GST number for a document never sent),
+│   │                          # comped stores skipped, and ⚠ the gateway
+│   │                          # subscription must be cancelled SEPARATELY or
+│   │                          # Razorpay's timer bills alongside our worker
 │   ├── billing_05_tax_mode.sql # ★ §34 platform_billing_settings.tax_inclusive.
 │   │                          # ⚠ Its OWN file because billing_01 is APPLIED —
 │   │                          # editing an applied CREATE TABLE IF NOT EXISTS

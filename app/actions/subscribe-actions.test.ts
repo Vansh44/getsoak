@@ -48,7 +48,20 @@ const pricing = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/plans/pricing", () => pricing);
 
-import { confirmSubscribe, startSubscribe } from "./subscribe-actions";
+const manual = vi.hoisted(() => ({
+  startInvoicePayment: vi.fn(),
+  confirmInvoicePayment: vi.fn(),
+  listPayableInvoices: vi.fn(),
+}));
+vi.mock("@/lib/billing/manual-pay", () => manual);
+
+import {
+  confirmPayInvoice,
+  confirmSubscribe,
+  getPayableInvoices,
+  startPayInvoice,
+  startSubscribe,
+} from "./subscribe-actions";
 
 const STORE = "store-1";
 
@@ -90,6 +103,100 @@ beforeEach(() => {
   pricing.getExtraLocationPricingLive.mockResolvedValue({
     monthlyInr: 1000,
     yearlyInr: 10000,
+  });
+  manual.startInvoicePayment.mockResolvedValue({
+    ok: true,
+    data: {
+      invoiceId: "inv-9",
+      providerOrderId: "order_9",
+      keyId: "rzp_1",
+      amountPaise: 5_000_00,
+      invoiceRef: "SM/2026-27/00009",
+    },
+  });
+  manual.confirmInvoicePayment.mockResolvedValue({
+    ok: true,
+    data: { invoiceId: "inv-9", planRestored: true },
+  });
+  manual.listPayableInvoices.mockResolvedValue([{ id: "inv-9" }]);
+});
+
+describe("manual payment actions", () => {
+  it("★ every one is gated, and does nothing unauthorised", async () => {
+    access.getManagerUserId.mockResolvedValue(null);
+    expect((await startPayInvoice("inv-9")).ok).toBe(false);
+    expect((await confirmPayInvoice("inv-9", "pay_1", "sig")).ok).toBe(false);
+    expect(await getPayableInvoices()).toEqual([]);
+    expect(manual.startInvoicePayment).not.toHaveBeenCalled();
+    expect(manual.confirmInvoicePayment).not.toHaveBeenCalled();
+    expect(manual.listPayableInvoices).not.toHaveBeenCalled();
+  });
+
+  it("★★ takes the store from the SESSION, never the caller", async () => {
+    // An invoice id is the only thing the client supplies; the tenant is ours.
+    await startPayInvoice("inv-9");
+    expect(manual.startInvoicePayment).toHaveBeenCalledWith({
+      storeId: STORE,
+      invoiceId: "inv-9",
+    });
+  });
+
+  it("returns what the modal needs", async () => {
+    const res = await startPayInvoice("inv-9");
+    expect(res).toMatchObject({
+      ok: true,
+      providerOrderId: "order_9",
+      amountPaise: 5_000_00,
+    });
+  });
+
+  it("rejects a malformed invoice id without calling through", async () => {
+    for (const bad of [null, "", 42, {}]) {
+      expect((await startPayInvoice(bad)).ok).toBe(false);
+    }
+    expect(manual.startInvoicePayment).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed confirm input", async () => {
+    const bad: [unknown, unknown, unknown][] = [
+      [null, "pay_1", "sig"],
+      ["inv-9", "", "sig"],
+      ["inv-9", "pay_1", 42],
+    ];
+    for (const [a, b, c] of bad) {
+      expect((await confirmPayInvoice(a, b, c)).ok).toBe(false);
+    }
+    expect(manual.confirmInvoicePayment).not.toHaveBeenCalled();
+  });
+
+  it("★ busts the store cache when a plan was restored", async () => {
+    const { revalidateTag } = await import("next/cache");
+    await confirmPayInvoice("inv-9", "pay_1", "sig");
+    expect(revalidateTag).toHaveBeenCalled();
+  });
+
+  it("★ does NOT bust the cache when nothing changed", async () => {
+    // Paying inside the T−4d window settles the invoice without moving the
+    // cycle — no entitlement changed, so no reason to invalidate every store read.
+    manual.confirmInvoicePayment.mockResolvedValue({
+      ok: true,
+      data: { invoiceId: "inv-9", planRestored: false },
+    });
+    const { revalidateTag } = await import("next/cache");
+    const res = await confirmPayInvoice("inv-9", "pay_1", "sig");
+    expect(res).toEqual({ ok: true, planRestored: false });
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("passes a failure through", async () => {
+    manual.confirmInvoicePayment.mockResolvedValue({
+      ok: false,
+      error: "bad sig",
+    });
+    expect(await confirmPayInvoice("inv-9", "pay_1", "sig")).toEqual({
+      ok: false,
+      error: "bad sig",
+    });
   });
 });
 
