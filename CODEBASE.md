@@ -334,7 +334,15 @@ wholesip/
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
-│   │   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
+│   │   ├── subscribe-actions.ts # ★ §34 the NEW subscribe path: startSubscribe /
+│   │                      # confirmSubscribe. Runs ALONGSIDE the old
+│   │                      # subscription-actions.ts until the cutover, and
+│   │                      # REFUSES when the old system already has a live
+│   │                      # mandate — failing CLOSED on a read error, because
+│   │                      # billing one store from two systems has no single
+│   │                      # place to stop it. ⚠ NOT the same file as
+│   │                      # billing-actions.ts (§17 tax classes).
+│   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
 │   │   │                      # invoice settings. Gated on `billing`, revalidates TAGS.billing.
 │   │   ├── store-domain.ts    # Custom domain connect (§30) — the GATE only; the
 │   │                          # work is lib/domains/reconcile.ts so the cron runs
