@@ -283,9 +283,11 @@ page at `/orders/[id]/collect` with a client-rendered QR, the code carried into
 the `order.ready_for_pickup` notification, and `findPickupByCode` for the
 counter.
 
-**✅ Also shipped:** the scan box on `/pos/pickups` (one box takes both a
+**✅ Also shipped:** the scan box on the collection queue (one box takes both a
 scanned code and a typed order number — a scanner is a keyboard, and a counter
-should not make anyone choose a field first), the code in the confirmation
+should not make anyone choose a field first — since extended to past orders
+too, when the queue and the returns lookup merged into `/pos/orders`; see
+CODEBASE.md §22 "the shell"), the code in the confirmation
 email, and a per-event **default routing scope** so pickup events reach managers
 at the shop it happened at.
 
@@ -357,7 +359,7 @@ to set, not a mechanism to build.
 
 ### 3.3 Scan at the counter
 
-`/pos/pickups` gains a scan box resolving a collection code, reusing
+The collection queue gains a scan box resolving a collection code, reusing
 `createKeyboardWedge` and `lib/pos/barcode-camera.ts` — a hardware scanner is a
 keyboard, so this is mostly wiring. A code belonging to another shop must say
 _which shop_, not "not found": the customer is standing there and the answer

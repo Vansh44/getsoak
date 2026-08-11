@@ -20,9 +20,11 @@ import {
   desc,
   eq,
   gt,
+  gte,
   ilike,
   inArray,
   isNotNull,
+  lt,
   or,
   sql,
 } from "drizzle-orm";
@@ -62,6 +64,7 @@ import {
 } from "@/lib/pos/session";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { posTotals } from "@/lib/pos/totals";
+import { isPosDateRangeKey, posDateRange } from "@/lib/pos/date-range";
 import {
   settleTenders,
   validateTenderShape,
@@ -1402,6 +1405,7 @@ export interface PosSaleRow {
  */
 export async function listPosSales(
   query?: string,
+  range?: string,
 ): Promise<{ sales: PosSaleRow[]; error?: string }> {
   const op = await resolvePosOperator();
   if (!op) return { sales: [], error: "Not signed in." };
@@ -1409,6 +1413,11 @@ export async function listPosSales(
 
   const q = (query ?? "").trim().slice(0, 60);
   const like = likePattern(q);
+  // The client sends a KEY, never timestamps: the window is the SHOP's calendar
+  // day (Asia/Kolkata), decided here, so it cannot depend on a device clock —
+  // and an unrecognised key falls back to no filter rather than an empty list,
+  // because a till showing "no sales" when there are sales is the worse failure.
+  const window = isPosDateRangeKey(range) ? posDateRange(range) : null;
 
   try {
     const rows = await withService((db) =>
@@ -1437,6 +1446,12 @@ export async function listPosSales(
                   sql`${orders.shippingAddress}::text ilike ${like}`,
                 )
               : undefined,
+            // Half-open [from, to): `yesterday` ends exactly where `today`
+            // begins, so a sale lands in one window or the other, never both.
+            window
+              ? gte(orders.createdAt, window.from.toISOString())
+              : undefined,
+            window ? lt(orders.createdAt, window.to.toISOString()) : undefined,
           ),
         )
         .orderBy(desc(orders.createdAt))

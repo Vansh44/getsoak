@@ -355,8 +355,8 @@ permanently.
 
 **PS-6.13 ★★ — EVERY screen locks, not just the two that asked**
 Set `pos.idleLockMinutes` to 1. As a cashier, go to each of `/pos`,
-`/pos/sell`, `/pos/inventory`, `/pos/shift`, `/pos/returns`, `/pos/pickups`
-and `/pos/sales` in turn and leave the till alone on each.
+`/pos/sell`, `/pos/inventory`, `/pos/shift`, `/pos/orders` and `/pos/sales`
+in turn and leave the till alone on each.
 **Expect:** all seven warn and then lock to `/pos/login`.
 **Was:** only `/pos` and `/pos/sell` locked. The other five never did — so the
 till sat unlocked indefinitely on the screens that issue refunds, adjust stock
@@ -766,7 +766,7 @@ With 1 unit left and it held for another customer's collection.
 stock here."_ Offering it is how two people get promised the same box.
 
 **PS-8.4 — Collect it**
-`/pos/pickups` → Mark ready → Hand over.
+`/pos/orders` → Mark ready → Hand over.
 **Expect:** the customer gets the ready notification; on hand-over the holds
 commit (on-hand finally drops) and the order leaves the queue.
 
@@ -838,7 +838,7 @@ collect", the button reads "Place Order (Pay at store)", and the order stores
 server-side — otherwise an order could be placed that nobody ever pays for.
 
 **PS-8.17 ★ — Handing over settles the payment**
-Collect a pay-at-store order at `/pos/pickups`.
+Collect a pay-at-store order at `/pos/orders`.
 **Expect:** payment_status flips pending → paid. An order already paid online is
 untouched, and a failed payment is not marked paid by a hand-over.
 
@@ -923,7 +923,7 @@ contradicted itself one screen later. Set it to 2 days and the same page quotes
 the date instead.
 
 **PS-8.24 ★ — "Ready to collect" says WHERE**
-Mark an order ready at `/pos/pickups` and read the customer's email.
+Mark an order ready at `/pos/orders` and read the customer's email.
 **Expect:** the shop's **name and full address** are filled in. This is the one
 message in the flow whose whole job is an address — and because the fact list
 is generated from the variable catalog, an emitter that supplies neither
@@ -1324,7 +1324,7 @@ shops" on, plus the location's **Accept returns** capability (Locations). Sign
 in at `/pos` as a manager.
 
 **PS-15.1 ★ — An online order is FOUND at all**
-`/pos/returns`, search the online order's reference.
+`/pos/orders`, search the online order's reference.
 **Expect:** it appears, tagged "Bought elsewhere". Before this step the till
 filtered by its own location and could never see one.
 
@@ -1488,7 +1488,7 @@ pinned by a regression test, but re-run them by hand after any change to
 
 **PS-18.1 — The same line, named twice, in one request**
 Post a return with `lines: [{A,1},{A,1},{A,1}]` on a one-unit line — from the
-storefront form's action AND from `/pos/returns`.
+storefront form's action AND from the till (`/pos/orders` → Take return).
 **Expect:** one return item, quantity 1, one line's money.
 **Was:** three items and 3× the money, in a single call. No race needed.
 
@@ -1531,6 +1531,80 @@ Submit a return photo at `https://storage.googleapis.com/not-our-bucket/x.svg`.
 **Expect:** dropped.
 **Was:** stored and rendered in the merchant's dashboard.
 
+## 10j. The register shell — one navigation, one counter (CODEBASE §22 "the shell")
+
+Nothing here changes permissions, money or stock. These stories exist because
+the previous navigation was per-screen, and per-screen is exactly how the idle
+lock came to be missing from five of seven screens.
+
+**PS-19.1 ★★ — Every screen has the same way out**
+Sign in and visit `/pos/sell`, `/pos/orders`, `/pos/sales`, `/pos/inventory`
+and `/pos/shift`.
+**Expect:** each shows the same navigation — a 76px rail above `lg`, a
+hamburger below it — with the current screen marked. No screen has a
+hand-rolled back arrow, and none paints its own page background.
+**Was:** `/pos/sell` had four links buried in a ten-item header that hid every
+label below `sm`; the other four had a back arrow to `/pos` in three different
+forms; three painted `bg-neutral-950` over the shell's `bg-[#0b0f14]`.
+
+**PS-19.2 ★ — Stock to the drawer is one tap**
+From `/pos/inventory`, go to the cash drawer.
+**Expect:** one tap.
+**Was:** three — back to `/pos`, then Cash drawer, via a page whose entire
+content was "You're signed in".
+
+**PS-19.3 ★★ — Collections are reachable when the queue is EMPTY**
+With nothing waiting to collect, open Collections.
+**Expect:** `/pos/orders` opens and says nothing is waiting.
+**Was:** unreachable. The only link was a `/pos` tile that rendered when the
+queue was non-empty, so a manager could not open it to mark the box in their
+hands as ready.
+
+**PS-19.4 ★★ — One box finds both kinds of visit**
+At `/pos/orders`, search an order reference that matches both a waiting
+collection and past orders.
+**Expect:** the collection appears with `Take payment`/`Hand over`, and past
+orders appear with `Take return` — from ONE query, in one list, with "Bought
+elsewhere" still flagged.
+**Was:** two screens. `/pos/pickups` could not find a past order and
+`/pos/returns` could not find a collection, so a cashier had to know which kind
+of visit it was before they knew which order it was.
+
+**PS-19.5 — A scanned collection code still short-circuits**
+Scan a collection code into that same box.
+**Expect:** it resolves that one order directly, and a code belonging to a
+sister branch still names THAT branch rather than returning "not found".
+
+**PS-19.6 ★ — The rail shows only what the role may open**
+Sign in as a cashier.
+**Expect:** Sell, Orders, Sales, Drawer — no Stock (`adjust_inventory`).
+Orders IS present: handing a collection over is a cashier's job with the
+customer standing there. On a collection row they see `Hand over` but not
+`Mark ready` (`fulfil_pickup`), and no `Take return` (`refund`).
+**Why it matters:** gating the Orders door on the strongest action on the
+screen would hide the queue from the person who works it.
+
+**PS-19.7 — Opening the till opens the till**
+Go to `/pos`.
+**Expect:** `/pos/sell`. On a browser that is not an authorized device, the
+device-authorization prompt instead.
+**Was:** "You're signed in" over a stack of link pills, every shift.
+
+**PS-19.8 — The old addresses still work**
+Open `/pos/pickups` and `/pos/returns`.
+**Expect:** both 307 to `/pos/orders`. `/pos/returns/<id>` still opens the
+return detail, and Orders stays lit in the rail while it is open.
+
+**PS-19.9 — The badge agrees with the list**
+Note the number on Orders in the rail, then open it.
+**Expect:** the same count of waiting collections. With the database
+unreachable the badge is absent rather than the screen failing.
+
+**PS-19.10 — The refund bar is inside the content column**
+Open a return detail on a wide screen.
+**Expect:** the "Refund ₹…" bar starts to the right of the rail.
+**Was:** `fixed inset-x-0`, so it ran underneath it.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -1544,6 +1618,10 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                     |
 | ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second |
 | ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                               |
+| ~~**Collections were unreachable with an empty queue**~~           | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                  |
+| ~~**Two search screens for one counter moment**~~                  | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/orders`, old paths 307                                                                                                                 |
+| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The rail/drawer is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                         |
+| **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                               |
 | **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
 | ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
 | **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |

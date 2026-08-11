@@ -8,27 +8,20 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Loader2,
-  MapPin,
-  LogOut,
   Search,
   Trash2,
   Plus,
   Minus,
   X,
-  ScanLine,
   Camera,
   Package,
   Database,
   UserPlus,
   UserRound,
   LayoutGrid,
-  Banknote,
-  Boxes,
-  Receipt,
 } from "lucide-react";
 import {
   lookupProducts,
@@ -40,8 +33,8 @@ import {
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
 import { CustomerPanel } from "./customer-panel";
-import { posLock } from "@/app/actions/pos-auth-actions";
-import { endSession } from "@/lib/auth/firebase-client";
+// posLock/endSession moved to the rail (app/pos/pos-nav.tsx) — locking is the
+// same act on every screen, and it was hand-rolled identically in two places.
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
 import {
   createKeyboardWedge,
@@ -447,106 +440,57 @@ export function SellClient({
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {/* The idle lock is mounted once in app/pos/layout.tsx, so it covers every
           POS screen rather than the two that remembered to ask for it. The
-          exemption rule (superadmin only) moved there with it. */}
-      <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5">
-        <div className="flex items-center gap-2 font-semibold">
-          <ScanLine className="h-5 w-5" strokeWidth={2} />
-          Register
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          {/* Cache state, deliberately quiet. A cashier only needs it when
-              something looks wrong — hence the click-to-refresh. */}
+          exemption rule (superadmin only) moved there with it.
+
+          ★ THIS HEADER CARRIES ONLY WHAT BELONGS TO THE REGISTER. It used to
+          hold ten things: four links to other screens, the location, the
+          operator, Lock, and these three. Below `sm` every label was hidden, so
+          it degraded into a row of anonymous icons — which is what made the
+          till confusing to look at. Navigation, location, operator and Lock all
+          live in the rail now (app/pos/pos-nav.tsx), where they are the same on
+          every screen; what is left is the state of THIS screen. */}
+      <header className="flex h-11 shrink-0 items-center justify-end gap-3 border-b border-white/10 px-3 text-sm">
+        {/* Cache state, deliberately quiet. A cashier only needs it when
+            something looks wrong — hence the click-to-refresh. */}
+        <button
+          type="button"
+          onClick={catalog.resync}
+          disabled={catalog.syncing}
+          title={
+            catalog.ready
+              ? `${catalog.count} products cached on this device. Click to refresh.`
+              : "Loading the catalog…"
+          }
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-white/40 transition-colors hover:bg-white/10 hover:text-white/70 disabled:opacity-60"
+        >
+          {catalog.syncing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Database className="h-3.5 w-3.5" strokeWidth={2} />
+          )}
+          {catalog.ready ? catalog.count : "…"}
+        </button>
+        {/* "12 of 20" — a manager can see at a glance that eight products
+            are reachable only by search or scan. Hidden until configured,
+            since "20 of 20" is noise. */}
+        {coverage.configured && (
+          <span className="hidden text-white/40 sm:inline">
+            {coverage.shown} of {coverage.total} products
+          </span>
+        )}
+        {canEditLayout && (
           <button
             type="button"
-            onClick={catalog.resync}
-            disabled={catalog.syncing}
-            title={
-              catalog.ready
-                ? `${catalog.count} products cached on this device. Click to refresh.`
-                : "Loading the catalog…"
-            }
-            className="hidden items-center gap-1.5 rounded-lg px-2 py-1 text-white/40 transition-colors hover:bg-white/10 hover:text-white/70 disabled:opacity-60 sm:inline-flex"
+            onClick={() => setLayoutOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
           >
-            {catalog.syncing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Database className="h-3.5 w-3.5" strokeWidth={2} />
-            )}
-            {catalog.ready ? catalog.count : "…"}
+            <LayoutGrid className="h-4 w-4" strokeWidth={2} />
+            Edit layout
           </button>
-          {/* "12 of 20" — a manager can see at a glance that eight products
-              are reachable only by search or scan. Hidden until configured,
-              since "20 of 20" is noise. */}
-          {coverage.configured && (
-            <span className="hidden text-white/40 sm:inline">
-              {coverage.shown} of {coverage.total} products
-            </span>
-          )}
-          {canEditLayout && (
-            <button
-              type="button"
-              onClick={() => setLayoutOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
-            >
-              <LayoutGrid className="h-4 w-4" strokeWidth={2} />
-              <span className="hidden sm:inline">Edit layout</span>
-            </button>
-          )}
-          {/* Reachable mid-queue, not just from the home screen: the customer
-              asking for their bill again is standing at the counter now. Any
-              operator who can sell can reprint. */}
-          <Link
-            href="/pos/sales"
-            title="Find a sale and reprint its receipt"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
-          >
-            <Receipt className="h-4 w-4" strokeWidth={2} />
-            <span className="hidden sm:inline">Sales</span>
-          </Link>
-          {canEditLayout && (
-            <Link
-              href="/pos/inventory"
-              title="Stock at this location"
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
-            >
-              <Boxes className="h-4 w-4" strokeWidth={2} />
-              <span className="hidden sm:inline">Stock</span>
-            </Link>
-          )}
-          <Link
-            href="/pos/shift"
-            title="Cash drawer"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
-          >
-            <Banknote className="h-4 w-4" strokeWidth={2} />
-            <span className="hidden sm:inline">Drawer</span>
-          </Link>
-          <span className="flex items-center gap-1.5 text-white/70">
-            <MapPin className="h-4 w-4" strokeWidth={2} />
-            {config.locationName}
-          </span>
-          <span className="rounded-full bg-white/10 px-3 py-1">
-            {config.operatorName}
-          </span>
-          <button
-            type="button"
-            onClick={async () => {
-              await posLock();
-              // Also sign the Firebase SDK out locally, so nothing can re-mint
-              // a session for the person who just walked away.
-              await endSession();
-              router.replace("/pos/login");
-              router.refresh();
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
-          >
-            <LogOut className="h-4 w-4" strokeWidth={2} />
-            Lock
-          </button>
-        </div>
+        )}
       </header>
 
       <div className="flex min-h-0 flex-1">

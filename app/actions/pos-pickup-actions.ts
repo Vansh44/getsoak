@@ -414,7 +414,7 @@ export async function markCollected(
     payload: { pickupLocation: claimed.location_name ?? "" },
   });
 
-  revalidatePath("/pos/pickups");
+  revalidatePath("/pos/orders");
   return { success: true, changeDue: change };
 }
 
@@ -489,7 +489,7 @@ export async function markReadyForPickup(
     return { error: dbErrorMessage(err, "Couldn't update the order.") };
   }
 
-  revalidatePath("/pos/pickups");
+  revalidatePath("/pos/orders");
   return { success: true };
 }
 

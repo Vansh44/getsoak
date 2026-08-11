@@ -9,11 +9,9 @@
 // into it.
 
 import { useState, useTransition } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowDownToLine,
-  ArrowLeft,
   ArrowUpFromLine,
   Banknote,
   Loader2,
@@ -29,6 +27,7 @@ import {
   type ShiftReport,
 } from "@/app/actions/pos-shift-actions";
 import type { CashMovementType } from "@/lib/pos/shifts";
+import { PosScreen } from "../pos-screen";
 
 // The sign goes BEFORE the symbol: "₹-45.00" reads like a currency called
 // "₹-", and a variance is the one figure here people scan for a minus.
@@ -489,27 +488,13 @@ function Shell({
   locationName: string;
   children: React.ReactNode;
 }) {
+  // The drawer is a detour from selling, so the way back has to be obvious —
+  // this screen had no exit at all on first build, then grew a "Back to
+  // register" button. The rail is that exit now, on every screen and without
+  // each one having to remember to draw one.
   return (
-    <div className="mx-auto w-full max-w-2xl p-4">
-      {/* The drawer is a detour from selling, so the way back has to be
-          obvious — this screen had no exit at all on first build. */}
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Banknote className="h-5 w-5 shrink-0" strokeWidth={2} />
-          <h1 className="truncate text-lg font-semibold">Cash drawer</h1>
-          <span className="truncate text-sm text-white/50">
-            · {locationName}
-          </span>
-        </div>
-        <Link
-          href="/pos/sell"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-white/20"
-        >
-          <ArrowLeft className="h-4 w-4" strokeWidth={2} />
-          Back to register
-        </Link>
-      </div>
+    <PosScreen title="Cash drawer" subtitle={locationName} width="narrow">
       {children}
-    </div>
+    </PosScreen>
   );
 }
