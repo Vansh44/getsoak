@@ -99,6 +99,7 @@ import { updateAuthUser } from "@/lib/auth/firebase-users";
 import {
   authorizeThisDevice,
   createPairingCode,
+  replaceDevice,
   revokeDevice,
   pairDevice,
   posLoginWithPin,
@@ -163,10 +164,17 @@ describe("authorizeThisDevice", () => {
   });
 
   // Bounds the blast radius of a leaked pairing code (Pro allows 5/location).
-  it("refuses once the location is at its device cap", async () => {
-    dbHolder.current = makeDbMock({ selectQueue: capSelects(5) });
+  //
+  // The cap still REFUSES — nothing is authorized — but on this path it now
+  // surfaces as the replace picker rather than a dead-end error, so the owner
+  // can swap a device from the till in front of them. The flat-error contract
+  // is still asserted for `pairDevice`, which must never be offered the choice.
+  it("authorizes nothing once the location is at its device cap", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [...capSelects(5), []] });
     const r = await authorizeThisDevice("loc-1");
-    expect(r.error).toMatch(/already has 5 authorized devices/i);
+    expect(r.success).toBeUndefined();
+    expect(r.atCapacity?.cap).toBe(5);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
     expect(H.jar.set).not.toHaveBeenCalled();
   });
 
@@ -220,6 +228,147 @@ describe("createPairingCode", () => {
     const r = await createPairingCode("loc-1");
     expect(r.error).toMatch(/already has 5 authorized devices/i);
     expect(r.code).toBeUndefined();
+  });
+});
+
+// ★ Replacing a device at a full location: the owner picks one to retire and
+// this browser takes its place, instead of walking back to the dashboard.
+//
+// The alternative — auto-retiring the least recently used device — was refused.
+// Two reasons, both pinned below: a pairing code must never be able to trigger
+// it (possession of a code is not ownership of the shop), and an eviction the
+// owner did not choose can end a till with a customer at the counter.
+describe("replacing a device at a full location", () => {
+  const FULL_DEVICES = [
+    {
+      id: "d-old",
+      label: "Back office",
+      last_seen_at: null,
+      authorized_by: "a@b.c",
+      created_at: "2026-07-01T00:00:00.000Z",
+    },
+    {
+      id: "d-busy",
+      label: "Counter 1",
+      last_seen_at: "2026-08-12T00:00:00.000Z",
+      authorized_by: "a@b.c",
+      created_at: "2026-07-01T00:00:00.000Z",
+    },
+  ];
+
+  describe("authorizeThisDevice at the cap", () => {
+    it("offers the devices to replace instead of a dead end", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [...capSelects(5), FULL_DEVICES],
+      });
+      const r = await authorizeThisDevice("loc-1");
+      expect(r.atCapacity?.cap).toBe(5);
+      expect(r.atCapacity?.devices.map((d) => d.id)).toEqual([
+        "d-old",
+        "d-busy",
+      ]);
+      // Nothing is authorized yet — the owner still has to choose.
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+      expect(H.jar.set).not.toHaveBeenCalled();
+    });
+
+    it("reports it as a QUESTION, not an error", async () => {
+      // The client renders a picker off `atCapacity`; an `error` alongside it
+      // would put a failure toast next to the thing asking you to choose.
+      dbHolder.current = makeDbMock({
+        selectQueue: [...capSelects(5), FULL_DEVICES],
+      });
+      const r = await authorizeThisDevice("loc-1");
+      expect(r.error).toBeUndefined();
+      expect(r.success).toBeUndefined();
+    });
+
+    it("still authorizes normally when there is room", async () => {
+      dbHolder.current = makeDbMock({ selectQueue: capSelects(4) });
+      const r = await authorizeThisDevice("loc-1");
+      expect(r.success).toBe(true);
+      expect(r.atCapacity).toBeUndefined();
+    });
+  });
+
+  // ★★ THE SECURITY BOUNDARY. registerDevice is the choke point both paths run
+  // through, so the capacity check had to live in authorizeThisDevice rather
+  // than inside it — otherwise redeeming a leaked code would return the shop's
+  // device inventory and the power to retire a working till.
+  it("NEVER offers the picker to a pairing code", async () => {
+    dbHolder.current = makeDbMock({
+      returning: [{ location_id: "loc-1" }],
+      selectQueue: capSelects(5),
+    });
+    const r = (await pairDevice("ABCD2345")) as Record<string, unknown>;
+    expect(r.atCapacity).toBeUndefined();
+    expect(r.error).toMatch(/already has 5 authorized devices/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  describe("replaceDevice", () => {
+    it("refuses a DELEGATED dashboard admin", async () => {
+      // It ends in a GRANT, so it takes the grant gate — not revokeDevice's
+      // wider one. Otherwise spending a slot would be a way around
+      // authorize_device being SUPERADMIN_ONLY.
+      vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
+      dbHolder.current = makeDbMock();
+      const r = await replaceDevice("d-old", "loc-1");
+      expect(r.error).toMatch(/only the store owner/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+    });
+
+    it("retires the chosen device and authorizes this browser", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "d-old" }],
+        selectQueue: capSelects(4),
+      });
+      const r = await replaceDevice("d-old", "loc-1");
+      expect(r.success).toBe(true);
+      // Marked as a replacement, not a bare revoke — the dashboard says so.
+      expect(dbHolder.current.calls.set[0]).toMatchObject({
+        revokedReason: "replaced",
+      });
+      expect(dbHolder.current.calls.insert).toHaveLength(1);
+      expect(H.jar.set).toHaveBeenCalled();
+      const token = H.store.get(POS_DEVICE_COOKIE);
+      expect(verifyDeviceToken(token)?.locationId).toBe("loc-1");
+    });
+
+    it("does nothing when the device is already gone", async () => {
+      // The revoke is conditional on the device still being active AT this
+      // location. A second click, or one someone else revoked meanwhile,
+      // matches zero rows — which must NOT free a slot a different device then
+      // takes, or you retire two tills to add one.
+      dbHolder.current = makeDbMock({
+        returning: [],
+        selectQueue: capSelects(4),
+      });
+      const r = await replaceDevice("d-old", "loc-1");
+      expect(r.error).toMatch(/no longer authorized/i);
+      expect(dbHolder.current.calls.insert).toHaveLength(0);
+      expect(H.jar.set).not.toHaveBeenCalled();
+    });
+
+    it("rejects a location that isn't this store's", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ id: "d-old" }] });
+      const r = await replaceDevice("d-old", "loc-elsewhere");
+      expect(r.error).toMatch(/pick a location/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
+    });
+
+    it("says the slot is free when authorizing fails after the retire", async () => {
+      // The revoke has already committed by then. A bare failure would leave
+      // the owner unable to tell whether their old till still works.
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "d-old" }],
+        selectQueue: capSelects(5), // still full → registerDevice refuses
+      });
+      const r = await replaceDevice("d-old", "loc-1");
+      expect(r.error).toMatch(/already retired/i);
+      expect(r.error).toMatch(/free slot/i);
+    });
   });
 });
 

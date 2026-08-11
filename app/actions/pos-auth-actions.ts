@@ -133,18 +133,33 @@ async function deviceCapReached(
   return { reached: (rows[0]?.n ?? 0) >= cap, cap };
 }
 
+interface RegisterOutcome extends ActionResult {
+  /**
+   * The location was full, and this is the cap — a MARKER for the caller, not a
+   * second decision. registerDevice stays the one place the cap is enforced;
+   * callers only choose how to REPORT it, and they differ: the superadmin path
+   * offers a device to replace, the pairing-code path must not.
+   *
+   * Doing that check in the caller instead would run `deviceCapReached` twice
+   * on the common path — four queries where two will do, and at ~46 ms each
+   * over the Cloud SQL proxy that is not free.
+   */
+  capReached?: number;
+}
+
 // Create a pos_devices row + set the signed pos_device cookie on THIS browser.
 async function registerDevice(
   storeId: string,
   locationId: string,
   actor: string | null,
-): Promise<ActionResult> {
+): Promise<RegisterOutcome> {
   // Enforced HERE — the single choke point both authorization paths funnel
   // through, so a pairing code can't be used to exceed the cap either.
   const { reached, cap } = await deviceCapReached(storeId, locationId);
   if (reached) {
     return {
       error: `This location already has ${cap} authorized devices. Revoke one in Dashboard → POS → Devices before adding another.`,
+      capReached: cap,
     };
   }
 
@@ -218,9 +233,73 @@ async function superadminIdentity(): Promise<UserIdentity | null> {
   return (await isStoreSuperadmin()) ? admin : null;
 }
 
+/** One authorized device, as offered for replacement when a location is full. */
+export interface ReplaceableDevice {
+  id: string;
+  label: string;
+  /** Genuinely "last used" now — see the note on LAST_SEEN_THROTTLE_MS in
+   *  lib/pos/devices.ts for why this used to be the authorization date. */
+  lastSeenAt: string | null;
+  authorizedBy: string | null;
+  createdAt: string;
+}
+
+export interface AuthorizeResult extends ActionResult {
+  /**
+   * The location is full. Carries the devices the owner may replace, so they
+   * can swap one from the till in front of them instead of walking back to the
+   * dashboard to revoke and returning.
+   *
+   * ★ `error` is deliberately UNSET here. This is not a failure to report — it
+   * is a question to answer, and a toast next to the picker would read as one.
+   */
+  atCapacity?: { cap: number; devices: ReplaceableDevice[] };
+}
+
+/** Active devices at a location, newest-used first. Local, not exported: every
+ *  export of a "use server" file is a public endpoint, and a store's device
+ *  inventory is not something to hand out on request. */
+async function devicesAtLocation(
+  storeId: string,
+  locationId: string,
+): Promise<ReplaceableDevice[]> {
+  const rows = await withService((db) =>
+    db
+      .select({
+        id: posDevices.id,
+        label: posDevices.label,
+        last_seen_at: posDevices.lastSeenAt,
+        authorized_by: posDevices.authorizedBy,
+        created_at: posDevices.createdAt,
+      })
+      .from(posDevices)
+      .where(
+        and(
+          eq(posDevices.storeId, storeId),
+          eq(posDevices.locationId, locationId),
+          isNull(posDevices.revokedAt),
+        ),
+      )
+      // Least recently used LAST is wrong here: the owner is choosing, and the
+      // one they want to retire is the one nobody has touched. Oldest first puts
+      // it at the top. NULLS FIRST — a device with no last_seen_at has not been
+      // used since the column started being maintained, so it is the safest
+      // candidate, not the least informative one.
+      .orderBy(sql`${posDevices.lastSeenAt} asc nulls first`),
+  ).catch(() => []);
+
+  return rows.map((r) => ({
+    id: r.id,
+    label: r.label ?? "",
+    lastSeenAt: r.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+    authorizedBy: r.authorized_by,
+    createdAt: new Date(r.created_at).toISOString(),
+  }));
+}
+
 export async function authorizeThisDevice(
   locationId: string,
-): Promise<ActionResult> {
+): Promise<AuthorizeResult> {
   const admin = await superadminIdentity();
   if (!admin) return { error: NOT_OWNER_ERROR };
   const storeId = await getCurrentStoreId();
@@ -229,7 +308,122 @@ export async function authorizeThisDevice(
   if (!locations.some((l) => l.id === locationId)) {
     return { error: "Pick a location." };
   }
-  return registerDevice(storeId, locationId, admin.email ?? admin.uid);
+
+  const res = await registerDevice(
+    storeId,
+    locationId,
+    admin.email ?? admin.uid,
+  );
+
+  // ★★ THE PICKER IS OFFERED ON THIS PATH ONLY. `pairDevice` runs through the
+  // same registerDevice and reads only `.error`: whoever holds a code has proved
+  // possession of a code, not ownership of the shop, so neither the store's
+  // device inventory nor the power to retire a working till belongs to them.
+  //
+  // Reading the marker rather than re-checking the cap here keeps registerDevice
+  // the single enforcement point AND avoids running deviceCapReached twice on
+  // the ordinary path — the list is only fetched once the cap has refused.
+  if (res.capReached) {
+    return {
+      atCapacity: {
+        cap: res.capReached,
+        devices: await devicesAtLocation(storeId, locationId),
+      },
+    };
+  }
+  return { success: res.success, error: res.error };
+}
+
+/**
+ * Retire one authorized device and authorize THIS browser in its place.
+ *
+ * ★ THE SAME GATE AS AUTHORIZING, NOT AS REVOKING. Revocation alone is
+ * deliberately the wider `getManagerIdentity("pos")` gate, because it can only
+ * ever reduce what a browser may do. This ends in a GRANT, so it takes the
+ * narrower one — otherwise it would be a way for a delegated admin to authorize
+ * a device by spending a slot, routing around `authorize_device` being
+ * SUPERADMIN_ONLY.
+ *
+ * ★ AND IT IS NEVER SILENT. The alternative considered was auto-retiring the
+ * least recently used device whenever the cap was hit. It reads as convenient
+ * and is not: the evicted till may have a customer at the counter and an open
+ * cash drawer, and nobody would be told. The owner picks, and sees what they
+ * are ending.
+ */
+export async function replaceDevice(
+  deviceId: string,
+  locationId: string,
+): Promise<ActionResult> {
+  const admin = await superadminIdentity();
+  if (!admin) return { error: NOT_OWNER_ERROR };
+  const storeId = await getCurrentStoreId();
+  if (typeof deviceId !== "string" || !deviceId) {
+    return { error: "Pick a device to replace." };
+  }
+
+  const locations = await getStoreLocations(storeId);
+  if (!locations.some((l) => l.id === locationId)) {
+    return { error: "Pick a location." };
+  }
+
+  // CONDITIONAL, and it must match this store, this location and a device that
+  // is still active. `.returning()` is what makes it safe: a second click, or a
+  // device someone else revoked in the meantime, matches zero rows and is told
+  // so — rather than silently freeing a slot that a DIFFERENT device then took,
+  // which is how you retire two tills to add one.
+  let revoked: { id: string } | undefined;
+  try {
+    const rows = await withService((db) =>
+      db
+        .update(posDevices)
+        .set({
+          revokedAt: new Date().toISOString(),
+          revokedReason: "replaced",
+          revokedBy: admin.email ?? admin.uid,
+        })
+        .where(
+          and(
+            eq(posDevices.id, deviceId),
+            eq(posDevices.storeId, storeId),
+            eq(posDevices.locationId, locationId),
+            isNull(posDevices.revokedAt),
+          ),
+        )
+        .returning({ id: posDevices.id }),
+    );
+    revoked = rows[0];
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't replace that device.") };
+  }
+  if (!revoked) {
+    return {
+      error: "That device is no longer authorized. Reload and try again.",
+    };
+  }
+
+  await posAudit({
+    storeId,
+    event: "device_revoked",
+    deviceId,
+    locationId,
+    actor: admin.email ?? admin.uid,
+    detail: "Replaced by a newly authorized device at this location.",
+  });
+
+  const res = await registerDevice(
+    storeId,
+    locationId,
+    admin.email ?? admin.uid,
+  );
+  if (res.error) {
+    // The slot is already free, so say that plainly. Without it the owner reads
+    // a bare failure and cannot tell whether the old till is still working.
+    return {
+      error: `${res.error} The previous device was already retired, so there is now a free slot — try again.`,
+    };
+  }
+  revalidatePath("/dashboard/pos/devices");
+  return { success: res.success };
 }
 
 // ---- Admin: pairing codes & devices ---------------------------------------
@@ -488,11 +682,13 @@ export async function pairDevice(
     "pairing_code",
   );
   if (res.error) {
+    // `capReached` is deliberately NOT forwarded — see authorizeThisDevice for
+    // why the replace option never reaches the pairing-code path.
     return {
       error: `${res.error} This code has now been used — generate a new one after freeing a slot.`,
     };
   }
-  return res;
+  return { success: res.success };
 }
 
 // ---- Staff: PIN login on an authorized device -----------------------------

@@ -42,6 +42,9 @@ const EVENT_META: Record<
 const REVOKED_REASON: Record<string, string> = {
   clone_detected: "Revoked automatically — a copied credential was detected",
   revoked_by_admin: "Revoked from the dashboard",
+  // Without this the row falls through to a bare "Revoked", which for a device
+  // the owner deliberately swapped out reads like something went wrong.
+  replaced: "Replaced by another device at this location",
 };
 
 const TONE_CLS: Record<string, string> = {
