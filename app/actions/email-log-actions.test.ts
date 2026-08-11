@@ -61,9 +61,10 @@ const LOG = {
   createdAt: "2026-08-01T00:00:00Z",
 };
 
-function allow(can = true) {
+function allow(can = true, isPlatformAdmin = false) {
   vi.mocked(getViewerAccess).mockResolvedValue({
     can: vi.fn(() => can),
+    isPlatformAdmin,
   } as any);
 }
 
@@ -133,6 +134,7 @@ describe("email-log-actions", () => {
     it("scopes to PLATFORM rows on the platform host", async () => {
       // storemink.com must show store_id IS NULL, not the fallback store's mail.
       headerHolder.host = "storemink.com";
+      allow(true, true);
       dbHolder.current = makeDbMock({ selectQueue: logQueues([], 0) });
 
       await getEmailLogs();
@@ -141,6 +143,17 @@ describe("email-log-actions", () => {
       expect(sqlParamValues(dbHolder.current.calls.where[0])).not.toContain(
         "store-1",
       );
+    });
+
+    it("refuses platform rows to a non-operator even with store activity access", async () => {
+      headerHolder.host = "storemink.com";
+      allow(true, false);
+
+      const result = await getEmailLogs();
+
+      expect(result.error).toMatch(/only StoreMink operators/i);
+      expect(result.rows).toEqual([]);
+      expect(dbHolder.current.calls.where).toHaveLength(0);
     });
 
     it("returns zero counts when the tally queries yield no rows", async () => {
@@ -345,6 +358,7 @@ describe("email-log-actions", () => {
       // `host` would scope every console to the proxy's own hostname.
       headerHolder.forwardedHost = "storemink.com";
       headerHolder.host = "acme.storemink.com";
+      allow(true, true);
       dbHolder.current = makeDbMock({ selectQueue: logQueues([], 0) });
 
       await getEmailLogs();
@@ -357,6 +371,7 @@ describe("email-log-actions", () => {
       // NULL — it shows nothing rather than defaulting into some store's mail.
       headerHolder.host = null;
       headerHolder.forwardedHost = null;
+      allow(true, true);
       dbHolder.current = makeDbMock({ selectQueue: logQueues([], 0) });
 
       await getEmailLogs();
@@ -430,11 +445,23 @@ describe("email-log-actions", () => {
 
     it("scopes to platform rows on the platform host", async () => {
       headerHolder.host = "storemink.com";
+      allow(true, true);
       dbHolder.current = makeDbMock({ selectQueue: [[]] });
 
       await getEmailLog("log-1");
 
       expect(getCurrentStoreId).not.toHaveBeenCalled();
+    });
+
+    it("refuses a platform detail to a non-operator", async () => {
+      headerHolder.host = "storemink.com";
+      allow(true, false);
+
+      const result = await getEmailLog("log-1");
+
+      expect(result.error).toMatch(/only StoreMink operators/i);
+      expect(result.log).toBeUndefined();
+      expect(dbHolder.current.calls.where).toHaveLength(0);
     });
 
     it("returns a friendly error instead of throwing when the read fails", async () => {

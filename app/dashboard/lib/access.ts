@@ -231,6 +231,8 @@ export interface ViewerAccess {
   email: string;
   roleSlug: string;
   isSuperadmin: boolean;
+  /** Platform allowlist membership, independently of store permissions. */
+  isPlatformAdmin: boolean;
   permissions: RolePermissions;
   can: (section: string, action: PermissionAction) => boolean;
 }
@@ -257,6 +259,7 @@ export async function getViewerAccess(): Promise<ViewerAccess | null> {
     email: ctx.profile.email,
     roleSlug,
     isSuperadmin: ctx.isSuperadmin,
+    isPlatformAdmin: ctx.isPlatformAdmin,
     permissions: ctx.permissions,
     can: (section, action) =>
       can(ctx.permissions, section, action, ctx.isSuperadmin),

@@ -37,9 +37,10 @@ export interface MailerDef {
   /** One line of "what is this", for the filter menu. */
   description: string;
   /**
-   * True when the message body or subject carries a CREDENTIAL — a one-time
-   * code, a password-reset link, an invite token. Those are redacted before the
-   * log row is written.
+   * True when policy requires the message body and subject to be redacted
+   * before the log row is written. Password-reset links and invite tokens are
+   * always sensitive; the catalog documents the owner's explicit exceptions
+   * for operator and merchant-signup OTPs.
    *
    * The reasoning: an email log is readable by store staff (and, for platform
    * rows, by operators). Storing a live sign-in code there turns a debugging
@@ -126,7 +127,11 @@ export const MAILERS: MailerDef[] = [
     label: "Signup verification code",
     description:
       "A six-digit code that verifies a new merchant's email address.",
-    sensitive: true,
+    // NOT redacted, by owner's decision (2026-08-12): signup codes must be
+    // available to platform operators for assisted and dummy-store creation.
+    // The email log actions independently require a platform-operator identity
+    // before returning platform-scoped rows. The code itself still expires
+    // after 10 minutes; password resets and staff invites remain redacted.
   },
   {
     key: "signup_test_otp",
@@ -135,9 +140,9 @@ export const MAILERS: MailerDef[] = [
       "A verification code for an RFC-reserved dummy address with no inbox.",
     // Platform-scoped and intentionally retained by the owner's decision
     // (2026-08-12): operators use this to complete dummy-store signups whose
-    // reserved test addresses have no inbox. Real-address signup_otp mail is
-    // sensitive and redacted; this type never appears in a merchant log and
-    // its code expires after 10 minutes.
+    // reserved test addresses have no inbox. Like real-address signup OTPs,
+    // this type never appears in a merchant log and its code expires after 10
+    // minutes.
   },
 ];
 

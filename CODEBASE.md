@@ -2999,10 +2999,12 @@ group, span}` (span = columns of the 4-wide desktop grid),
       console — but an operator can read another operator's live code. Flipping
       one flag reverses it; both behaviours are pinned by tests.
       The platform console exposes the platform scope at
-      `/dashboard/email-logs`; real-address `signup_otp` credentials are
-      redacted, while `signup_test_otp` is deliberately retained in full (owner
-      decision, 2026-08-12) so an operator can verify only an RFC-reserved dummy
-      address. Both are platform rows and never enter a merchant log.
+      `/dashboard/email-logs`; `signup_otp` and `signup_test_otp` are deliberately
+      retained in full (owner decision, 2026-08-12) so an operator can complete
+      assisted or dummy-store signup. Both are platform rows, never enter a
+      merchant log, and the read actions independently require platform-operator
+      membership before returning platform-scoped rows. Password-reset and
+      staff-invite credentials remain redacted.
     - **VALUES ARE FORMATTED FOR READING** (`lib/notifications/format.ts`, pure
       - tested). Every value used to reach the email as `String(value)`, so an
         order confirmation read "Total 281.4 / Currency INR / Payment method cod /

@@ -34,6 +34,13 @@ describe("mailer catalog", () => {
     expect(isSensitiveMailer("operator_otp")).toBe(false);
   });
 
+  // Owner's explicit decision (2026-08-12): signup verification codes are
+  // visible in the operator-only platform log for assisted store creation.
+  it("shows merchant signup codes to platform operators, by decision", () => {
+    expect(isSensitiveMailer("signup_otp")).toBe(false);
+    expect(isSensitiveMailer("signup_test_otp")).toBe(false);
+  });
+
   it("does not redact ordinary mail, which is the point of keeping bodies", () => {
     expect(isSensitiveMailer("notification")).toBe(false);
     expect(isSensitiveMailer("coupon_campaign")).toBe(false);

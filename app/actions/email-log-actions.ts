@@ -67,12 +67,15 @@ export interface EmailLogFilters {
  * getCurrentStoreId() alone, whose never-null fallback would show the WholeSip
  * store's mail on the platform console.
  */
-async function currentScope(): Promise<{ storeId: string | null }> {
+async function currentScope(): Promise<{
+  storeId: string | null;
+  platform: boolean;
+}> {
   const headersList = await headers();
   const host =
     headersList.get("x-forwarded-host") || headersList.get("host") || "";
-  if (isPlatformHost(host)) return { storeId: null };
-  return { storeId: await getCurrentStoreId() };
+  if (isPlatformHost(host)) return { storeId: null, platform: true };
+  return { storeId: await getCurrentStoreId(), platform: false };
 }
 
 function scopeFilter(storeId: string | null) {
@@ -104,7 +107,18 @@ export async function getEmailLogs(
     };
   }
 
-  const { storeId } = await currentScope();
+  const { storeId, platform } = await currentScope();
+  // Platform rows include live signup/operator codes. Page-level protection is
+  // not enough: Server Actions are independently reachable POST endpoints.
+  if (platform && !access.isPlatformAdmin) {
+    return {
+      rows: [],
+      total: 0,
+      pageSize: PAGE_SIZE,
+      counts: {},
+      error: "Only StoreMink operators can view platform email logs.",
+    };
+  }
   const page = Math.max(1, filters.page ?? 1);
 
   // Validate every filter against a fixed list rather than trusting the query
@@ -215,9 +229,9 @@ export interface EmailLogDetail extends EmailLogRow {
 /**
  * One logged email, including its rendered body.
  *
- * The body is NULL for sensitive mailers — an OTP or invite carries a live
- * credential, so lib/email/send.ts never stores it (see lib/email/mailers.ts).
- * The UI says so rather than showing an empty frame.
+ * The body is NULL for redacted mailers such as password resets and invites,
+ * or when it exceeds the logging size cap. Signup OTPs are a documented,
+ * platform-operator-only exception (see lib/email/mailers.ts).
  */
 export async function getEmailLog(
   id: string,
@@ -228,7 +242,10 @@ export async function getEmailLog(
     return { error: "You don't have access to activity logs." };
   }
 
-  const { storeId } = await currentScope();
+  const { storeId, platform } = await currentScope();
+  if (platform && !access.isPlatformAdmin) {
+    return { error: "Only StoreMink operators can view platform email logs." };
+  }
 
   try {
     // The store filter IS the tenancy boundary here: email_logs is service-role

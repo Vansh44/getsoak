@@ -185,7 +185,7 @@ describe("sendEmail", () => {
     expect(row.storeId).toBeNull();
   });
 
-  it("redacts a real-address signup code", async () => {
+  it("stores a real-address signup code for operator verification", async () => {
     await sendEmail({
       ...base,
       storeId: null,
@@ -196,8 +196,8 @@ describe("sendEmail", () => {
 
     expect(loggedRow()).toMatchObject({
       storeId: null,
-      subject: REDACTED,
-      bodyHtml: null,
+      subject: "739105 is your StoreMink verification code",
+      bodyHtml: "<p>739105</p>",
       mailer: "signup_otp",
     });
   });

@@ -192,8 +192,9 @@ async function writeLog(
     providerMessageId?: string | null;
   },
 ): Promise<void> {
-  // A credential must not outlive its own expiry inside a log table that store
-  // staff can read (see lib/email/mailers.ts). Everything a log is actually
+  // Sensitive credentials must not outlive their expiry inside a log table
+  // that store staff can read. The catalog owns the documented operator-only
+  // OTP exceptions (see lib/email/mailers.ts). Everything a log is actually
   // for — who, when, did it send — survives redaction untouched.
   const sensitive = isSensitiveMailer(input.mailer);
   const body = sensitive ? null : input.html;

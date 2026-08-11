@@ -85,10 +85,10 @@ export default async function PlatformDashboard({
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
-              href="/dashboard/email-logs?mailer=signup_test_otp&days=1"
+              href="/dashboard/email-logs?q=verification+code&days=1"
               className="inline-flex items-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
             >
-              Dummy signup codes <ArrowRight className="h-4 w-4" />
+              Signup codes <ArrowRight className="h-4 w-4" />
             </Link>
             <Link
               href="/dashboard/failures"
