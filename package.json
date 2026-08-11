@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "dev:lean": "NODE_OPTIONS=--max-old-space-size=3072 next dev --turbopack",
     "db:proxy": "cloud-sql-proxy --port 6543 --run-connection-test storemink-prod:asia-south1:storemink-prod-db",
     "dev:all": "concurrently -n proxy,next -c blue,green --kill-others-on-fail \"npm run db:proxy\" \"npm run dev\"",
+    "dev:all:lean": "concurrently -n proxy,next -c blue,green --kill-others-on-fail \"npm run db:proxy\" \"npm run dev:lean\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",

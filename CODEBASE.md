@@ -4598,9 +4598,23 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 
 ## 6. Commands
 
+> **Dev feels slow?** Read `docs/local-dev-performance.md` before tuning
+> anything. It is measured, and the answer is almost never the bundler:
+> compiles run 13 ms–1.5 s, while **every DB query costs ~46 ms** because
+> `db:proxy` points at a Cloud SQL instance in Mumbai — so a page render spends
+> 300–500 ms on network before React starts. The durable fix is a local
+> Postgres (not built; the doc says what it would take). On an 8 GB machine the
+> second cost is memory: the dev server grows to ~4.4 GB through a session and
+> `.next/dev` to ~4 GB, so `rm -rf .next` plus a restart is the ten-second fix.
+
 ```bash
 npm run dev         # next dev --turbopack (test stores via {slug}.localhost:3000)
+npm run dev:lean    # ↑ with --max-old-space-size=3072. OPT-IN, not the default:
+                    #   a heap cap trades CPU (more GC) for RAM, so it helps only
+                    #   where RAM is the binding constraint — making it default
+                    #   would slow every 16/32 GB machine to suit an 8 GB one.
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
+npm run dev:all:lean # ↑ dev:all, with the heap cap
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`
