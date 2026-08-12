@@ -38,6 +38,36 @@ export const GOOGLE_INDEXING_SETTINGS_KEYS = [
   GOOGLE_INDEXING_ERROR_KEY,
 ] as const;
 
+/**
+ * Google Site Verification's META method returns the complete HTML tag, while
+ * Next's Metadata API expects only the value for its `content` attribute.
+ * Accept a bare value too so old and new records share one rendering path.
+ */
+export function normalizeGoogleVerificationToken(
+  value: unknown,
+): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (!trimmed.includes("<")) {
+    return /[\s>"']/.test(trimmed) ? null : trimmed;
+  }
+
+  const meta = trimmed.match(/<meta\b[^>]*>/i)?.[0];
+  if (!meta) return null;
+  const attribute = (name: string): string | null => {
+    const match = meta.match(
+      new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"),
+    );
+    return (match?.[1] ?? match?.[2] ?? match?.[3] ?? "").trim() || null;
+  };
+  if (attribute("name")?.toLowerCase() !== "google-site-verification") {
+    return null;
+  }
+  return attribute("content");
+}
+
 type StoreIndexingRow = Store;
 
 export interface StoreIndexingResult {
@@ -159,9 +189,12 @@ export async function ensureGoogleCoverageForStore(
 
     // URL-prefix properties require a trailing slash and match one protocol.
     const property = `${origin}/`;
+    const rawVerificationToken = settings[GOOGLE_VERIFICATION_TOKEN_KEY];
+    const verificationToken =
+      normalizeGoogleVerificationToken(rawVerificationToken);
     const tokenMatchesDomain =
       settings[GOOGLE_VERIFICATION_DOMAIN_KEY] === origin &&
-      typeof settings[GOOGLE_VERIFICATION_TOKEN_KEY] === "string";
+      verificationToken !== null;
     if (
       tokenMatchesDomain &&
       typeof settings[GOOGLE_VERIFIED_AT_KEY] === "string" &&
@@ -173,9 +206,10 @@ export async function ensureGoogleCoverageForStore(
 
     if (!tokenMatchesDomain) {
       const requested = await requestGoogleSiteVerificationToken(property);
-      if (!requested.result.ok || !requested.token) {
+      const requestedToken = normalizeGoogleVerificationToken(requested.token);
+      if (!requested.result.ok || !requestedToken) {
         const error = requested.result.ok
-          ? "Site Verification returned no token"
+          ? "Site Verification returned an invalid META token"
           : requested.result.error;
         await patchIndexingSettings(storeId, {
           [GOOGLE_INDEXING_ATTEMPTED_AT_KEY]: attemptedAt,
@@ -187,11 +221,17 @@ export async function ensureGoogleCoverageForStore(
       // Persist before asking Google to verify: the storefront metadata reads
       // this value and emits <meta name="google-site-verification">.
       await patchIndexingSettings(storeId, {
-        [GOOGLE_VERIFICATION_TOKEN_KEY]: requested.token,
+        [GOOGLE_VERIFICATION_TOKEN_KEY]: requestedToken,
         [GOOGLE_VERIFICATION_DOMAIN_KEY]: origin,
         [GOOGLE_VERIFIED_AT_KEY]: null,
         [GOOGLE_INDEXING_ATTEMPTED_AT_KEY]: attemptedAt,
         [GOOGLE_INDEXING_ERROR_KEY]: null,
+      });
+    } else if (rawVerificationToken !== verificationToken) {
+      // Repair tokens saved by older releases, which persisted Google's full
+      // <meta> tag and caused Next to escape that tag inside content="...".
+      await patchIndexingSettings(storeId, {
+        [GOOGLE_VERIFICATION_TOKEN_KEY]: verificationToken,
       });
     }
 

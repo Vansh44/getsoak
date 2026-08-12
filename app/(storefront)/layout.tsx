@@ -19,7 +19,10 @@ import { getThemeDefinition } from "@/lib/themes";
 import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
-import { GOOGLE_VERIFICATION_TOKEN_KEY } from "@/lib/seo/store-indexing";
+import {
+  GOOGLE_VERIFICATION_TOKEN_KEY,
+  normalizeGoogleVerificationToken,
+} from "@/lib/seo/store-indexing";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 import "./storefront-theme.css";
 
@@ -42,7 +45,12 @@ export async function generateMetadata(): Promise<Metadata> {
   }
 
   const [brand, siteUrl] = await Promise.all([getStoreBrand(), getStoreUrl()]);
-  const googleVerification = store.settings?.[GOOGLE_VERIFICATION_TOKEN_KEY];
+  // The Site Verification API's META method returns a complete <meta> tag.
+  // Normalize legacy records as well as current bare-token records before
+  // handing the value to Next, whose API renders the tag itself.
+  const googleVerification = normalizeGoogleVerificationToken(
+    store.settings?.[GOOGLE_VERIFICATION_TOKEN_KEY],
+  );
   return {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
@@ -50,7 +58,7 @@ export async function generateMetadata(): Promise<Metadata> {
     icons: brand.logoUrl
       ? { icon: brand.logoUrl }
       : { icon: "/brand/storemink-mark.png" },
-    ...(typeof googleVerification === "string" && googleVerification
+    ...(googleVerification
       ? { verification: { google: googleVerification } }
       : {}),
   };

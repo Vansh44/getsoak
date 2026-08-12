@@ -4798,7 +4798,11 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
-  sitemap submission. Attempt/success/error timestamps are persisted;
+  sitemap submission. Google's META verification response is a complete HTML
+  tag, but Next metadata accepts only its `content` value; the pipeline
+  normalizes that value before storage and also repairs legacy full-tag values
+  so the tag cannot be escaped inside another tag. Attempt/success/error
+  timestamps are persisted;
   successful stores are refreshed at most weekly, failures retry daily and make
   the cron return 503 so Cloud Scheduler's three retries engage. Full setup and
   Google-controlled limitations: `docs/seo-indexing.md`.
