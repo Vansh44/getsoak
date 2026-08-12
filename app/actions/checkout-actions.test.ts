@@ -87,7 +87,7 @@ const validForm: CheckoutFormData = {
   firstName: "Ada",
   lastName: "Lovelace",
   email: "ada@example.com",
-  phone: "9999999999",
+  phone: "9876543210",
   addressLine1: "1 Analytical Engine Rd",
   city: "London",
   state: "England",
@@ -169,6 +169,15 @@ describe("placeOrder", () => {
   it("rejects when a required address field is missing", async () => {
     const result = await placeOrder({ ...validForm, city: "   " }, [oneItem()]);
     expect("error" in result && result.error).toMatch(/city is required/i);
+  });
+
+  it("rejects a phone number Shiprocket cannot deliver to", async () => {
+    const result = await placeOrder(
+      { ...validForm, phone: "+91 88888 88888" },
+      [oneItem()],
+    );
+    expect("error" in result && result.error).toMatch(/valid 10-digit/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("rejects when rate-limited", async () => {

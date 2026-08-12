@@ -1738,6 +1738,13 @@ Open the delivery order, confirm packed measurements, Book with Shiprocket.
 **Expect:** the Shiprocket order/shipment, AWB, courier, tracking URL and label
 are saved; order becomes Processing and fulfilment becomes In progress.
 
+**PS-SH.7a ★ — Bad delivery phones fail before the carrier and can be fixed**
+Try checkout with `8888888888`, then open a legacy pending delivery with that
+phone and no Shiprocket IDs. **Expect:** checkout refuses the placeholder; the
+drawer's Delivery card accepts a real Indian mobile, stores it as `+91` plus ten
+digits, and Retry booking succeeds. Once any Shiprocket order/shipment/AWB is
+stored, StoreMink refuses the edit and directs staff to Shiprocket.
+
 **PS-SH.8 ★★ — Retrying cannot create a second parcel**
 Make label generation fail after Shiprocket assigned the AWB, then retry Book.
 **Expect:** StoreMink retains the external shipment/AWB and resumes at the

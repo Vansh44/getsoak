@@ -41,6 +41,7 @@ import {
   shipmentStatusLabel,
   type ShipmentStatus,
 } from "@/lib/logistics/status";
+import { normalizeIndianMobile } from "@/lib/phone";
 
 export interface ParcelInput {
   weightGrams: number;
@@ -339,6 +340,13 @@ export async function bookShiprocketShipment(
       return {
         error: "Complete the customer's delivery address before booking.",
       };
+    const deliveryPhone = normalizeIndianMobile(field(address, "phone"));
+    if (!deliveryPhone) {
+      return {
+        error:
+          "Enter a valid 10-digit Indian delivery phone before booking with Shiprocket.",
+      };
+    }
 
     const fulfilmentId = await ensureFulfilmentOrder({
       storeId,
@@ -500,9 +508,7 @@ export async function bookShiprocketShipment(
           billing_state: field(address, "state"),
           billing_country: field(address, "country") || "India",
           billing_email: field(address, "email") || session.email,
-          billing_phone: field(address, "phone")
-            .replace(/[^0-9]/g, "")
-            .slice(-10),
+          billing_phone: deliveryPhone,
           shipping_is_billing: true,
           order_items: physical.map((line) => ({
             name: line.name.slice(0, 100),

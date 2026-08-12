@@ -57,6 +57,7 @@ import {
   getCheckoutPolicies,
 } from "@/lib/legal/store-consent";
 import { summariseItems } from "@/lib/notifications/format";
+import { formatIndianMobile } from "@/lib/phone";
 import {
   rowToBillingSettings,
   rowToTaxClass,
@@ -772,6 +773,10 @@ export async function placeOrder(
       return { error: `${label} is required.` };
     }
   }
+  const deliveryPhone = formatIndianMobile(form.phone);
+  if (!deliveryPhone) {
+    return { error: "Enter a valid 10-digit Indian mobile number." };
+  }
 
   // The order belongs to the store the shopper is actually on (the host),
   // never a store inferred from client-supplied cart contents.
@@ -1061,7 +1066,7 @@ export async function placeOrder(
     postalCode: cleanField(form.postalCode),
     country: cleanField(form.country),
     email: cleanField(form.email),
-    phone: cleanField(form.phone),
+    phone: deliveryPhone,
   };
   const notes = cleanField(form.notes, MAX_NOTES_LEN) || null;
 

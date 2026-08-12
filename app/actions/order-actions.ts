@@ -21,6 +21,7 @@ import {
   orders,
   products,
   productVariants,
+  shipments,
   storeLocations,
 } from "@/drizzle/schema";
 import { releaseCancelledOrder } from "@/lib/orders/cancel";
@@ -42,6 +43,7 @@ import {
   sanitizeSearch,
 } from "@/app/dashboard/lib/list-params";
 import { emitEvent } from "@/lib/notifications/record";
+import { formatIndianMobile } from "@/lib/phone";
 
 // Allowlists — order/payment state is a closed set, so never trust an arbitrary
 // string from the client into the DB (keeps the status column clean + prevents
@@ -415,6 +417,117 @@ export async function updateOrderStatus(
 
   revalidatePath("/dashboard/orders");
   return { success: true };
+}
+
+/**
+ * Correct a delivery phone before a carrier has accepted the parcel.  The
+ * frozen order address remains the fulfilment source of truth, but carrier IDs
+ * make that snapshot immutable so StoreMink and Shiprocket cannot disagree.
+ */
+export async function updateOrderDeliveryPhone(
+  orderId: string,
+  phoneInput: string,
+): Promise<{ success?: boolean; error?: string }> {
+  const admin = await getManagerIdentity("orders");
+  if (!admin) return { error: "Not authenticated" };
+  if (typeof orderId !== "string" || !orderId.trim()) {
+    return { error: "Invalid order." };
+  }
+  const phone = formatIndianMobile(phoneInput);
+  if (!phone) {
+    return { error: "Enter a valid 10-digit Indian mobile number." };
+  }
+
+  const storeId = await getActingStoreId();
+  try {
+    // Logistics tables are service-only. The manager permission above and the
+    // explicit store predicates below are therefore both mandatory.
+    const result = await withService(async (db) => {
+      const orderRows = await db
+        .select({
+          status: orders.status,
+          fulfilmentType: orders.fulfilmentType,
+          shippingAddress: orders.shippingAddress,
+        })
+        .from(orders)
+        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        .limit(1);
+      const order = orderRows[0];
+      if (!order) return { error: "This order no longer exists." };
+      if (order.fulfilmentType !== "delivery") {
+        return { error: "Pickup orders do not have a delivery phone." };
+      }
+      if (!["pending", "processing"].includes(order.status)) {
+        return {
+          error: "The delivery phone cannot be changed after shipping starts.",
+        };
+      }
+
+      const carrierRows = await db
+        .select({
+          externalOrderId: shipments.externalOrderId,
+          externalShipmentId: shipments.externalShipmentId,
+          awb: shipments.awb,
+        })
+        .from(shipments)
+        .where(
+          and(eq(shipments.orderId, orderId), eq(shipments.storeId, storeId)),
+        );
+      if (
+        carrierRows.some(
+          (row) => row.externalOrderId || row.externalShipmentId || row.awb,
+        )
+      ) {
+        return {
+          error:
+            "Shiprocket has already accepted this parcel. Update the consignee in Shiprocket instead.",
+        };
+      }
+
+      const shippingAddress = (order.shippingAddress ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const updated = await db
+        .update(orders)
+        .set({
+          shippingAddress: { ...shippingAddress, phone },
+          updatedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, storeId),
+            // Close the check→write race with a concurrent booking request.
+            // Even if Shiprocket IDs appear after carrierRows was read, this
+            // update becomes a no-op and the frozen address stays unchanged.
+            sql`not exists (
+              select 1 from ${shipments}
+              where ${shipments.orderId} = ${orderId}
+                and ${shipments.storeId} = ${storeId}
+                and (
+                  ${shipments.externalOrderId} is not null
+                  or ${shipments.externalShipmentId} is not null
+                  or ${shipments.awb} is not null
+                )
+            )`,
+          ),
+        )
+        .returning({ id: orders.id });
+      if (!updated.length) {
+        return {
+          error:
+            "Shiprocket booking started while the phone was being changed. Refresh the order before continuing.",
+        };
+      }
+      return { success: true as const };
+    });
+    if (result.success) revalidatePath("/dashboard/orders");
+    return result;
+  } catch (err) {
+    console.error("Error updating delivery phone:", err);
+    return { error: dbErrorMessage(err, "Failed to update delivery phone.") };
+  }
 }
 
 // ── Order detail (the slide-over drawer) ───────────────────────────────────

@@ -478,6 +478,7 @@ wholesip/
 │
 ├── lib/
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
+│   ├── phone.ts               # Indian mobile normalization shared by checkout and Shiprocket
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
 │   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
@@ -4723,6 +4724,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       staff then schedule pickup and get a manifest. A manual courier fallback
       records the same provider-neutral shipment/events and marks the order
       shipped without pretending Shiprocket handled it.
+      Checkout and booking share strict Indian-mobile normalization, including
+      rejection of repeated placeholder numbers. Before any carrier identifier
+      exists, staff may correct the frozen delivery phone in the order drawer;
+      after Shiprocket accepts the parcel it is immutable in StoreMink.
     - **Carrier state is not order state.** `lib/logistics/status.ts` maps
       Shiprocket's numeric/text vocabulary to stable parcel statuses and refuses
       terminal or backwards transitions from late webhooks. The provider-neutral

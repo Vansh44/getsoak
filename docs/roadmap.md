@@ -73,6 +73,9 @@ details were saved in the optional second line.
 The order drawer now covers the warehouse path: confirm the packed weight and
 dimensions, create the Shiprocket order, persist its IDs before continuing,
 assign an AWB, generate the label, schedule pickup and expose the manifest.
+Checkout rejects malformed or repeated-placeholder Indian mobile numbers, and
+the drawer lets staff correct a legacy order's delivery phone before any
+Shiprocket order/shipment/AWB exists, then retry booking.
 Every stage is resumable under one local idempotency key. A timeout after AWB
 creation therefore retries the missing label instead of buying a second
 shipment. A merchant can record another courier manually without losing the
