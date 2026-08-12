@@ -80,7 +80,7 @@ const CHANNELS: ChannelDef[] = [
     tagline: "Accept UPI, cards & netbanking at checkout",
     accent: "#0b6cff",
     icon: CreditCard,
-    logo: "/channels/razorpay.svg",
+    logo: "/channels/razorpay.webp",
     logoAspect: 132 / 38, // Razorpay wordmark
   },
   SHIPROCKET_CHANNEL,
@@ -857,7 +857,7 @@ function RazorpayModal({
         <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
           <div className="flex items-center gap-3">
             <Image
-              src="/channels/razorpay.svg"
+              src="/channels/razorpay.webp"
               alt="Razorpay logo"
               width={Math.round(28 * (132 / 38))}
               height={28}
