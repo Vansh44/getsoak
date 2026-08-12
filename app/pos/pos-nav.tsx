@@ -44,7 +44,7 @@ import type { PosActorRole } from "@/lib/pos/permissions";
  *  client dependency and can be imported by a server component or a test. */
 const ICONS: Record<PosNavKey, typeof ScanLine> = {
   sell: ScanLine,
-  orders: PackageCheck,
+  pickups: PackageCheck,
   sales: Receipt,
   inventory: Boxes,
   shift: Banknote,
@@ -121,7 +121,7 @@ export function PosNav({
     });
 
   const activeItem = items.find((i) => i.key === active);
-  const badgeFor = (key: PosNavKey) => (key === "orders" ? ordersWaiting : 0);
+  const badgeFor = (key: PosNavKey) => (key === "pickups" ? ordersWaiting : 0);
 
   return (
     <div className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white">

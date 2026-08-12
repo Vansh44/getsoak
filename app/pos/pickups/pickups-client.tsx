@@ -3,16 +3,23 @@
 // The counter screen: a customer is standing here with an order that already
 // exists. Collections and returns, one screen, one box.
 //
-// ★ WHY THEY MERGED. They were two search screens for the same physical moment.
-// /pos/pickups searched a collection code or an order number; /pos/returns
-// searched an order number, a phone or an email — and neither could find what
-// the other could. So a cashier had to know which kind of visit this was BEFORE
-// they knew which order it was, and pick a screen accordingly. The customer
-// holding the phone does not present that way: they hand over a number and the
-// till should work out what can be done with it.
+// ★ WHY THE TWO MERGED. They were two search screens for the same physical
+// moment. The old collections queue searched a collection code or an order
+// number; the old /pos/returns lookup searched an order number, a phone or an
+// email — and neither could find what the other could. So a cashier had to know
+// which kind of visit this was BEFORE they knew which order it was, and pick a
+// screen accordingly. The customer holding the phone does not present that way:
+// they hand over a number, and the till should work out what can be done with
+// it. It is the ONE-BOX-TAKES-BOTH rule the queue already had for scanned codes,
+// carried one step further — to the order itself.
 //
-// It is the rule /pos/pickups already had — ONE BOX TAKES BOTH a scanned code
-// and a typed order number — carried one step further, to the order itself.
+// ★ WHY IT IS CALLED PICKUPS, NOT ORDERS. It was briefly "Orders" (Shopify POS
+// names the equivalent screen that way), and it sat two rows below "Sales" in
+// the rail, where both read as "the things we sold". The label names the job
+// this screen exists for; the subtitle and the drawer hint carry the returns
+// half, which no single word covers.
+//
+// ★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON — see the split below.
 //
 // ★ THE ROW OFFERS WHAT THE ORDER CAN DO, AND WHAT THIS OPERATOR MAY DO. Both
 // halves matter. "Mark ready" is `fulfil_pickup` (manager and above: it is the
@@ -87,7 +94,7 @@ type CounterRow =
   | { kind: "pickup"; order: PickupOrder }
   | { kind: "past"; order: FoundOrder };
 
-export function OrdersClient({
+export function PickupsClient({
   initial,
   error,
   canRefund,
@@ -254,15 +261,153 @@ export function OrdersClient({
   const rows: CounterRow[] =
     found ?? queue.map((order) => ({ kind: "pickup" as const, order }));
 
-  const waiting = queue.length;
+  // ★★ THE QUEUE SPLITS BY WHO IT IS WAITING ON.
+  //
+  // One flat list mixed two unrelated states behind a small "Ready" badge:
+  // orders nobody has packed yet, and packed parcels sitting on the shelf. They
+  // demand opposite things — the first is work for STAFF right now, the second
+  // waits on a CUSTOMER walking in — so a shop reading the list had to sort them
+  // by eye every time. Sectioned, "3 to prepare" is answerable at a glance.
+  //
+  // getPickupQueue only ever returns awaiting|ready, so these two are exhaustive
+  // — but `others` catches anything a future status adds rather than silently
+  // dropping it off a screen that is someone's work queue.
+  const pickups = rows.flatMap((r) => (r.kind === "pickup" ? [r.order] : []));
+  const toPrepare = pickups.filter((o) => o.status === "awaiting");
+  const readyToCollect = pickups.filter((o) => o.status === "ready");
+  const others = pickups.filter(
+    (o) => o.status !== "awaiting" && o.status !== "ready",
+  );
+  const pastOrders = rows.flatMap((r) => (r.kind === "past" ? [r.order] : []));
+
+  /** A collection waiting on this shop's shelf. Defined here rather than as a
+   *  component so the two sections and the search results share ONE row — three
+   *  copies of a row carrying money and a Hand over button is three places to
+   *  fix the next time one of them is wrong. */
+  const renderPickup = (o: PickupOrder) => (
+    <li
+      key={`pickup:${o.id}`}
+      className="rounded-xl border border-white/10 bg-white/5 p-4"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="font-mono text-base font-semibold">{o.orderRef}</span>
+        {/* ★ BOTH BADGES ARE SEARCH-ONLY. Under a section heading they repeat
+            it — "Collection" on every row of a list called Pickups, "Ready"
+            under a heading that says Ready to collect — and a badge that always
+            says the same thing is the kind of noise people stop reading. In
+            search results there is no heading, and the list mixes collections
+            with returnable past orders, so both earn their place. */}
+        {searching && (
+          <>
+            <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
+              Collection
+            </span>
+            {o.status === "ready" && (
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                Ready
+              </span>
+            )}
+          </>
+        )}
+        {/* Whether to ask for money is the first thing the cashier needs to
+            know — before they open the order, not after. */}
+        {o.amountDue > 0 && (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+            {money(o.amountDue)} to pay
+          </span>
+        )}
+        <span className="ml-auto text-base font-semibold">
+          {money(o.total)}
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-white/60">
+        {o.customerName ?? "Customer"} · {o.itemCount} item
+        {o.itemCount === 1 ? "" : "s"}
+        {o.expiresAt ? ` · ${expiryLabel(o.expiresAt)}` : ""}
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {o.status === "awaiting" && canFulfilPickup && (
+          <button
+            type="button"
+            disabled={busy === o.id}
+            onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
+            className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
+          >
+            <PackageCheck className="h-4 w-4" />
+            Mark ready
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy === o.id}
+          onClick={() => handOver(o)}
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {busy === o.id ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : o.amountDue > 0 ? (
+            <Wallet className="h-4 w-4" />
+          ) : (
+            <Check className="h-4 w-4" />
+          )}
+          {o.amountDue > 0 ? "Take payment" : "Hand over"}
+        </button>
+      </div>
+    </li>
+  );
+
+  /** A past order a customer has brought back — a doorway to the return screen,
+   *  nothing more. */
+  const renderPastOrder = (o: FoundOrder) => (
+    <li
+      key={`past:${o.orderId}`}
+      className="rounded-xl border border-white/10 bg-white/5 p-4"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="font-mono text-base font-semibold">{o.label}</span>
+        {/* Said up front, so the cashier knows before they open it that this
+            one depends on the shop's BORIS settings. */}
+        {o.broughtIn && (
+          <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-medium text-white/70">
+            Bought elsewhere
+          </span>
+        )}
+        <span className="ml-auto text-base font-semibold tabular-nums">
+          {money(o.total)}
+        </span>
+      </div>
+      <p className="mt-1 text-sm text-white/60">
+        {fmtDate(o.createdAt)}
+        {o.paymentMethod === "razorpay"
+          ? " · paid online"
+          : o.paymentMethod === "cash_on_delivery"
+            ? " · cash on delivery"
+            : ""}
+      </p>
+      <div className="mt-3">
+        <Link
+          href={`/pos/returns/${o.orderId}`}
+          className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Take return
+        </Link>
+      </div>
+    </li>
+  );
 
   return (
     <PosScreen
-      title="Orders"
+      title="Pickups"
       subtitle={
-        waiting > 0
-          ? `${waiting} waiting to collect`
-          : "Collections and returns"
+        // The breakdown, not just a total — the two halves are what a shop
+        // actually plans around.
+        toPrepare.length > 0
+          ? `${toPrepare.length} to prepare · ${readyToCollect.length} ready`
+          : readyToCollect.length > 0
+            ? `${readyToCollect.length} ready to collect`
+            : "Collections and returns"
       }
       width="wide"
     >
@@ -301,14 +446,6 @@ export function OrdersClient({
         </p>
       )}
 
-      {/* Says which list is on screen. Without it, a search returning one
-          collection looks identical to a queue with one thing in it. */}
-      {!error && rows.length > 0 && (
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/35">
-          {searching ? "Search results" : "Waiting to collect"}
-        </h2>
-      )}
-
       {!error && rows.length === 0 && !pending && (
         <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-10 text-center">
           {searching && searched ? (
@@ -331,116 +468,56 @@ export function OrdersClient({
         </div>
       )}
 
-      <ul className="space-y-3">
-        {rows.map((row) =>
-          row.kind === "pickup" ? (
-            <li
-              key={`pickup:${row.order.id}`}
-              className="rounded-xl border border-white/10 bg-white/5 p-4"
-            >
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="font-mono text-base font-semibold">
-                  {row.order.orderRef}
-                </span>
-                <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
-                  Collection
-                </span>
-                {row.order.status === "ready" && (
-                  <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300">
-                    Ready
-                  </span>
-                )}
-                {/* Whether to ask for money is the first thing the cashier
-                    needs to know — before they open the order, not after. */}
-                {row.order.amountDue > 0 && (
-                  <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
-                    {money(row.order.amountDue)} to pay
-                  </span>
-                )}
-                <span className="ml-auto text-base font-semibold">
-                  {money(row.order.total)}
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-white/60">
-                {row.order.customerName ?? "Customer"} · {row.order.itemCount}{" "}
-                item{row.order.itemCount === 1 ? "" : "s"}
-                {row.order.expiresAt
-                  ? ` · ${expiryLabel(row.order.expiresAt)}`
-                  : ""}
-              </p>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                {row.order.status === "awaiting" && canFulfilPickup && (
-                  <button
-                    type="button"
-                    disabled={busy === row.order.id}
-                    onClick={() =>
-                      act(row.order.id, markReadyForPickup, "Marked ready.")
-                    }
-                    className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
-                  >
-                    <PackageCheck className="h-4 w-4" />
-                    Mark ready
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={busy === row.order.id}
-                  onClick={() => handOver(row.order)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {busy === row.order.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : row.order.amountDue > 0 ? (
-                    <Wallet className="h-4 w-4" />
-                  ) : (
-                    <Check className="h-4 w-4" />
-                  )}
-                  {row.order.amountDue > 0 ? "Take payment" : "Hand over"}
-                </button>
-              </div>
-            </li>
-          ) : (
-            <li
-              key={`past:${row.order.orderId}`}
-              className="rounded-xl border border-white/10 bg-white/5 p-4"
-            >
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="font-mono text-base font-semibold">
-                  {row.order.label}
-                </span>
-                {/* Said up front, so the cashier knows before they open it that
-                    this one depends on the shop's BORIS settings. */}
-                {row.order.broughtIn && (
-                  <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-medium text-white/70">
-                    Bought elsewhere
-                  </span>
-                )}
-                <span className="ml-auto text-base font-semibold tabular-nums">
-                  {money(row.order.total)}
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-white/60">
-                {fmtDate(row.order.createdAt)}
-                {row.order.paymentMethod === "razorpay"
-                  ? " · paid online"
-                  : row.order.paymentMethod === "cash_on_delivery"
-                    ? " · cash on delivery"
-                    : ""}
-              </p>
-              <div className="mt-3">
-                <Link
-                  href={`/pos/returns/${row.order.orderId}`}
-                  className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                  Take return
-                </Link>
-              </div>
-            </li>
-          ),
-        )}
-      </ul>
+      {/* ★ SEARCHING IS ONE FLAT LIST, THE QUEUE IS SECTIONED. When you are
+          hunting for one specific order, splitting the two or three hits across
+          headed sections makes you read all of them to find it. The queue is the
+          opposite: nobody is looking for a particular row, they are asking "what
+          do I have to do?" */}
+      {searching ? (
+        <Section
+          title="Search results"
+          count={rows.length}
+          show={rows.length > 0}
+        >
+          {rows.map((row) =>
+            row.kind === "pickup"
+              ? renderPickup(row.order)
+              : renderPastOrder(row.order),
+          )}
+        </Section>
+      ) : (
+        <>
+          <Section
+            title="To prepare"
+            count={toPrepare.length}
+            show={toPrepare.length > 0}
+            hint="Packed and ready? Mark it, and the customer is told to come in."
+          >
+            {toPrepare.map(renderPickup)}
+          </Section>
+          <Section
+            title="Ready to collect"
+            count={readyToCollect.length}
+            show={readyToCollect.length > 0}
+            hint="On the shelf, waiting for the customer."
+          >
+            {readyToCollect.map(renderPickup)}
+          </Section>
+          {/* Only ever non-empty if a new pickup_status appears. Better a
+              labelled section than a row that silently vanishes from a work
+              queue. */}
+          <Section title="Other" count={others.length} show={others.length > 0}>
+            {others.map(renderPickup)}
+          </Section>
+          <Section
+            title="Returns"
+            count={pastOrders.length}
+            show={pastOrders.length > 0}
+          >
+            {pastOrders.map(renderPastOrder)}
+          </Section>
+        </>
+      )}
 
       {tendering && (
         <TenderPanel
@@ -457,4 +534,38 @@ export function OrdersClient({
 
 function rowId(row: CounterRow): string {
   return row.kind === "pickup" ? row.order.id : row.order.orderId;
+}
+
+/** A headed group of rows, with its count in the heading.
+ *
+ *  `show` rather than letting the caller conditionally render: an empty section
+ *  must draw NOTHING — not a heading over blank space — and putting that rule
+ *  here means each of the four call sites cannot forget it. The count is in the
+ *  heading because "To prepare 3" is the whole answer a shop opens this for. */
+function Section({
+  title,
+  count,
+  show,
+  hint,
+  children,
+}: {
+  title: string;
+  count: number;
+  show: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  if (!show) return null;
+  return (
+    <section className="mb-6 last:mb-0">
+      <h2 className="mb-1 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wide text-white/35">
+        {title}
+        <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px] tabular-nums text-white/60">
+          {count}
+        </span>
+      </h2>
+      {hint && <p className="mb-2 text-xs text-white/30">{hint}</p>}
+      <ul className="space-y-3">{children}</ul>
+    </section>
+  );
 }

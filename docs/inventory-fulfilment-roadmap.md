@@ -274,7 +274,7 @@ pickup_location_id / pickup_status / pickup_expires_at / collected_at /
 collected_by on `orders`, three CHECKs, the queue index);
 `lib/fulfilment/pickup.ts` (`pickupLocationsFor` — capability + plan + stock,
 `sweepExpiredPickups`); `getPickupOptions` + a pickup step at checkout;
-`placeOrder` **holds** instead of reserving; `/pos/orders` (queue, mark ready,
+`placeOrder` **holds** instead of reserving; `/pos/pickups` (queue, mark ready,
 hand over) + a Collections tile on the POS home; four notification events; the
 sweep folded into `/api/cron/expire-pending-payments`.
 

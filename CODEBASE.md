@@ -2487,8 +2487,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
         the SCREEN, never the strongest action on it**: Orders is `sell`,
         because handing a collection over is a cashier's job with the customer
         standing there — gating that door on `refund` would hide the queue from
-        the person who works it. Tested, both directions.
-      - **★★ COLLECTIONS AND RETURNS MERGED INTO `/pos/orders`.** They were two
+        the person who works it. Tested, both directions. (The key and label are
+        `pickups`; Orders was its first name.)
+      - **★★ COLLECTIONS AND RETURNS MERGED INTO `/pos/pickups`.** They were two
         search screens for one physical moment — a customer at the counter with
         an order that already exists. `/pos/pickups` searched a collection code
         or an order number; `/pos/returns` searched an order number, a phone or
@@ -2497,16 +2498,32 @@ group, span}` (span = columns of the 4-wide desktop grid),
         One box now takes all of it and each row offers what that order can do
         AND what this operator may do (`Mark ready` = `fulfil_pickup`,
         `Hand over` = `sell`, `Take return` = `refund`, every one re-checked in
-        the action). It is `/pos/pickups`'s own ONE-BOX-TAKES-BOTH rule carried
-        one step further. Only the operator's permitted lookups fire — a cashier
-        has no `refund`, so `findOrderForReturn` is never called for them.
-      - **The old paths still resolve** (`/pos/pickups`, `/pos/returns` → 307),
+        the action). It is the queue's own ONE-BOX-TAKES-BOTH rule for scanned
+        codes carried one step further. Only the operator's permitted lookups
+        fire — a cashier has no `refund`, so `findOrderForReturn` is never
+        called for them.
+      - **★ IT IS CALLED PICKUPS, NOT ORDERS** (owner's call, 2026-08-12, after
+        it shipped as Orders). Shopify POS names the equivalent screen Orders
+        and that was the case for it, but in THIS rail it sat two rows above
+        "Sales" and both read as "the things we sold". The label names the job
+        the screen exists for; the subtitle and drawer hint carry the returns
+        half, which no single word covers. `/pos/orders` 307s here.
+      - **★★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON** — "To prepare"
+        (`awaiting`) above "Ready to collect" (`ready`), each with its count.
+        One flat list hid two opposite states behind a small badge: orders
+        nobody has packed, which are work for STAFF right now, and packed
+        parcels waiting on a CUSTOMER to walk in. A shop had to sort them by
+        eye every time. SEARCHING stays one flat list, deliberately — when you
+        are hunting one order, splitting three hits across headings makes you
+        read all of them. An `others` section catches any future
+        `pickup_status` rather than dropping it silently off a work queue.
+      - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers
         indefinitely and there are no SEO signals to consolidate behind a login
         (the trap `proxy.ts` works around with `Cache-Control: no-store`, §30).
         The return DETAIL screen stays at `/pos/returns/[orderId]`; only the
-        front door moved, and `activePosNavKey` keeps Orders lit on it.
+        front door moved, and `activePosNavKey` keeps Pickups lit on it.
       - **`/pos` OPENS THE REGISTER.** It redirects to `/pos/sell`; the only
         screen left there is the device-authorization prompt
         (`authorize-client.tsx`), and staff cannot resolve as an operator
@@ -2637,7 +2654,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       because a pickup IS an order (same money, items, invoice, history) and a
       side table would mean every order read either joins it or silently
       ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
-      where; `/pos/orders` hands it over; the sweep rides on
+      where; `/pos/pickups` hands it over; the sweep rides on
       `/api/cron/expire-pending-payments`. Config:
       `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
       `locations`, rendered on Locations → Online fulfilment).
@@ -2714,7 +2731,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         hand over a card. Booking every collection as cash would put card money
         into expected cash and report the drawer SHORT: the same defect pointed
         the other way, and worse, because "over on cash, short on card" cannot
-        be attributed to anything. `/pos/orders` shows the amount owed on the
+        be attributed to anything. `/pos/pickups` shows the amount owed on the
         row and opens the register's own `TenderPanel` (cash/card/UPI, split
         tenders, change) before handing over. It is the rule §26 and §28
         already state for refunds, read backwards: **the tender decides where
@@ -2782,7 +2799,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         change who hears about ordinary orders for every existing store
         (invariant 1). A merchant's own stored choice always beats the default;
         the fallback only applies when they have chosen nothing.
-      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/orders` resolves a
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
         scanned collection code OR a typed order number from the same input —
         a hardware scanner is a keyboard, and making someone pick a field first
         is exactly the friction the code was meant to remove.
@@ -3659,7 +3676,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         advance exchange needs a card hold, and there is no hold primitive),
         and cross-product swaps.
     - **★ BORIS — RETURNING AN ONLINE ORDER AT A COUNTER**
-      (`lib/returns/in-store.ts`, `/pos/orders`). This is what finally reads
+      (`lib/returns/in-store.ts`, `/pos/pickups`). This is what finally reads
       the `returns` location capability, in the registry unused since Phase 0.
       - **The bug that made it impossible:** `getReturnableSale` filtered on
         `orders.location_id = op.locationId`, and an online order's location is

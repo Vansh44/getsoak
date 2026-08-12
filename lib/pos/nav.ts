@@ -23,7 +23,7 @@
 import type { PosActorRole, PosCapability } from "./permissions";
 import { posCan } from "./permissions";
 
-export type PosNavKey = "sell" | "orders" | "sales" | "inventory" | "shift";
+export type PosNavKey = "sell" | "pickups" | "sales" | "inventory" | "shift";
 
 export interface PosNavItem {
   key: PosNavKey;
@@ -55,9 +55,15 @@ export const POS_NAV: readonly PosNavItem[] = [
     cap: "sell",
   },
   {
-    key: "orders",
-    href: "/pos/orders",
-    label: "Orders",
+    key: "pickups",
+    href: "/pos/pickups",
+    // ★ "Pickups", not "Orders". Shopify POS calls the equivalent screen
+    // Orders, but at THIS till it sat two rows below "Sales" — and a cashier
+    // reads both as "the things we sold". Naming the job the screen exists for
+    // beats matching another product's vocabulary.
+    label: "Pickups",
+    // The screen also takes returns, which the label cannot say in one word —
+    // so the hint does, on the rail tooltip and in the drawer.
     hint: "Collections and returns",
     cap: "sell",
   },
@@ -101,10 +107,11 @@ export function posNavFor(role: PosActorRole): PosNavItem[] {
  * operator and therefore no rail.
  */
 export function activePosNavKey(pathname: string): PosNavKey | null {
-  // The two pre-merge routes still resolve (see app/pos/pickups + app/pos/
-  // returns) and the return DETAIL screen lives under /pos/returns for good —
-  // all three belong to Orders, or opening a return would light up nothing.
-  if (/^\/pos\/(orders|pickups|returns)(\/|$)/.test(pathname)) return "orders";
+  // `/pos/orders` (where this screen briefly lived) and `/pos/returns` (the
+  // pre-merge lookup) both still resolve, and the return DETAIL screen lives
+  // under /pos/returns for good — all three belong to Pickups, or opening a
+  // return would leave the rail lit on nothing.
+  if (/^\/pos\/(pickups|orders|returns)(\/|$)/.test(pathname)) return "pickups";
   const hit = POS_NAV.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );

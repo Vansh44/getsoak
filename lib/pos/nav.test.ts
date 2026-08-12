@@ -30,7 +30,7 @@ describe("POS navigation registry", () => {
       // Sell, hand over a collection, reprint a receipt, see whether the drawer
       // is open. NOT stock — a cashier sells stock but does not get to declare
       // how much of it exists (app/pos/inventory/page.tsx redirects them).
-      expect(keys).toEqual(["sell", "orders", "sales", "shift"]);
+      expect(keys).toEqual(["sell", "pickups", "sales", "shift"]);
     });
 
     it("gives a manager everything", () => {
@@ -50,11 +50,11 @@ describe("POS navigation registry", () => {
       );
     });
 
-    it("shows a cashier Orders — they are the ones who hand collections over", () => {
+    it("shows a cashier Pickups — they are the ones who hand collections over", () => {
       // Regression: gating this door on `refund` (the strongest thing on the
       // screen) would hide the collection queue from exactly the person who
       // works it, with the customer standing at the counter.
-      expect(posNavFor("cashier").map((i) => i.key)).toContain("orders");
+      expect(posNavFor("cashier").map((i) => i.key)).toContain("pickups");
       expect(posCan("cashier", "refund")).toBe(false);
     });
   });
@@ -66,12 +66,13 @@ describe("POS navigation registry", () => {
       }
     });
 
-    it("keeps Orders lit on the return detail screen", () => {
+    it("keeps Pickups lit on the return detail screen", () => {
       // /pos/returns/<id> is reached FROM Orders; without this the rail goes
       // blank the moment you open the return you just searched for.
-      expect(activePosNavKey("/pos/returns/abc-123")).toBe("orders");
-      expect(activePosNavKey("/pos/returns")).toBe("orders");
-      expect(activePosNavKey("/pos/pickups")).toBe("orders");
+      expect(activePosNavKey("/pos/returns/abc-123")).toBe("pickups");
+      expect(activePosNavKey("/pos/returns")).toBe("pickups");
+      // /pos/orders is where this screen briefly lived; it still resolves.
+      expect(activePosNavKey("/pos/orders")).toBe("pickups");
     });
 
     it("has no active destination on the signed-out screens", () => {

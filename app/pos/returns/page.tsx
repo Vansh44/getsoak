@@ -10,5 +10,5 @@ import { redirect } from "next/navigation";
 //
 // 307, not 308 — see the note in app/pos/pickups/page.tsx.
 export default function PosReturnsRedirect() {
-  redirect("/pos/orders");
+  redirect("/pos/pickups");
 }
