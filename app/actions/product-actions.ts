@@ -44,6 +44,11 @@ export interface VariantFormData {
    *  codes on the packaging). Distinct from `sku`, which is our system-generated
    *  Luhn code and immutable. Free text: real barcodes are EAN/UPC/other. */
   barcode?: string | null;
+  requires_shipping?: boolean | null;
+  weight_grams?: number | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
   images: string[]; // this variant's own gallery (empty = uses product gallery)
 }
 
@@ -73,8 +78,14 @@ export interface ProductFormData {
   // Optional per-product tax class (public.tax_classes). Products without one
   // fall back to the store default at checkout. Empty string / null = none.
   tax_class_id?: string | null;
+  hsn_code?: string | null;
   returnable?: boolean;
   return_window_days?: number | null;
+  requires_shipping?: boolean;
+  weight_grams?: number | null;
+  length_cm?: number | null;
+  width_cm?: number | null;
+  height_cm?: number | null;
 }
 
 export interface ActionResult {
@@ -151,6 +162,13 @@ function normalizePrices(base: number, selling: number) {
   return { basePrice: b, sellingPrice: s };
 }
 
+function positiveOrNull(value: unknown, max = 1_000_000): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(max, n);
+}
+
 // Keep only valid variant rows (a name is required) and normalise numbers.
 // Preserves `id` so the reconcile can match existing DB rows.
 function sanitizeVariants(variants: VariantFormData[]) {
@@ -184,6 +202,12 @@ function sanitizeVariants(variants: VariantFormData[]) {
         // the opposite: it's the merchant's own supplier code, freely editable.
         barcode:
           typeof v.barcode === "string" ? v.barcode.trim() || null : null,
+        requiresShipping:
+          typeof v.requires_shipping === "boolean" ? v.requires_shipping : null,
+        weightGrams: positiveOrNull(v.weight_grams, 1_000_000),
+        lengthCm: positiveOrNull(v.length_cm, 10_000),
+        widthCm: positiveOrNull(v.width_cm, 10_000),
+        heightCm: positiveOrNull(v.height_cm, 10_000),
         images,
         imageUrl: images[0] ?? null, // keep the legacy single image in sync
         sortOrder: i,
@@ -429,8 +453,17 @@ export async function createProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    hsnCode:
+      typeof formData.hsn_code === "string"
+        ? formData.hsn_code.trim().slice(0, 20) || null
+        : null,
     returnable: formData.returnable !== false,
     returnWindowDays: normalizeReturnWindow(formData.return_window_days),
+    requiresShipping: formData.requires_shipping !== false,
+    weightGrams: positiveOrNull(formData.weight_grams, 1_000_000),
+    lengthCm: positiveOrNull(formData.length_cm, 10_000),
+    widthCm: positiveOrNull(formData.width_cm, 10_000),
+    heightCm: positiveOrNull(formData.height_cm, 10_000),
     // The merchant's own scannable supplier code (NOT the system sku below).
     barcode:
       typeof formData.barcode === "string"
@@ -550,8 +583,17 @@ export async function updateProduct(
     allowBackorder: formData.allow_backorder ?? false,
     lowStockThreshold: formData.low_stock_threshold ?? null,
     taxClassId: formData.tax_class_id || null,
+    hsnCode:
+      typeof formData.hsn_code === "string"
+        ? formData.hsn_code.trim().slice(0, 20) || null
+        : null,
     returnable: formData.returnable !== false,
     returnWindowDays: normalizeReturnWindow(formData.return_window_days),
+    requiresShipping: formData.requires_shipping !== false,
+    weightGrams: positiveOrNull(formData.weight_grams, 1_000_000),
+    lengthCm: positiveOrNull(formData.length_cm, 10_000),
+    widthCm: positiveOrNull(formData.width_cm, 10_000),
+    heightCm: positiveOrNull(formData.height_cm, 10_000),
     barcode:
       typeof formData.barcode === "string"
         ? formData.barcode.trim() || null

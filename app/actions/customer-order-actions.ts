@@ -18,7 +18,14 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
-import { orderItems, orders, products, storeLocations } from "@/drizzle/schema";
+import {
+  orderItems,
+  orders,
+  products,
+  shipmentEvents,
+  shipments,
+  storeLocations,
+} from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
@@ -31,6 +38,10 @@ import {
   rulesFromSettings,
 } from "@/lib/orders/cancellation";
 import { approveCancellation } from "@/lib/orders/approve-cancellation";
+import {
+  shipmentStatusLabel,
+  type ShipmentStatus,
+} from "@/lib/logistics/status";
 
 export interface MyOrderRow {
   id: string;
@@ -86,6 +97,24 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
   pickup_location_name: string | null;
   pickup_location_address: Record<string, unknown> | null;
   items: MyOrderItem[];
+  shipments: MyOrderShipment[];
+}
+
+export interface MyOrderShipment {
+  id: string;
+  status: ShipmentStatus;
+  status_label: string;
+  courier_name: string | null;
+  awb: string | null;
+  tracking_url: string | null;
+  estimated_delivery_at: string | null;
+  events: Array<{
+    id: string;
+    description: string | null;
+    status: string;
+    location: string | null;
+    occurred_at: string;
+  }>;
 }
 
 /** The signed-in shopper's orders on THIS store, newest first. */
@@ -255,6 +284,69 @@ export async function getMyOrder(
           .where(eq(orderItems.orderId, orderId))
           .orderBy(asc(orderItems.createdAt));
 
+        // Shipments are service-only because they contain provider internals.
+        // The ownership + host-store check above has already proven this is
+        // the shopper's order; return only the customer-safe tracking fields.
+        const shipmentRows = await withService((service) =>
+          service
+            .select({
+              id: shipments.id,
+              status: shipments.status,
+              courier_name: shipments.courierName,
+              awb: shipments.awb,
+              tracking_url: shipments.trackingUrl,
+              estimated_delivery_at: shipments.estimatedDeliveryAt,
+            })
+            .from(shipments)
+            .where(
+              and(
+                eq(shipments.orderId, orderId),
+                eq(shipments.storeId, storeId),
+              ),
+            )
+            .orderBy(asc(shipments.createdAt)),
+        );
+        const eventRows = shipmentRows.length
+          ? await withService((service) =>
+              service
+                .select({
+                  id: shipmentEvents.id,
+                  shipment_id: shipmentEvents.shipmentId,
+                  description: shipmentEvents.description,
+                  status: shipmentEvents.status,
+                  location: shipmentEvents.location,
+                  occurred_at: shipmentEvents.occurredAt,
+                })
+                .from(shipmentEvents)
+                .where(
+                  inArray(
+                    shipmentEvents.shipmentId,
+                    shipmentRows.map((shipment) => shipment.id),
+                  ),
+                )
+                .orderBy(desc(shipmentEvents.occurredAt)),
+            )
+          : [];
+        const customerShipments: MyOrderShipment[] = shipmentRows.map(
+          (shipment) => {
+            const status = shipment.status as ShipmentStatus;
+            return {
+              ...shipment,
+              status,
+              status_label: shipmentStatusLabel(status),
+              events: eventRows
+                .filter((event) => event.shipment_id === shipment.id)
+                .map((event) => ({
+                  id: event.id,
+                  description: event.description,
+                  status: event.status,
+                  location: event.location,
+                  occurred_at: event.occurred_at,
+                })),
+            };
+          },
+        );
+
         return {
           order: {
             ...order,
@@ -265,6 +357,7 @@ export async function getMyOrder(
             item_count: items.reduce((n, i) => n + i.quantity, 0),
             first_item: items[0]?.name ?? null,
             items,
+            shipments: customerShipments,
           },
         };
       },

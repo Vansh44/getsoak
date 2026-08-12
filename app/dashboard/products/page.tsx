@@ -48,6 +48,11 @@ export interface ProductVariant {
   sku: string | null;
   /** Merchant-entered supplier barcode (pos_06) — what the register scans. */
   barcode: string | null;
+  requires_shipping: boolean | null;
+  weight_grams: number | null;
+  length_cm: number | null;
+  width_cm: number | null;
+  height_cm: number | null;
   image_url: string | null;
   images: string[] | null;
   sort_order: number;
@@ -84,9 +89,15 @@ export interface Product {
   sku: string | null;
   barcode: string | null;
   tax_class_id: string | null;
+  hsn_code: string | null;
   // Return policy (returns_01_product_policy.sql)
   returnable: boolean;
   return_window_days: number | null;
+  requires_shipping: boolean;
+  weight_grams: number | null;
+  length_cm: number | null;
+  width_cm: number | null;
+  height_cm: number | null;
   created_at: string;
   updated_at: string;
   // Joined

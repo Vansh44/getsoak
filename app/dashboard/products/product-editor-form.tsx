@@ -21,6 +21,7 @@ import {
   Image as ImageIcon,
   Loader2,
   Package,
+  Truck,
   Tag,
   Boxes,
   Layers,
@@ -95,8 +96,14 @@ const EMPTY: ProductFormData = {
   sku: "",
   barcode: "",
   tax_class_id: null,
+  hsn_code: null,
   returnable: true,
   return_window_days: null,
+  requires_shipping: true,
+  weight_grams: null,
+  length_cm: null,
+  width_cm: null,
+  height_cm: null,
 };
 
 function toForm(product: Product): ProductFormData {
@@ -121,8 +128,14 @@ function toForm(product: Product): ProductFormData {
     sku: product.sku ?? "",
     barcode: product.barcode ?? "",
     tax_class_id: product.tax_class_id,
+    hsn_code: product.hsn_code,
     returnable: product.returnable !== false,
     return_window_days: product.return_window_days,
+    requires_shipping: product.requires_shipping !== false,
+    weight_grams: product.weight_grams,
+    length_cm: product.length_cm,
+    width_cm: product.width_cm,
+    height_cm: product.height_cm,
     variants: (product.variants ?? []).map((v) => ({
       id: v.id, // preserve DB id for reconcile (stable variant ids)
       name: v.name,
@@ -132,6 +145,11 @@ function toForm(product: Product): ProductFormData {
       stock: v.stock,
       sku: v.sku ?? "",
       barcode: v.barcode ?? "",
+      requires_shipping: v.requires_shipping,
+      weight_grams: v.weight_grams,
+      length_cm: v.length_cm,
+      width_cm: v.width_cm,
+      height_cm: v.height_cm,
       images: v.images ?? (v.image_url ? [v.image_url] : []),
     })),
   };
@@ -406,6 +424,11 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
             stock: 0,
             sku: "",
             barcode: "",
+            requires_shipping: null,
+            weight_grams: null,
+            length_cm: null,
+            width_cm: null,
+            height_cm: null,
             images: [],
           },
         ],
@@ -887,6 +910,86 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                     ) : null}
                   </p>
                 </div>
+              </div>
+            </Section>
+
+            <Section
+              title="Shipping"
+              description="Physical measurements used for courier serviceability and labels. Final packed dimensions can still be corrected when booking."
+              icon={Truck}
+              tint="teal"
+            >
+              <div className="space-y-4">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1f2937]">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_shipping !== false}
+                    onChange={(e) => set("requires_shipping", e.target.checked)}
+                    className="h-4 w-4 accent-[#4f46e5]"
+                  />
+                  This is a physical product that requires shipping
+                </label>
+                {form.requires_shipping !== false && (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+                    <div>
+                      <label className={labelClass}>Weight (g)</label>
+                      <NumberField
+                        className={fieldClass}
+                        value={form.weight_grams ?? 0}
+                        onValueChange={(n) =>
+                          set("weight_grams", n > 0 ? n : null)
+                        }
+                        allowDecimal={false}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Length (cm)</label>
+                      <NumberField
+                        className={fieldClass}
+                        value={form.length_cm ?? 0}
+                        onValueChange={(n) =>
+                          set("length_cm", n > 0 ? n : null)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Width (cm)</label>
+                      <NumberField
+                        className={fieldClass}
+                        value={form.width_cm ?? 0}
+                        onValueChange={(n) => set("width_cm", n > 0 ? n : null)}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Height (cm)</label>
+                      <NumberField
+                        className={fieldClass}
+                        value={form.height_cm ?? 0}
+                        onValueChange={(n) =>
+                          set("height_cm", n > 0 ? n : null)
+                        }
+                      />
+                    </div>
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className={labelClass}>HSN</label>
+                      <input
+                        className={fieldClass}
+                        value={form.hsn_code ?? ""}
+                        onChange={(event) =>
+                          set("hsn_code", event.target.value || null)
+                        }
+                        inputMode="numeric"
+                        maxLength={20}
+                        placeholder="e.g. 2202"
+                      />
+                    </div>
+                  </div>
+                )}
+                <p className={hintClass}>
+                  Shiprocket requires a positive packed weight and dimensions.
+                  Variants inherit these values unless an import supplies an
+                  override.
+                </p>
               </div>
             </Section>
 

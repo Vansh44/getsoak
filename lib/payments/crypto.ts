@@ -2,9 +2,9 @@ import "server-only";
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-// App-layer encryption for stored payment-gateway secrets (AES-256-GCM).
-// Defense in depth: store_payment_providers is already service-role-only at
-// the DB layer, but a merchant's Razorpay key secret must not be readable
+// App-layer encryption for stored channel secrets (AES-256-GCM).
+// Defense in depth: provider credential tables are already service-role-only at
+// the DB layer, but a merchant's Razorpay or Shiprocket secret must not be readable
 // from a DB dump alone — it's encrypted with PAYMENT_CRED_KEY (32-byte,
 // base64) which lives only in the app environment.
 //
@@ -28,7 +28,7 @@ function credKey(): Buffer {
   return key;
 }
 
-/** Encrypt a secret for storage (key_secret_enc). */
+/** Encrypt a secret for storage in a service-only provider table. */
 export function encryptSecret(plaintext: string): string {
   const key = credKey();
   const iv = randomBytes(IV_LENGTH);

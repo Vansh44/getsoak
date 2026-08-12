@@ -278,8 +278,9 @@ wholesip/
 │   │   ├── branding/          # per-store branding editor (logo, colors)
 │   │   ├── billing/           # ★ Invoices & Billing (§17): tax config + tax-class
 │   │   │                      # manager + invoice-template editor (billing.css)
-│   │   ├── channels/          # ★ Channels (§18): connect the store's OWN Razorpay
-│   │   │                      # gateway (verify & save, pause/resume, disconnect)
+│   │   ├── channels/          # ★ Channels (§18/§35): connect the store's OWN Razorpay
+│   │   │                      # and Shiprocket accounts; pause/resume, sync warehouse
+│   │   │                      # pickup mappings and configure the tracking webhook
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
@@ -375,6 +376,10 @@ wholesip/
 │   │   │                      # reconcileMyOrderPayment. Tested.
 │   │   ├── payment-provider-actions.ts # ★ Channels (§18): get/save/enable/disconnect the
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
+│   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
+│   │   │                      # credentials, rotate webhook tokens, sync warehouses
+│   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
+│   │   │                      # staged idempotency plus a provider-independent manual fallback
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
@@ -420,6 +425,8 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── webhooks/shiprocket/[connectionId]/ # ★ §35 authenticated carrier events;
+│       │                      # duplicate and out-of-order safe, raw payload service-only
 │       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
 │       │                      # cron): coupon campaigns + notification emails
 │       │                      # (§22). Self-chains while either has work left
@@ -469,6 +476,9 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
+│   │                          # session, fulfilment work, stable status machine and tracking
+│   │                          # ingestion/order synchronization. Pure boundaries tested.
 │   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
 │   │                          # quoted fields w/ embedded delimiters+newlines, quote-
 │   │                          # aware delimiter sniffing for Excel's semicolons, ragged
@@ -831,6 +841,9 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── logistics_01_shiprocket.sql # ★ §35 physical product/order snapshots plus
+│   │                          # fulfilment orders, parcels, events, credentials and pickup maps;
+│   │                          # all logistics tables are service-role only
 │   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
 │   │                          # RPCs; available = on_hand - reserved
 │   ├── locations_10_default_online_fulfil.sql  # ★ auto-created Main locations
@@ -4670,6 +4683,60 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       can overwrite a comp DOWNWARD; a scheduled location release never lands,
       so Razorpay bills the cheaper plan while the allowance keeps granting the
       released slots free). Ten live in code this rebuild deletes.
+
+35. **Logistics — Shopify-shaped fulfilment, Shiprocket first.**
+    `supabase/logistics_01_shiprocket.sql` deliberately separates four facts:
+    `orders` are what a customer bought; `fulfilment_orders` are warehouse work
+    assigned to a location; `shipments` are physical parcels/AWBs; and
+    `shipment_events` are the append-only carrier history. This is the same
+    separation that makes Shopify fulfilment extensible. StoreMink still ships a
+    whole order from one routed location in v1, but no Shiprocket identifier is
+    stored on `orders`, so later split fulfilment does not require an extraction
+    migration. `shipment_items` and `fulfilment_order_items` already model the
+    allocation.
+    - **Checkout snapshots logistics data.** Products carry `requires_shipping`,
+      grams and centimetres; variants may inherit or override. `placeOrder`
+      copies SKU/HSN/physical values onto each `order_item`, then best-effort
+      creates the location work object after durable lines exist. Booking calls
+      `ensureFulfilmentOrder` too, which self-heals legacy orders and interrupted
+      deployments.
+    - **Each merchant brings their OWN Shiprocket account.** Channels verifies
+      the API-user login before storing it. The password and cached token use the
+      existing channel encryption key (`PAYMENT_CRED_KEY`); neither is returned.
+      The connection can be paused without deleting history. Active locations
+      with `online_fulfil` sync to stable Shiprocket pickup codes through
+      `location_logistics_mappings`; incomplete addresses are named and skipped,
+      never silently mapped to another warehouse.
+    - **Booking is a resumable state machine, not one giant API call.**
+      `shipment-actions.ts` first claims a unique local idempotency key, then
+      creates the Shiprocket order, assigns an AWB, generates the label and
+      finally marks the fulfilment in progress. Every provider id is persisted
+      immediately. If label generation times out after the AWB exists, retry
+      resumes at label generation instead of creating a second parcel. Warehouse
+      staff then schedule pickup and get a manifest. A manual courier fallback
+      records the same provider-neutral shipment/events and marks the order
+      shipped without pretending Shiprocket handled it.
+    - **Carrier state is not order state.** `lib/logistics/status.ts` maps
+      Shiprocket's numeric/text vocabulary to stable parcel statuses and refuses
+      terminal or backwards transitions from late webhooks. The webhook route is
+      addressed by connection UUID and authenticates Shiprocket's `x-api-key`
+      against a SHA-256 hash; the token is shown only on creation/rotation.
+      Events dedupe by content hash. Picked-up/in-transit/NDR/RTO move an eligible
+      order to `shipped`; delivered moves it to `delivered` and stamps
+      `delivered_at`. Cancelled orders are never revived. Customers receive only
+      safe tracking fields/events after their normal owner+host check; raw
+      payloads, credentials and provider IDs remain service-only.
+    - **Operational UI.** The order drawer computes a parcel starting point from
+      line snapshots, then supports booking, label/manifest links, pickup,
+      tracking refresh, pre-pickup cancellation and NDR re-attempt/RTO. Product
+      editing captures physical measurements. Customer order detail shows the
+      courier, AWB, external tracking link and the latest scans.
+    - **Deliberate v1 limits.** StoreMink does not yet expose live courier-rate
+      selection at checkout (shipping remains the existing zero charge), split
+      one order across multiple warehouses/parcels, purchase return labels, or
+      reconcile weight disputes/COD remittances. The schema and adapter boundary
+      are ready for these, but claiming full Shopify parity before those workflows
+      exist would be false.
 
 ## 6. Commands
 
