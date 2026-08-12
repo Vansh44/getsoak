@@ -286,7 +286,7 @@ counter.
 **✅ Also shipped:** the scan box on the collection queue (one box takes both a
 scanned code and a typed order number — a scanner is a keyboard, and a counter
 should not make anyone choose a field first — since extended to past orders
-too, when the queue and the returns lookup merged into `/pos/orders`; see
+too, when the queue and the returns lookup merged into `/pos/pickups`; see
 CODEBASE.md §22 "the shell"), the code in the confirmation
 email, and a per-event **default routing scope** so pickup events reach managers
 at the shop it happened at.

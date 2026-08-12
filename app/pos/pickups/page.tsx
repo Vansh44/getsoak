@@ -1,13 +1,34 @@
 import { redirect } from "next/navigation";
+import { resolvePosOperator } from "@/lib/pos/operator";
+import { posCan } from "@/lib/pos/permissions";
+import { getPickupQueue } from "@/app/actions/pos-pickup-actions";
+import { CounterClient } from "../counter-client";
 
-// Collections merged into the counter screen — see app/pos/orders/orders-client.tsx
-// for why. This stays as a door because `revalidatePath` calls, the acceptance
-// doc and any till someone left open still name it.
+// Collections waiting on this shop's shelf — plus, through the same box, any
+// past order a customer has brought back. One screen with two doors; see the
+// header of counter-client.tsx for why the LOOKUP must not split again.
 //
-// TEMPORARY (307), deliberately: `redirect()` issues one, and a 308 is cached by
-// browsers indefinitely — the trap proxy.ts already had to work around with
-// `Cache-Control: no-store`. There are no SEO signals to consolidate on a path
-// behind a login, so a permanent redirect buys nothing and costs reversibility.
-export default function PosPickupsRedirect() {
-  redirect("/pos/orders");
+// The DOOR is `sell`: handing a collection over is a cashier's job with the
+// customer standing there. Marking a box ready is `fulfil_pickup` and taking a
+// return is `refund`, both gated per action below and again inside the actions.
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "Pickups — Register" };
+
+export default async function PosPickupsPage() {
+  const operator = await resolvePosOperator();
+  if (!operator) redirect("/pos/login");
+  if (!posCan(operator.role, "sell")) redirect("/pos");
+
+  const { orders, error } = await getPickupQueue();
+
+  return (
+    <CounterClient
+      mode="pickups"
+      initial={orders}
+      error={error ?? null}
+      canRefund={posCan(operator.role, "refund")}
+      canFulfilPickup={posCan(operator.role, "fulfil_pickup")}
+    />
+  );
 }

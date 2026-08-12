@@ -2487,8 +2487,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
         the SCREEN, never the strongest action on it**: Orders is `sell`,
         because handing a collection over is a cashier's job with the customer
         standing there — gating that door on `refund` would hide the queue from
-        the person who works it. Tested, both directions.
-      - **★★ COLLECTIONS AND RETURNS MERGED INTO `/pos/orders`.** They were two
+        the person who works it. Tested, both directions. (The key and label are
+        `pickups`; Orders was its first name.)
+      - **★★ COLLECTIONS AND RETURNS MERGED INTO `/pos/pickups`.** They were two
         search screens for one physical moment — a customer at the counter with
         an order that already exists. `/pos/pickups` searched a collection code
         or an order number; `/pos/returns` searched an order number, a phone or
@@ -2497,16 +2498,46 @@ group, span}` (span = columns of the 4-wide desktop grid),
         One box now takes all of it and each row offers what that order can do
         AND what this operator may do (`Mark ready` = `fulfil_pickup`,
         `Hand over` = `sell`, `Take return` = `refund`, every one re-checked in
-        the action). It is `/pos/pickups`'s own ONE-BOX-TAKES-BOTH rule carried
-        one step further. Only the operator's permitted lookups fire — a cashier
-        has no `refund`, so `findOrderForReturn` is never called for them.
-      - **The old paths still resolve** (`/pos/pickups`, `/pos/returns` → 307),
+        the action). It is the queue's own ONE-BOX-TAKES-BOTH rule for scanned
+        codes carried one step further. Only the operator's permitted lookups
+        fire — a cashier has no `refund`, so `findOrderForReturn` is never
+        called for them.
+      - **★ IT IS CALLED PICKUPS, NOT ORDERS** (owner's call, 2026-08-12, after
+        it shipped as Orders). Shopify POS names the equivalent screen Orders
+        and that was the case for it, but in THIS rail it sat two rows above
+        "Sales" and both read as "the things we sold". The label names the job
+        the screen exists for. `/pos/orders` 307s here.
+      - **★★ TWO DOORS, ONE SEARCH.** `/pos/pickups` and `/pos/returns` are both
+        `counter-client.tsx` with a different `mode`, and Returns has its own
+        rail entry. Discoverability and lookup are separate problems: someone
+        holding goods a customer just handed back would not think to tap
+        "Pickups", so Returns needs a name — but giving it a second SEARCH would
+        rebuild exactly what the merge removed, because a customer hands over a
+        number without announcing which kind of visit it is. The mode changes
+        only what is on screen BEFORE you search: Pickups opens on the queue,
+        Returns on a prompt (there is no returns queue at a till — a return
+        starts when someone walks in). Either door finds everything.
+      - **★ RETURNS IS THE ONE DESTINATION GATED ABOVE `sell`** (`refund`), so a
+        cashier never sees it and `app/pos/returns/page.tsx` re-checks for
+        anyone typing the URL — with an explanation, not a redirect, since a
+        manager sending them there should see why. Pickups stays on `sell`: its
+        door is handing collections over, which IS a cashier's job.
+      - **★★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON** — "To prepare"
+        (`awaiting`) above "Ready to collect" (`ready`), each with its count.
+        One flat list hid two opposite states behind a small badge: orders
+        nobody has packed, which are work for STAFF right now, and packed
+        parcels waiting on a CUSTOMER to walk in. A shop had to sort them by
+        eye every time. SEARCHING stays one flat list, deliberately — when you
+        are hunting one order, splitting three hits across headings makes you
+        read all of them. An `others` section catches any future
+        `pickup_status` rather than dropping it silently off a work queue.
+      - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers
         indefinitely and there are no SEO signals to consolidate behind a login
         (the trap `proxy.ts` works around with `Cache-Control: no-store`, §30).
         The return DETAIL screen stays at `/pos/returns/[orderId]`; only the
-        front door moved, and `activePosNavKey` keeps Orders lit on it.
+        front door moved, and `activePosNavKey` keeps Pickups lit on it.
       - **`/pos` OPENS THE REGISTER.** It redirects to `/pos/sell`; the only
         screen left there is the device-authorization prompt
         (`authorize-client.tsx`), and staff cannot resolve as an operator
@@ -2637,7 +2668,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
       because a pickup IS an order (same money, items, invoice, history) and a
       side table would mean every order read either joins it or silently
       ignores a whole fulfilment mode. `lib/fulfilment/pickup.ts` decides
-      where; `/pos/orders` hands it over; the sweep rides on
+      where; `/pos/pickups` hands it over; the sweep rides on
       `/api/cron/expire-pending-payments`. Config:
       `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
       `locations`, rendered on Locations → Online fulfilment).
@@ -2714,7 +2745,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         hand over a card. Booking every collection as cash would put card money
         into expected cash and report the drawer SHORT: the same defect pointed
         the other way, and worse, because "over on cash, short on card" cannot
-        be attributed to anything. `/pos/orders` shows the amount owed on the
+        be attributed to anything. `/pos/pickups` shows the amount owed on the
         row and opens the register's own `TenderPanel` (cash/card/UPI, split
         tenders, change) before handing over. It is the rule §26 and §28
         already state for refunds, read backwards: **the tender decides where
@@ -2752,6 +2783,50 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★★ THE COUNTER KNOWS WHAT A COLLECTION CAN STILL DO**
+        (`lib/pos/collection-state.ts`, pure + tested). `markCollected` has
+        always scoped its read to `pickup_status in ('awaiting','ready')`, so
+        the SERVER could never hand over an expired or already-collected order.
+        The SCREEN did not know: `findPickupByCode` has no status filter (by
+        design — see below) and the row drew "Hand over" unconditionally, so
+        scanning a cancelled order's code produced a full-strength green button
+        that could only fail, in front of the customer. Exactly the anti-pattern
+        the discount fields and the BORIS cash button already exist to avoid.
+        Three states now: `collectable`, `lapsed` and `gone`.
+      - **★ `lapsed` IS STILL COLLECTABLE, AND THAT IS THE POINT.** The sweep is
+        DAILY, so between `pickup_expires_at` passing and the cron running there
+        is a window of up to 24 hours in which the server will happily hand the
+        order over — and should, because a customer a few hours late should
+        simply be served. The row previously showed "Expired" beside a live
+        green button with nothing saying which to believe; it now drops the
+        contradictory countdown and says "The hold period has passed, but this
+        can still be handed over."
+      - **★ A `gone` ORDER STILL RENDERS — it just stops offering actions.**
+        Filtering expired orders out of the lookup would swap a failing button
+        for "No collection found for that code", which is a LIE and leaves a
+        customer at a counter with an order the shop can see and cannot explain.
+        The row renders dimmed, with no buttons, no "₹45 to pay" (nothing is
+        owed on something that will not be handed over), and a note that says
+        what happened — including **where the stock went**, which is the
+        merchant's next question and is not obvious from "cancelled". It
+        replaces `markCollected`'s old catch-all guess, "It may already have
+        been collected", which was given AFTER the tap and was wrong whenever
+        the real answer was expiry.
+      - **★ `findPickupByCode` RETURNED ZEROES FOR MONEY AND ITEMS.** Both were
+        hardcoded 0 on the reasoning that a scan "lands on the order itself,
+        where the caller re-reads what it needs" — but nothing re-reads: a
+        scanned order renders through the SAME row as the queue. So a
+        pay-at-store collection scanned at the counter drew "Hand over" instead
+        of "Take payment" and skipped the tender pad, and every scanned order
+        read "0 items". No money could be lost (markCollected re-reads what is
+        owed and refuses an uncovered hand-over), but the button described the
+        wrong action. It now returns the real `amountDueAtCollection` and a real
+        count, and does NOT default a missing status to `awaiting` — that would
+        present a dead order as live, which is the whole defect.
+      - ⚠ **Staging never sweeps.** Every Cloud Scheduler job targets
+        `storemink.com` (docs/cron-jobs.md), so an expired collection sits in
+        the staging queue indefinitely. That is the `lapsed` state, permanently
+        — useful for testing it, and not a bug.
       - **★ A COLLECTION CODE, AND WHY IT IS NOT THE ORDER REFERENCE**
         (`lib/fulfilment/collection-code.ts`, pure + tested;
         `orders.pickup_code`, locations_11). Minted at checkout for collections
@@ -2782,7 +2857,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         change who hears about ordinary orders for every existing store
         (invariant 1). A merchant's own stored choice always beats the default;
         the fallback only applies when they have chosen nothing.
-      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/orders` resolves a
+      - **★ ONE BOX AT THE COUNTER TAKES BOTH.** `/pos/pickups` resolves a
         scanned collection code OR a typed order number from the same input —
         a hardware scanner is a keyboard, and making someone pick a field first
         is exactly the friction the code was meant to remove.
@@ -3659,7 +3734,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         advance exchange needs a card hold, and there is no hold primitive),
         and cross-product swaps.
     - **★ BORIS — RETURNING AN ONLINE ORDER AT A COUNTER**
-      (`lib/returns/in-store.ts`, `/pos/orders`). This is what finally reads
+      (`lib/returns/in-store.ts`, `/pos/pickups`). This is what finally reads
       the `returns` location capability, in the registry unused since Phase 0.
       - **The bug that made it impossible:** `getReturnableSale` filtered on
         `orders.location_id = op.locationId`, and an online order's location is
@@ -4798,7 +4873,11 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
-  sitemap submission. Attempt/success/error timestamps are persisted;
+  sitemap submission. Google's META verification response is a complete HTML
+  tag, but Next metadata accepts only its `content` value; the pipeline
+  normalizes that value before storage and also repairs legacy full-tag values
+  so the tag cannot be escaped inside another tag. Attempt/success/error
+  timestamps are persisted;
   successful stores are refreshed at most weekly, failures retry daily and make
   the cron return 503 so Cloud Scheduler's three retries engage. Full setup and
   Google-controlled limitations: `docs/seo-indexing.md`.

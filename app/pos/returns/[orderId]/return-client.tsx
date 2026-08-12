@@ -98,14 +98,14 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
     // redundant second exit next to the rail — but this is a STEP IN A FLOW, not
     // a destination: you arrived from a specific order and the way out is back
     // to the counter, not sideways to another part of the till. It has no rail
-    // entry of its own for the same reason (Orders stays lit — see
+    // entry of its own for the same reason (Returns stays lit — see
     // activePosNavKey).
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
         <Link
-          href="/pos/orders"
+          href="/pos/returns"
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20"
-          aria-label="Back to orders"
+          aria-label="Back to returns"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>

@@ -414,7 +414,7 @@ export async function markCollected(
     payload: { pickupLocation: claimed.location_name ?? "" },
   });
 
-  revalidatePath("/pos/orders");
+  revalidatePath("/pos/pickups");
   return { success: true, changeDue: change };
 }
 
@@ -489,7 +489,7 @@ export async function markReadyForPickup(
     return { error: dbErrorMessage(err, "Couldn't update the order.") };
   }
 
-  revalidatePath("/pos/orders");
+  revalidatePath("/pos/pickups");
   return { success: true };
 }
 
@@ -528,6 +528,9 @@ export async function findPickupByCode(
           expires_at: orders.pickupExpiresAt,
           status: orders.pickupStatus,
           pickup_location_id: orders.pickupLocationId,
+          // What is still owed depends on both of these — see below.
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
           location_name: sql<string | null>`(
             select l.name from ${storeLocations} l
              where l.id = ${orders.pickupLocationId}
@@ -550,19 +553,42 @@ export async function findPickupByCode(
     const name =
       [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() || null;
 
+    // ★ THE REAL FIGURES, NOT ZEROES. Both of these were hardcoded to 0 on the
+    // reasoning that a scan "lands on the order itself, where the caller re-reads
+    // what it needs" — but nothing re-reads: the scanned order is rendered by the
+    // SAME row component as the queue. So a pay-at-store collection scanned at
+    // the counter drew "Hand over" instead of "Take payment" and skipped the
+    // tender pad, and every scanned order read "0 items".
+    //
+    // No money could be lost — markCollected re-reads what is owed server-side
+    // and refuses a hand-over that doesn't cover it (validateTenderShape) — but
+    // the button described the wrong action, so the cashier tapped expecting to
+    // hand goods over and got an error about money instead.
+    const itemRows = await withService((db) =>
+      db
+        .select({ n: count() })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, row.id)),
+    ).catch(() => []);
+
     return {
       order: {
         id: row.id,
         orderRef: row.order_ref ?? "",
         customerName: name,
-        // The queue's own count is what the card renders; a scan lands on the
-        // order itself, where the caller re-reads what it needs.
-        itemCount: 0,
+        itemCount: Number(itemRows[0]?.n) || 0,
         total: Number(row.total) || 0,
         placedAt: row.created_at,
         expiresAt: row.expires_at,
-        status: row.status ?? "awaiting",
-        amountDue: 0,
+        // NOT defaulted to "awaiting": that would present an expired or
+        // already-collected order as live, which is the whole bug being fixed.
+        // collectionState() reads an unknown status as "gone" (no button).
+        status: row.status ?? "",
+        amountDue: amountDueAtCollection({
+          paymentMethod: row.payment_method,
+          paymentStatus: row.payment_status,
+          total: row.total,
+        }),
       },
     };
   } catch (err) {

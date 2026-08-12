@@ -19,7 +19,7 @@ This doc answers three questions and makes the decisions the roadmap left open.
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `order_returns` + `order_return_items` + `order_refunds` | ✅ tables, RLS (admin read, service-role write), `gateway_refund_id` UNIQUE                     |
 | `lib/pos/returns.ts` — `refundBreakdown`                 | ✅ pure, tested, and already solves the order-discount re-allocation trap                       |
-| `app/actions/pos-return-actions.ts` + `/pos/orders`      | ✅ full/partial, per-line `sellable`/`damaged`, restock, cash out of the drawer, shift-stamped  |
+| `app/actions/pos-return-actions.ts` + `/pos/pickups`     | ✅ full/partial, per-line `sellable`/`damaged`, restock, cash out of the drawer, shift-stamped  |
 | `returns` location capability (`requires: pos`, Pro)     | ✅ registry + UI, but **nothing reads it yet** — it was added for this work                     |
 | `order.refund_issued` notification event                 | ✅ registered AND emitted — by `processReturn` (the till) and now `refundOrder` (the dashboard) |
 | **Gateway refunds** (roadmap Step 2 / build order §7.1)  | ✅ **built** — see §9                                                                           |
@@ -908,7 +908,7 @@ that never left the till.
 ### Also shipped
 
 `findOrderForReturn` — store-scoped search by order ref, receipt, phone or
-email, behind `/pos/orders`. It shows orders the counter may NOT accept,
+email, behind `/pos/pickups`. It shows orders the counter may NOT accept,
 labelled "Bought elsewhere", because an empty result reads as "your order
 doesn't exist" and a labelled one reads as an answer.
 

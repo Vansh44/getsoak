@@ -68,7 +68,9 @@ account key JSON; ADC is preferred in production.
 When StoreMink's certificate + routing verification flips a domain to verified:
 
 1. the background hook requests a Google META token for `https://domain/`;
-2. the token is stored in public store settings and rendered in `<head>`;
+2. the API's complete META-tag response is reduced to its `content` token,
+   stored in public store settings, and rendered once in `<head>` (legacy
+   full-tag values are normalized at render and repaired by reconciliation);
 3. Google verifies that URL-prefix property;
 4. the service account adds it to Search Console and submits
    `https://domain/sitemap.xml`;

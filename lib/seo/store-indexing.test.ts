@@ -33,7 +33,10 @@ import {
   submitSitemapToGoogle,
   verifyGoogleSite,
 } from "@/lib/seo/search-engines";
-import { ensureGoogleCoverageForStore } from "./store-indexing";
+import {
+  ensureGoogleCoverageForStore,
+  normalizeGoogleVerificationToken,
+} from "./store-indexing";
 
 const baseStore = {
   id: "store-1",
@@ -45,6 +48,29 @@ const baseStore = {
   custom_domain: null,
   settings: { launched: true },
 };
+
+describe("normalizeGoogleVerificationToken", () => {
+  it("extracts the content value from Google's META-method response", () => {
+    expect(
+      normalizeGoogleVerificationToken(
+        '<meta name="google-site-verification" content="abc_123-xyz" />',
+      ),
+    ).toBe("abc_123-xyz");
+  });
+
+  it("accepts an already-normalized token", () => {
+    expect(normalizeGoogleVerificationToken("abc_123-xyz")).toBe("abc_123-xyz");
+  });
+
+  it("rejects unrelated or malformed markup", () => {
+    expect(
+      normalizeGoogleVerificationToken(
+        '<meta name="something-else" content="abc" />',
+      ),
+    ).toBeNull();
+    expect(normalizeGoogleVerificationToken("<meta>")).toBeNull();
+  });
+});
 
 describe("ensureGoogleCoverageForStore", () => {
   beforeEach(() => {
@@ -71,6 +97,11 @@ describe("ensureGoogleCoverageForStore", () => {
   });
 
   it("verifies and registers a custom-domain URL-prefix property", async () => {
+    vi.mocked(requestGoogleSiteVerificationToken).mockResolvedValue({
+      result: { ok: true, status: 200 },
+      token:
+        '<meta name="google-site-verification" content="verification-token" />',
+    });
     dbHolder.current = makeDbMock({
       selectQueue: [
         [

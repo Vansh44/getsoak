@@ -23,7 +23,13 @@
 import type { PosActorRole, PosCapability } from "./permissions";
 import { posCan } from "./permissions";
 
-export type PosNavKey = "sell" | "orders" | "sales" | "inventory" | "shift";
+export type PosNavKey =
+  | "sell"
+  | "pickups"
+  | "returns"
+  | "sales"
+  | "inventory"
+  | "shift";
 
 export interface PosNavItem {
   key: PosNavKey;
@@ -55,11 +61,29 @@ export const POS_NAV: readonly PosNavItem[] = [
     cap: "sell",
   },
   {
-    key: "orders",
-    href: "/pos/orders",
-    label: "Orders",
-    hint: "Collections and returns",
+    key: "pickups",
+    href: "/pos/pickups",
+    // ★ "Pickups", not "Orders". Shopify POS calls the equivalent screen
+    // Orders, but at THIS till it sat two rows below "Sales" — and a cashier
+    // reads both as "the things we sold". Naming the job the screen exists for
+    // beats matching another product's vocabulary.
+    label: "Pickups",
+    hint: "Orders waiting to be collected",
     cap: "sell",
+  },
+  {
+    key: "returns",
+    href: "/pos/returns",
+    // ★ ITS OWN DOOR, THE SAME SEARCH BEHIND IT. Someone holding goods a
+    // customer just handed back would not think to tap "Pickups", so returns
+    // needs a name in the rail. It is NOT a second lookup — both doors run the
+    // same query; see app/pos/counter-client.tsx.
+    label: "Returns",
+    hint: "Take goods back",
+    // The one destination gated above `sell`: a cashier cannot give money back,
+    // so a door they would be turned away at is worse than no door. The screen
+    // re-checks, for anyone who types the URL.
+    cap: "refund",
   },
   {
     key: "sales",
@@ -95,16 +119,18 @@ export function posNavFor(role: PosActorRole): PosNavItem[] {
 /**
  * Which destination a pathname belongs to, for the "you are here" state.
  *
- * Prefix-matched, not equality: `/pos/returns/<id>` is the return detail screen
- * reached FROM Orders, and `/pos/sell` covers nothing deeper today but will.
+ * Prefix-matched on a SEGMENT boundary, not equality: `/pos/returns/<id>` is
+ * the return detail, which has no rail entry of its own and belongs to Returns.
+ * The boundary matters — a plain `startsWith` would light Sell on a future
+ * `/pos/sell-report`.
+ *
  * Returns null on /pos/login, /pos/register and /pos/reset, where there is no
  * operator and therefore no rail.
  */
 export function activePosNavKey(pathname: string): PosNavKey | null {
-  // The two pre-merge routes still resolve (see app/pos/pickups + app/pos/
-  // returns) and the return DETAIL screen lives under /pos/returns for good —
-  // all three belong to Orders, or opening a return would light up nothing.
-  if (/^\/pos\/(orders|pickups|returns)(\/|$)/.test(pathname)) return "orders";
+  // `/pos/orders` is where the counter screen briefly lived; it 307s to
+  // /pos/pickups, but a mid-flight render should still light the right entry.
+  if (/^\/pos\/orders(\/|$)/.test(pathname)) return "pickups";
   const hit = POS_NAV.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );

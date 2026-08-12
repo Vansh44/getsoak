@@ -41,7 +41,7 @@ export async function generateMetadata(): Promise<Metadata> {
     keywords: [
       "storemink",
       "StoreMink",
-      "store mink",
+      "storemink.com",
       "Storemink",
       "ecommerce store builder",
       "online store builder",

@@ -45,11 +45,14 @@ const BRAND_DESCRIPTION =
   "India-first no-code store builder — storefront, blogs, reviews, coupons and email campaigns included. D2C + B2B, no transaction fees.";
 
 /**
- * "storemink" written the ways people actually type it. Declaring these tells
- * Google the one-word spelling IS the brand — a direct counter to the
- * "did you mean…?" spell-correction a new, invented brand name attracts.
+ * Safe fallbacks for Google's automated site-name system.
+ *
+ * Keep the invented brand as one word. "store mink" is an ordinary phrase
+ * about mink storage and was causing Google to associate the company with fur
+ * care. Google explicitly supports the lowercase domain as the final fallback
+ * when the preferred site name is not yet recognised.
  */
-const ALTERNATE_NAMES = ["Storemink", "store mink"];
+const ALTERNATE_NAMES = ["Storemink", "storemink.com"];
 
 /**
  * The platform Organization node. Emitted on the apex AND the help centre under
