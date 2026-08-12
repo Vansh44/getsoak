@@ -20,6 +20,7 @@ stories are here.**
 | Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                            |
 | `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
 | `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                   |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Shiprocket credentials, fulfilment work and tracking events cannot exist otherwise         |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
 are applied. `locations_10` is pending a `postgres` migration run; the three
@@ -1691,7 +1692,109 @@ destination gated above `sell`), and typing `/pos/returns` gives an
 explanation — not a silent redirect, because a manager who sent them there
 should see why. Pickups stays available: handing collections over is their job.
 
-## 11. Known gaps
+## 11. Shiprocket logistics
+
+Use a Shiprocket test account/API user and an order routed to an active
+`online_fulfil` warehouse with a complete Indian address.
+
+**PS-SH.1 — The merchant connects their account, not ours**
+Channels → Shiprocket → enter the API-user email/password.
+**Expect:** wrong credentials are refused before save; correct credentials show
+the email but never the password/token. Shiprocket charges and settlement stay
+in that merchant's account.
+
+**PS-SH.2 ★ — The webhook secret is write-only**
+Connect or rotate the webhook token, copy it, close/reopen the dialog.
+**Expect:** URL remains visible; token does not. The old token gets 401 as soon
+as it is rotated; the new token works in `x-api-key`.
+
+**PS-SH.3 — Only fulfilment warehouses sync**
+Keep one shop without `online_fulfil`, enable it on a warehouse, then Sync.
+**Expect:** only the warehouse is created/mapped in Shiprocket. Re-sync keeps
+the same stable pickup code rather than making another warehouse.
+
+**PS-SH.4 ★ — A bad warehouse is named, not silently replaced**
+Remove its PIN code and Sync.
+**Expect:** the location is skipped with the exact missing-address instruction;
+it is never mapped to the default shop.
+
+**PS-SH.5 — Product logistics survive later edits**
+Give a product/variant weight and dimensions, place an order, then change them.
+**Expect:** the parcel defaults use the order-line snapshots from purchase time,
+not the newly edited product.
+
+**PS-SH.6 ★ — An order and warehouse work are different records**
+Place a delivery order and inspect its fulfilment data.
+**Expect:** one order, one location-assigned fulfilment order, and its line
+allocations. No AWB or Shiprocket ID appears on `orders`.
+
+**PS-SH.7 — Packing produces an AWB and label**
+Open the delivery order, confirm packed measurements, Book with Shiprocket.
+**Expect:** the Shiprocket order/shipment, AWB, courier, tracking URL and label
+are saved; order becomes Processing and fulfilment becomes In progress.
+
+**PS-SH.8 ★★ — Retrying cannot create a second parcel**
+Make label generation fail after Shiprocket assigned the AWB, then retry Book.
+**Expect:** StoreMink retains the external shipment/AWB and resumes at the
+missing stage. Shiprocket has one order and one AWB, not two.
+
+**PS-SH.9 — Pickup and manifest are warehouse actions**
+On Ready to ship, Schedule pickup.
+**Expect:** status becomes Pickup scheduled; manifest appears when Shiprocket
+returns one. A temporary manifest failure does not undo the successful pickup.
+
+**PS-SH.10 — Another courier still works**
+Without Shiprocket (or by choice), Use another courier; enter carrier/AWB/link.
+**Expect:** the shipment is saved as Manual, order becomes Shipped, and the
+customer sees the same safe courier/tracking information.
+
+**PS-SH.11 ★ — Duplicate webhooks are exactly once**
+POST the same authenticated Shiprocket event twice.
+**Expect:** both requests are accepted, one `shipment_event` exists, and no
+duplicate notification/status change is emitted.
+
+**PS-SH.12 ★★ — Late webhooks never send a parcel backwards**
+Record Delivered, then send In transit; or send an old Picked up after Out for
+delivery.
+**Expect:** history may retain the evidence, but shipment/order remain at the
+furthest valid state. A cancelled order is never revived by a carrier callback.
+
+**PS-SH.13 — The customer follows the parcel**
+As that shopper, open `/orders/<id>` after scans arrive.
+**Expect:** status, courier, AWB, tracking link and recent scans/location/time.
+No raw webhook payload, provider order ID, credential, internal error or pickup
+mapping is exposed.
+
+**PS-SH.14 — Delivery closes the journey**
+Send a Delivered callback while the order is Processing or Shipped.
+**Expect:** shipment and order become Delivered, `delivered_at` is stamped, and
+the return window now has its actual starting point.
+
+**PS-SH.15 — NDR offers the two real decisions**
+Send an undelivered/NDR callback.
+**Expect:** dashboard says action required and offers Re-attempt or Return to
+origin; the chosen action reaches Shiprocket and moves to the appropriate
+provider-neutral state.
+
+**PS-SH.16 — Cancellation stops at courier custody**
+Cancel a Ready-to-ship AWB, then try on a Picked-up parcel.
+**Expect:** the first calls Shiprocket and becomes Cancelled; the second is
+refused with guidance to use Shiprocket support/NDR. Cancelling a parcel does
+not silently cancel/refund the commercial order.
+
+**PS-SH.17 — Pausing is reversible, disconnecting preserves evidence**
+Pause Shiprocket, attempt a booking, resume it, then disconnect after an order
+has shipped.
+**Expect:** paused booking is refused; resume works; disconnect removes the
+credential/mappings but historical shipment/events remain readable.
+
+**PS-SH.18 — Store scope is absolute**
+As staff of store A, request an order/shipment belonging to store B and POST its
+AWB to store A's connection URL.
+**Expect:** no data/action. Connection id, store id, order id and normal
+permission checks all agree before any mutation.
+
+## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
 
@@ -1714,3 +1817,8 @@ Real and deliberate, so nobody files them as bugs:
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |
+| **Live delivery rates at checkout**                                | Shiprocket serviceability exists in the adapter, but checkout still charges the existing ₹0 shipping. Courier/rate/ETA selection and a server-revalidated quote remain to build                                                                      |
+| **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                         |
+| **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                              |
+| **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                       |
+| **Shiprocket browser/API smoke test pending**                      | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                            |

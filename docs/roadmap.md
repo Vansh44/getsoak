@@ -32,6 +32,7 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
@@ -56,6 +57,42 @@ to end in a browser_. Steps 1 and 3 finish it.
 ---
 
 # Part 1 — What to build
+
+---
+
+## Delivered foundation — Shiprocket logistics ✅ DONE
+
+The delivery lifecycle is no longer an order-status dropdown pretending to be
+a warehouse. `logistics_01_shiprocket.sql` adds Shopify-shaped fulfilment work,
+parcels and append-only carrier events; each merchant connects their own
+Shiprocket API user in Channels and maps every `online_fulfil` location to a
+pickup address.
+
+The order drawer now covers the warehouse path: confirm the packed weight and
+dimensions, create the Shiprocket order, persist its IDs before continuing,
+assign an AWB, generate the label, schedule pickup and expose the manifest.
+Every stage is resumable under one local idempotency key. A timeout after AWB
+creation therefore retries the missing label instead of buying a second
+shipment. A merchant can record another courier manually without losing the
+same tracking/order semantics.
+
+Shiprocket webhook and manual refresh both feed one provider-neutral,
+duplicate-safe, non-regressing status machine. Pickup, transit, delivery, NDR
+and RTO propagate to the order/customer timeline; the dashboard can ask for a
+re-attempt or return-to-origin. Credentials, raw events and carrier internals
+are service-only, while the shopper sees courier, AWB, tracking link and scans.
+
+**Deployment prerequisite:** run `supabase/logistics_01_shiprocket.sql`, set the
+existing `PAYMENT_CRED_KEY`, connect the merchant account, sync warehouses, and
+copy the generated URL/token into Shiprocket's webhook settings.
+
+**Not in this completed core:** live courier rate/ETA selection at checkout,
+multi-parcel or multi-location splits, return-label purchasing, weight-dispute
+and COD-remittance reconciliation. Shipping is still the pre-existing free
+checkout charge. Those are the remaining Shopify-parity layers, not hidden
+inside an “integrated” badge.
+
+Acceptance: **PS-SH.1–SH.18**.
 
 ---
 

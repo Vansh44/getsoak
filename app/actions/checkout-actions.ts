@@ -51,6 +51,7 @@ import {
 } from "@/lib/fulfilment/pickup";
 import { holdStock, releaseHold } from "@/lib/inventory/reservations";
 import { formatAddressLine } from "@/lib/locations/address";
+import { ensureFulfilmentOrder } from "@/lib/logistics/fulfilment";
 import {
   recordStorePolicyConsent,
   getCheckoutPolicies,
@@ -837,6 +838,13 @@ export async function placeOrder(
         // stock to run out of (roadmap Phase D).
         track_inventory: products.trackInventory,
         allow_backorder: products.allowBackorder,
+        sku: products.sku,
+        hsn_code: products.hsnCode,
+        requires_shipping: products.requiresShipping,
+        weight_grams: products.weightGrams,
+        length_cm: products.lengthCm,
+        width_cm: products.widthCm,
+        height_cm: products.heightCm,
       })
       .from(products)
       .where(
@@ -876,6 +884,12 @@ export async function placeOrder(
       selling_price: number;
       track_inventory?: boolean | null;
       allow_backorder?: boolean | null;
+      sku: string;
+      requires_shipping: boolean | null;
+      weight_grams: number | null;
+      length_cm: number | null;
+      width_cm: number | null;
+      height_cm: number | null;
     }
   >();
   if (variantIds.length > 0) {
@@ -887,6 +901,12 @@ export async function placeOrder(
           selling_price: productVariants.sellingPrice,
           track_inventory: productVariants.trackInventory,
           allow_backorder: productVariants.allowBackorder,
+          sku: productVariants.sku,
+          requires_shipping: productVariants.requiresShipping,
+          weight_grams: productVariants.weightGrams,
+          length_cm: productVariants.lengthCm,
+          width_cm: productVariants.widthCm,
+          height_cm: productVariants.heightCm,
         })
         .from(productVariants)
         .where(
@@ -916,6 +936,13 @@ export async function placeOrder(
     tax_rate: number;
     tax_amount: number;
     tax_class_name: string | null;
+    sku: string;
+    hsn_code: string | null;
+    requires_shipping: boolean;
+    weight_grams: number | null;
+    length_cm: number | null;
+    width_cm: number | null;
+    height_cm: number | null;
   }> = [];
 
   for (const item of items) {
@@ -926,6 +953,14 @@ export async function placeOrder(
     let price = dbProduct.selling_price;
     const name = dbProduct.name;
     let variantName: string | null = null;
+    let logistics = {
+      sku: dbProduct.sku,
+      requires_shipping: dbProduct.requires_shipping,
+      weight_grams: dbProduct.weight_grams,
+      length_cm: dbProduct.length_cm,
+      width_cm: dbProduct.width_cm,
+      height_cm: dbProduct.height_cm,
+    };
 
     if (item.variantId) {
       const dbVariant = variantsMap.get(item.variantId);
@@ -933,6 +968,15 @@ export async function placeOrder(
         return { error: `Variant no longer available: ${item.variantName}` };
       price = dbVariant.selling_price;
       variantName = dbVariant.name;
+      logistics = {
+        sku: dbVariant.sku,
+        requires_shipping:
+          dbVariant.requires_shipping ?? dbProduct.requires_shipping,
+        weight_grams: dbVariant.weight_grams ?? dbProduct.weight_grams,
+        length_cm: dbVariant.length_cm ?? dbProduct.length_cm,
+        width_cm: dbVariant.width_cm ?? dbProduct.width_cm,
+        height_cm: dbVariant.height_cm ?? dbProduct.height_cm,
+      };
     }
 
     const taxInfo = resolveTax(dbProduct);
@@ -948,6 +992,8 @@ export async function placeOrder(
       tax_rate: taxInfo.rate,
       tax_amount: 0,
       tax_class_name: taxInfo.name,
+      ...logistics,
+      hsn_code: dbProduct.hsn_code,
     });
   }
 
@@ -1392,6 +1438,13 @@ export async function placeOrder(
     taxRate: item.tax_rate,
     taxAmount: item.tax_amount,
     taxClassName: item.tax_class_name,
+    hsnCode: item.hsn_code,
+    sku: item.sku,
+    requiresShipping: item.requires_shipping,
+    weightGrams: item.weight_grams,
+    lengthCm: item.length_cm,
+    widthCm: item.width_cm,
+    heightCm: item.height_cm,
   }));
 
   let itemsFailed = false;
@@ -1408,6 +1461,18 @@ export async function placeOrder(
     await deleteOrder();
     await releaseCoupon();
     return { error: "Failed to save order items. Please try again." };
+  }
+
+  // Shopify's durable split: the order records the sale; this work object says
+  // which location must prepare it. A migration rolling out moments after the
+  // app must not lose a paid order, so this is self-healing and booking repeats
+  // it before calling a carrier.
+  if (!pickupAt) {
+    await ensureFulfilmentOrder({
+      storeId,
+      orderId: order.id,
+      locationId: fulfilmentLocationId,
+    }).catch((err) => console.error("create fulfilment order:", errMsg(err)));
   }
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";

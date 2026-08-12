@@ -155,6 +155,55 @@ export default async function MyOrderDetailPage({
               )}
             </div>
 
+            {!pickup && order.shipments.length > 0 && (
+              <div className={styles.card}>
+                <div className={styles.sectionTitle}>Shipment tracking</div>
+                {order.shipments.map((shipment) => (
+                  <div key={shipment.id}>
+                    <p className={styles.summary}>
+                      <strong>{shipment.status_label}</strong>
+                      {shipment.courier_name
+                        ? ` · ${shipment.courier_name}`
+                        : ""}
+                      {shipment.awb ? ` · AWB ${shipment.awb}` : ""}
+                    </p>
+                    {shipment.tracking_url && (
+                      <a
+                        href={shipment.tracking_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={styles.invoiceBtn}
+                      >
+                        Track with courier
+                      </a>
+                    )}
+                    {shipment.events.length > 0 && (
+                      <ol className={styles.track} style={{ marginTop: 18 }}>
+                        {shipment.events.slice(0, 6).map((event, index) => (
+                          <li
+                            key={event.id}
+                            className={`${styles.trackStep} ${index === 0 ? styles.trackStepDone : ""}`}
+                          >
+                            <span className={styles.trackDot} />
+                            <span className={styles.trackLabel}>
+                              {event.description ??
+                                event.status.replaceAll("_", " ")}
+                              <small
+                                style={{ display: "block", fontWeight: 400 }}
+                              >
+                                {formatDate(event.occurred_at)}
+                                {event.location ? ` · ${event.location}` : ""}
+                              </small>
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className={styles.card}>
               <div className={styles.sectionTitle}>
                 {order.item_count} {order.item_count === 1 ? "item" : "items"}

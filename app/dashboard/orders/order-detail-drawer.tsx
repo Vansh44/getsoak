@@ -34,6 +34,7 @@ import {
 import { locationAddressLines } from "@/lib/locations/address";
 import { RefundPanel } from "./refund-panel";
 import { PickupBadge, isPickupOrder, pickupStageLabel } from "./pickup-badge";
+import { ShipmentPanel } from "./shipment-panel";
 
 const ORDER_STATUSES = [
   "pending",
@@ -461,6 +462,16 @@ export function OrderDetailDrawer({
                 )}
               </div>
             </section>
+
+            {!isPickupOrder(detail) && (
+              <ShipmentPanel
+                orderId={detail.id}
+                onChanged={async () => {
+                  await reload();
+                  onChanged();
+                }}
+              />
+            )}
 
             {detail.notes && (
               <section>
