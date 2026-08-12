@@ -84,7 +84,9 @@ are service-only, while the shopper sees courier, AWB, tracking link and scans.
 
 **Deployment prerequisite:** run `supabase/logistics_01_shiprocket.sql`, set the
 existing `PAYMENT_CRED_KEY`, connect the merchant account, sync warehouses, and
-copy the generated URL/token into Shiprocket's webhook settings.
+copy the generated provider-neutral URL/token into Shiprocket's webhook
+settings. The callback path deliberately omits Shiprocket's reserved provider
+keywords so its dashboard accepts the address.
 
 **Not in this completed core:** live courier rate/ETA selection at checkout,
 multi-parcel or multi-location splits, return-label purchasing, weight-dispute
