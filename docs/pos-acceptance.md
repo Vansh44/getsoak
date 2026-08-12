@@ -1705,8 +1705,10 @@ in that merchant's account.
 
 **PS-SH.2 ★ — The webhook secret is write-only**
 Connect or rotate the webhook token, copy it, close/reopen the dialog.
-**Expect:** URL remains visible; token does not. The old token gets 401 as soon
-as it is rotated; the new token works in `x-api-key`.
+**Expect:** Shiprocket accepts the provider-neutral URL (it contains none of its
+reserved provider keywords); the URL remains visible but the token does not.
+The old token gets 401 as soon as it is rotated; the new token works in
+`x-api-key`.
 
 **PS-SH.3 — Only fulfilment warehouses sync**
 Keep one shop without `online_fulfil`, enable it on a warehouse, then Sync.

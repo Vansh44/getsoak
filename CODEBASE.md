@@ -425,8 +425,9 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
-│       ├── webhooks/shiprocket/[connectionId]/ # ★ §35 authenticated carrier events;
-│       │                      # duplicate and out-of-order safe, raw payload service-only
+│       ├── webhooks/logistics/[connectionId]/ # ★ §35 authenticated carrier events;
+│       │                      # provider-neutral URL accepted by Shiprocket; duplicate and
+│       │                      # out-of-order safe, raw payload service-only
 │       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
 │       │                      # cron): coupon campaigns + notification emails
 │       │                      # (§22). Self-chains while either has work left
@@ -4703,7 +4704,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Each merchant brings their OWN Shiprocket account.** Channels verifies
       the API-user login before storing it. The password and cached token use the
       existing channel encryption key (`PAYMENT_CRED_KEY`); neither is returned.
-      The connection can be paused without deleting history. Active locations
+      The connection can be paused without deleting history. The generated
+      callback uses the provider-neutral `/api/webhooks/logistics/...` path
+      because Shiprocket rejects webhook URLs containing its reserved provider
+      keywords. Active locations
       with `online_fulfil` sync to stable Shiprocket pickup codes through
       `location_logistics_mappings`; incomplete addresses are named and skipped,
       never silently mapped to another warehouse.
@@ -4718,8 +4722,9 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       shipped without pretending Shiprocket handled it.
     - **Carrier state is not order state.** `lib/logistics/status.ts` maps
       Shiprocket's numeric/text vocabulary to stable parcel statuses and refuses
-      terminal or backwards transitions from late webhooks. The webhook route is
-      addressed by connection UUID and authenticates Shiprocket's `x-api-key`
+      terminal or backwards transitions from late webhooks. The provider-neutral
+      webhook route is addressed by connection UUID and authenticates
+      Shiprocket's `x-api-key`
       against a SHA-256 hash; the token is shown only on creation/rotation.
       Events dedupe by content hash. Picked-up/in-transit/NDR/RTO move an eligible
       order to `shipped`; delivered moves it to `delivered` and stamps

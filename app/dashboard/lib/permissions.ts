@@ -373,9 +373,8 @@ export const SECTIONS: DashboardSection[] = [
     parent: "settings",
   },
   {
-    // Was "Channels", which named the mechanism rather than the job.
     key: "channels",
-    label: "Payments",
+    label: "Channels",
     href: "/dashboard/channels",
     icon: "channels",
     group: "Settings",

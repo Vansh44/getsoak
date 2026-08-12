@@ -34,7 +34,10 @@ export function verifyWebhookSecret(
 }
 
 export function shiprocketWebhookUrl(connectionId: string): string {
-  return `${PLATFORM_URL}/api/webhooks/shiprocket/${encodeURIComponent(connectionId)}`;
+  // Shiprocket rejects callback addresses containing provider keywords such as
+  // "shiprocket", "kartrocket", "sr", or "kr". Keep the public route
+  // provider-neutral even though the connection itself is provider-specific.
+  return `${PLATFORM_URL}/api/webhooks/logistics/${encodeURIComponent(connectionId)}`;
 }
 
 type ConnectionRow = {

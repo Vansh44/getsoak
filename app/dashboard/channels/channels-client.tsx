@@ -33,9 +33,7 @@ import {
 
 // ---------------------------------------------------------------------------
 // Channel catalog — data-driven so new channels (logistics, SMS, marketplace…)
-// are a one-line addition here later. For now the only live channel is the
-// store's own Razorpay payment gateway; everything else the reference shows is
-// intentionally not built yet.
+// are a one-line addition here later.
 // ---------------------------------------------------------------------------
 
 type Category =
@@ -63,6 +61,17 @@ interface ChannelDef {
   logoAspect?: number;
 }
 
+const SHIPROCKET_CHANNEL: ChannelDef = {
+  id: "shiprocket",
+  name: "Shiprocket",
+  category: "logistics",
+  tagline: "Courier booking, labels, tracking & NDR",
+  accent: "#7357e8",
+  icon: Truck,
+  logo: "/channels/shiprocket.svg",
+  logoAspect: 854.34 / 189.9,
+};
+
 const CHANNELS: ChannelDef[] = [
   {
     id: "razorpay",
@@ -74,14 +83,7 @@ const CHANNELS: ChannelDef[] = [
     logo: "/channels/razorpay.svg",
     logoAspect: 132 / 38, // Razorpay wordmark
   },
-  {
-    id: "shiprocket",
-    name: "Shiprocket",
-    category: "logistics",
-    tagline: "Courier booking, labels, tracking & NDR",
-    accent: "#7357e8",
-    icon: Truck,
-  },
+  SHIPROCKET_CHANNEL,
 ];
 
 // Brand logo when the channel ships one, else a tinted icon tile. `height`
@@ -482,8 +484,8 @@ function ShiprocketModal({
       >
         <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50">
-              <Truck className="h-5 w-5 text-violet-600" />
+            <span className="flex h-10 w-[7.5rem] items-center justify-center">
+              <ChannelLogo def={SHIPROCKET_CHANNEL} height={24} />
             </span>
             <div>
               <h2 className="text-base font-semibold text-[#111827]">
