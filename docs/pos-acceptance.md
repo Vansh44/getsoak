@@ -1634,6 +1634,29 @@ those badges are absent: they would repeat their own heading on every row.
 **Expect:** any `pickup_status` that is neither `awaiting` nor `ready` renders
 under an "Other" heading rather than dropping silently off a work queue.
 
+**PS-19.15 ★ — Returns has its own door**
+As a manager, look at the rail.
+**Expect:** a **Returns** entry between Pickups and Sales, opening
+`/pos/returns` on a prompt ("Search for the order the customer is bringing
+back") with no queue — a return starts when someone walks in.
+**Why:** someone holding goods a customer just handed back would not think to
+tap "Pickups".
+
+**PS-19.16 ★★ — Two doors, ONE search**
+Search the same reference from `/pos/pickups` and from `/pos/returns`.
+**Expect:** the same results from both — collections AND returnable past
+orders. Neither door narrows the query.
+**Was:** two screens with two boxes, and neither could find what the other
+could, so a cashier had to know which kind of visit it was before they knew
+which order it was. Giving Returns its own search again would rebuild that.
+
+**PS-19.17 ★ — A cashier has no Returns door**
+Sign in as a cashier.
+**Expect:** no Returns entry in the rail (it is gated on `refund`, the only
+destination gated above `sell`), and typing `/pos/returns` gives an
+explanation — not a silent redirect, because a manager who sent them there
+should see why. Pickups stays available: handing collections over is their job.
+
 ## 11. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

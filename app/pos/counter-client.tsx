@@ -1,23 +1,27 @@
 "use client";
 
-// The counter screen: a customer is standing here with an order that already
-// exists. Collections and returns, one screen, one box.
+// The counter: a customer is standing here with an order that already exists.
+// TWO DOORS — /pos/pickups and /pos/returns — and ONE search behind both.
 //
-// ★ WHY THE TWO MERGED. They were two search screens for the same physical
-// moment. The old collections queue searched a collection code or an order
-// number; the old /pos/returns lookup searched an order number, a phone or an
-// email — and neither could find what the other could. So a cashier had to know
-// which kind of visit this was BEFORE they knew which order it was, and pick a
-// screen accordingly. The customer holding the phone does not present that way:
-// they hand over a number, and the till should work out what can be done with
-// it. It is the ONE-BOX-TAKES-BOTH rule the queue already had for scanned codes,
-// carried one step further — to the order itself.
+// ★ WHY THE LOOKUP IS SHARED. These were once two screens with two search
+// boxes. The collections queue searched a collection code or an order number;
+// the returns lookup searched an order number, a phone or an email — and
+// NEITHER COULD FIND WHAT THE OTHER COULD. So a cashier had to know which kind
+// of visit this was BEFORE they knew which order it was. The customer holding
+// the phone does not present that way: they hand over a number, and the till
+// works out what can be done with it. It is the ONE-BOX-TAKES-BOTH rule the
+// queue already had for scanned codes, carried one step further.
 //
-// ★ WHY IT IS CALLED PICKUPS, NOT ORDERS. It was briefly "Orders" (Shopify POS
-// names the equivalent screen that way), and it sat two rows below "Sales" in
-// the rail, where both read as "the things we sold". The label names the job
-// this screen exists for; the subtitle and the drawer hint carry the returns
-// half, which no single word covers.
+// ★ WHY THERE ARE STILL TWO DOORS. Discoverability is a separate problem from
+// lookup. Someone holding goods a customer just handed back would not think to
+// tap "Pickups", so Returns keeps its own name in the rail — and its own
+// capability gate, since a cashier cannot give money back. What the two doors
+// differ in is ONLY what is on screen before you search (`mode` below);
+// splitting the query again would rebuild the problem the merge removed.
+//
+// ★ WHY "PICKUPS", NOT "ORDERS". It shipped as Orders (Shopify POS names the
+// equivalent screen that way) and sat two rows above "Sales" in the rail, where
+// a cashier reads both as "the things we sold".
 //
 // ★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON — see the split below.
 //
@@ -52,8 +56,8 @@ import {
   type FoundOrder,
 } from "@/app/actions/pos-return-actions";
 import type { PosTender } from "@/app/actions/pos-sale-actions";
-import { TenderPanel } from "../sell/tender-panel";
-import { PosScreen } from "../pos-screen";
+import { TenderPanel } from "./sell/tender-panel";
+import { PosScreen } from "./pos-screen";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -94,12 +98,28 @@ type CounterRow =
   | { kind: "pickup"; order: PickupOrder }
   | { kind: "past"; order: FoundOrder };
 
-export function PickupsClient({
+/**
+ * Which door the operator came through.
+ *
+ * ★ TWO DOORS, ONE SEARCH — and that is the whole point. The screens were
+ * merged because a customer at the counter hands over a number without
+ * announcing which kind of visit it is, and the search still finds everything
+ * from either entry. What the mode changes is only what you see BEFORE you
+ * search: `pickups` opens on the shelf (a queue of work), `returns` opens on
+ * the box (there is no returns queue at a till — a return starts when someone
+ * walks in). Splitting the LOOKUP again would rebuild the exact problem the
+ * merge removed.
+ */
+export type CounterMode = "pickups" | "returns";
+
+export function CounterClient({
+  mode,
   initial,
   error,
   canRefund,
   canFulfilPickup,
 }: {
+  mode: CounterMode;
   initial: PickupOrder[];
   error: string | null;
   /** Taking a return is a manager capability — a cashier hands collections
@@ -256,10 +276,17 @@ export function PickupsClient({
     return {};
   };
 
-  // No search on screen ⇒ the shelf. The queue is the till's default view
-  // because it is the work waiting to be done, not a blank box.
+  const isReturns = mode === "returns";
+
+  // No search on screen ⇒ the shelf, on the Pickups door: the queue is that
+  // screen's default view because it is the work waiting to be done, not a
+  // blank box. Returns has no equivalent — a return begins when a customer
+  // walks in — so its idle state is the prompt below, not an empty queue.
   const rows: CounterRow[] =
-    found ?? queue.map((order) => ({ kind: "pickup" as const, order }));
+    found ??
+    (isReturns
+      ? []
+      : queue.map((order) => ({ kind: "pickup" as const, order })));
 
   // ★★ THE QUEUE SPLITS BY WHO IT IS WAITING ON.
   //
@@ -399,15 +426,17 @@ export function PickupsClient({
 
   return (
     <PosScreen
-      title="Pickups"
+      title={isReturns ? "Returns" : "Pickups"}
       subtitle={
-        // The breakdown, not just a total — the two halves are what a shop
-        // actually plans around.
-        toPrepare.length > 0
-          ? `${toPrepare.length} to prepare · ${readyToCollect.length} ready`
-          : readyToCollect.length > 0
-            ? `${readyToCollect.length} ready to collect`
-            : "Collections and returns"
+        isReturns
+          ? "Find the order the customer is bringing back"
+          : // The breakdown, not just a total — the two halves are what a shop
+            // actually plans around.
+            toPrepare.length > 0
+            ? `${toPrepare.length} to prepare · ${readyToCollect.length} ready`
+            : readyToCollect.length > 0
+              ? `${readyToCollect.length} ready to collect`
+              : "Collections and returns"
       }
       width="wide"
     >
@@ -425,8 +454,15 @@ export function PickupsClient({
           onChange={(e) => setQuery(e.target.value)}
           // Says every kind of thing it takes, because the whole point of the
           // merge is that the cashier no longer has to know which kind of visit
-          // this is before they can look it up.
-          placeholder="Scan a collection code, or type an order number, phone or email…"
+          // this is before they can look it up. The Returns door leads with the
+          // order number — the customer holding a parcel usually has one, and
+          // rarely a collection code — but the box behaves identically, so a
+          // scanned code still resolves here.
+          placeholder={
+            isReturns
+              ? "Order number, phone or email — or scan a code…"
+              : "Scan a collection code, or type an order number, phone or email…"
+          }
           className="w-full rounded-xl border border-white/10 bg-white/5 py-3.5 pl-11 pr-11 text-base outline-none focus:border-white/30"
         />
         {pending && (
@@ -453,6 +489,19 @@ export function PickupsClient({
               Nothing found for “{trimmed}”. Check the number, or try their
               phone.
             </p>
+          ) : isReturns ? (
+            // Not an empty state — an instruction. There is nothing missing
+            // here; the screen is waiting to be given a number, and saying
+            // "nothing found" before anyone has searched reads like a fault.
+            <>
+              <p className="text-sm text-white/60">
+                Search for the order the customer is bringing back.
+              </p>
+              <p className="mt-1 text-sm text-white/40">
+                Their order number, the phone or email they ordered with, or a
+                scanned collection code.
+              </p>
+            </>
           ) : (
             <>
               <p className="text-sm text-white/60">

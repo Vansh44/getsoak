@@ -2506,8 +2506,22 @@ group, span}` (span = columns of the 4-wide desktop grid),
         it shipped as Orders). Shopify POS names the equivalent screen Orders
         and that was the case for it, but in THIS rail it sat two rows above
         "Sales" and both read as "the things we sold". The label names the job
-        the screen exists for; the subtitle and drawer hint carry the returns
-        half, which no single word covers. `/pos/orders` 307s here.
+        the screen exists for. `/pos/orders` 307s here.
+      - **★★ TWO DOORS, ONE SEARCH.** `/pos/pickups` and `/pos/returns` are both
+        `counter-client.tsx` with a different `mode`, and Returns has its own
+        rail entry. Discoverability and lookup are separate problems: someone
+        holding goods a customer just handed back would not think to tap
+        "Pickups", so Returns needs a name — but giving it a second SEARCH would
+        rebuild exactly what the merge removed, because a customer hands over a
+        number without announcing which kind of visit it is. The mode changes
+        only what is on screen BEFORE you search: Pickups opens on the queue,
+        Returns on a prompt (there is no returns queue at a till — a return
+        starts when someone walks in). Either door finds everything.
+      - **★ RETURNS IS THE ONE DESTINATION GATED ABOVE `sell`** (`refund`), so a
+        cashier never sees it and `app/pos/returns/page.tsx` re-checks for
+        anyone typing the URL — with an explanation, not a redirect, since a
+        manager sending them there should see why. Pickups stays on `sell`: its
+        door is handing collections over, which IS a cashier's job.
       - **★★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON** — "To prepare"
         (`awaiting`) above "Ready to collect" (`ready`), each with its count.
         One flat list hid two opposite states behind a small badge: orders

@@ -28,6 +28,7 @@ import {
   Menu,
   PackageCheck,
   Receipt,
+  RotateCcw,
   ScanLine,
   X,
 } from "lucide-react";
@@ -45,6 +46,7 @@ import type { PosActorRole } from "@/lib/pos/permissions";
 const ICONS: Record<PosNavKey, typeof ScanLine> = {
   sell: ScanLine,
   pickups: PackageCheck,
+  returns: RotateCcw,
   sales: Receipt,
   inventory: Boxes,
   shift: Banknote,

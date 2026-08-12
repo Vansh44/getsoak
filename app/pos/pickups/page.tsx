@@ -2,16 +2,15 @@ import { redirect } from "next/navigation";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import { getPickupQueue } from "@/app/actions/pos-pickup-actions";
-import { PickupsClient } from "./pickups-client";
+import { CounterClient } from "../counter-client";
 
-// The counter: collections waiting on this shop's shelf, and any past order a
-// customer has brought back. One screen, because they are one moment — see the
-// header of pickups-client.tsx.
+// Collections waiting on this shop's shelf — plus, through the same box, any
+// past order a customer has brought back. One screen with two doors; see the
+// header of counter-client.tsx for why the LOOKUP must not split again.
 //
-// The DOOR is `sell`: handing a collection over and reprinting are a cashier's
-// job with the customer standing there. Taking a return is `refund` and marking
-// a box ready is `fulfil_pickup`, both gated per action below and again inside
-// the actions themselves.
+// The DOOR is `sell`: handing a collection over is a cashier's job with the
+// customer standing there. Marking a box ready is `fulfil_pickup` and taking a
+// return is `refund`, both gated per action below and again inside the actions.
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Pickups — Register" };
@@ -24,7 +23,8 @@ export default async function PosPickupsPage() {
   const { orders, error } = await getPickupQueue();
 
   return (
-    <PickupsClient
+    <CounterClient
+      mode="pickups"
       initial={orders}
       error={error ?? null}
       canRefund={posCan(operator.role, "refund")}
