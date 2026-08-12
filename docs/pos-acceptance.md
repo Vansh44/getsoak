@@ -1650,6 +1650,40 @@ orders. Neither door narrows the query.
 could, so a cashier had to know which kind of visit it was before they knew
 which order it was. Giving Returns its own search again would rebuild that.
 
+**PS-19.18 ★★ — An expired collection can still be handed over, and says so**
+Find a collection whose `pickup_expires_at` has passed but which the daily
+sweep has not reached (on staging this is permanent — no cron runs there).
+**Expect:** it stays in "Ready to collect" with its **Hand over / Take payment**
+button live, no contradictory "Expired" in the meta line, and an amber note:
+"The hold period has passed, but this can still be handed over."
+**Why:** the sweep is daily, so this window is up to 24 hours wide in
+production, and `markCollected` will genuinely still hand the order over — a
+customer a few hours late should simply be served.
+**Was:** "Expired" next to a full-strength green button, with nothing saying
+which one to believe.
+
+**PS-19.19 ★★ — A swept order offers nothing, and explains itself**
+Scan the collection code of an order the sweep has already cancelled.
+**Expect:** the row renders, dimmed, with **no buttons**, no "₹… to pay", and a
+note: "Not collected in time — this order was cancelled and the stock went back
+on the shelf," plus the date. An already-collected one says "Already handed
+over" instead.
+**Was:** a green Hand over button that always failed, and only after the tap —
+with the guess "That order isn't waiting for collection here. It may already
+have been collected", which was wrong whenever the truth was expiry.
+**Note:** filtering these out of the lookup instead would give "No collection
+found for that code", which is a lie and leaves the customer at a counter with
+an order the shop can see and cannot explain.
+
+**PS-19.20 ★ — A scanned pay-at-store order asks for the money**
+Scan the code of a collection with `pay_at_store` still outstanding.
+**Expect:** the row shows "₹… to pay" and the button reads **Take payment**,
+opening the tender pad.
+**Was:** `findPickupByCode` hardcoded `amountDue: 0` (and `itemCount: 0`), so it
+read "0 items" and offered **Hand over** — the server refused correctly, so no
+money was ever lost, but the cashier tapped expecting to hand goods over and got
+an error about payment.
+
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
 **Expect:** no Returns entry in the rail (it is gated on `refund`, the only

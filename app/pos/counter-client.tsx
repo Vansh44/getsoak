@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { isCollectionCode } from "@/lib/fulfilment/collection-code";
+import { collectionNote, collectionState } from "@/lib/pos/collection-state";
 import {
   findPickupByCode,
   getPickupQueue,
@@ -311,78 +312,127 @@ export function CounterClient({
    *  component so the two sections and the search results share ONE row — three
    *  copies of a row carrying money and a Hand over button is three places to
    *  fix the next time one of them is wrong. */
-  const renderPickup = (o: PickupOrder) => (
-    <li
-      key={`pickup:${o.id}`}
-      className="rounded-xl border border-white/10 bg-white/5 p-4"
-    >
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-mono text-base font-semibold">{o.orderRef}</span>
-        {/* ★ BOTH BADGES ARE SEARCH-ONLY. Under a section heading they repeat
+  const renderPickup = (o: PickupOrder) => {
+    // ONE answer for the button and the wording — see lib/pos/collection-state.
+    const state = collectionState(o.status, o.expiresAt);
+    const note = collectionNote(state, o.status);
+    const gone = state === "gone";
+    return (
+      <li
+        key={`pickup:${o.id}`}
+        className={`rounded-xl border p-4 ${
+          // Dimmed and grey-bordered: this row is a record, not work. It renders
+          // at all because the customer is standing there and the counter has to
+          // be able to say what happened.
+          gone
+            ? "border-white/5 bg-white/[0.02] text-white/50"
+            : "border-white/10 bg-white/5"
+        }`}
+      >
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="font-mono text-base font-semibold">
+            {o.orderRef}
+          </span>
+          {/* ★ BOTH BADGES ARE SEARCH-ONLY. Under a section heading they repeat
             it — "Collection" on every row of a list called Pickups, "Ready"
             under a heading that says Ready to collect — and a badge that always
             says the same thing is the kind of noise people stop reading. In
             search results there is no heading, and the list mixes collections
             with returnable past orders, so both earn their place. */}
-        {searching && (
-          <>
-            <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
-              Collection
-            </span>
-            {o.status === "ready" && (
-              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300">
-                Ready
+          {searching && (
+            <>
+              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
+                Collection
               </span>
-            )}
-          </>
-        )}
-        {/* Whether to ask for money is the first thing the cashier needs to
-            know — before they open the order, not after. */}
-        {o.amountDue > 0 && (
-          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
-            {money(o.amountDue)} to pay
-          </span>
-        )}
-        <span className="ml-auto text-base font-semibold">
-          {money(o.total)}
-        </span>
-      </div>
-      <p className="mt-1 text-sm text-white/60">
-        {o.customerName ?? "Customer"} · {o.itemCount} item
-        {o.itemCount === 1 ? "" : "s"}
-        {o.expiresAt ? ` · ${expiryLabel(o.expiresAt)}` : ""}
-      </p>
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {o.status === "awaiting" && canFulfilPickup && (
-          <button
-            type="button"
-            disabled={busy === o.id}
-            onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
-            className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
-          >
-            <PackageCheck className="h-4 w-4" />
-            Mark ready
-          </button>
-        )}
-        <button
-          type="button"
-          disabled={busy === o.id}
-          onClick={() => handOver(o)}
-          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
-        >
-          {busy === o.id ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : o.amountDue > 0 ? (
-            <Wallet className="h-4 w-4" />
-          ) : (
-            <Check className="h-4 w-4" />
+              {o.status === "ready" && (
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                  Ready
+                </span>
+              )}
+            </>
           )}
-          {o.amountDue > 0 ? "Take payment" : "Hand over"}
-        </button>
-      </div>
-    </li>
-  );
+          {/* Whether to ask for money is the first thing the cashier needs to
+            know — before they open the order, not after. Silent once the order
+            is gone: nothing is owed on something that will not be handed over,
+            and "₹45 to pay" beside a cancelled order invites taking it. */}
+          {o.amountDue > 0 && !gone && (
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+              {money(o.amountDue)} to pay
+            </span>
+          )}
+          <span className="ml-auto text-base font-semibold">
+            {money(o.total)}
+          </span>
+        </div>
+        <p
+          className={`mt-1 text-sm ${gone ? "text-white/40" : "text-white/60"}`}
+        >
+          {o.customerName ?? "Customer"} · {o.itemCount} item
+          {o.itemCount === 1 ? "" : "s"}
+          {/* Only while the countdown is still RUNNING. Past the deadline
+            expiryLabel just says "Expired", which sat immediately beside a note
+            saying the order could still be handed over — two contradictory
+            answers to the same question. The note is the better one, so it
+            wins, and it carries the date itself on a gone order. */}
+          {o.expiresAt && state === "collectable"
+            ? ` · ${expiryLabel(o.expiresAt)}`
+            : ""}
+        </p>
+
+        {/* ★ THE NOTE REPLACES THE GUESS. The old failure path returned "That
+          order isn't waiting for collection here. It may already have been
+          collected." — a hedge, given AFTER the tap, that was wrong whenever
+          the real answer was "it expired". */}
+        {note && (
+          <p
+            className={`mt-2 rounded-lg px-3 py-2 text-sm ${
+              state === "lapsed"
+                ? "bg-amber-500/10 text-amber-200"
+                : "bg-white/5 text-white/55"
+            }`}
+          >
+            {note}
+            {gone && o.expiresAt ? ` Expired ${fmtDate(o.expiresAt)}.` : ""}
+          </p>
+        )}
+
+        {/* No buttons once it is gone: markCollected's claim is scoped to
+          awaiting|ready, so every control here could only ever fail — in front
+          of the customer. Same rule as the discount fields and the BORIS cash
+          button. */}
+        {!gone && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {o.status === "awaiting" && canFulfilPickup && (
+              <button
+                type="button"
+                disabled={busy === o.id}
+                onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
+                className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
+              >
+                <PackageCheck className="h-4 w-4" />
+                Mark ready
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy === o.id}
+              onClick={() => handOver(o)}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+            >
+              {busy === o.id ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : o.amountDue > 0 ? (
+                <Wallet className="h-4 w-4" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              {o.amountDue > 0 ? "Take payment" : "Hand over"}
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  };
 
   /** A past order a customer has brought back — a doorway to the return screen,
    *  nothing more. */

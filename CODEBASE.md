@@ -2783,6 +2783,50 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order, so a hand-over racing the sweep can't lose). Refunds wait for
         the returns machinery that records them (roadmap Phase G) — quietly
         moving money on a schedule ahead of that is not a thing to build.
+      - **★★ THE COUNTER KNOWS WHAT A COLLECTION CAN STILL DO**
+        (`lib/pos/collection-state.ts`, pure + tested). `markCollected` has
+        always scoped its read to `pickup_status in ('awaiting','ready')`, so
+        the SERVER could never hand over an expired or already-collected order.
+        The SCREEN did not know: `findPickupByCode` has no status filter (by
+        design — see below) and the row drew "Hand over" unconditionally, so
+        scanning a cancelled order's code produced a full-strength green button
+        that could only fail, in front of the customer. Exactly the anti-pattern
+        the discount fields and the BORIS cash button already exist to avoid.
+        Three states now: `collectable`, `lapsed` and `gone`.
+      - **★ `lapsed` IS STILL COLLECTABLE, AND THAT IS THE POINT.** The sweep is
+        DAILY, so between `pickup_expires_at` passing and the cron running there
+        is a window of up to 24 hours in which the server will happily hand the
+        order over — and should, because a customer a few hours late should
+        simply be served. The row previously showed "Expired" beside a live
+        green button with nothing saying which to believe; it now drops the
+        contradictory countdown and says "The hold period has passed, but this
+        can still be handed over."
+      - **★ A `gone` ORDER STILL RENDERS — it just stops offering actions.**
+        Filtering expired orders out of the lookup would swap a failing button
+        for "No collection found for that code", which is a LIE and leaves a
+        customer at a counter with an order the shop can see and cannot explain.
+        The row renders dimmed, with no buttons, no "₹45 to pay" (nothing is
+        owed on something that will not be handed over), and a note that says
+        what happened — including **where the stock went**, which is the
+        merchant's next question and is not obvious from "cancelled". It
+        replaces `markCollected`'s old catch-all guess, "It may already have
+        been collected", which was given AFTER the tap and was wrong whenever
+        the real answer was expiry.
+      - **★ `findPickupByCode` RETURNED ZEROES FOR MONEY AND ITEMS.** Both were
+        hardcoded 0 on the reasoning that a scan "lands on the order itself,
+        where the caller re-reads what it needs" — but nothing re-reads: a
+        scanned order renders through the SAME row as the queue. So a
+        pay-at-store collection scanned at the counter drew "Hand over" instead
+        of "Take payment" and skipped the tender pad, and every scanned order
+        read "0 items". No money could be lost (markCollected re-reads what is
+        owed and refuses an uncovered hand-over), but the button described the
+        wrong action. It now returns the real `amountDueAtCollection` and a real
+        count, and does NOT default a missing status to `awaiting` — that would
+        present a dead order as live, which is the whole defect.
+      - ⚠ **Staging never sweeps.** Every Cloud Scheduler job targets
+        `storemink.com` (docs/cron-jobs.md), so an expired collection sits in
+        the staging queue indefinitely. That is the `lapsed` state, permanently
+        — useful for testing it, and not a bug.
       - **★ A COLLECTION CODE, AND WHY IT IS NOT THE ORDER REFERENCE**
         (`lib/fulfilment/collection-code.ts`, pure + tested;
         `orders.pickup_code`, locations_11). Minted at checkout for collections
