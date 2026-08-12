@@ -4710,7 +4710,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       keywords. Active locations
       with `online_fulfil` sync to stable Shiprocket pickup codes through
       `location_logistics_mappings`; incomplete addresses are named and skipped,
-      never silently mapped to another warehouse.
+      never silently mapped to another warehouse. The pickup adapter promotes
+      house/flat/road details from either saved location-address line and folds
+      short secondary fragments into the primary line, matching Shiprocket's
+      per-line validation without forcing existing merchants to re-enter data.
     - **Booking is a resumable state machine, not one giant API call.**
       `shipment-actions.ts` first claims a unique local idempotency key, then
       creates the Shiprocket order, assigns an AWB, generates the label and

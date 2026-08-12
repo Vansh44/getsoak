@@ -66,7 +66,9 @@ The delivery lifecycle is no longer an order-status dropdown pretending to be
 a warehouse. `logistics_01_shiprocket.sql` adds Shopify-shaped fulfilment work,
 parcels and append-only carrier events; each merchant connects their own
 Shiprocket API user in Channels and maps every `online_fulfil` location to a
-pickup address.
+pickup address. Location address lines are normalized for Shiprocket's primary
+address and minimum-length rules, including older locations whose house/flat
+details were saved in the optional second line.
 
 The order drawer now covers the warehouse path: confirm the packed weight and
 dimensions, create the Shiprocket order, persist its IDs before continuing,

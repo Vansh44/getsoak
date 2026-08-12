@@ -9,6 +9,9 @@ const REQUEST_TIMEOUT_MS = 15_000;
 type JsonObject = Record<string, unknown>;
 type FetchLike = typeof fetch;
 
+const PICKUP_PRIMARY_MARKER =
+  /\d|\b(?:house|flat|plot|road|street|lane|building|office|shop|unit|floor|block|sector|village|ward)\b/i;
+
 export class ShiprocketError extends Error {
   constructor(
     message: string,
@@ -24,21 +27,73 @@ function baseUrl(): string {
   return (process.env.SHIPROCKET_API_URL || DEFAULT_BASE).replace(/\/$/, "");
 }
 
+function errorDetails(value: unknown): string[] {
+  if (typeof value === "string") {
+    const message = value.trim();
+    if (!message) return [];
+    if (
+      (message.startsWith("{") && message.endsWith("}")) ||
+      (message.startsWith("[") && message.endsWith("]"))
+    ) {
+      try {
+        return errorDetails(JSON.parse(message));
+      } catch {
+        // It looked like JSON but was ordinary provider text. Show it as-is.
+      }
+    }
+    return [message];
+  }
+  if (Array.isArray(value)) return value.flatMap(errorDetails);
+  if (value && typeof value === "object") {
+    return Object.values(value as JsonObject).flatMap(errorDetails);
+  }
+  return [];
+}
+
 function messageFrom(body: unknown): string {
   if (!body || typeof body !== "object") return "Shiprocket request failed.";
   const b = body as JsonObject;
-  const direct = [b.message, b.error, b.status_message].find(
-    (v) => typeof v === "string" && v.trim(),
-  );
-  if (typeof direct === "string") return direct;
-  const errors = b.errors;
-  if (errors && typeof errors === "object") {
-    const first = Object.values(errors as JsonObject)
-      .flatMap((v) => (Array.isArray(v) ? v : [v]))
-      .find((v) => typeof v === "string");
-    if (typeof first === "string") return first;
+  for (const value of [b.message, b.error, b.status_message, b.errors]) {
+    const details = [...new Set(errorDetails(value))];
+    if (details.length > 0) return details.join(" ");
   }
   return "Shiprocket request failed.";
+}
+
+/**
+ * Adapt StoreMink's two location lines to Shiprocket's pickup-address rules.
+ *
+ * Shiprocket validates the primary line for house/flat/road details and
+ * requires each supplied line to be at least ten characters. Existing stores
+ * may have put those details in line 2 because the editor described it as the
+ * apartment/unit field. Promote that more-specific line when necessary, and
+ * merge a short secondary fragment instead of sending an invalid address_2.
+ */
+export function shiprocketPickupAddressFields(input: {
+  line1?: unknown;
+  line2?: unknown;
+}): { address: string; address_2: string } {
+  const clean = (value: unknown) =>
+    typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  let primary = clean(input.line1);
+  let secondary = clean(input.line2);
+
+  if (
+    secondary &&
+    !PICKUP_PRIMARY_MARKER.test(primary) &&
+    PICKUP_PRIMARY_MARKER.test(secondary)
+  ) {
+    [primary, secondary] = [secondary, primary];
+  }
+
+  // `address_2`, when supplied, has its own minimum-length validation. Keep
+  // all information while presenting Shiprocket with one valid primary line.
+  if (secondary && (primary.length < 10 || secondary.length < 10)) {
+    primary = `${primary}, ${secondary}`;
+    secondary = "";
+  }
+
+  return { address: primary, address_2: secondary };
 }
 
 async function request<T>(

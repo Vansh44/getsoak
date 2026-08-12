@@ -18,6 +18,7 @@ import {
 import {
   addShiprocketPickup,
   ShiprocketError,
+  shiprocketPickupAddressFields,
   shiprocketLogin,
 } from "@/lib/logistics/shiprocket";
 import { getShiprocketSessionForStore } from "@/lib/logistics/connection";
@@ -385,13 +386,24 @@ export async function syncShiprocketPickupLocations(): Promise<LogisticsActionRe
     if (!locationCan(capabilities, "online_fulfil")) continue;
     const address = (location.address ?? {}) as Record<string, unknown>;
     const line1 = textField(address.line1);
+    const pickupAddress = shiprocketPickupAddressFields({
+      line1,
+      line2: address.line2,
+    });
     const city = textField(address.city);
     const state = textField(address.state);
     const pin = textField(address.postalCode).replace(/\s/g, "");
-    if (!line1 || !city || !state || !/^\d{6}$/.test(pin)) {
+    if (
+      !line1 ||
+      pickupAddress.address.length < 10 ||
+      !city ||
+      !state ||
+      !/^\d{6}$/.test(pin)
+    ) {
       skipped.push({
         location: location.name,
-        reason: "Complete street, city, state, and a 6-digit PIN code.",
+        reason:
+          "Add a complete house/flat and street address, city, state, and 6-digit PIN code in Locations.",
       });
       continue;
     }
@@ -403,8 +415,8 @@ export async function syncShiprocketPickupLocations(): Promise<LogisticsActionRe
         name: location.name.slice(0, 50),
         email,
         phone,
-        address: line1,
-        address_2: textField(address.line2),
+        address: pickupAddress.address,
+        address_2: pickupAddress.address_2,
         city,
         state,
         country: "India",

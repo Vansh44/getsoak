@@ -1713,7 +1713,10 @@ The old token gets 401 as soon as it is rotated; the new token works in
 **PS-SH.3 — Only fulfilment warehouses sync**
 Keep one shop without `online_fulfil`, enable it on a warehouse, then Sync.
 **Expect:** only the warehouse is created/mapped in Shiprocket. Re-sync keeps
-the same stable pickup code rather than making another warehouse.
+the same stable pickup code rather than making another warehouse. If house or
+flat details were entered in the location's second address line, they become
+Shiprocket's primary address; short address fragments do not produce raw JSON
+validation messages.
 
 **PS-SH.4 ★ — A bad warehouse is named, not silently replaced**
 Remove its PIN code and Sync.
