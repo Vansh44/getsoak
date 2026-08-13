@@ -48,6 +48,7 @@ import {
   amountDueForInvoice,
   ensureRenewalInvoice,
   finalizeInvoiceClaimed,
+  loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
 import {
@@ -259,7 +260,9 @@ async function collectOne(
     tax,
   });
 
+  const parties = await loadInvoiceParties(row.storeId);
   const invoice = await ensureRenewalInvoice({
+    ...parties,
     storeId: row.storeId,
     cycleSeq: next.seq,
     periodStart: next.start,

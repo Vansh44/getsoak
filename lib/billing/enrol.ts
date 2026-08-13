@@ -49,6 +49,7 @@ import {
   amountDueForInvoice,
   ensureRenewalInvoice,
   finalizeInvoice,
+  loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
 import { beginAttempt, settleAttempt } from "./collect";
@@ -203,7 +204,10 @@ export async function startEnrolment(input: {
   });
   if (!seeded) return { ok: false, error: "Couldn't start the subscription." };
 
+  // ★ Stamp the tax identifiers, so the document is fixed at issue time.
+  const parties = await loadInvoiceParties(input.storeId);
   const invoice = await ensureRenewalInvoice({
+    ...parties,
     storeId: input.storeId,
     cycleSeq: FIRST_CYCLE,
     periodStart: cycle.start,

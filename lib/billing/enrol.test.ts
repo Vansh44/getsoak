@@ -38,6 +38,7 @@ vi.mock("@/lib/payments/razorpay", () => rzp);
 
 const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
+  loadInvoiceParties: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
   finalizeInvoice: vi.fn(),
   amountDueForInvoice: vi.fn(),
@@ -80,6 +81,11 @@ beforeEach(() => {
     rateBps: 0,
     inclusive: false,
     supplierStateCode: null,
+    placeOfSupply: null,
+  });
+  store.loadInvoiceParties.mockResolvedValue({
+    supplierGstin: null,
+    customerGstin: null,
     placeOfSupply: null,
   });
   store.ensureRenewalInvoice.mockResolvedValue({
@@ -179,6 +185,23 @@ describe("startEnrolment", () => {
     expect(values.currentCycleSeq).toBe(0);
     // The cycle columns stay unset until the money lands.
     expect(values.currentPeriodStart).toBeUndefined();
+  });
+
+  it("★★ STAMPS the tax identifiers onto the invoice", async () => {
+    // These columns existed from billing_03 and NOBODY passed them, so every
+    // invoice stored NULL — leaving the document to name a GSTIN from LIVE
+    // settings, which is exactly what an immutable invoice must not do.
+    store.loadInvoiceParties.mockResolvedValue({
+      supplierGstin: "07AABCS1429B1ZX",
+      customerGstin: "29AAACM1234C1ZP",
+      placeOfSupply: "29",
+    });
+    await startEnrolment(args);
+    expect(store.ensureRenewalInvoice.mock.calls[0][0]).toMatchObject({
+      supplierGstin: "07AABCS1429B1ZX",
+      customerGstin: "29AAACM1234C1ZP",
+      placeOfSupply: "29",
+    });
   });
 
   it("★★ does NOT finalize — an enrolment is an OFFER, not an obligation", async () => {

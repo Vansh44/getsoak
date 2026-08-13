@@ -94,6 +94,77 @@ export async function loadTaxContext(storeId: string): Promise<TaxContext> {
   }
 }
 
+/**
+ * The tax IDENTIFIERS to stamp on one invoice, alongside the rate.
+ *
+ * ★★ THESE COLUMNS EXISTED AND WERE NEVER WRITTEN. `billing_invoices` has carried
+ * `supplier_gstin`, `customer_gstin` and `place_of_supply` since billing_03 —
+ * every creator accepted them as optional arguments and no caller passed one, so
+ * every invoice stored NULL. The document could then only name a GSTIN by reading
+ * LIVE settings, which defeats the point of an immutable invoice: an operator
+ * correcting a GSTIN in September would silently rewrite what April's invoice
+ * claims to have been issued under.
+ *
+ * ⚠ THE NAMES AND ADDRESSES ARE STILL NOT SNAPSHOTTED — no column exists for
+ * them, so the document renders those live. The GSTINs, the place of supply, the
+ * rate and every amount ARE fixed, which is the legally significant part; a
+ * company rename would restate the label on old invoices but not what they
+ * charged or under whose registration. Closing that fully needs a `parties jsonb`
+ * column.
+ */
+export interface InvoiceParties {
+  supplierGstin: string | null;
+  customerGstin: string | null;
+  placeOfSupply: string | null;
+}
+
+const NO_PARTIES: InvoiceParties = {
+  supplierGstin: null,
+  customerGstin: null,
+  placeOfSupply: null,
+};
+
+/**
+ * Read them for one store.
+ *
+ * ★ Falls back to all-null rather than throwing, matching `loadTaxContext`: a
+ * read failure must not fail a renewal, and an invoice with no GSTIN block is
+ * exactly what a tax-OFF invoice looks like anyway.
+ */
+export async function loadInvoiceParties(
+  storeId: string,
+): Promise<InvoiceParties> {
+  try {
+    return await withService(async (db) => {
+      const [settings] = await db
+        .select({
+          gstin: platformBillingSettings.gstin,
+          taxEnabled: platformBillingSettings.taxEnabled,
+        })
+        .from(platformBillingSettings)
+        .limit(1);
+      const [account] = await db
+        .select({
+          gstin: billingAccounts.gstin,
+          stateCode: billingAccounts.stateCode,
+        })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.storeId, storeId))
+        .limit(1);
+      return {
+        // ★ Only when tax is ON. Stamping our GSTIN onto an invoice that charges
+        // no GST would make it look like a tax invoice that forgot the tax.
+        supplierGstin: settings?.taxEnabled ? (settings.gstin ?? null) : null,
+        customerGstin: account?.gstin ?? null,
+        placeOfSupply: account?.stateCode ?? null,
+      };
+    });
+  } catch (err) {
+    logError("billing.load_invoice_parties", err, { storeId });
+    return NO_PARTIES;
+  }
+}
+
 /** Shared shape for writing an invoice + its lines in one transaction. */
 interface CreateInput {
   storeId: string;

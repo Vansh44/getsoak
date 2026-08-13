@@ -40,6 +40,7 @@ vi.mock("@/lib/payments/razorpay", () => rzp);
 
 const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
+  loadInvoiceParties: vi.fn(),
   createAddonInvoice: vi.fn(),
   finalizeInvoice: vi.fn(),
   amountDueForInvoice: vi.fn(),
@@ -98,6 +99,11 @@ beforeEach(() => {
     rateBps: 0,
     inclusive: false,
     supplierStateCode: null,
+    placeOfSupply: null,
+  });
+  store.loadInvoiceParties.mockResolvedValue({
+    supplierGstin: null,
+    customerGstin: null,
     placeOfSupply: null,
   });
   store.createAddonInvoice.mockResolvedValue({

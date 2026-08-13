@@ -120,3 +120,64 @@ export interface PlatformTaxSettings {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/** Address shape shared by both parties on an invoice. */
+export interface InvoiceAddress {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  postalCode?: string;
+}
+
+/** One row of a merchant's invoice history. */
+export interface InvoiceSummary {
+  id: string;
+  invoiceRef: string | null;
+  kind: string;
+  status: string;
+  totalPaise: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  finalizedAt: string | null;
+  paidAt: string | null;
+}
+
+export interface InvoiceLineView {
+  kind: string;
+  description: string;
+  quantity: number;
+  unitAmountPaise: number;
+  amountPaise: number;
+}
+
+/**
+ * One issued invoice, as the printable document renders it.
+ *
+ * ★ The tax figures and identifiers come from the invoice's OWN row — see
+ * `lib/billing/invoice-history.ts` for why that distinction is load-bearing.
+ */
+export interface InvoiceDocument {
+  id: string;
+  invoiceRef: string | null;
+  kind: string;
+  status: string;
+  issuedAt: string | null;
+  paidAt: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  subtotalPaise: number;
+  discountPaise: number;
+  taxPaise: number;
+  totalPaise: number;
+  taxRateBps: number | null;
+  supplierGstin: string | null;
+  customerGstin: string | null;
+  placeOfSupply: string | null;
+  items: InvoiceLineView[];
+  supplier: { legalName: string; address: InvoiceAddress };
+  customer: {
+    legalName: string | null;
+    address: InvoiceAddress;
+    billingEmail: string | null;
+  };
+}

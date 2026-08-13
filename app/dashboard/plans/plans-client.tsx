@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { renewalTerm, renewalLabel } from "@/lib/plans/renewal";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   Sparkles,
@@ -12,6 +13,7 @@ import {
   Zap,
   Lock,
   History,
+  FileText,
   Check,
   BadgeCheck,
   CalendarClock,
@@ -250,6 +252,18 @@ export function PlansBillingClient({
           to.
         </p>
       </div>
+
+      {/* ★ In the HEADER, not buried at the bottom. Finding a past invoice is
+          something a merchant comes to this page specifically to do — usually
+          at the request of an accountant — and it is not a thing they scroll
+          for. */}
+      <Link
+        href="/dashboard/plans/invoices"
+        className="-mt-3 inline-flex items-center gap-1.5 self-start text-sm font-medium text-[#111827] hover:underline"
+      >
+        <FileText className="h-4 w-4" strokeWidth={2} />
+        View invoices
+      </Link>
 
       {/* ─────────────── 1. Plan details ─────────────── */}
       <section className="rounded-xl border border-[rgba(17,24,39,0.08)] bg-white p-6 shadow-sm">

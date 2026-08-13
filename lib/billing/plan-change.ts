@@ -55,6 +55,7 @@ import {
   amountDueForInvoice,
   createAddonInvoice,
   finalizeInvoice,
+  loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
 import { beginAttempt, settleAttempt } from "./collect";
@@ -280,7 +281,9 @@ export async function startPlanChange(input: {
 
   // Not finalized — an unpaid upgrade must not burn a GST number (the enrolment
   // rule). `confirmPlanChange` issues it once the payment verifies.
+  const parties = await loadInvoiceParties(input.storeId);
   const invoice = await createAddonInvoice({
+    ...parties,
     storeId: input.storeId,
     built,
     // ★ Reuses the addon target field to carry the LOCATION count that applies

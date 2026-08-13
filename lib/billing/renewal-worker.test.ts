@@ -31,6 +31,7 @@ vi.mock("@/lib/db/client", () => ({
 // are seams, so a test can put the worker in any outcome without a database.
 const repo = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
+  loadInvoiceParties: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
   finalizeInvoiceClaimed: vi.fn(),
   amountDueForInvoice: vi.fn(),
@@ -94,6 +95,11 @@ beforeEach(() => {
     rateBps: 0,
     inclusive: false,
     supplierStateCode: null,
+    placeOfSupply: null,
+  });
+  repo.loadInvoiceParties.mockResolvedValue({
+    supplierGstin: null,
+    customerGstin: null,
     placeOfSupply: null,
   });
   repo.ensureRenewalInvoice.mockResolvedValue({

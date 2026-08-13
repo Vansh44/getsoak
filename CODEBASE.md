@@ -4862,6 +4862,37 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         instance of that split). The retired codes `25` and `28` are deliberately
         omitted from the picker but still parse, because a merchant's stored code
         may be one.
+    - **★★ MERCHANTS CAN SEE AND PRINT THEIR INVOICES**
+      (`/dashboard/plans/invoices`, `lib/billing/invoice-history.ts`). The gapless
+      FY series, the immutability triggers and the tax snapshot all existed to
+      produce a document nothing could retrieve — the only reader was
+      `listPayableInvoices`, which shows what is OWED, so a merchant who had paid
+      ₹50,000 for a year had no receipt.
+      - **★ ONLY FINALIZED INVOICES ARE DOCUMENTS.** A draft has no number (the
+        trigger allocates one on finalize precisely so an abandoned checkout does
+        not burn one), and enrolment and add-on purchases BOTH leave drafts behind
+        whenever a payment window is closed. Showing one would present an
+        unnumbered, unpaid row as a bill.
+      - **★★ THE TAX IDENTIFIERS WERE NEVER SNAPSHOTTED, and now are.**
+        `supplier_gstin` / `customer_gstin` / `place_of_supply` have existed since
+        billing_03; every creator ACCEPTED them and no caller passed one, so every
+        invoice stored NULL. The document would then have had to name a GSTIN from
+        LIVE settings — so an operator correcting one in September would rewrite
+        what April's invoice claims. `loadInvoiceParties` + a stamp at all four
+        creation sites fixes it. ⚠ The NAMES and ADDRESSES are still read live,
+        because no column stores them; closing that needs a `parties jsonb`.
+      - **★★ A NO-TAX INVOICE IS A VALID INVOICE** and must not pretend otherwise:
+        titled "Invoice" not "Tax Invoice", NO GST line at all (a "GST ₹0" row on a
+        document naming no GSTIN reads as a claim), and a footer saying why. It is
+        the state every invoice is in today.
+      - **★ The GST split comes from the tax AMOUNT** (`splitGstPaise`), never
+        recomputed from the rate, so the halves always re-sum to what was charged.
+        Intra-state ⇒ CGST+SGST, inter-state ⇒ IGST, decided by comparing the
+        supplier GSTIN's first two digits with the snapshotted place of supply.
+      - Printable HTML, not a server PDF — the §17 decision, reusing that module's
+        `.invoice-sheet` print isolation and `PrintInvoiceButton`. The INNER
+        classes are `sminv-*`, deliberately NOT the `inv-*` ones: those are shaped
+        for the order invoice's different markup and would silently mis-style this.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,

@@ -64,6 +64,7 @@ import {
   amountDueForInvoice,
   createAddonInvoice,
   finalizeInvoice,
+  loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
 import { beginAttempt, settleAttempt } from "./collect";
@@ -344,7 +345,9 @@ export async function startLocationPurchase(input: {
   // OFFER until it is paid, and finalizing would burn a number in the gapless
   // GST series for a document nobody received, and put "you owe this" on
   // /dashboard/plans for a location that was never granted.
+  const parties = await loadInvoiceParties(input.storeId);
   const invoice = await createAddonInvoice({
+    ...parties,
     storeId: input.storeId,
     built,
     // What this payment buys, so confirm cannot be talked into a different
