@@ -10,6 +10,7 @@ import { useBrand } from "@/app/(storefront)/components/brand-provider";
 import { useChrome } from "@/app/(storefront)/components/chrome-provider";
 import { useAuth } from "@/app/(storefront)/components/auth/AuthProvider";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
+import { DeliveryLocationControl } from "@/app/(storefront)/components/delivery/delivery-location-control";
 import {
   User,
   Package,
@@ -158,6 +159,7 @@ export default function Header() {
       </div>
 
       <div className={styles.headerRight}>
+        <DeliveryLocationControl />
         {/* Search Bar - Now exclusively in the main header */}
         {headerCfg.showSearch && (
           <form
@@ -502,6 +504,8 @@ export default function Header() {
             />
           </form>
         </div>
+
+        <DeliveryLocationControl drawer />
 
         <nav className={styles.drawerNav}>
           {navLinks.map((link) => (

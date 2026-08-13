@@ -110,7 +110,8 @@ wholesip/
 │   ├── robots.ts / sitemap.ts
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
-│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart providers
+│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
+│   │   │                      # delivery-location providers
 │   │   ├── page.tsx           # Store homepage = store_pages row with slug "" (the
 │   │   │                      # "homepage sentinel"); reads published/preview sections
 │   │   │                      # just like [pageSlug]. Edited in /dashboard/builder (§11)
@@ -170,6 +171,8 @@ wholesip/
 │   │       │                  # immediately while anonymous visitors dynamically
 │   │       │                  # import the Web SDK only when account UI opens.
 │   │       ├── cart/          # CartProvider, CartDrawer, CouponField
+│   │       ├── delivery/      # ★ remembered/default/current delivery location UI +
+│   │       │                  # server-priced PDP PIN availability/charge/ETA (§35)
 │   │       ├── header/ footer/  # nav from store_menus via MenuProvider (§11 menu builder)
 │   │       ├── homepage/      # Shared per-section renderer (featured products,
 │   │       │                  # blog carousel, promo banner, shop-by-category…)
@@ -378,8 +381,8 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
-│   │   ├── shipping-actions.ts # ★ §35 Shipping & delivery settings + storefront
-│   │   │                      # server-priced courier options (origin/cart/COD aware)
+│   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
+│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware)
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
 │   │   │                      # staged idempotency plus a provider-independent manual fallback
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
@@ -5083,6 +5086,19 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       stores the exact selected promise in `orders.shipping_option`; shipment
       booking uses that courier and carries the quoted provider cost/ETA.
       Digital-only and pickup orders remain ₹0 without a carrier call.
+    - **Delivery discovery starts before checkout.** The storefront shell owns a
+      host-local remembered delivery location. A signed-in shopper's default
+      address fills it automatically unless they deliberately chose another PIN
+      on this browser; “Use my current location” requests browser permission and
+      reverse-geocodes only after a click. The header displays that destination.
+      Every classic/grocery PDP can check a six-digit PIN. Its public,
+      IP-rate-limited server action re-reads the published product/variant,
+      online stock, physical measurements, fulfilment location and shipping
+      policy, then returns the cheapest current option/ETA (or an unavailable
+      reason). The product quantity participates in free-above pricing. Checkout
+      still re-quotes authoritatively, especially because payment method can
+      change COD serviceability. PDPs no longer claim “delivered tomorrow” or a
+      hardcoded free-above amount.
     - **Deliberate v1 limits.** StoreMink does not yet expose postal zones,
       price/weight rate tables, product-specific shipping profiles, split one
       order across multiple warehouses/parcels, purchase return labels, or

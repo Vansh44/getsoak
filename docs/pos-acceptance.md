@@ -1849,6 +1849,35 @@ Choose store pickup, then separately check out a digital-only basket.
 delivery with an invalid/unserviceable PIN cannot be ordered while live rates
 are selected.
 
+**PS-SH.26 — The header remembers where delivery is going**
+As a signed-in customer with a default saved address, open the storefront on a
+fresh browser profile. Then enter a different valid PIN in the header and
+refresh. **Expect:** the default city/state appears automatically first; the
+deliberately entered PIN wins after refresh. A signed-out shopper's entered PIN
+also survives refresh on that store origin.
+
+**PS-SH.27 — Current location is permissioned and recoverable**
+Open the header location panel. Confirm no browser location prompt appeared
+before clicking “Use my current location”; click it once with permission and
+once with permission denied. **Expect:** success fills the reverse-geocoded PIN
+and location label. Denial explains that a PIN can still be entered; browsing
+and purchasing remain usable.
+
+**PS-SH.28 ★ — A PDP promise uses the checkout engine**
+On classic and grocery product pages, enter a serviceable PIN under free, fixed
+₹50/free-above-₹500 and live Shiprocket modes. Change variant and quantity.
+**Expect:** the page shows online-stock availability, customer charge and ETA
+from the selected variant/quantity. Free-above follows merchandise subtotal;
+live mode shows the cheapest current courier and says when more choices will be
+available at checkout. Invalid/unserviceable PINs show a useful refusal.
+
+**PS-SH.29 ★ — A PDP cannot invent price, stock or parcel data**
+Tamper with product/variant/quantity in a delivery-check request, including a
+variant from another product/store and an unpublished product. Burst more than
+30 requests in one minute from one IP. **Expect:** the server re-reads all
+catalog/logistics values under the request host, rejects invalid references and
+rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

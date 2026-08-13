@@ -4,6 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { ImageIcon, Truck, RotateCcw, Sprout, Minus } from "lucide-react";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { formatPrice, hasSpecialPrice } from "@/lib/pricing";
 import { RatingStars } from "./reviews-section";
 import type { DetailProduct, DetailVariant } from "./product-detail-client";
@@ -33,6 +34,7 @@ export function GroceryProductDetail({
   maxQty,
   onAddToCart,
   onBuyNow,
+  deliveryEstimator,
 }: {
   product: DetailProduct;
   gallery: string[];
@@ -53,6 +55,7 @@ export function GroceryProductDetail({
   maxQty: number;
   onAddToCart: () => void;
   onBuyNow: () => void;
+  deliveryEstimator: ReactNode;
 }) {
   const [descOpen, setDescOpen] = useState(true);
   const catActive = product.category && product.category.status === "active";
@@ -159,9 +162,7 @@ export function GroceryProductDetail({
                 </>
               )}
             </div>
-            <p className="gpdp-price-note">
-              Inclusive of all taxes · Delivered by tomorrow
-            </p>
+            <p className="gpdp-price-note">Inclusive of all taxes</p>
 
             {hasVariants && (
               <div className="gpdp-variants">
@@ -186,6 +187,8 @@ export function GroceryProductDetail({
                 })}
               </div>
             )}
+
+            {deliveryEstimator}
 
             <div className="gpdp-actions">
               <div className="gpdp-stepper" aria-label="Quantity">
@@ -226,7 +229,7 @@ export function GroceryProductDetail({
 
             <div className="gpdp-trust">
               <span>
-                <Truck size={16} aria-hidden /> Free over ₹499
+                <Truck size={16} aria-hidden /> PIN-code delivery
               </span>
               <span>
                 <RotateCcw size={16} aria-hidden /> Easy returns

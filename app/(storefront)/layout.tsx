@@ -4,6 +4,7 @@ import Header from "@/app/(storefront)/components/header/Header";
 import Footer from "@/app/(storefront)/components/footer/Footer";
 import AuthProvider from "@/app/(storefront)/components/auth/AuthProvider";
 import CartProvider from "@/app/(storefront)/components/cart/CartProvider";
+import { DeliveryLocationProvider } from "@/app/(storefront)/components/delivery/delivery-location-provider";
 import CartDrawer from "@/app/(storefront)/components/cart/CartDrawer";
 import AuthModalLoader from "@/app/(storefront)/components/auth/auth-modal-loader";
 import { BrandProvider } from "@/app/(storefront)/components/brand-provider";
@@ -139,24 +140,26 @@ export default async function StorefrontLayout({
 
   return (
     <AuthProvider initialHasSession={hasCustomerSession}>
-      <CartProvider>
-        <BrandProvider brand={brand}>
-          <ChromeProvider
-            chrome={chrome}
-            themeLayout={design?.layout}
-            live={previewing}
-          >
-            <div className={rootClass} style={themeVars as CSSProperties}>
-              <Header />
-              {children}
-              <Footer />
-            </div>
-          </ChromeProvider>
-        </BrandProvider>
-        <AuthModalLoader />
-        <CartDrawer />
-        <Toaster richColors />
-      </CartProvider>
+      <DeliveryLocationProvider>
+        <CartProvider>
+          <BrandProvider brand={brand}>
+            <ChromeProvider
+              chrome={chrome}
+              themeLayout={design?.layout}
+              live={previewing}
+            >
+              <div className={rootClass} style={themeVars as CSSProperties}>
+                <Header />
+                {children}
+                <Footer />
+              </div>
+            </ChromeProvider>
+          </BrandProvider>
+          <AuthModalLoader />
+          <CartDrawer />
+          <Toaster richColors />
+        </CartProvider>
+      </DeliveryLocationProvider>
     </AuthProvider>
   );
 }

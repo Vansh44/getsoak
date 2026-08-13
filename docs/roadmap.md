@@ -103,12 +103,21 @@ choices. Checkout re-prices from the selected fulfilment location and freezes
 the chosen courier/customer charge/carrier cost/ETA on the order; booking uses
 that courier by default.
 
+**Added storefront discovery:** the fixed header now remembers a delivery PIN,
+prefers a signed-in shopper's default saved address, and offers an explicit
+browser-location lookup. Classic and grocery product pages check that PIN
+against online warehouse stock and the same free/fixed/Shiprocket quote engine
+used at checkout, showing availability, charge and handling-inclusive ETA. The
+PDP passes only ids/PIN/quantity; the server re-reads every commercial value.
+The oversized PDP gap below the fixed header and the old hardcoded “tomorrow” /
+“free over ₹499” claims are removed.
+
 **Still not in the completed layers:** postal zones, weight/price rate tables,
 product-specific shipping profiles, multi-parcel or multi-location splits,
 return-label purchasing, weight-dispute and COD-remittance reconciliation.
 Those are later Shopify-parity layers, not hidden inside an “integrated” badge.
 
-Acceptance: **PS-SH.1–SH.25**.
+Acceptance: **PS-SH.1–SH.29**.
 
 ---
 
