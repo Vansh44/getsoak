@@ -155,24 +155,34 @@ describe("★ collection with no gateway configured", () => {
     gateway.chargeUnavailableReason.mockReturnValue("endpoint not verified");
   });
 
-  it("★★ SKIPS collection entirely rather than attempting it", async () => {
-    // A stub that always failed would create attempt rows that can never
-    // settle — and because an unreachable provider is an UNKNOWN outcome, not a
-    // decline, each would sit in reconciliation forever.
-    const res = await GET(req(`Bearer ${SECRET}`));
-    expect(worker.collectDueRenewals).not.toHaveBeenCalled();
-    const body = await res.json();
-    expect(body.collect).toBeNull();
+  it("★★ STILL RUNS pass 1 — it ISSUES the invoice, charging is separate", async () => {
+    // Skipping the pass wholesale meant no invoice was ever written: pass 2
+    // waited forever, nobody was downgraded, every subscriber got free service
+    // past their cycle end, and the manual payment surface had nothing to list.
+    await GET(req(`Bearer ${SECRET}`));
+    expect(worker.collectDueRenewals).toHaveBeenCalled();
+  });
+
+  it("★★ passes charge NULL, so the invoice is issued but never charged", async () => {
+    // Deliberately not a stub that fails: an unreachable provider is an UNKNOWN
+    // outcome, not a decline, so every attempt would sit in reconciliation
+    // forever.
+    await GET(req(`Bearer ${SECRET}`));
+    expect(worker.collectDueRenewals.mock.calls[0][0].charge).toBeNull();
+  });
+
+  it("★ reports collectionSkipped so a green run can't be read as 'collecting'", async () => {
+    const body = await (await GET(req(`Bearer ${SECRET}`))).json();
     expect(body.collectionSkipped).toBe("endpoint not verified");
+    // The pass still reports its work — issuance happened.
+    expect(body.collect).not.toBeNull();
   });
 
   it("★ still 200s — an unconfigured gateway is not an outage", async () => {
     expect((await GET(req(`Bearer ${SECRET}`))).status).toBe(200);
   });
 
-  it("★ still runs evaluate and downgrade, which stay safe without it", async () => {
-    // With no invoice, evaluate waits, so grace never opens and nothing is
-    // ever downgraded.
+  it("★ still runs evaluate and downgrade", async () => {
     await GET(req(`Bearer ${SECRET}`));
     expect(worker.evaluateCycleTurns).toHaveBeenCalled();
     expect(worker.downgradeExpired).toHaveBeenCalled();

@@ -84,7 +84,18 @@ interface DueRow {
 export async function collectDueRenewals(input: {
   now?: Date;
   limit?: number;
-  charge: ChargeFn;
+  /**
+   * ★★ NULL = ISSUE THE INVOICE, DO NOT CHARGE. Issuing is not charging: it
+   * writes a document saying what is owed, which the merchant settles by hand on
+   * /dashboard/plans. Gating ISSUANCE behind the charge — which is what this
+   * pass used to do, by being skipped wholesale — meant no invoice was ever
+   * written, so pass 2 waited forever, grace never opened, nobody was ever
+   * downgraded, and every subscriber silently received free service past their
+   * cycle end. It also made the manual payment surface unreachable: it lists
+   * open invoices, and there were none. The two must be separable, because
+   * manual payment is a complete billing path on its own.
+   */
+  charge: ChargeFn | null;
   /** Injected so tests need no pricing table; production passes the LIVE
    *  reader, never a cached one — this number decides a charge. */
   priceFor: (
@@ -183,7 +194,7 @@ async function collectOne(
   row: DueRow,
   now: Date,
   input: {
-    charge: ChargeFn;
+    charge: ChargeFn | null;
     priceFor: (
       plan: Plan,
       period: BillingPeriod,
@@ -239,6 +250,13 @@ async function collectOne(
 
   const amountDue = await amountDueForInvoice(invoice.id);
   if (amountDue === null) return "pending"; // Never guess an amount (Rule 10).
+
+  // ★ No gateway: the invoice is issued and OPEN, and that is the whole job.
+  // `manual` is the honest bucket — it already means "the merchant must pay this
+  // themselves", which is exactly true here. Deliberately NOT a stub charge that
+  // always fails: an unreachable provider is an UNKNOWN outcome, not a decline,
+  // so every attempt would sit in reconciliation forever.
+  if (!input.charge) return "manual";
 
   const mandate = await loadMandate(row.mandateId);
   const outcome = await collectInvoice({

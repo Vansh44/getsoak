@@ -134,6 +134,62 @@ describe("collectDueRenewals", () => {
     expect(arg.periodEnd.toISOString()).toBe("2026-10-03T00:00:00.000Z");
   });
 
+  describe("★★ charge = null — ISSUE the invoice, do not charge", () => {
+    // Issuing is not charging. When the pass was skipped wholesale for a missing
+    // gateway, no invoice was ever written: pass 2 waited forever, grace never
+    // opened, nobody was downgraded, every subscriber got free service past
+    // their cycle end, and the manual payment surface had nothing to list.
+
+    it("still writes the invoice", async () => {
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(repo.ensureRenewalInvoice).toHaveBeenCalled();
+    });
+
+    it("★ still FINALIZES it — the merchant pays against a document number", async () => {
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(repo.finalizeInvoice).toHaveBeenCalled();
+    });
+
+    it("★★ never calls the gateway", async () => {
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(collector.collectInvoice).not.toHaveBeenCalled();
+    });
+
+    it("★ counts it as manualRequired, not failed", async () => {
+      // `failed` starts the grace clock. Nobody declined anything here — the
+      // merchant simply has to pay it themselves.
+      seed([[DUE_ROW]]);
+      const res = await collectDueRenewals({
+        now: NOW,
+        charge: null,
+        priceFor,
+      });
+      expect(res.manualRequired).toBe(1);
+      expect(res.failed).toBe(0);
+      expect(res.errors).toBe(0);
+    });
+
+    it("★ does not re-issue an invoice already paid", async () => {
+      repo.ensureRenewalInvoice.mockResolvedValue({
+        id: "inv-1",
+        status: "paid",
+        finalizedAt: "2026-09-01T00:00:00.000Z",
+        invoiceRef: "SM/2026-27/00004",
+      });
+      seed([[DUE_ROW]]);
+      const res = await collectDueRenewals({
+        now: NOW,
+        charge: null,
+        priceFor,
+      });
+      expect(res.collected).toBe(1);
+      expect(repo.finalizeInvoice).not.toHaveBeenCalled();
+    });
+  });
+
   it("★ finalizes BEFORE charging — the debit is against an issued document", async () => {
     seed([[DUE_ROW]]);
     await collectDueRenewals({ now: NOW, charge, priceFor });

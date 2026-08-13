@@ -453,9 +453,9 @@ wholesip/
 │       │                      # merchants and removes plans). A declined
 │       │                      # payment or a downgrade is 200, not an outage;
 │       │                      # only a thrown pass is 503. ⚠ While the Razorpay
-│       │                      # charge endpoint is unverified, collection is
-│       │                      # SKIPPED and `collectionSkipped` is set — a
-│       │                      # green run then means NOBODY IS BEING CHARGED
+│       │                      # charge endpoint is unverified `collectionSkipped`
+│       │                      # is set — AUTOPAY is off, but pass 1 still ISSUES
+│       │                      # every invoice, payable by hand on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
 │       │                      # activity_events 365d, email_logs 90d — windows

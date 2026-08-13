@@ -54,6 +54,12 @@ each job is a landmine the moment it does:
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
 | `storemink-billing` ⚠ NOT CREATED   | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
+⚠ **`billing` is now the one that must be created.** It stops being a no-op the
+moment `billing_subscriptions` has a row: it issues renewal invoices, advances
+paid cycles, opens grace windows and downgrades unpaid stores — none of which
+needs autopay. Without it a migrated subscriber is billed by nothing, from
+either system.
+
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
 system: on a daily schedule some merchants would get nearly a day of unearned
@@ -199,13 +205,22 @@ merchant's buffer would quietly become 48 hours plus two intervals.
 | Collection is **unconfigured**        | **200** | See below — it is a known state, not a failure.                                                                                |
 | A pass threw, or a store errored      | **503** | Money was not collected or a plan was not applied. Worth retrying.                                                             |
 
-⚠ **`collectionSkipped` in the response body is the one to watch.** While the
-Razorpay subsequent-charge endpoint is unverified (`lib/billing/gateway.ts`),
-pass 1 is **skipped entirely** rather than attempted — a stub that always failed
-would create payment attempts that can never settle, and because an unreachable
-provider is an _unknown_ outcome rather than a decline, each would sit in
-reconciliation forever. So a green run with `collectionSkipped` set means
-**nobody is being charged**. That is deliberate and safe, but it is not "working".
+⚠ **`collectionSkipped` in the response body means AUTOPAY is off, not that
+billing is idle.** While the Razorpay subsequent-charge endpoint is unverified
+(`lib/billing/gateway.ts`), pass 1 still runs and still **issues** each renewal
+invoice — it just does not charge it. The merchant pays it by hand on
+`/dashboard/plans`, which is a complete billing path on its own. What is skipped
+is only the automatic debit; a stub that always failed would create payment
+attempts that can never settle, and because an unreachable provider is an
+_unknown_ outcome rather than a decline, each would sit in reconciliation
+forever.
+
+★★ **Issuing was coupled to charging until 2026-08-13, and that was a silent
+revenue hole.** The whole pass was skipped when the gateway was unavailable, so
+no invoice was ever written — pass 2 then found nothing and recorded `waiting`,
+grace never opened, nobody was ever downgraded, and every subscriber received
+free service past their cycle end. The manual payment surface listed nothing,
+because there was nothing to list. The job reported green throughout.
 
 ### What `prune-logs` closes
 
@@ -317,14 +332,18 @@ probe deliberately: with no queued import it is a no-op, whereas triggering
 possibly `"incomplete":true` for a few nights while the backlog drains, since
 retention has never run.
 
-> **⚠ `storemink-billing` HAS NOT BEEN CREATED, deliberately.** The route ships,
-> but `RECURRING_CHARGE_VERIFIED` in `lib/billing/gateway.ts` is `false` and
-> `billing_subscriptions` is empty, so the job would report green hourly while
-> charging nobody — a signal that means less than it looks like. Create it in the
-> SAME sitting as verifying the Razorpay subsequent-charge endpoint and flipping
-> that flag; the three only mean anything together. Until then this row is the
-> reminder, and per the top of this file a written reminder is not one anybody
-> receives — so treat it as a task, not a note.
+> **⚠ `storemink-billing` HAS NOT BEEN CREATED.** It was deliberate while the
+> pass was inert; it no longer is. The original reasoning — "it would report
+> green hourly while charging nobody" — was written when the pass was skipped
+> wholesale for a missing gateway. Since 2026-08-13 pass 1 always runs and
+> **issues** each renewal invoice, which the merchant pays by hand, so the job
+> does real work with autopay still off.
+>
+> **Its two preconditions are now:** `billing_01`…`06` applied to the production
+> database, and at least one row in `billing_subscriptions`. Verifying the
+> Razorpay subsequent-charge endpoint is NOT one of them — that only decides
+> whether the invoice is also debited automatically. Per the top of this file a
+> written reminder is not one anybody receives, so treat this as a task.
 
 ## Staging
 

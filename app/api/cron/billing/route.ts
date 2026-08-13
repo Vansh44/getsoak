@@ -85,31 +85,31 @@ async function handle(request: Request) {
   const charge = getRecurringCharge();
   const chargeBlocked = chargeUnavailableReason();
 
-  // ★ WITH NO GATEWAY, PASS 1 IS SKIPPED ENTIRELY rather than attempted. A stub
-  // that always failed would create attempt rows that can never settle, and an
-  // unreachable provider is an UNKNOWN outcome rather than a decline — so every
-  // one would sit in reconciliation forever, indistinguishable from a real
-  // outage. Passes 2 and 3 stay safe without it: with no invoice, evaluate
-  // waits, so grace never opens and nothing is ever downgraded.
-  let collect = null;
-  if (charge) {
-    collect = await collectDueRenewals({
-      now,
-      limit: RENEWAL_BATCH,
-      charge,
-      priceFor,
-    });
-  }
+  // ★★ PASS 1 ALWAYS RUNS. It ISSUES the invoice; whether it also CHARGES it
+  // depends on the gateway. Skipping the whole pass when the charge is
+  // unavailable — which is what this did — meant no invoice was ever written, so
+  // pass 2 waited forever, nobody was downgraded, every subscriber got free
+  // service past their cycle end, and the manual payment surface had nothing to
+  // list. A null `charge` issues and finalizes the invoice, then stops: the
+  // merchant pays it on /dashboard/plans. NOT a stub charge — an unreachable
+  // provider is an UNKNOWN outcome, not a decline, so every attempt would sit in
+  // reconciliation forever.
+  const collect = await collectDueRenewals({
+    now,
+    limit: RENEWAL_BATCH,
+    charge,
+    priceFor,
+  });
 
   const evaluate = await evaluateCycleTurns({ now, limit: RENEWAL_BATCH });
   const downgrade = await downgradeExpired({ now, limit: RENEWAL_BATCH });
 
-  const errors = (collect?.errors ?? 0) + evaluate.errors + downgrade.errors;
+  const errors = collect.errors + evaluate.errors + downgrade.errors;
 
   // More work than one batch could hold. Reported so a caller can run again
   // sooner, but NOT an error — a backlog draining is normal.
   const more =
-    (collect?.considered ?? 0) >= RENEWAL_BATCH ||
+    collect.considered >= RENEWAL_BATCH ||
     evaluate.advanced + evaluate.graced + evaluate.waiting >= RENEWAL_BATCH ||
     downgrade.downgraded >= RENEWAL_BATCH;
 
