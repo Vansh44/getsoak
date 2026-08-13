@@ -4927,6 +4927,41 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         — one that died before that has nothing to ask about. And the OPEN items
         have no operator UI yet: `listOpenReconciliationItems` exists and nothing
         renders it.
+    - **★★ AI CREDIT PURCHASES NOW PRODUCE AN INVOICE**
+      (`lib/billing/credit-invoice.ts`, `supabase/billing_08_ai_credit_invoice.sql`).
+      `kind = 'ai_credits'` has existed since billing_03 and
+      `buildAiCreditsInvoice` / `createAiCreditsInvoice` were written, tested and
+      NEVER CALLED — a credit purchase produced no document at all. Survivable
+      while merchants could see no invoices; once `/dashboard/plans/invoices`
+      listed them, a purchase appearing nowhere is a receipt they cannot produce.
+      - **★ CREDITS GET THEIR OWN INVOICE, never a line on a subscription one**
+        (spec §1, §14). They are a one-off at an arbitrary moment; a subscription
+        invoice covers a period and is idempotent on its cycle. Carrying no
+        `cycle_seq` is what keeps it outside `billing_invoices_one_per_cycle`, so
+        a merchant can buy twice in a month.
+      - **★★ ISSUED FROM `settlePurchase`, THE ONE PLACE A PURCHASE BECOMES PAID**
+        — reached both from `confirmCreditPurchase` and from the reconcile-on-read
+        sweep. Hooking only the confirm path would leave every reconciled purchase
+        without a document, which is exactly the case where the merchant is
+        already unsure what happened. Pinned by a mutation.
+      - **★ DRAFT AT PURCHASE, FINALIZED ON PAYMENT** — the enrolment rule, so an
+        abandoned checkout never burns a number. And the draft is raised AFTER the
+        gateway order, so a purchase that died there leaves no document at all.
+      - **★ The link lives on the PURCHASE** (`ai_credit_purchases.invoice_id`,
+        UNIQUE where not null), not on the invoice: `billing_invoices` is the
+        generic document table and already carries one product-specific column, so
+        a second would start a pattern of one per product.
+      - **⚠ APPLY `billing_08` BEFORE DEPLOYING.** Without the column the link
+        UPDATE throws, the function returns null, and credit purchases keep
+        working with no document — but each leaves an orphan DRAFT invoice, which
+        is harmless (invisible, unnumbered, never finalized) and untidy.
+      - **⚠ Purchases made BEFORE this get no invoice, deliberately.** Issuing one
+        today would put a number from the CURRENT financial year's series on a
+        months-old sale, which is worse than no number.
+      - ⚠ `app/actions/ai-credit-actions.ts` had NO tests at all before this,
+        despite being a money path. It now has ten, covering the invoicing half
+        only; the plan gate, the `add_ai_credits` RPC and reconcile-on-read are
+        still uncovered.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,

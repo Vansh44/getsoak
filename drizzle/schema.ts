@@ -168,6 +168,7 @@ export const aiCreditPurchases = pgTable(
     amountInr: integer("amount_inr").notNull(),
     rzpOrderId: text("rzp_order_id"),
     rzpPaymentId: text("rzp_payment_id"),
+    invoiceId: uuid("invoice_id"),
     status: text().default("pending").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
