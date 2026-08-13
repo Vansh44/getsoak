@@ -33,6 +33,7 @@ const BLURB: Record<string, string> = {
   activity: "Everything that happened, and every email sent about it.",
   policies: "Terms, refund, shipping and privacy pages for your store.",
   domain: "Use your own domain instead of the storemink.com address.",
+  shipping: "Choose what delivery costs and dates customers see at checkout.",
 };
 
 export default async function SettingsPage() {

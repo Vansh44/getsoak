@@ -64,6 +64,9 @@ import {
   type BillingSettings,
   type TaxClass,
 } from "@/lib/billing/types";
+import { packageForShippingLines } from "@/lib/shipping/rates";
+import { quoteShippingForOrder } from "@/lib/shipping/quote";
+import type { ShippingOptionSnapshot } from "@/lib/shipping/types";
 
 // Aliased select for store_billing_settings preserving the snake_case row shape
 // rowToBillingSettings expects (Drizzle would otherwise return camelCase keys).
@@ -711,6 +714,12 @@ export async function placeOrder(
   /** Only when it differs from the delivery address. Null = same as shipping,
    *  which is what the invoice already falls back to. */
   billingInput?: BillingAddressInput | null,
+  /** The courier/rate the shopper picked from the server-issued quote. The
+   *  order action quotes again and accepts only a currently available id. */
+  selectedShippingRateId?: string | null,
+  /** Displayed amount paired with the selected id. A changed provider quote is
+   *  shown again instead of silently charging more than the shopper accepted. */
+  selectedShippingRateAmount?: number | null,
 ): Promise<CheckoutResult> {
   // Authenticate the shopper via the identity seam (session-backed).
   const user = await getServerUser();
@@ -1023,7 +1032,8 @@ export async function placeOrder(
     }
   }
 
-  const shipping = 0; // Hardcoded free shipping for now
+  let shipping = 0;
+  let shippingOption: ShippingOptionSnapshot | null = null;
 
   // 3c. Compute tax from each line's resolved rate, on the DISCOUNTED amount
   //     (see lib/billing/tax.ts). Exclusive: tax is ADDED to the total.
@@ -1044,7 +1054,7 @@ export async function placeOrder(
     it.tax_amount = taxResult.lines[idx]?.tax ?? 0;
   });
 
-  const total = Math.max(
+  let total = Math.max(
     0,
     subtotal - discount + shipping + (billing.pricesIncludeTax ? 0 : tax),
   );
@@ -1167,6 +1177,102 @@ export async function placeOrder(
   const holdDays = pickupAt ? await pickupHoldDays() : 0;
   const readyDays = pickupAt ? await pickupReadyDays() : 0;
 
+  // Price shipping AFTER the fulfilment location is resolved: live carrier
+  // rates depend on the origin PIN code. The provider is re-queried here rather
+  // than trusting the browser's displayed amount or courier id.
+  if (pickupAt) {
+    shippingOption = {
+      id: "pickup:free",
+      label: "Pickup in store",
+      description:
+        readyDays === 0 ? "Available today" : `Ready in ${readyDays} days`,
+      amount: 0,
+      carrierCost: null,
+      courierId: null,
+      courierName: null,
+      estimatedDeliveryMinDays: readyDays,
+      estimatedDeliveryMaxDays: readyDays,
+      estimatedDeliveryAt: null,
+      freeShippingApplied: true,
+      provider: "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  } else if (!validItems.some((item) => item.requires_shipping)) {
+    shippingOption = {
+      id: "digital:none",
+      label: "No delivery required",
+      description: "Digital products",
+      amount: 0,
+      carrierCost: null,
+      courierId: null,
+      courierName: null,
+      estimatedDeliveryMinDays: null,
+      estimatedDeliveryMaxDays: null,
+      estimatedDeliveryAt: null,
+      freeShippingApplied: true,
+      provider: "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  } else {
+    const shippingQuote = await quoteShippingForOrder({
+      storeId,
+      fulfilmentLocationId,
+      deliveryPostcode: cleanField(form.postalCode),
+      cod: paymentMethod === "cod",
+      merchandiseSubtotal: subtotal,
+      parcel: packageForShippingLines(
+        validItems.map((item) => ({
+          quantity: item.quantity,
+          requiresShipping: item.requires_shipping,
+          weightGrams: item.weight_grams,
+          lengthCm: item.length_cm,
+          widthCm: item.width_cm,
+          heightCm: item.height_cm,
+        })),
+      ),
+    });
+    if (!shippingQuote.options.length) {
+      await releaseCoupon();
+      return {
+        error:
+          shippingQuote.error || "Delivery is not available for this address.",
+      };
+    }
+    const selectedRate = selectedShippingRateId
+      ? shippingQuote.options.find(
+          (option) => option.id === selectedShippingRateId,
+        )
+      : shippingQuote.options[0];
+    if (!selectedRate) {
+      await releaseCoupon();
+      return {
+        error:
+          "That delivery rate changed. Review the latest options and try again.",
+      };
+    }
+    if (
+      selectedShippingRateId &&
+      typeof selectedShippingRateAmount === "number" &&
+      Math.abs(selectedRate.amount - selectedShippingRateAmount) > 0.009
+    ) {
+      await releaseCoupon();
+      return {
+        error:
+          "That delivery price changed. Review the latest options and try again.",
+      };
+    }
+    shipping = selectedRate.amount;
+    shippingOption = {
+      ...selectedRate,
+      provider: selectedRate.courierId ? "shiprocket" : "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  }
+  total = Math.max(
+    0,
+    subtotal - discount + shipping + (billing.pricesIncludeTax ? 0 : tax),
+  );
+
   // A separate billing address is optional and trimmed/capped exactly like the
   // shipping one — it prints on the invoice, so it is merchant-visible text
   // from an untrusted source.
@@ -1227,6 +1333,7 @@ export async function placeOrder(
         tax,
         taxInclusive: billing.pricesIncludeTax,
         shipping,
+        shippingOption,
         discount,
         total,
         currency: "INR",

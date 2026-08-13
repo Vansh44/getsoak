@@ -33,6 +33,7 @@ sequence AND the spec for everything still to build.
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
+| —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
@@ -93,13 +94,21 @@ copy the generated provider-neutral URL/token into Shiprocket's webhook
 settings. The callback path deliberately omits Shiprocket's reserved provider
 keywords so its dashboard accepts the address.
 
-**Not in this completed core:** live courier rate/ETA selection at checkout,
-multi-parcel or multi-location splits, return-label purchasing, weight-dispute
-and COD-remittance reconciliation. Shipping is still the pre-existing free
-checkout charge. Those are the remaining Shopify-parity layers, not hidden
-inside an “integrated” badge.
+**Added checkout layer:** `shipping_01_checkout_rates.sql` and Settings →
+Shipping & delivery let each merchant choose always-free, one fixed order rate,
+or live Shiprocket courier rates, with an optional free-above threshold. Manual
+rates carry a merchant-entered delivery range; live rates include handling time,
+an optional price adjustment, and either the cheapest courier or up to five
+choices. Checkout re-prices from the selected fulfilment location and freezes
+the chosen courier/customer charge/carrier cost/ETA on the order; booking uses
+that courier by default.
 
-Acceptance: **PS-SH.1–SH.18**.
+**Still not in the completed layers:** postal zones, weight/price rate tables,
+product-specific shipping profiles, multi-parcel or multi-location splits,
+return-label purchasing, weight-dispute and COD-remittance reconciliation.
+Those are later Shopify-parity layers, not hidden inside an “integrated” badge.
+
+Acceptance: **PS-SH.1–SH.25**.
 
 ---
 

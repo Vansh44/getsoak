@@ -295,7 +295,7 @@ wholesip/
 │   │   │                      # ★ failures/ = everything that DIDN'T work, read
 │   │   │                      # across the other tables (§33). FIVE logs, ONE
 │   │   │                      # `activity` permission
-│   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
+│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) + ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
@@ -378,6 +378,8 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
+│   │   ├── shipping-actions.ts # ★ §35 Shipping & delivery settings + storefront
+│   │   │                      # server-priced courier options (origin/cart/COD aware)
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
 │   │   │                      # staged idempotency plus a provider-independent manual fallback
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
@@ -478,9 +480,11 @@ wholesip/
 │
 ├── lib/
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
-│   ├── phone.ts               # Indian mobile normalization shared by checkout and Shiprocket
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
+│   ├── shipping/              # ★ §35 checkout policy/types + pure rate translation +
+│   │                          # server-only origin-aware Shiprocket quotation
+│   ├── phone.ts               # Indian mobile normalization shared by checkout and Shiprocket
 │   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
 │   │                          # quoted fields w/ embedded delimiters+newlines, quote-
 │   │                          # aware delimiter sniffing for Excel's semicolons, ragged
@@ -846,6 +850,8 @@ wholesip/
 │   ├── logistics_01_shiprocket.sql # ★ §35 physical product/order snapshots plus
 │   │                          # fulfilment orders, parcels, events, credentials and pickup maps;
 │   │                          # all logistics tables are service-role only
+│   ├── shipping_01_checkout_rates.sql # ★ §35 merchant rate policy + immutable
+│   │                          # orders.shipping_option checkout promise
 │   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
 │   │                          # RPCs; available = on_hand - reserved
 │   ├── locations_10_default_online_fulfil.sql  # ★ auto-created Main locations
@@ -5065,9 +5071,21 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       tracking refresh, pre-pickup cancellation and NDR re-attempt/RTO. Product
       editing captures physical measurements. Customer order detail shows the
       courier, AWB, external tracking link and the latest scans.
-    - **Deliberate v1 limits.** StoreMink does not yet expose live courier-rate
-      selection at checkout (shipping remains the existing zero charge), split
-      one order across multiple warehouses/parcels, purchase return labels, or
+    - **Checkout shipping policy is separate from the channel.** Channels answers
+      “which provider account fulfils this”; Settings → Shipping & delivery
+      answers “what does the customer pay and see.” `store_shipping_settings`
+      supports always-free, one fixed order rate, or live Shiprocket choices; an
+      optional merchandise-subtotal threshold makes fixed/live delivery free.
+      Manual modes publish a merchant-entered day range. Live mode requests
+      serviceability from the routed location with the authoritative parcel,
+      declared value and COD flag, adds handling time/optional markup, and shows
+      either the cheapest or five sorted couriers. `placeOrder` quotes again and
+      stores the exact selected promise in `orders.shipping_option`; shipment
+      booking uses that courier and carries the quoted provider cost/ETA.
+      Digital-only and pickup orders remain ₹0 without a carrier call.
+    - **Deliberate v1 limits.** StoreMink does not yet expose postal zones,
+      price/weight rate tables, product-specific shipping profiles, split one
+      order across multiple warehouses/parcels, purchase return labels, or
       reconcile weight disputes/COD remittances. The schema and adapter boundary
       are ready for these, but claiming full Shopify parity before those workflows
       exist would be false.

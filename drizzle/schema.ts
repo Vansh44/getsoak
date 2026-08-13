@@ -1842,6 +1842,9 @@ export const orders = pgTable(
     shipping: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
+    // The checkout promise, frozen at purchase time. Carrier rates and ETAs
+    // change; support and fulfilment must see what this customer selected.
+    shippingOption: jsonb("shipping_option"),
     discount: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
@@ -2725,6 +2728,69 @@ export const storeBillingSettings = pgTable(
       for: "select",
       to: ["public"],
     }),
+  ],
+);
+
+// What the CUSTOMER pays for delivery. Provider credentials remain in
+// store_logistics_providers; this policy deliberately lives separately so a
+// merchant can use Shiprocket operationally while charging a flat or free rate.
+export const storeShippingSettings = pgTable(
+  "store_shipping_settings",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    mode: text().default("free").notNull(),
+    flatRate: numeric("flat_rate", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    freeAbove: numeric("free_above", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    manualMinDays: integer("manual_min_days").default(3).notNull(),
+    manualMaxDays: integer("manual_max_days").default(7).notNull(),
+    handlingDays: integer("handling_days").default(1).notNull(),
+    carrierAdjustmentType: text("carrier_adjustment_type")
+      .default("none")
+      .notNull(),
+    carrierAdjustmentValue: numeric("carrier_adjustment_value", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    showAllCouriers: boolean("show_all_couriers").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_shipping_settings_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_shipping_settings_mode_check",
+      sql`mode = ANY (ARRAY['free'::text, 'flat'::text, 'shiprocket'::text])`,
+    ),
+    check(
+      "store_shipping_settings_adjustment_check",
+      sql`carrier_adjustment_type = ANY (ARRAY['none'::text, 'fixed'::text, 'percentage'::text])`,
+    ),
+    check(
+      "store_shipping_settings_values_check",
+      sql`flat_rate >= 0 AND (free_above IS NULL OR free_above > 0) AND manual_min_days BETWEEN 0 AND 60 AND manual_max_days BETWEEN manual_min_days AND 90 AND handling_days BETWEEN 0 AND 30 AND carrier_adjustment_value >= 0`,
+    ),
   ],
 );
 

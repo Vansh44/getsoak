@@ -1806,6 +1806,49 @@ AWB to store A's connection URL.
 **Expect:** no data/action. Connection id, store id, order id and normal
 permission checks all agree before any mutation.
 
+**PS-SH.19 — Shipping policy has one obvious home**
+Open Settings → Shipping & delivery. **Expect:** always-free, fixed-rate and
+live Shiprocket pricing are configured here; Channels still contains only the
+Shiprocket account connection, warehouse sync and webhook.
+
+**PS-SH.20 — A fixed fee ignores the destination**
+Choose Fixed rate, enter ₹50 and set a 3–7 day estimate. Checkout with two valid
+Indian PIN codes. **Expect:** both show Standard shipping, ₹50 and 3–7 days;
+the order subtotal, shipping and total persist as separate values.
+
+**PS-SH.21 — Free above uses the merchandise subtotal**
+Set fixed ₹50 and free above ₹500. Test baskets of ₹499 and ₹500, then apply a
+coupon to the ₹500 basket. **Expect:** ₹499 pays ₹50; ₹500 is free. The rule is
+based on merchandise subtotal before coupon discounts, as the settings screen
+says, so applying the coupon does not unexpectedly add shipping back.
+
+**PS-SH.22 — Live courier choices include price and promise**
+Enable live Shiprocket rates with a synced fulfilment location, valid parcel
+measurements and a serviceable address. **Expect:** checkout shows either the
+cheapest courier or up to five (per setting), sorted by customer price, with
+the adjusted charge and handling-inclusive delivery estimate. Switching COD to
+prepaid re-quotes serviceability.
+
+**PS-SH.23 ★ — The browser never sets the shipping price**
+Tamper with the displayed amount or submit an unavailable courier id.
+**Expect:** `placeOrder` re-fetches the current server quote. A missing choice
+defaults safely to the cheapest current option for old clients; a named choice
+or displayed price that changed is refused with “rate changed,” and no order is
+written.
+
+**PS-SH.24 — The checkout promise is durable**
+Place a live-rate order, then change shipping settings or Shiprocket rates.
+**Expect:** `orders.shipping_option` still records the selected courier,
+customer charge, provider cost, ETA and quote time. Booking proposes that
+courier and copies its cost/ETA to the shipment; a provider rejection remains a
+normal retryable carrier error.
+
+**PS-SH.25 — Pickup and digital goods are never charged delivery**
+Choose store pickup, then separately check out a digital-only basket.
+**Expect:** both are ₹0 and make no Shiprocket serviceability request. A physical
+delivery with an invalid/unserviceable PIN cannot be ordered while live rates
+are selected.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -1829,7 +1872,7 @@ Real and deliberate, so nobody files them as bugs:
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |
-| **Live delivery rates at checkout**                                | Shiprocket serviceability exists in the adapter, but checkout still charges the existing ₹0 shipping. Courier/rate/ETA selection and a server-revalidated quote remain to build                                                                      |
+| ~~**Live delivery rates at checkout**~~                            | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                        |
 | **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                         |
 | **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                              |
 | **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                       |
