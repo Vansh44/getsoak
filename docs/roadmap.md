@@ -607,14 +607,14 @@ hand, which was the step that mattered.
 
 ## Also outstanding — unglamorous, worth scheduling
 
-| Item                          | Why it matters                                                                         |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| Catalogue **delta** sync      | Every register re-pulls the whole catalogue every 5 min — O(catalogue), forever        |
-| Money-event **audit**         | All 6 `posAudit` sites are auth-only; discounts, overrides and till refunds leave none |
-| Analytics **location filter** | Store-wide figures only, on a multi-location product                                   |
-| Sale round trips              | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path           |
-| Live **Razorpay** run         | Refunds and metered billing have never touched a real account                          |
-| `data_jobs` retention         | §32 prunes logs but not CSV job rows; needs two policies + two `created_at` indexes    |
+| Item                            | Why it matters                                                                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catalogue **delta** sync        | Every register re-pulls the whole catalogue every 5 min — O(catalogue), forever                                                                                   |
+| Money-event **audit**           | All 6 `posAudit` sites are auth-only; discounts, overrides and till refunds leave none                                                                            |
+| Analytics **dashboard rebuild** | Spec: `docs/analytics-and-search-console-plan.md` — metric contract → persistent editor → commerce widgets → Search Console; includes the missing location filter |
+| Sale round trips                | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path                                                                                      |
+| Live **Razorpay** run           | Refunds and metered billing have never touched a real account                                                                                                     |
+| `data_jobs` retention           | §32 prunes logs but not CSV job rows; needs two policies + two `created_at` indexes                                                                               |
 
 ---
 
