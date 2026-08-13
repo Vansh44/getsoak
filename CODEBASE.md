@@ -4707,15 +4707,46 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         announce a grace window a rollback then un-started.
       - **★ BEST-EFFORT, NEVER THROWS.** A mail outage must not fail a
         collection, block a cycle advance, or abort a downgrade.
+    - **★ SIGNUP ENROLS ON THE NEW SYSTEM** (`startSignupSubscribe` /
+      `confirmSignupSubscribe`). The wizard runs on the PLATFORM host, where
+      `getActingStoreId()` resolves the FALLBACK store rather than the one created
+      seconds earlier — so the client names the store and
+      **`assertStoreSuperadmin` is the entire security boundary**: without it any
+      signed-in user could post another store's id and buy, or settle, a
+      subscription on it. Superadmin, not any admin, mirroring the old gate — a
+      new path to the same act must not be easier to pass than the one it
+      replaces — and it returns null on a read error, so a blip refuses rather
+      than authorises. Both entry points delegate to
+      `startSubscribeForStore`/`confirmSubscribeForStore`, the SAME cores the
+      dashboard uses: a second copy of the plan validation, legacy-mandate check
+      or price lookup is how a merchant gets billed differently depending on
+      which screen they subscribed from.
+    - **★★ AN ENROLMENT IS AN OFFER; A RENEWAL IS AN OBLIGATION.**
+      `startEnrolment` deliberately does NOT finalize its invoice —
+      `confirmEnrolment` does, once the payment verifies. Finalizing up front did
+      three bad things at once: it burned a number in the gapless GST series for
+      a document nobody ever received (the exact waste that allocating ON
+      finalize exists to prevent), it made the invoice `open` so
+      `/dashboard/plans` demanded payment for a plan that was never granted, and
+      it dated the document to the Subscribe click rather than the payment. The
+      renewal worker still finalizes BEFORE charging, because there the merchant
+      already has the plan and genuinely owes it.
+    - **★★ A DISMISSED CHECKOUT USED TO BE A PERMANENT DEAD END.** Closing the
+      Razorpay modal leaves the attempt `processing` forever — nothing tells us a
+      modal was closed — and `billing_payment_attempts_one_in_flight` then
+      refused every later attempt, so "A payment is already in progress" was the
+      answer to Subscribe FOREVER. Reproducible in two clicks. `startEnrolment`
+      now hands back the SAME Razorpay order, which stays payable until paid —
+      the §18 "Retry payment" pattern, with no staleness guess and no risk of a
+      second charge. ⚠ Only a `processing` attempt is resumable: the index also
+      covers `created` (no order exists yet) and `authorized` (money already
+      authorized — re-opening checkout would invite a second authorization).
     - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
       `subscription-actions.ts` still drives **cancel** and **plan change** on
-      the plans page, plus (1) **signup enrolment** —
-      `app/platform/signup/page.tsx` calls `startSignupSubscription`, and
-      `startSubscribe` cannot serve it because `getActingStoreId()` does not
-      resolve on the platform host — and (2) **buying an extra location**, where
-      the new system READS `billed_locations` but has no way to change it.
-      Deleting the old actions before those two are rebuilt would break signup
-      and remove a paid feature. Nothing bills twice in the meantime:
+      the plans page, plus **buying an extra location** — the new system READS
+      `billed_locations` but has no way to change it. (Signup enrolment moved
+      across on 2026-08-13; see above.) Deleting the old actions before that is
+      rebuilt would remove a paid feature. Nothing bills twice in the meantime:
       `startSubscribe` refuses when the old system holds a live mandate, and
       fails closed on a read error.
     - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an

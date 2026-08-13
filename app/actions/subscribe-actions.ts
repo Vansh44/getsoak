@@ -15,10 +15,11 @@
  */
 
 import { revalidateTag } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
+import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
-import { storeSubscriptions, stores } from "@/drizzle/schema";
+import { admins, storeSubscriptions, stores } from "@/drizzle/schema";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
 import { hasLiveMandate } from "@/lib/payments/plan-change";
@@ -119,14 +120,31 @@ export async function startSubscribe(
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
+  return startSubscribeForStore(await getActingStoreId(), plan, period);
+}
 
+/**
+ * ★ THE CORE, shared by the dashboard and by signup.
+ *
+ * The two differ ONLY in how the store and the caller are resolved: the
+ * dashboard reads the store from the host, and signup cannot — the wizard runs
+ * on the PLATFORM host, where `getActingStoreId()` has no store to resolve. So
+ * the signup entry point names the store explicitly and proves the caller owns
+ * it. Everything after that is identical, and must stay in one place: a second
+ * copy of the plan validation, the legacy-mandate check or the price lookup is
+ * how a merchant ends up billed differently depending on which screen they
+ * subscribed from.
+ */
+async function startSubscribeForStore(
+  storeId: string,
+  plan: unknown,
+  period: unknown,
+): Promise<SubscribeStart> {
   if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
     return { ok: false, error: "Choose a paid plan." };
   }
   const billingPeriod: BillingPeriod =
     period === "yearly" ? "yearly" : "monthly";
-
-  const storeId = await getActingStoreId();
 
   if (await hasLegacySubscription(storeId)) {
     return {
@@ -164,7 +182,21 @@ export async function confirmSubscribe(
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
+  return confirmSubscribeForStore(
+    await getActingStoreId(),
+    invoiceId,
+    providerPaymentId,
+    signature,
+  );
+}
 
+/** ★ THE CORE — see startSubscribeForStore for why this split exists. */
+async function confirmSubscribeForStore(
+  storeId: string,
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<SubscribeConfirm> {
   if (
     typeof invoiceId !== "string" ||
     typeof providerPaymentId !== "string" ||
@@ -175,8 +207,6 @@ export async function confirmSubscribe(
   ) {
     return { ok: false, error: "That payment couldn't be confirmed." };
   }
-
-  const storeId = await getActingStoreId();
 
   // Read the plan BEFORE activation so the audit row can name what it moved
   // from. Best-effort: a missing `from` is a worse audit row, not a reason to
@@ -221,6 +251,80 @@ export async function confirmSubscribe(
     periodEnd: confirmed.data.periodEnd,
     autopay: confirmed.data.mandateActivated,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Signup — the merchant's FIRST subscription, bought during the wizard.
+//
+// ★ WHY THESE EXIST AT ALL. The wizard runs on the PLATFORM host
+// (storemink.com/platform/signup), where there is no store to resolve from the
+// Host header — `getActingStoreId()` would return the fallback store. The store
+// has just been created a few lines earlier in the wizard, so the client knows
+// its id and passes it; these entry points prove the caller OWNS it and then
+// delegate to the same core the dashboard uses.
+//
+// ★ THE STORE ID FROM THE CLIENT IS NOT TRUSTED. `assertStoreSuperadmin` is the
+// whole security boundary here: without it, anyone signed in could post another
+// store's id and start — or settle — a subscription against it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The signed-in user's id, if they are the SUPERADMIN of this store.
+ *
+ * ★ Superadmin, not any admin: this buys a plan with a card. It mirrors the
+ * check the old signup flow used, deliberately — a new path to the same act must
+ * not be easier to pass than the one it replaces.
+ *
+ * Returns null on a read failure, so a database blip refuses rather than
+ * authorises.
+ */
+async function assertStoreSuperadmin(storeId: unknown): Promise<string | null> {
+  if (typeof storeId !== "string" || !storeId) return null;
+  const user = await getServerUser();
+  if (!user) return null;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ role: admins.role })
+        .from(admins)
+        .where(and(eq(admins.id, user.id), eq(admins.storeId, storeId)))
+        .limit(1),
+    );
+    return rows[0]?.role === "superadmin" ? user.id : null;
+  } catch (err) {
+    logError("billing.assert_superadmin", err, { storeId });
+    return null;
+  }
+}
+
+/** Begin the first subscription during signup. */
+export async function startSignupSubscribe(
+  storeId: unknown,
+  plan: unknown,
+  period: unknown,
+): Promise<SubscribeStart> {
+  const userId = await assertStoreSuperadmin(storeId);
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  return startSubscribeForStore(storeId as string, plan, period);
+}
+
+/** Settle it. */
+export async function confirmSignupSubscribe(
+  storeId: unknown,
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<SubscribeConfirm> {
+  const userId = await assertStoreSuperadmin(storeId);
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  return confirmSubscribeForStore(
+    storeId as string,
+    invoiceId,
+    providerPaymentId,
+    signature,
+  );
 }
 
 // ---------------------------------------------------------------------------

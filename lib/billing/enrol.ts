@@ -216,10 +216,23 @@ export async function startEnrolment(input: {
   if (invoice.status === "paid") {
     return { ok: false, error: "This subscription is already paid for." };
   }
-  if (!invoice.finalizedAt) {
-    const issued = await finalizeInvoice(invoice.id, now);
-    if (!issued) return { ok: false, error: "Couldn't issue your invoice." };
-  }
+
+  // ★★ DELIBERATELY NOT FINALIZED HERE. A RENEWAL is an obligation — the
+  // merchant already has the plan, so the worker issues a real document at T−4d
+  // and they pay against its number. An ENROLMENT is an OFFER: nothing is owed
+  // until they pay, and most abandoned checkouts never will. Finalizing up front
+  // did three bad things at once:
+  //
+  //   • burned a number in the gapless GST series for a document nobody ever
+  //     received — the exact waste that allocating ON finalize exists to prevent
+  //     (billing_03, and the §28 credit-note reasoning);
+  //   • made the invoice `open`, so `listPayableInvoices` showed "you have an
+  //     invoice to pay" on /dashboard/plans for a plan that was never granted;
+  //   • dated the document to the day they clicked Subscribe rather than the day
+  //     they paid.
+  //
+  // `confirmEnrolment` finalizes once the payment verifies. The draft carries no
+  // number and appears nowhere.
 
   const amountDue = await amountDueForInvoice(invoice.id);
   if (amountDue === null || amountDue <= 0) {
@@ -232,9 +245,36 @@ export async function startEnrolment(input: {
     amountPaise: amountDue,
     mode: "manual",
   });
-  // ★ Refused because one is already in flight — three clicks on Subscribe, or
-  // a reopened tab. Telling them to wait is right; opening a second charge is not.
+
+  // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
+  // a DEAD END. Dismissing the Razorpay modal leaves the attempt `processing`
+  // forever (nothing tells us a modal was closed), so every later Subscribe was
+  // answered with "a payment is already in progress" and the merchant could
+  // never subscribe at all. Reproducible in two clicks.
+  //
+  // The fix is the one §18 checkout already uses: a Razorpay ORDER stays payable
+  // until it is paid, so hand the SAME order back rather than opening a second
+  // one. No staleness guess, no duplicate charge, and a resumed tab simply works.
   if (!attempt) {
+    const resumable = await resumableAttempt(invoice.id, input.storeId);
+    if (resumable) {
+      return {
+        ok: true,
+        data: {
+          invoiceId: invoice.id,
+          attemptId: resumable.id,
+          providerOrderId: resumable.providerOrderId,
+          keyId: creds.keyId,
+          amountPaise: resumable.amountPaise,
+          suggestedMandateMaxPaise: mandateSizePaise({
+            planPaise: price.planPaise,
+            taxInclusive: tax.inclusive,
+          }),
+        },
+      };
+    }
+    // In flight but with no order to resume — a race between two Subscribe
+    // clicks, caught before either reached the gateway. Waiting IS the answer.
     return {
       ok: false,
       error: "A payment is already in progress. Give it a moment.",
@@ -285,6 +325,68 @@ export async function startEnrolment(input: {
       }),
     },
   };
+}
+
+/**
+ * The in-flight attempt for this invoice, if it has an order we can re-open.
+ *
+ * ★ `billing_payment_attempts_one_in_flight` covers THREE states —
+ * `created`, `processing`, `authorized` — and only ONE of them is resumable:
+ *
+ *   created     no gateway order exists yet, so there is nothing to re-open.
+ *               (Also caught by the providerOrderId check below.)
+ *   processing  the order exists and was never paid. RESUMABLE.
+ *   authorized  the money is already authorized. Re-opening checkout here would
+ *               invite a second authorization on the same invoice.
+ *
+ * So the filter is deliberate, not incidental — widen it and `authorized`
+ * becomes a double-charge invitation.
+ *
+ * ⚠ TEST GAP: the db mock does not evaluate WHERE clauses, so the `authorized`
+ * exclusion is argued here rather than pinned by a test. The `created` case IS
+ * covered, via the providerOrderId check.
+ */
+const RESUMABLE_STATE = "processing";
+
+async function resumableAttempt(
+  invoiceId: string,
+  storeId: string,
+): Promise<{
+  id: string;
+  providerOrderId: string;
+  amountPaise: number;
+} | null> {
+  try {
+    return await withService(async (db) => {
+      const [row] = await db
+        .select({
+          id: billingPaymentAttempts.id,
+          providerOrderId: billingPaymentAttempts.providerOrderId,
+          amountPaise: billingPaymentAttempts.amountPaise,
+        })
+        .from(billingPaymentAttempts)
+        .where(
+          and(
+            eq(billingPaymentAttempts.invoiceId, invoiceId),
+            // Scoped by store as well: an invoice id alone must never re-open
+            // another merchant's payment.
+            eq(billingPaymentAttempts.storeId, storeId),
+            eq(billingPaymentAttempts.state, RESUMABLE_STATE),
+          ),
+        )
+        .orderBy(desc(billingPaymentAttempts.createdAt))
+        .limit(1);
+      if (!row?.providerOrderId) return null;
+      return {
+        id: row.id,
+        providerOrderId: row.providerOrderId,
+        amountPaise: row.amountPaise,
+      };
+    });
+  } catch (err) {
+    logError("billing.resumable_attempt", err, { invoiceId });
+    return null;
+  }
 }
 
 /**
@@ -446,6 +548,12 @@ export async function confirmEnrolment(input: {
   if (settled && settled !== "captured") {
     return { ok: false, error: "That payment didn't complete." };
   }
+
+  // ★ ISSUE THE DOCUMENT NOW, not when they clicked Subscribe. The number comes
+  // from the gapless GST series, so it is spent only on an invoice that was
+  // really paid — and it is dated to the payment. Best-effort: the money is in
+  // and the plan must follow, so a numbering hiccup is logged, not fatal.
+  await finalizeInvoice(input.invoiceId, now);
 
   // Returns the id, so activateSubscription does not have to look up the row it
   // just created — one fewer query, and no reliance on the one-active-mandate
