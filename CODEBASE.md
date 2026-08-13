@@ -126,7 +126,11 @@ wholesip/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
 │   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
 │   │   │   │                  #   [id] detail (status timeline, items, totals,
-│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   invoice link) + capability-aware Online /
+│   │   │   │                  #   In store tabs. `order-history.tsx` groups
+│   │   │   │                  #   StoreMink POS sales and pickup journeys; the
+│   │   │   │                  #   split stays hidden for delivery-only stores.
+│   │   │   │                  #   Double-locked: withUser (RLS
 │   │   │   │                  #   customer_id = auth.uid()) AND host store id
 │   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
 │   │   │   │                  #   the customer rows the fan-out has always
@@ -402,7 +406,8 @@ wholesip/
 │   │   │                      # re-parses every chunk server-side, row-atomic. Gated on
 │   │   │                      # the RESOURCE's own section, never a key of its own. Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
-│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # getMyOrders/getMyOrder + physical-store channel
+│   │   │                      # capability resolution. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
 │   │   │                      # DIFFERENT store while browsing this one.
 │   │   │                      # ★ cancelMyOrder (§26): ONE button, TWO outcomes —
@@ -557,6 +562,9 @@ wholesip/
 │   │                          # Takes a `runner` so the dashboard keeps its
 │   │                          # withUser(admin) scope while the customer path uses
 │   │                          # withService after proving ownership itself.
+│   │                          # history-channels.ts: pure Online/In-store grouping
+│   │                          # and tab-visibility rules (current POS/pickup OR
+│   │                          # historical receipt; never hide owned history).
 │   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
 │   │                          # every event, its audiences + default channels),
 │   │                          # render.ts (audience-aware copy, pure), record.ts

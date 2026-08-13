@@ -34,6 +34,7 @@ sequence AND the spec for everything still to build.
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
+| —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
@@ -439,6 +440,26 @@ confirmation email and the order page.
 ---
 
 ## Step 4 — POS customer capture, the Shopify way
+
+### Shipped foundation — channel-aware shopper history
+
+`/orders` now separates **Online** from **In store** only when that second
+journey is real. In store includes StoreMink POS purchases linked to the signed-
+in customer and online pickup orders. The split is shown when the store has an
+effective POS setting plus an active POS-capable shop, when checkout pickup is
+enabled plus an active pickup-capable shop, or when the customer owns a
+historical POS/pickup order. That last condition is deliberate: disabling POS,
+pickup, a location or a plan may stop future sales but must never hide an owned
+receipt. Delivery-only stores keep the simpler single history.
+
+POS detail pages now say **Purchased in store**, show the sale location and do
+not render a courier timeline or an empty delivery address. A pickup stays an
+online checkout source internally but is grouped under In store because it is
+a shop-visit journey for the customer.
+
+The remaining gap is still the identity work below: only POS sales explicitly
+attached to an existing customer can appear today. Anonymous walk-ins cannot be
+claimed later until Step 4 ships the unclaimed-customer adoption transaction.
 
 ### What Shopify does
 
