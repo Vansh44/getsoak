@@ -237,42 +237,16 @@ describe("startSubscribe — the gate", () => {
   });
 });
 
-describe("★ startSubscribe — never billed by both systems", () => {
-  it("★★ refuses when the OLD system has a live mandate", async () => {
-    seed([[{ rzpSubscriptionId: "sub_old", status: "active" }]]);
-    const res = await startSubscribe("pro", "monthly");
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error).toMatch(/already has a subscription/i);
-    expect(enrol.startEnrolment).not.toHaveBeenCalled();
-  });
-
-  it("proceeds when the old row exists but its mandate is dead", async () => {
-    seed([[{ rzpSubscriptionId: "sub_old", status: "cancelled" }]]);
-    expect((await startSubscribe("pro", "monthly")).ok).toBe(true);
-  });
-
-  it("proceeds when the old row has no gateway subscription at all", async () => {
-    seed([[{ rzpSubscriptionId: null, status: "created" }]]);
-    expect((await startSubscribe("pro", "monthly")).ok).toBe(true);
-  });
-
-  it("★★ FAILS CLOSED when the legacy check itself errors", async () => {
-    // If we cannot tell whether the old system is billing them, refusing costs
-    // one merchant a retry; enrolling anyway could bill the same store twice
-    // from two systems with no single place to stop it.
-    dbHolder.current = {
-      db: {
-        select: () => {
-          throw new Error("db down");
-        },
-      },
-    };
-    const res = await startSubscribe("pro", "monthly");
-    expect(res.ok).toBe(false);
-    expect(enrol.startEnrolment).not.toHaveBeenCalled();
-  });
-});
+// ⚠ The "never billed by both systems" block was DELETED with the old path
+// (2026-08-13). `hasLegacySubscription` existed to stop a store being enrolled on
+// the new system while `store_subscriptions` held a live Razorpay mandate — and
+// with `subscription-actions.ts` gone, nothing can create one. The table remains
+// as an audit trail that nothing reads.
+//
+// ★ If a legacy row is ever found in a live database, the fix is to cancel the
+// GATEWAY subscription, not to reinstate this guard: our code no longer bills
+// from that row, so the only thing that could still take money is Razorpay's own
+// timer, which a guard here cannot reach.
 
 describe("startSubscribe — pricing", () => {
   it("★ prices from the LIVE readers", async () => {

@@ -67,3 +67,29 @@ export interface LocationBillingState {
   canBuy: boolean;
   blockedReason?: string;
 }
+
+/**
+ * The subscription, as the plans page shows it (§34).
+ *
+ * Replaces the old `SubscriptionState`. Two differences worth noting: `status`
+ * carries OUR state vocabulary (`active`/`past_due`/`grace`/…), not Razorpay's,
+ * and `scheduledPeriod` exists — the old shape could not express "same tier,
+ * different billing period", which is why period changes were impossible.
+ */
+export interface SubscriptionView {
+  plan: string | null;
+  period: "monthly" | "yearly" | null;
+  /** Our state machine's value. Null when there is no subscription. */
+  status: string | null;
+  /** End of the paid period: the next charge, or the last day of service. */
+  currentEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  scheduledPlan: string | null;
+  scheduledPeriod: "monthly" | "yearly" | null;
+  /** A booked location release. */
+  scheduledLocations: number | null;
+  /** True when autopay is authorised, so it renews without being asked. */
+  autopay: boolean;
+  /** True when there is a live subscription to cancel or change. */
+  active: boolean;
+}

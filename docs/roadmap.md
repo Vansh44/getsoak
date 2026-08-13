@@ -577,17 +577,22 @@ the amount; the gateway only collects it.
 | 8 · AI-credit invoicing                              | ⏳                                  |
 | 9 · Delete `subscription-actions.ts` + the rzp plans | ⏳ after 4 and 5                    |
 
-**★ AUTOMATIC COLLECTION IS SWITCHED OFF, AND A GREEN CRON RUN MEANS NOBODY IS
-BEING CHARGED.** `RECURRING_CHARGE_VERIFIED` is false because the Razorpay
-subsequent-charge signature is unverified, so the worker sets
-`collectionSkipped` and every renewal is settled by hand on
-`/dashboard/plans`. Six Razorpay facts need a test-mode account to settle; they
-are listed in the spec's §10 rather than guessed.
+**★ AUTOPAY IS OFF, BUT THE SYSTEM IS NOT.** `RECURRING_CHARGE_VERIFIED` is false
+because the Razorpay subsequent-charge signature is unverified, so
+`collectionSkipped` is set — but pass 1 still ISSUES every renewal invoice, the
+merchant pays it on `/dashboard/plans`, and grace and downgrade run as designed.
+Six Razorpay facts need a test-mode account to settle; they are listed in the
+spec's §10 rather than guessed.
 
-**★ THE MIGRATION NEEDS A HUMAN FIRST.** `billing_06` moves our records only —
-Razorpay keeps charging an `active` subscription on its own timer, so the
-gateway subscription must be cancelled before it runs or the store is billed
-twice, from two systems, with no single place to stop it.
+**★ THERE IS ONE BILLING SYSTEM NOW.** `subscription-actions.ts`,
+`lib/payments/subscription.ts`, the `razorpay_plans` cache and the five
+`rzp*Subscription` calls were deleted on 2026-08-13. The `store_subscriptions`
+table remains as the old system's audit trail; nothing reads it.
+
+**The migration turned out to be a no-op.** `store_subscriptions` was empty in
+production by the time `billing_06` was applied, so there was nothing to move —
+and the one live subscriber's gateway subscription had already been cancelled by
+hand, which was the step that mattered.
 
 ---
 

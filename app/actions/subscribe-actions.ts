@@ -7,11 +7,10 @@
  * makes the gate on each one load-bearing rather than decorative: these take a
  * merchant's money and change what their store is entitled to.
  *
- * ★ RUNS ALONGSIDE the old `subscription-actions.ts`, which still drives
- * `/dashboard/plans`. Nothing here retires that path — the cutover is its own
- * step, and until it happens a store must not be enrolled in both.
- * `startSubscribe` refuses when the OLD system already has a live mandate for
- * the store, so the two cannot both be billing the same merchant.
+ * ★ THE ONLY BILLING PATH. `subscription-actions.ts` and the Razorpay
+ * Subscriptions machinery behind it were deleted on 2026-08-13 — StoreMink owns
+ * the amount and the schedule now, so nothing here asks a provider to change a
+ * plan (which is the call that never worked on UPI or e-mandate).
  */
 
 import { revalidateTag } from "next/cache";
@@ -19,18 +18,18 @@ import { and, eq } from "drizzle-orm";
 import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
-import { admins, storeSubscriptions, stores } from "@/drizzle/schema";
+import { admins, stores } from "@/drizzle/schema";
 import { getCurrentStore, STORE_TAG } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
-import { hasLiveMandate } from "@/lib/payments/plan-change";
 import {
   getExtraLocationPricingLive,
   getPlanPricingLive,
 } from "@/lib/plans/pricing";
-import { PLAN_IDS, type Plan } from "@/lib/plans";
+import { PLAN_IDS, PLAN_META, type Plan } from "@/lib/plans";
 import type {
   LocationBillingState,
   PayableInvoice,
+  SubscriptionView,
 } from "@/lib/billing/invoice-types";
 import {
   confirmInvoicePayment,
@@ -38,6 +37,12 @@ import {
   startInvoicePayment,
   type PaymentStart,
 } from "@/lib/billing/manual-pay";
+import {
+  cancelAtPeriodEnd,
+  getSubscriptionView,
+  resumeSubscription,
+} from "@/lib/billing/cancel";
+import { confirmPlanChange, startPlanChange } from "@/lib/billing/plan-change";
 import {
   confirmLocationPurchase,
   getLocationBillingState as readLocationBillingState,
@@ -90,29 +95,6 @@ function isPaidPlan(plan: unknown): plan is Plan {
   return plan === "basic" || plan === "pro";
 }
 
-/** Does the OLD system already bill this store? */
-async function hasLegacySubscription(storeId: string): Promise<boolean> {
-  try {
-    return await withService(async (db) => {
-      const [row] = await db
-        .select({
-          rzpSubscriptionId: storeSubscriptions.rzpSubscriptionId,
-          status: storeSubscriptions.status,
-        })
-        .from(storeSubscriptions)
-        .where(eq(storeSubscriptions.storeId, storeId))
-        .limit(1);
-      return !!row?.rzpSubscriptionId && hasLiveMandate(row.status);
-    });
-  } catch (err) {
-    // ★ FAILS CLOSED. If we cannot tell whether the old system is billing them,
-    // refusing costs one merchant a retry; enrolling them anyway could bill the
-    // same store twice, from two systems, with no single place to stop it.
-    logError("billing.legacy_check", err, { storeId });
-    return true;
-  }
-}
-
 /**
  * Begin subscribing: issue the first invoice and open a Razorpay order.
  *
@@ -154,14 +136,6 @@ async function startSubscribeForStore(
   }
   const billingPeriod: BillingPeriod =
     period === "yearly" ? "yearly" : "monthly";
-
-  if (await hasLegacySubscription(storeId)) {
-    return {
-      ok: false,
-      error:
-        "This store already has a subscription. Cancel it before starting a new one.",
-    };
-  }
 
   // Best-effort: an invoice can be issued without a billing profile, and
   // blocking a sale on optional identity fields would be the wrong trade.
@@ -558,4 +532,210 @@ export async function releaseExtraLocations(
       ? `Booked. You keep the location until ${when}, then stop paying for it.`
       : "Booked. You keep the location until this cycle ends.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cancelling, resuming, and changing plan.
+//
+// ★ None of these calls the gateway to change a schedule — StoreMink owns the
+// amount and the dates, so cancelling is a flag and a downgrade is a booked
+// change. Only a DEARER change moves money, and it does so through the same
+// one-off checkout as enrolment and location purchases.
+// ---------------------------------------------------------------------------
+
+/** The subscription card's data. Read-only, so gated on VIEW. */
+export async function getMySubscription(): Promise<SubscriptionView> {
+  const userId = await getManagerUserId("ai");
+  const storeId = await getActingStoreId();
+  // No permission still returns the neutral view rather than throwing — the page
+  // renders other things, and `active: false` simply hides the controls.
+  if (!userId) {
+    return {
+      plan: null,
+      period: null,
+      status: null,
+      currentEnd: null,
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
+      scheduledPeriod: null,
+      scheduledLocations: null,
+      autopay: false,
+      active: false,
+    };
+  }
+  return getSubscriptionView(storeId);
+}
+
+export type CancelActionResult =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+export async function cancelMySubscription(): Promise<CancelActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+
+  const storeId = await getActingStoreId();
+  const done = await cancelAtPeriodEnd({ storeId });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  const until = done.data.accessUntil
+    ? new Date(done.data.accessUntil).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      })
+    : null;
+  return {
+    ok: true,
+    // ★ The promise has to match what will happen. Access runs to the end of the
+    // cycle only if there IS one — between authorising and the first charge there
+    // isn't, and promising a plan they were never charged for sets up the wrong
+    // expectation.
+    message: until
+      ? `Cancelled. You keep your plan until ${until}, then move to Free.`
+      : "Cancelled. No further payments will be taken.",
+  };
+}
+
+export async function resumeMySubscription(): Promise<CancelActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+
+  const storeId = await getActingStoreId();
+  const done = await resumeSubscription({ storeId });
+  if (!done.ok) return { ok: false, error: done.error };
+  return {
+    ok: true,
+    // ⚠ Autopay is NOT restored — the mandate was withdrawn on cancel and only
+    // the merchant can authorise a new one. Saying otherwise has them expect a
+    // charge that never comes, and be downgraded for it.
+    message: done.data.autopay
+      ? "Resumed. Your plan will renew as normal."
+      : "Resumed. Autopay is off, so we'll ask you to pay each renewal.",
+  };
+}
+
+export type PlanChangeActionResult =
+  | {
+      ok: true;
+      /** Present when a payment is needed to apply it now. */
+      payment?: {
+        invoiceId: string;
+        providerOrderId: string;
+        keyId: string;
+        amountPaise: number;
+      };
+      scheduled: boolean;
+      message: string;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Move to a different plan or billing period.
+ *
+ * ★ The DIRECTION decides the timing, and the server decides the direction —
+ * there is no "apply now" option to pick, because on a downgrade that means a
+ * refund (§15b).
+ */
+export async function changeMyPlan(
+  plan: unknown,
+  period: unknown,
+): Promise<PlanChangeActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
+    return { ok: false, error: "Choose a paid plan." };
+  }
+  const billingPeriod: BillingPeriod =
+    period === "yearly" ? "yearly" : "monthly";
+
+  const [storeId, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getExtraLocationPricingLive(),
+  ]);
+  const started = await startPlanChange({
+    storeId,
+    targetPlan: plan,
+    targetPeriod: billingPeriod,
+    priceFor,
+    locationPrice,
+  });
+  if (!started.ok) return { ok: false, error: started.error };
+
+  const name = PLAN_META[plan].name;
+  if (started.data.payment) {
+    return {
+      ok: true,
+      payment: started.data.payment,
+      scheduled: false,
+      message: `Moving to ${name}.`,
+    };
+  }
+  // Applied free (a part period that rounded to nothing) or booked for later.
+  if (started.data.scheduled) {
+    const when = started.data.effectiveAt
+      ? new Date(started.data.effectiveAt).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          timeZone: "Asia/Kolkata",
+        })
+      : null;
+    return {
+      ok: true,
+      scheduled: true,
+      message: when
+        ? `Booked. You keep your current plan until ${when}, then move to ${name} billed ${billingPeriod}.`
+        : `Booked. You'll move to ${name} at the end of this cycle.`,
+    };
+  }
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, scheduled: false, message: `You're on ${name}.` };
+}
+
+export async function confirmMyPlanChange(
+  invoiceId: unknown,
+  plan: unknown,
+  period: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<{ ok: true; plan: Plan } | { ok: false; error: string }> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (
+    typeof invoiceId !== "string" ||
+    typeof providerPaymentId !== "string" ||
+    typeof signature !== "string" ||
+    !invoiceId ||
+    !providerPaymentId ||
+    !signature
+  ) {
+    return { ok: false, error: "That payment couldn't be confirmed." };
+  }
+  // ★ RE-VALIDATED, not trusted: the plan and period come from the client, and
+  // the invoice carries only the location count.
+  if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
+    return { ok: false, error: "That plan isn't valid." };
+  }
+  const billingPeriod: BillingPeriod =
+    period === "yearly" ? "yearly" : "monthly";
+
+  const storeId = await getActingStoreId();
+  const done = await confirmPlanChange({
+    storeId,
+    invoiceId,
+    targetPlan: plan,
+    targetPeriod: billingPeriod,
+    providerPaymentId,
+    signature,
+  });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, plan: done.data.plan };
 }

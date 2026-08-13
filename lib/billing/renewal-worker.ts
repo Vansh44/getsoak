@@ -33,9 +33,10 @@ import {
   billingMandates,
   billingSubscriptions,
   posShifts,
+  stores,
 } from "@/drizzle/schema";
 import { logError, logInfo } from "@/lib/observability/logger";
-import { limitsFor, type Plan } from "@/lib/plans";
+import type { Plan } from "@/lib/plans";
 import {
   collectionCutoff,
   cycleFrom,
@@ -55,6 +56,7 @@ import {
   notifyInvoiceIssued,
 } from "./dunning";
 import { buildSubscriptionInvoice } from "./invoice";
+import { resolveNextCycle, type ScheduledFields } from "./next-cycle";
 
 /** How many subscriptions one pass will touch. Bounded so a Cloud Run request
  *  finishes; the cron self-chains while there is more. */
@@ -78,8 +80,11 @@ interface DueRow {
   currentCycleSeq: number;
   currentPeriodEnd: string | null;
   billedLocations: number;
-  /** A booked release, which applies to the cycle this invoice is FOR. */
+  /** Booked changes, which apply to the cycle this invoice is FOR. */
+  scheduledPlan: string | null;
+  scheduledPeriod: string | null;
   scheduledLocations: number | null;
+  cancelAtPeriodEnd: boolean;
   mandateId: string | null;
 }
 
@@ -179,7 +184,10 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
       currentCycleSeq: billingSubscriptions.currentCycleSeq,
       currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
       billedLocations: billingSubscriptions.billedLocations,
+      scheduledPlan: billingSubscriptions.scheduledPlan,
+      scheduledPeriod: billingSubscriptions.scheduledPeriod,
       scheduledLocations: billingSubscriptions.scheduledLocations,
+      cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
       mandateId: billingSubscriptions.mandateId,
     })
     .from(billingSubscriptions)
@@ -187,6 +195,11 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
       and(
         inArray(billingSubscriptions.state, ["active", "past_due", "grace"]),
         sql`${billingSubscriptions.planSource} <> 'comp'`,
+        // ★★ A CANCELLED SUBSCRIPTION IS NOT INVOICED. It ends at the period end,
+        // so raising a document for the cycle after it would bill a merchant who
+        // explicitly stopped — and, because grace and downgrade follow an unpaid
+        // invoice, would then chase them for it.
+        eq(billingSubscriptions.cancelAtPeriodEnd, false),
         isNotNull(billingSubscriptions.currentPeriodEnd),
         // A cycle beginning at or before the cutoff is inside the lead window.
         lte(
@@ -213,26 +226,29 @@ async function collectOne(
     }>;
   },
 ): Promise<"paid" | "failed" | "manual" | "pending"> {
-  const period: BillingPeriod = row.period === "yearly" ? "yearly" : "monthly";
-  const plan = row.plan as Plan;
+  // ★★ PRICE WHAT WILL APPLY NEXT CYCLE, not what applies today. `resolveNextCycle`
+  // is the ONE place scheduled plan / period / location changes are resolved, so
+  // this and `advanceCycle` cannot disagree — and if they did, the merchant would
+  // be billed for something they did not get, silently, a month later.
+  const nextShape = resolveNextCycle(row);
+  // A cancelled subscription is filtered out in claimDue; this is the belt to
+  // that braces, so a future caller cannot invoice one by accident.
+  if (nextShape.ending) return "pending";
+
+  const period: BillingPeriod = nextShape.period;
+  const plan = nextShape.plan as Plan;
   const periodStart = new Date(row.currentPeriodEnd!);
   const next = cycleFrom(periodStart, period, row.currentCycleSeq + 1);
 
   const price = await input.priceFor(plan, period);
   const tax = await loadTaxContext(row.storeId);
 
-  // ★★ THE INVOICE IS FOR THE NEXT CYCLE, SO IT MUST USE THE COUNT THAT WILL
-  // APPLY THEN — the scheduled one when a release is booked. Pricing it at
-  // today's count and then dropping the count at the turn (advanceCycle) would
-  // charge the merchant a full extra cycle for a shop they released, which is the
-  // one direction "nobody is ever refunded" must not be allowed to mean.
-  const billedNext = row.scheduledLocations ?? row.billedLocations;
-
-  // ★ Locations are billed only if the TARGET plan can have them. Charging for
-  // POS on a plan that cannot use it is indefensible (the §POS-7 rule).
+  // Locations are billed only if the plan can have them — `resolveNextCycle`
+  // already zeroed the count for a plan without POS, so this is the shape, not
+  // the rule.
   const locations =
-    limitsFor(plan).posLocationsIncluded > 0
-      ? { count: billedNext, unitPaise: price.locationPaise }
+    nextShape.billedLocations > 0
+      ? { count: nextShape.billedLocations, unitPaise: price.locationPaise }
       : undefined;
 
   const built = buildSubscriptionInvoice({
@@ -369,6 +385,8 @@ export interface EvaluateSummary {
   advanced: number;
   graced: number;
   waiting: number;
+  /** Subscriptions that reached the end of a cancelled cycle. */
+  ended: number;
   errors: number;
 }
 
@@ -405,6 +423,7 @@ export async function evaluateCycleTurns(
     advanced: 0,
     graced: 0,
     waiting: 0,
+    ended: 0,
     errors: 0,
   };
 
@@ -413,6 +432,7 @@ export async function evaluateCycleTurns(
   // length of an HTTP request, and would also announce a grace window that a
   // rollback then un-started.
   const graced: { storeId: string; plan: string; graceEndsAt: Date }[] = [];
+  const ending: { storeId: string; plan: string }[] = [];
 
   try {
     await withService(async (db) => {
@@ -421,6 +441,11 @@ export async function evaluateCycleTurns(
           storeId: billingSubscriptions.storeId,
           plan: billingSubscriptions.plan,
           period: billingSubscriptions.period,
+          billedLocations: billingSubscriptions.billedLocations,
+          scheduledPlan: billingSubscriptions.scheduledPlan,
+          scheduledPeriod: billingSubscriptions.scheduledPeriod,
+          scheduledLocations: billingSubscriptions.scheduledLocations,
+          cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
           currentCycleSeq: billingSubscriptions.currentCycleSeq,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
         })
@@ -437,6 +462,23 @@ export async function evaluateCycleTurns(
         .for("update", { skipLocked: true });
 
       for (const row of rows) {
+        // ★★ A CANCELLED SUBSCRIPTION ENDS HERE, and there is no invoice to wait
+        // for — claimDue never raised one. Without this branch the merchant would
+        // sit in `waiting` forever: still `active`, still entitled to a paid plan
+        // they stopped paying for, and never actually cancelled.
+        if (row.cancelAtPeriodEnd) {
+          const ended = await endSubscription(db, {
+            storeId: row.storeId,
+            fromCycleSeq: row.currentCycleSeq,
+            now,
+          });
+          if (ended) {
+            ending.push({ storeId: row.storeId, plan: row.plan });
+            summary.ended += 1;
+          }
+          continue;
+        }
+
         const nextSeq = row.currentCycleSeq + 1;
         const [invoice] = await db
           .select({ status: billingInvoices.status })
@@ -464,7 +506,7 @@ export async function evaluateCycleTurns(
         if (invoice.status === "paid") {
           await advanceCycle(db, {
             storeId: row.storeId,
-            period: row.period,
+            scheduled: row,
             fromCycleSeq: row.currentCycleSeq,
             fromPeriodEnd: row.currentPeriodEnd!,
             now,
@@ -512,6 +554,14 @@ export async function evaluateCycleTurns(
     summary.errors += 1;
   }
 
+  // ★ A cancellation reaching its end IS a downgrade from the merchant's point of
+  // view — their plan stopped and they are on Free — so it reuses that notice
+  // rather than inventing a second one that says the same thing. They already
+  // know they cancelled; what they need is confirmation and the way back.
+  for (const e of ending) {
+    await notifyDowngraded({ storeId: e.storeId, fromPlan: e.plan });
+  }
+
   // ★ This is the LAST message that can change the outcome — 48 hours from now
   // the store loses its plan and its till. Best-effort, so a mail failure never
   // becomes a billing error.
@@ -543,17 +593,21 @@ async function advanceCycle(
   db: Db,
   input: {
     storeId: string;
-    period: string;
+    /** The row's plan/period/scheduled fields — resolved by resolveNextCycle. */
+    scheduled: ScheduledFields;
     fromCycleSeq: number;
     fromPeriodEnd: string;
     now: Date;
   },
 ): Promise<boolean> {
-  const period: BillingPeriod =
-    input.period === "yearly" ? "yearly" : "monthly";
+  // ★★ ONE RESOLVER, so what was PRICED at T−4d is what is WRITTEN at T0. The
+  // period matters twice over: it decides the plan amount AND the length of the
+  // cycle, so a monthly→yearly switch that ignored it would give the merchant a
+  // 30-day year or a 365-day month.
+  const shape = resolveNextCycle(input.scheduled);
   const next = cycleFrom(
     new Date(input.fromPeriodEnd),
-    period,
+    shape.period,
     input.fromCycleSeq + 1,
   );
   const claimed = await db
@@ -565,13 +619,15 @@ async function advanceCycle(
       state: "active",
       graceStartedAt: null,
       graceEndsAt: null,
-      // ★ A BOOKED LOCATION RELEASE TAKES EFFECT HERE, in the same statement
-      // that turns the cycle — the merchant keeps (and keeps paying for) the
-      // shop until the period they bought runs out, then it goes. Doing it in a
-      // second UPDATE would let an interrupted run leave the count and the cycle
-      // disagreeing, with the merchant either paying for a shop they released or
-      // holding one they no longer pay for.
-      billedLocations: sql`coalesce(${billingSubscriptions.scheduledLocations}, ${billingSubscriptions.billedLocations})`,
+      // ★ EVERY BOOKED CHANGE TAKES EFFECT HERE, in the same statement that turns
+      // the cycle — the merchant keeps (and keeps paying for) what they bought
+      // until the period runs out, then it changes. Doing it in a second UPDATE
+      // would let an interrupted run leave the plan and the cycle disagreeing.
+      plan: shape.plan,
+      period: shape.period,
+      billedLocations: shape.billedLocations,
+      scheduledPlan: null,
+      scheduledPeriod: null,
       scheduledLocations: null,
       updatedAt: input.now.toISOString(),
     })
@@ -583,6 +639,54 @@ async function advanceCycle(
     )
     .returning({ storeId: billingSubscriptions.storeId });
   return claimed.length > 0;
+}
+
+/**
+ * End a cancelled subscription at its period end.
+ *
+ * ★ A CONDITIONAL CLAIM on the cycle it was told about, so a second run — or a
+ * resume racing the turn — cannot end it twice or end one that moved on.
+ *
+ * ★ THE PLAN IS DROPPED TO FREE IN THE SAME STATEMENT-PAIR as the state change.
+ * `stores.plan` is what every gate reads, so leaving it while marking the
+ * subscription `cancelled` would give away a paid plan indefinitely.
+ */
+async function endSubscription(
+  db: Db,
+  input: { storeId: string; fromCycleSeq: number; now: Date },
+): Promise<boolean> {
+  const claimed = await db
+    .update(billingSubscriptions)
+    .set({
+      state: "cancelled",
+      cancelAtPeriodEnd: false,
+      // The cycle is over and there is no next one. Clearing it keeps the
+      // billing_subscriptions_cycle_present CHECK satisfied, which requires a
+      // cycle only for active/past_due/grace.
+      currentPeriodStart: null,
+      currentPeriodEnd: null,
+      graceStartedAt: null,
+      graceEndsAt: null,
+      scheduledPlan: null,
+      scheduledPeriod: null,
+      scheduledLocations: null,
+      updatedAt: input.now.toISOString(),
+    })
+    .where(
+      and(
+        eq(billingSubscriptions.storeId, input.storeId),
+        eq(billingSubscriptions.currentCycleSeq, input.fromCycleSeq),
+        eq(billingSubscriptions.cancelAtPeriodEnd, true),
+      ),
+    )
+    .returning({ storeId: billingSubscriptions.storeId });
+  if (claimed.length === 0) return false;
+
+  await db
+    .update(stores)
+    .set({ plan: "free", planExpiresAt: null })
+    .where(eq(stores.id, input.storeId));
+  return true;
 }
 
 /**
@@ -607,7 +711,16 @@ export async function advanceAfterPayment(
       const [sub] = await db
         .select({
           storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
           period: billingSubscriptions.period,
+          billedLocations: billingSubscriptions.billedLocations,
+          // ★ The scheduled fields must come along: this path advances the cycle
+          // just as the worker does, so it has to apply the same booked changes
+          // or a merchant who pays during grace keeps a plan they downgraded off.
+          scheduledPlan: billingSubscriptions.scheduledPlan,
+          scheduledPeriod: billingSubscriptions.scheduledPeriod,
+          scheduledLocations: billingSubscriptions.scheduledLocations,
+          cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
           currentCycleSeq: billingSubscriptions.currentCycleSeq,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
           state: billingSubscriptions.state,
@@ -640,7 +753,7 @@ export async function advanceAfterPayment(
 
       return advanceCycle(db, {
         storeId,
-        period: sub.period,
+        scheduled: sub,
         fromCycleSeq: sub.currentCycleSeq,
         fromPeriodEnd: sub.currentPeriodEnd,
         now,

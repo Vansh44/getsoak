@@ -23,18 +23,17 @@ import {
   startCreditPurchase,
   type AiUsagePageData,
 } from "@/app/actions/ai-credit-actions";
+// ★ Everything on this page now goes through the NEW billing system (§34) —
+// there is no second billing path left. See docs/billing-architecture.md.
 import {
-  cancelSubscription,
-  changePlan,
-  type SubscriptionState,
-} from "@/app/actions/subscription-actions";
-// ★ Subscribing now goes through the NEW billing system (§34). cancel + change
-// still use the old path until location purchase and signup enrolment are
-// rebuilt on it — see docs/billing-architecture.md.
-import {
+  cancelMySubscription,
+  changeMyPlan,
+  confirmMyPlanChange,
   confirmSubscribe,
+  resumeMySubscription,
   startSubscribe,
 } from "@/app/actions/subscribe-actions";
+import type { SubscriptionView } from "@/lib/billing/invoice-types";
 import type { CreditPack } from "@/lib/ai/credits";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import {
@@ -96,7 +95,7 @@ export function PlansBillingClient({
   pricing,
 }: {
   initialData: AiUsagePageData;
-  subscription: SubscriptionState;
+  subscription: SubscriptionView;
   packs: CreditPack[];
   canManage: boolean;
   /** Resolved server-side (code defaults + operator overrides). Never read
@@ -126,20 +125,35 @@ export function PlansBillingClient({
     if (
       !window.confirm(
         keepsCycle
-          ? "Cancel autopay? You keep your plan until the current cycle ends, then you'll move to Free. No further payments will be taken."
-          : "Cancel autopay? No payments will be taken.",
+          ? "Cancel your subscription? You keep your plan until the current cycle ends, then you'll move to Free. No further payments will be taken."
+          : "Cancel your subscription? No payments will be taken.",
       )
     ) {
       return;
     }
     setCancelling(true);
-    const res = await cancelSubscription();
+    const res = await cancelMySubscription();
     setCancelling(false);
-    if (res.error) {
+    if (!res.ok) {
       toast.error(res.error);
       return;
     }
-    toast.success(res.message ?? "Subscription cancelled.");
+    toast.success(res.message);
+    refresh();
+  }
+
+  // ★ NEW: changing your mind before the cycle ends. The old path could not offer
+  // this — it cancelled the subscription at the gateway, so coming back meant
+  // re-authorising. Here it is clearing a flag.
+  async function handleResume() {
+    setCancelling(true);
+    const res = await resumeMySubscription();
+    setCancelling(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(res.message);
     refresh();
   }
 
@@ -302,22 +316,30 @@ export function PlansBillingClient({
             <p className="text-sm text-[#5b6472]">
               {subscription.cancelAtPeriodEnd ? (
                 <>
-                  Autopay is cancelled — you keep {planMeta.name}
+                  Cancelled — you keep {planMeta.name}
                   {subscription.currentEnd
                     ? ` until ${formatDate(subscription.currentEnd)}`
                     : " until the cycle ends"}
                   , then move to Free.
                 </>
-              ) : subscription.scheduledPlan ? (
+              ) : subscription.scheduledPlan || subscription.scheduledPeriod ? (
                 <>
-                  {PLAN_META[normalizePlan(subscription.scheduledPlan)].name}{" "}
+                  {
+                    PLAN_META[normalizePlan(subscription.scheduledPlan ?? plan)]
+                      .name
+                  }
+                  {/* The PERIOD is named too: the old shape could not express a
+                      same-tier period switch, so it silently showed nothing. */}
+                  {subscription.scheduledPeriod
+                    ? `, billed ${subscription.scheduledPeriod},`
+                    : ""}{" "}
                   starts at your next renewal
                   {subscription.currentEnd
                     ? ` (${formatDate(subscription.currentEnd)})`
                     : ""}
                   .
                 </>
-              ) : (
+              ) : subscription.autopay ? (
                 <>
                   Autopay renews your {planMeta.name} plan
                   {subscription.currentEnd
@@ -325,20 +347,40 @@ export function PlansBillingClient({
                     : " automatically"}
                   .
                 </>
+              ) : (
+                <>
+                  {/* ★ Autopay is OFF, which is the ordinary state while the
+                      recurring charge is unverified — so say what the merchant
+                      must DO rather than implying it renews itself. */}
+                  Your {planMeta.name} plan runs
+                  {subscription.currentEnd
+                    ? ` to ${formatDate(subscription.currentEnd)}`
+                    : " to the end of this cycle"}
+                  . We&apos;ll send an invoice to pay before then.
+                </>
               )}
             </p>
             {canManage &&
               subscription.active &&
-              !subscription.cancelAtPeriodEnd && (
+              (subscription.cancelAtPeriodEnd ? (
+                <button
+                  type="button"
+                  onClick={handleResume}
+                  disabled={cancelling}
+                  className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-[#111827] hover:bg-[#111827]/[0.04] disabled:opacity-60"
+                >
+                  {cancelling ? "Resuming…" : "Keep my plan"}
+                </button>
+              ) : (
                 <button
                   type="button"
                   onClick={handleCancel}
                   disabled={cancelling}
                   className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
                 >
-                  {cancelling ? "Cancelling…" : "Cancel autopay"}
+                  {cancelling ? "Cancelling…" : "Cancel subscription"}
                 </button>
-              )}
+              ))}
           </div>
         )}
       </section>
@@ -856,14 +898,55 @@ function UpgradeModal({
     // No `when` — the server derives it from the direction of the change.
     // Offering "switch now" on a downgrade looks helpful and is the option
     // that triggers a refund of money already paid.
-    const res = await changePlan(plan, period);
-    setWorking(false);
-    if (res.error) {
+    const res = await changeMyPlan(plan, period);
+    if (!res.ok) {
+      setWorking(false);
       toast.error(res.error);
       return;
     }
-    toast.success(res.message ?? "Plan updated.");
-    onActivated();
+
+    // Cheaper or equal: booked for the cycle end, nothing to pay.
+    if (!res.payment) {
+      setWorking(false);
+      toast.success(res.message);
+      onActivated();
+      return;
+    }
+
+    // ★ Dearer: the part period is charged NOW, on the same one-off checkout as
+    // enrolment and location purchases.
+    const opened = await openRazorpayModal({
+      keyId: res.payment.keyId,
+      rzpOrderId: res.payment.providerOrderId,
+      amountPaise: res.payment.amountPaise,
+      name: "StoreMink",
+      description: `${meta.name} plan — part period`,
+      onSuccess: async (r) => {
+        const done = await confirmMyPlanChange(
+          res.payment!.invoiceId,
+          plan,
+          period,
+          r.razorpay_payment_id,
+          r.razorpay_signature,
+        );
+        setWorking(false);
+        if (!done.ok) {
+          // Money may have moved — never "failed" (§26's rule).
+          toast.info(done.error);
+        } else {
+          toast.success(`You're on ${meta.name}.`);
+        }
+        onActivated();
+      },
+      onDismiss: () => {
+        setWorking(false);
+        toast.error("Payment wasn't completed.");
+      },
+    });
+    if (!opened) {
+      setWorking(false);
+      toast.error("Couldn't open the payment window. Please try again.");
+    }
   }
 
   return (

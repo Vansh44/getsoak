@@ -115,7 +115,8 @@ async function handle(request: Request) {
   // sooner, but NOT an error — a backlog draining is normal.
   const more =
     collect.considered >= RENEWAL_BATCH ||
-    evaluate.advanced + evaluate.graced + evaluate.waiting >= RENEWAL_BATCH ||
+    evaluate.advanced + evaluate.graced + evaluate.waiting + evaluate.ended >=
+      RENEWAL_BATCH ||
     downgrade.downgraded >= RENEWAL_BATCH;
 
   const body = {

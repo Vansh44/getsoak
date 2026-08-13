@@ -24,7 +24,7 @@ import {
   inventoryLevels,
   storeFulfilmentRules,
   storeLocations,
-  storeSubscriptions,
+  billingSubscriptions,
   stores,
 } from "@/drizzle/schema";
 import {
@@ -219,11 +219,15 @@ export async function createLocation(
           .from(storeLocations)
           .where(eq(storeLocations.storeId, storeId)),
       ),
+      // ★ `billing_subscriptions`, NOT the retired `store_subscriptions`. The old
+      // table is dead as of 2026-08-13 (§34) and would read 0 here — silently
+      // refusing every merchant the extra locations they PAY FOR, with an error
+      // telling them to go and buy what they already own.
       withService((db) =>
         db
-          .select({ billed_locations: storeSubscriptions.billedLocations })
-          .from(storeSubscriptions)
-          .where(eq(storeSubscriptions.storeId, storeId))
+          .select({ billed_locations: billingSubscriptions.billedLocations })
+          .from(billingSubscriptions)
+          .where(eq(billingSubscriptions.storeId, storeId))
           .limit(1),
       ).catch(() => [] as { billed_locations: number }[]),
     ]);

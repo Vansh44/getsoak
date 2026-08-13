@@ -67,6 +67,10 @@ const DUE_ROW = {
   currentCycleSeq: 3,
   currentPeriodEnd: "2026-09-03T00:00:00.000Z",
   billedLocations: 2,
+  scheduledPlan: null,
+  scheduledPeriod: null,
+  scheduledLocations: null,
+  cancelAtPeriodEnd: false,
   mandateId: "man-1",
 };
 
@@ -383,6 +387,11 @@ describe("evaluateCycleTurns — the boundary", () => {
     storeId: STORE,
     plan: "pro",
     period: "monthly",
+    billedLocations: 0,
+    scheduledPlan: null,
+    scheduledPeriod: null,
+    scheduledLocations: null,
+    cancelAtPeriodEnd: false,
     currentCycleSeq: 3,
     currentPeriodEnd: "2026-09-01T00:00:00.000Z",
   };
@@ -400,6 +409,39 @@ describe("evaluateCycleTurns — the boundary", () => {
     // Any previous grace is cleared — they paid.
     expect(set.graceStartedAt).toBeNull();
     expect(set.graceEndsAt).toBeNull();
+  });
+
+  it("★★ APPLIES a booked plan change at the turn", async () => {
+    // The other half of the invariant: pass 1 priced the next cycle with this
+    // change, so pass 2 must write it. If they disagree the merchant is billed
+    // for one plan and given another.
+    seed([[{ ...TURNED, scheduledPlan: "basic" }], [{ status: "paid" }]]);
+    await evaluateCycleTurns({ now: NOW });
+    const set = dbHolder.current.calls.set[0];
+    expect(set.plan).toBe("basic");
+    expect(set.scheduledPlan).toBeNull();
+  });
+
+  it("★★ APPLIES a booked period change, and the new cycle takes its LENGTH", async () => {
+    // A monthly→yearly switch that ignored the period would give the merchant a
+    // 30-day year.
+    seed([[{ ...TURNED, scheduledPeriod: "yearly" }], [{ status: "paid" }]]);
+    await evaluateCycleTurns({ now: NOW });
+    const set = dbHolder.current.calls.set[0];
+    expect(set.period).toBe("yearly");
+    expect(set.currentPeriodEnd).toBe("2027-09-01T00:00:00.000Z");
+    expect(set.scheduledPeriod).toBeNull();
+  });
+
+  it("★ applies a booked location release at the turn", async () => {
+    seed([
+      [{ ...TURNED, billedLocations: 3, scheduledLocations: 1 }],
+      [{ status: "paid" }],
+    ]);
+    await evaluateCycleTurns({ now: NOW });
+    const set = dbHolder.current.calls.set[0];
+    expect(set.billedLocations).toBe(1);
+    expect(set.scheduledLocations).toBeNull();
   });
 
   it("★ starts grace on an OPEN (attempted, unpaid) invoice", async () => {
@@ -500,6 +542,111 @@ describe("evaluateCycleTurns — the boundary", () => {
       await evaluateCycleTurns({ now: NOW });
       expect(dunning.notifyGraceStarted).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("★★ a cancelled subscription ends at its period end", () => {
+  const CANCELLING = {
+    storeId: STORE,
+    plan: "pro",
+    period: "monthly",
+    billedLocations: 0,
+    scheduledPlan: null,
+    scheduledPeriod: null,
+    scheduledLocations: null,
+    cancelAtPeriodEnd: true,
+    currentCycleSeq: 3,
+    currentPeriodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  it("★★ ENDS it without waiting for an invoice", async () => {
+    // claimDue never raised one, so without this branch the merchant sits in
+    // `waiting` forever: still active, still entitled to a plan they stopped
+    // paying for, and never actually cancelled.
+    seed([[CANCELLING]]);
+    const s = await evaluateCycleTurns({ now: NOW });
+    expect(s.ended).toBe(1);
+    expect(s.waiting).toBe(0);
+    const set = dbHolder.current.calls.set[0];
+    expect(set.state).toBe("cancelled");
+    expect(set.cancelAtPeriodEnd).toBe(false);
+  });
+
+  it("★★ DROPS THE PLAN TO FREE — that is what every gate reads", async () => {
+    seed([[CANCELLING]]);
+    await evaluateCycleTurns({ now: NOW });
+    expect(dbHolder.current.calls.set.some((x: any) => x.plan === "free")).toBe(
+      true,
+    );
+  });
+
+  it("★ clears the cycle, so the cycle_present CHECK stays satisfied", async () => {
+    seed([[CANCELLING]]);
+    await evaluateCycleTurns({ now: NOW });
+    const set = dbHolder.current.calls.set[0];
+    expect(set.currentPeriodStart).toBeNull();
+    expect(set.currentPeriodEnd).toBeNull();
+  });
+
+  it("★ tells the merchant, naming the plan they had", async () => {
+    seed([[CANCELLING]]);
+    await evaluateCycleTurns({ now: NOW });
+    expect(dunning.notifyDowngraded).toHaveBeenCalledWith({
+      storeId: STORE,
+      fromPlan: "pro",
+    });
+  });
+
+  it("★★ says nothing and counts nothing when the claim was LOST", async () => {
+    // A resume racing the turn: the conditional claim is what decides.
+    dbHolder.current = makeDbMock({
+      selectQueue: [[CANCELLING]],
+      returning: [],
+    });
+    const s = await evaluateCycleTurns({ now: NOW });
+    expect(s.ended).toBe(0);
+    expect(dunning.notifyDowngraded).not.toHaveBeenCalled();
+  });
+
+  it("★ never starts a grace clock on it", async () => {
+    seed([[CANCELLING]]);
+    const s = await evaluateCycleTurns({ now: NOW });
+    expect(s.graced).toBe(0);
+    expect(dunning.notifyGraceStarted).not.toHaveBeenCalled();
+  });
+});
+
+describe("★★ pass 1 skips a cancelled subscription", () => {
+  it("does not invoice a cycle that will not happen", async () => {
+    // Raising a document would bill a merchant who explicitly stopped — and,
+    // because grace follows an unpaid invoice, would then chase them for it.
+    seed([[{ ...DUE_ROW, cancelAtPeriodEnd: true }]]);
+    await collectDueRenewals({ now: NOW, charge: null, priceFor });
+    expect(repo.ensureRenewalInvoice).not.toHaveBeenCalled();
+  });
+});
+
+describe("★★ the next cycle is priced with what will APPLY then", () => {
+  it("uses a booked plan change, not today's plan", async () => {
+    seed([[{ ...DUE_ROW, scheduledPlan: "basic" }]]);
+    await collectDueRenewals({ now: NOW, charge: null, priceFor });
+    expect(priceFor).toHaveBeenCalledWith("basic", "monthly");
+  });
+
+  it("★ uses a booked PERIOD change — it decides the amount AND the cycle length", async () => {
+    seed([[{ ...DUE_ROW, scheduledPeriod: "yearly" }]]);
+    await collectDueRenewals({ now: NOW, charge: null, priceFor });
+    expect(priceFor).toHaveBeenCalledWith("pro", "yearly");
+    // 365 days on from the boundary, because a yearly cycle is a DURATION.
+    const arg = repo.ensureRenewalInvoice.mock.calls[0][0];
+    expect(arg.periodEnd.toISOString()).toBe("2027-09-03T00:00:00.000Z");
+  });
+
+  it("★★ drops locations when the booked plan has no POS", async () => {
+    seed([[{ ...DUE_ROW, billedLocations: 3, scheduledPlan: "basic" }]]);
+    await collectDueRenewals({ now: NOW, charge: null, priceFor });
+    const built = repo.ensureRenewalInvoice.mock.calls[0][0].built;
+    expect(built.lines.some((l: any) => l.kind === "location")).toBe(false);
   });
 });
 

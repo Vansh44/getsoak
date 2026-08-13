@@ -11,7 +11,7 @@
  */
 
 import { isIntraState, splitGstPaise, type GstSplitPaise } from "./gst";
-import type { BillingPeriod } from "@/lib/payments/subscription";
+import type { BillingPeriod } from "@/lib/plans/location-billing";
 
 /** A line on an invoice. `kind` must explain itself (spec §13). */
 export interface InvoiceLine {

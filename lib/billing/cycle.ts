@@ -8,7 +8,7 @@
  * Money is integer PAISE throughout. Never floats — see roundUpTo.
  */
 
-import type { BillingPeriod } from "@/lib/payments/subscription";
+import type { BillingPeriod } from "@/lib/plans/location-billing";
 
 // ---------------------------------------------------------------------------
 // The cycle

@@ -55,7 +55,13 @@ const EMPTY_COLLECT = {
   manualRequired: 0,
   errors: 0,
 };
-const EMPTY_EVAL = { advanced: 0, graced: 0, waiting: 0, errors: 0 };
+const EMPTY_EVAL = {
+  advanced: 0,
+  graced: 0,
+  waiting: 0,
+  ended: 0,
+  errors: 0,
+};
 const EMPTY_DOWN = { downgraded: 0, shiftsClosed: 0, errors: 0 };
 
 beforeEach(() => {

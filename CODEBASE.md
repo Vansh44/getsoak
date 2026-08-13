@@ -4780,18 +4780,77 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       - **★ A ZERO PART PERIOD GRANTS IT INSTEAD OF CHARGING ₹0** — at the end of
         a cycle the proration rounds to nothing and Razorpay refuses a ₹0 order.
         The merchant gains a few hours; the next renewal bills it in full.
-    - **⚠ THE OLD PATH IS STILL THERE — CANCEL AND PLAN CHANGE ONLY.**
-      `subscription-actions.ts` still drives **cancel** and **plan change** on
-      the plans page. (Signup enrolment and extra-location purchase both moved
-      across on 2026-08-13 — see above.) Nothing bills twice in the meantime:
-      `startSubscribe` refuses when the old system holds a live mandate, and
-      fails closed on a read error.
-    - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an
-      apply-order dependency (see the tree). The Drizzle types describe tables
-      that do not exist yet: that typechecks and fails at query time.
-    - **⚠ Six Razorpay facts are still unverified** (exact subsequent-charge
+    - **★★ CANCELLING IS A FLAG, NOT A GATEWAY CALL** (`lib/billing/cancel.ts`).
+      The old path asked Razorpay to cancel the Subscription, so it could fail for
+      reasons unrelated to the merchant's intent — commonest being _"Subscription
+      cannot be cancelled since no billing cycle is going on"_, which hit anyone
+      cancelling before their first charge and left them stuck. Now
+      `cancel_at_period_end = true`, which cannot fail for a provider's reasons.
+      - **★ THE MANDATE IS REVOKED IMMEDIATELY**, even though the flag alone stops
+        the next charge. A live mandate is standing permission to debit; someone
+        who cancelled has withdrawn it, and "it doesn't matter, nothing will
+        charge it" is the reasoning that turns one bug into a debit.
+      - **★ RESUMING EXISTS NOW** — the old flow could not offer it, because the
+        gateway subscription was gone. ⚠ It does NOT restore autopay: only the
+        merchant can authorise a new mandate, and saying otherwise has them expect
+        a charge that never comes.
+      - **★ `claimDue` SKIPS a cancelled subscription** and `evaluateCycleTurns`
+        ENDS it at the period end. Without the second half the merchant sits in
+        `waiting` forever — still entitled to a plan they stopped paying for.
+    - **★★ PLAN AND PERIOD CHANGES** (`lib/billing/plan-change.ts`). Dearer applies
+      NOW and is paid for through the SAME `addon` invoice a location purchase
+      uses; cheaper or equal books `scheduled_plan`/`scheduled_period` for the
+      cycle end. One payment shape for every mid-cycle charge means one place
+      money can go wrong, not three. Period changes are first-class at last —
+      they were impossible before because `scheduled_plan` cannot express
+      "same tier, different period".
+    - **★★ `lib/billing/next-cycle.ts` — ONE RESOLVER, because THREE callers must
+      agree days apart:** pass 1 PRICES the next invoice at T−4d, pass 2 WRITES the
+      shape at T0, and the plans page TELLS the merchant. If pricing and writing
+      disagree someone is billed for something they did not get, silently, a month
+      later. It also decides two things that are easy to get wrong separately:
+      **a cancellation is not a change** (`ending` wins over any booked downgrade —
+      applying it would renew them onto a plan they explicitly stopped), and **a
+      plan with no POS carries no billable locations** (zeroed here, so the invoice
+      and the write cannot differ; the stored count is NOT cleared, so returning to
+      Pro resumes billing for shops they still hold).
+    - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
+      `lib/payments/subscription.ts` (the `razorpay_plans` cache,
+      `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,
+      `mandateMaxPaise`), the five `rzp*Subscription`/`rzpCreatePlan` client calls,
+      and `verifySubscriptionSignature` — a near-identical verifier with the
+      REVERSE operand order sitting next to the real one is what autocomplete picks
+      by mistake. The `store_subscriptions` and `razorpay_plans` TABLES remain as
+      the old system's audit trail; nothing reads them.
+      - **★ `createLocation` WAS STILL READING `store_subscriptions`** for the
+        allowance and would have read 0 — silently refusing every merchant the
+        extra locations they PAY FOR, with an error telling them to go and buy what
+        they already own. Now reads `billing_subscriptions`. This is the class of
+        breakage a deletion causes: the compiler is happy, because the table still
+        exists.
+      - **★ THE RAZORPAY WEBHOOK ROUTE IS KEPT, ACTING ON NOTHING.** It used to
+        write `stores.plan` from `subscription.*` events; those now describe a
+        gateway object StoreMink does not manage, so applying one would move a plan
+        on the word of a timer our state machine knows nothing about. It still
+        verifies the raw-body HMAC and records the exactly-once event marker —
+        deleting the route would 404 every delivery (a retry storm that reads as
+        our outage) and throw away the two pieces the new system's webhooks will
+        need. ⚠ `billing_webhook_events` is not in §32's retention policies and
+        grows one row per delivery.
+    - **✅ `billing_01`…`07` ARE APPLIED** to both `storemink` and
+      `storemink_staging` (2026-08-13). ⚠ They have an apply-order dependency
+      (see the tree) — `billing_03`'s tables must exist before `billing_02`'s
+      function is CALLED, because plpgsql resolves table names at call time, so
+      the wrong order succeeds and then fails at runtime. `billing_06` was a
+      no-op: `store_subscriptions` was empty in production, so there was nothing
+      to migrate.
+    - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
+      not the system. Every path (enrolment, manual payment, plan change, location
+      purchase) confirms ON SESSION against a verified one-time checkout, and the
+      renewal worker issues invoices the merchant pays by hand. What is unverified:
+      exact subsequent-charge
       endpoint signature, recurring webhook event names, retry and
-      payment-failure behaviour, e-mandate specifics, MCC restrictions). Listed
+      payment-failure behaviour, e-mandate specifics, MCC restrictions. Listed
       in the design doc's §10 rather than guessed; several need a test-mode
       account to settle.
     - **13 defects found in the current billing code while mapping it**, two of
