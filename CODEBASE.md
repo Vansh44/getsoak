@@ -30,7 +30,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
-| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → prettier → build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -1111,7 +1111,23 @@ wholesip/
 7. **Next.js 16 caution**: APIs may differ from training data — check
    `node_modules/next/dist/docs/` before using unfamiliar APIs (AGENTS.md rule).
 8. **Tests**: `npm run test` (vitest, coverage). CI also runs `lint`, `typecheck`,
-   `prettier --check`, `build` — all must pass.
+   **`test:shuffle`**, `prettier --check`, `build` — all must pass.
+   **★★ `test:shuffle` IS NOT A DUPLICATE RUN.** `npm run test` executes files in
+   DECLARATION ORDER, so a test that passes only because it happens to run before
+   another one looks permanently green. Three did (fixed 2026-08-13), all from the
+   same cause: **`vi.clearAllMocks()` clears CALLS, not IMPLEMENTATIONS**, so a
+   `mockResolvedValue`/`mockRejectedValue` set inside one test leaks into every
+   test after it — and the offenders were declared LAST in their files, so nothing
+   followed them. One hid a razorpay suite charging ₹150 for a ₹200 order.
+   **Restore defaults explicitly in `beforeEach`**; `resetAllMocks()` is NOT the
+   fix here, because in this Vitest `mockReset` restores an implementation passed
+   to `vi.fn(impl)` but WIPES a `mockResolvedValue` set at a `vi.mock` factory, and
+   this repo uses both forms — which is also why a global `mockReset: true` is a
+   prerequisite refactor rather than a config flag.
+   ⚠ The seed is FIXED (one ordering, reproducible): a randomly-red suite teaches
+   people to re-run rather than trust it. One seed is one permutation, so it
+   catches regressions this ordering exposes, not all of them — hunt for more with
+   `npx vitest run --coverage=false --sequence.shuffle --sequence.seed=<n>`.
 9. **Features are settings-based** (see §9): configurable behavior goes through
    `lib/settings/registry.ts` — add the setting there (key, label, default,
    `section` = the dashboard permission section that owns it, optional
@@ -4957,6 +4973,8 @@ npm run build       # production build
 npm run lint        # eslint
 npm run typecheck   # tsc --noEmit
 npm run test        # vitest run --coverage
+npm run test:shuffle # ★ the SAME suite in a different (fixed-seed) order — the only
+                    #   thing that catches order-dependent tests. CI runs it.
 npm run test:watch  # vitest watch
 npm run format      # prettier --write
 ```
