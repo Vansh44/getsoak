@@ -70,6 +70,14 @@ export default async function PlatformDashboardLayout({
           label: "Operators",
           icon: "users" as const,
         },
+        {
+          // StoreMink's OWN tax identity — what its subscription invoices say
+          // and whether they charge GST. Administration rather than Workspace:
+          // it is configured once and then left alone.
+          href: "/dashboard/billing",
+          label: "Billing & tax",
+          icon: "billing" as const,
+        },
       ],
     },
   ];

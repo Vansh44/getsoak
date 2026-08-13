@@ -4830,6 +4830,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       plan with no POS carries no billable locations** (zeroed here, so the invoice
       and the write cannot differ; the stored count is NOT cleared, so returning to
       Pro resumes billing for shops they still hold).
+    - **★★ TAX IS OPERATOR-CONFIGURED, ON A REAL SCREEN**
+      (`/dashboard/billing` on the platform host; `lib/billing/platform-settings.ts`).
+      `platform_billing_settings` had existed since `billing_01` with NOTHING
+      writing it, so tax could only be switched on by hand-editing SQL — the
+      requirement (owner, 2026-08-11) was schema-only until now. Superadmin to
+      edit, any operator to read, because "are we charging GST?" is a support
+      question that needs no write grant.
+      - **★ ENABLING IT REQUIRES A GSTIN, A STATE AND A LEGAL NAME.** The first is
+        also a DB CHECK (`platform_billing_tax_needs_gstin`) — an invoice charging
+        GST while naming no GSTIN is not a valid tax invoice and the merchant
+        cannot claim input credit against it. The state is NOT a constraint but is
+        just as load-bearing: `splitGst` compares it against the merchant's to
+        choose CGST+SGST vs IGST, so without it every invoice is silently treated
+        as intra-state.
+      - **★★ THE GSTIN CARRIES THE STATE, and a mismatch is refused.** Its first
+        two digits ARE the state code (`stateCodeFromGstin`), so if they disagree
+        with the state selected one of them is a typo — and the resulting wrong
+        tax split is invisible on the invoice and expensive at filing time.
+      - **★★ INCLUSIVE vs EXCLUSIVE CHANGES WHAT MERCHANTS PAY**, not how the
+        invoice reads, so the screen states the consequence in rupees against a
+        ₹5,000 plan rather than naming the modes. It must match what the pricing
+        page advertises or every merchant is over- or under-charged from the next
+        invoice onward.
+      - **★ TURNING TAX ON IS NEVER RETROACTIVE** — finalized invoices are
+        immutable by trigger — and the screen says so, because the intuition
+        ("I've added my GSTIN, now everything is a tax invoice") is the opposite.
+      - `GST_STATES` + `gstStateName` live in the PURE `lib/billing/gst.ts`, so the
+        client form can import them; `platform-settings.ts` is `server-only` and
+        `PlatformTaxSettings` therefore lives in `invoice-types.ts` (the third
+        instance of that split). The retired codes `25` and `28` are deliberately
+        omitted from the picker but still parse, because a merchant's stored code
+        may be one.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,

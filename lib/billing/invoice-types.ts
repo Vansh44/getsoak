@@ -93,3 +93,30 @@ export interface SubscriptionView {
   /** True when there is a live subscription to cancel or change. */
   active: boolean;
 }
+
+/**
+ * StoreMink's OWN tax identity, as the operator console edits it (§34).
+ *
+ * Here rather than in `lib/billing/platform-settings.ts` for the same reason as
+ * everything else in this file: that module is `server-only`, and the form is a
+ * client component.
+ */
+export interface PlatformTaxSettings {
+  legalName: string | null;
+  gstin: string | null;
+  address: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    postalCode?: string;
+  };
+  /** NUMERIC GST state code ("07", "29") — the origin for intra/inter decisions. */
+  stateCode: string | null;
+  taxEnabled: boolean;
+  taxRateBps: number;
+  /** True = the advertised price INCLUDES tax; false = tax is added on top. */
+  taxInclusive: boolean;
+  invoicePrefix: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}

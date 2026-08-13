@@ -32,6 +32,12 @@ import { STORE_TAG, FALLBACK_STORE_ID } from "@/lib/store/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { getThemeDefinition } from "@/lib/themes";
 import { applyTheme } from "@/lib/themes/apply";
+import {
+  getPlatformTaxSettings,
+  savePlatformTaxSettings,
+  type PlatformTaxSettings,
+  type TaxSettingsInput,
+} from "@/lib/billing/platform-settings";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 import {
@@ -998,5 +1004,43 @@ export async function savePlanPricing(
   revalidatePath("/platform");
   revalidatePath("/platform/pos");
   revalidatePath("/dashboard/plans");
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// StoreMink's OWN tax identity (§34).
+//
+// ★ Operator-managed, not merchant-facing and not a config file: it decides what
+// a GST tax invoice says, and it changes on a business timetable (the day a GSTIN
+// is issued) rather than a deploy one.
+// ---------------------------------------------------------------------------
+
+export async function getTaxSettings(): Promise<PlatformTaxSettings | null> {
+  const viewer = await getPlatformViewer();
+  if (!viewer) return null;
+  return getPlatformTaxSettings();
+}
+
+export async function saveTaxSettings(
+  input: TaxSettingsInput,
+): Promise<ActionResult> {
+  // ★ SUPERADMIN, matching plan pricing. Switching tax on changes what every
+  // merchant is charged from the next invoice onward, and the GSTIN it names is
+  // the platform's own tax identity.
+  const viewer = await getPlatformViewer();
+  if (viewer?.role !== "superadmin") {
+    return { error: "Only a platform superadmin can change tax settings." };
+  }
+  if (!input || typeof input !== "object") {
+    return { error: "Nothing to save." };
+  }
+
+  const saved = await savePlatformTaxSettings(input, viewer.email ?? null);
+  if (!saved.ok) return { error: saved.error };
+
+  // Invoices read this at build time through loadTaxContext, which is uncached —
+  // so there is no tag to bust. Revalidating the console page keeps the form in
+  // step with what was stored (the GSTIN is upper-cased, the rate rounded).
+  revalidatePath("/dashboard/billing");
   return { success: true };
 }
