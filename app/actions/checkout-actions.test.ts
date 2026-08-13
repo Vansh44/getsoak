@@ -516,6 +516,13 @@ describe("placeOrder — razorpay", () => {
     vi.mocked(getServerUser).mockResolvedValue({ id: "user-1" } as any);
     vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
     vi.mocked(validateCoupon).mockResolvedValue({} as any);
+    // ⚠ `clearAllMocks` clears CALLS, not IMPLEMENTATIONS, so the store-credit
+    // block's balance used to leak in here: the order total stayed ₹200 (credit
+    // is a payment, not a discount — §29) while the CHARGE dropped to ₹150, and
+    // this suite's whole point is that the gateway is asked for the
+    // server-computed amount. Reset explicitly so the razorpay tests describe a
+    // customer with no credit.
+    vi.mocked(getCreditBalance).mockResolvedValue(0);
     vi.mocked(getStoreGateway).mockResolvedValue(GATEWAY as any);
     vi.mocked(rzpCreateOrder).mockResolvedValue({
       ok: true,
