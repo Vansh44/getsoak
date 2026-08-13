@@ -97,9 +97,11 @@ export async function loadTaxContext(storeId: string): Promise<TaxContext> {
 /** Shared shape for writing an invoice + its lines in one transaction. */
 interface CreateInput {
   storeId: string;
-  kind: "subscription" | "ai_credits";
+  kind: "subscription" | "ai_credits" | "addon";
   built: BuiltInvoice;
   cycleSeq?: number | null;
+  /** Addon only: the billed-location count this invoice buys. */
+  addonTargetCount?: number | null;
   periodStart?: Date | null;
   periodEnd?: Date | null;
   dueAt?: Date | null;
@@ -131,6 +133,7 @@ async function insertInvoiceWithLines(
       totalPaise: built.totalPaise,
       taxRateBps: built.taxRateBps,
       cycleSeq: input.cycleSeq ?? null,
+      addonTargetCount: input.addonTargetCount ?? null,
       periodStart: input.periodStart?.toISOString() ?? null,
       periodEnd: input.periodEnd?.toISOString() ?? null,
       dueAt: input.dueAt?.toISOString() ?? null,
@@ -252,6 +255,46 @@ export async function createAiCreditsInvoice(input: {
     logError("billing.create_ai_credits_invoice", err, {
       storeId: input.storeId,
     });
+    return null;
+  }
+}
+
+/**
+ * A mid-cycle add-on invoice (extra locations).
+ *
+ * ★ `targetCount` IS THE GRANT, recorded on the document. `confirm` is a public
+ * server action, so reading the count from the client would let a caller be
+ * granted more locations than it paid for; reading it from the invoice means it
+ * can only ever be what the price was computed for.
+ *
+ * Deliberately NOT idempotent on anything: two purchases in one cycle are two
+ * separate documents, which is why `billing_invoices_one_per_cycle` is partial on
+ * `cycle_seq is not null` and an addon carries none.
+ */
+export async function createAddonInvoice(input: {
+  storeId: string;
+  built: BuiltInvoice;
+  targetCount: number;
+  supplierGstin?: string | null;
+  customerGstin?: string | null;
+  placeOfSupply?: string | null;
+}): Promise<InvoiceRow | null> {
+  try {
+    return await withService(async (db) => {
+      const id = await insertInvoiceWithLines(db, {
+        storeId: input.storeId,
+        kind: "addon",
+        built: input.built,
+        cycleSeq: null,
+        addonTargetCount: input.targetCount,
+        supplierGstin: input.supplierGstin,
+        customerGstin: input.customerGstin,
+        placeOfSupply: input.placeOfSupply,
+      });
+      return id ? readInvoice(db, id) : null;
+    });
+  } catch (err) {
+    logError("billing.create_addon_invoice", err, { storeId: input.storeId });
     return null;
   }
 }

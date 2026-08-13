@@ -4741,12 +4741,49 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       second charge. ⚠ Only a `processing` attempt is resumable: the index also
       covers `created` (no order exists yet) and `authorized` (money already
       authorized — re-opening checkout would invite a second authorization).
-    - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
+    - **★★ EXTRA LOCATIONS ARE BOUGHT ON THE NEW SYSTEM** (`lib/billing/locations.ts`,
+      `supabase/billing_07_addon_invoices.sql`). The old path called
+      `rzpUpdateSubscription`, which Razorpay does not support for UPI or
+      e-mandate mandates — so for most Indian merchants buying a location silently
+      did not work at all, and could not be made to. Here StoreMink prices it: the
+      part period is a one-off payment on the verified checkout, and every future
+      cycle is billed from `billed_locations` by the renewal worker, needing no
+      gateway call.
+      - **★ A THIRD INVOICE KIND, `addon`, carrying NO `cycle_seq`.** A renewal
+        invoice is one per cycle and idempotent on it; a mid-cycle purchase happens
+        at an arbitrary moment and can happen twice in one cycle. Because
+        `billing_invoices_one_per_cycle` is already partial on
+        `cycle_seq is not null`, several addons per cycle need NO index change —
+        the same trick `ai_credits` relies on.
+      - **★★ THE GRANTED COUNT LIVES ON THE INVOICE** (`addon_target_count`), not
+        in the confirm request. `confirm` is a public server action, so reading
+        the count from the client would let a caller be granted more locations
+        than it paid for.
+      - **★ BUYING APPLIES NOW; RELEASING WAITS FOR THE CYCLE END** — the §15b
+        rule, whose point is that **nobody is ever refunded**. A release writes
+        `scheduled_locations`, and `advanceCycle` applies it in the SAME statement
+        that turns the cycle; writing `billed_locations` down at once would refuse
+        a merchant a shop they own and are still paying for.
+      - **★★ AND THE INVOICE FOR THE NEXT CYCLE MUST BE PRICED WITH THE SCHEDULED
+        COUNT.** Pricing at today's count and then dropping it at the turn charges
+        a full extra cycle for a released shop — the one direction "nobody is
+        refunded" must not be allowed to mean. So `collectOne` reads
+        `scheduledLocations ?? billedLocations`, and a release booked INSIDE the
+        T−4d window is REFUSED with the date it becomes possible again, because
+        that invoice is already issued and immutable. Closing that properly needs
+        the schedule to carry the cycle it applies from.
+      - **★ THE MANDATE CEILING IS CHECKED BEFORE THE SALE.** The part period is
+        on-session and unaffected by it, but every future cycle is debited
+        automatically against a ceiling fixed when autopay was authorised. Selling
+        a location that makes the next renewal undebitable is how a paying
+        merchant gets downgraded.
+      - **★ A ZERO PART PERIOD GRANTS IT INSTEAD OF CHARGING ₹0** — at the end of
+        a cycle the proration rounds to nothing and Razorpay refuses a ₹0 order.
+        The merchant gains a few hours; the next renewal bills it in full.
+    - **⚠ THE OLD PATH IS STILL THERE — CANCEL AND PLAN CHANGE ONLY.**
       `subscription-actions.ts` still drives **cancel** and **plan change** on
-      the plans page, plus **buying an extra location** — the new system READS
-      `billed_locations` but has no way to change it. (Signup enrolment moved
-      across on 2026-08-13; see above.) Deleting the old actions before that is
-      rebuilt would remove a paid feature. Nothing bills twice in the meantime:
+      the plans page. (Signup enrolment and extra-location purchase both moved
+      across on 2026-08-13 — see above.) Nothing bills twice in the meantime:
       `startSubscribe` refuses when the old system holds a live mandate, and
       fails closed on a read error.
     - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an

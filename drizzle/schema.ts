@@ -358,6 +358,7 @@ export const billingInvoices = pgTable(
     fyLabel: text("fy_label"),
     /** The renewal invoice's idempotency key. Null for ai_credits. */
     cycleSeq: integer("cycle_seq"),
+    addonTargetCount: integer("addon_target_count"),
     periodStart: timestamp("period_start", {
       withTimezone: true,
       mode: "string",

@@ -20,7 +20,7 @@ import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
 import { admins, storeSubscriptions, stores } from "@/drizzle/schema";
-import { STORE_TAG } from "@/lib/store/resolve";
+import { getCurrentStore, STORE_TAG } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
 import { hasLiveMandate } from "@/lib/payments/plan-change";
 import {
@@ -28,13 +28,22 @@ import {
   getPlanPricingLive,
 } from "@/lib/plans/pricing";
 import { PLAN_IDS, type Plan } from "@/lib/plans";
-import type { PayableInvoice } from "@/lib/billing/invoice-types";
+import type {
+  LocationBillingState,
+  PayableInvoice,
+} from "@/lib/billing/invoice-types";
 import {
   confirmInvoicePayment,
   listPayableInvoices,
   startInvoicePayment,
   type PaymentStart,
 } from "@/lib/billing/manual-pay";
+import {
+  confirmLocationPurchase,
+  getLocationBillingState as readLocationBillingState,
+  releaseLocations,
+  startLocationPurchase,
+} from "@/lib/billing/locations";
 import {
   auditEnrolment,
   confirmEnrolment,
@@ -404,4 +413,149 @@ export async function confirmPayInvoice(
   if (done.data.planRestored) revalidateTag(STORE_TAG, "max");
 
   return { ok: true, planRestored: done.data.planRestored };
+}
+
+// ---------------------------------------------------------------------------
+// Extra locations — metered, and billed WITH the subscription (§34, POS 7).
+//
+// ★ The old path did this with `rzpUpdateSubscription`, which Razorpay does not
+// support for UPI or e-mandate mandates — so for most Indian merchants buying a
+// location silently did not work. Here StoreMink prices it: the part period is a
+// one-off payment on the verified checkout, and every future cycle is billed from
+// `billed_locations` by the renewal worker.
+// ---------------------------------------------------------------------------
+
+/** Read-only, so gated on VIEW of the section the merchant is looking at. */
+export async function getLocationBilling(): Promise<LocationBillingState | null> {
+  const userId = await getManagerUserId("locations");
+  if (!userId) return null;
+  const [storeId, store, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+    getExtraLocationPricingLive(),
+  ]);
+  return readLocationBillingState({ storeId, store, locationPrice });
+}
+
+export type LocationPurchaseResult =
+  | {
+      ok: true;
+      invoiceId: string;
+      providerOrderId: string;
+      keyId: string;
+      amountPaise: number;
+      targetCount: number;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Begin buying extra locations.
+ *
+ * ★ Gated on `ai`, not `locations`: this spends money, so it is the billing gate
+ * rather than the one that merely manages shops.
+ */
+export async function startBuyLocations(
+  requested: unknown,
+): Promise<LocationPurchaseResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (typeof requested !== "number" || !Number.isInteger(requested)) {
+    return { ok: false, error: "Choose a whole number of extra locations." };
+  }
+
+  const [storeId, store, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+    // LIVE — this number becomes a charge, so never the cached reader.
+    getExtraLocationPricingLive(),
+  ]);
+  const started = await startLocationPurchase({
+    storeId,
+    store,
+    requested,
+    locationPrice,
+  });
+  if (!started.ok) return { ok: false, error: started.error };
+  return { ok: true, ...started.data };
+}
+
+export type LocationConfirmResult =
+  | { ok: true; billedLocations: number }
+  | { ok: false; error: string };
+
+export async function confirmBuyLocations(
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<LocationConfirmResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (
+    typeof invoiceId !== "string" ||
+    typeof providerPaymentId !== "string" ||
+    typeof signature !== "string" ||
+    !invoiceId ||
+    !providerPaymentId ||
+    !signature
+  ) {
+    return { ok: false, error: "That payment couldn't be confirmed." };
+  }
+
+  const storeId = await getActingStoreId();
+  const done = await confirmLocationPurchase({
+    storeId,
+    invoiceId,
+    providerPaymentId,
+    signature,
+  });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  // The allowance is a plan gate, so every reader must see the new number.
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, billedLocations: done.data.billedLocations };
+}
+
+export type ReleaseLocationsResult =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+/**
+ * Book a reduction for the end of the current cycle.
+ *
+ * ★ No money moves, in either direction — they keep what they paid for until it
+ * runs out, and nobody is refunded (§15b).
+ */
+export async function releaseExtraLocations(
+  requested: unknown,
+): Promise<ReleaseLocationsResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (typeof requested !== "number" || !Number.isInteger(requested)) {
+    return { ok: false, error: "Choose a whole number of extra locations." };
+  }
+
+  const [storeId, store] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+  ]);
+  const done = await releaseLocations({ storeId, store, requested });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  const when = done.data.effectiveAt
+    ? new Date(done.data.effectiveAt).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      })
+    : null;
+  return {
+    ok: true,
+    message: when
+      ? `Booked. You keep the location until ${when}, then stop paying for it.`
+      : "Booked. You keep the location until this cycle ends.",
+  };
 }

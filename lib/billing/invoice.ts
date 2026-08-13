@@ -261,6 +261,35 @@ export function buildAiCreditsInvoice(input: {
 }
 
 /**
+ * A mid-cycle add-on — today, extra locations bought part way through a period.
+ *
+ * ★ ONE LINE, kind `addon`, and NO cycle_seq on the invoice that carries it. It
+ * is a one-off document dated to the day it was paid, not a periodic one: a
+ * merchant may buy a shop in January and another in February, and each is its own
+ * receipt. The recurring cost then rides the next subscription invoice's
+ * `location` line, so nothing is billed twice.
+ */
+export function buildAddonInvoice(input: {
+  description: string;
+  amountPaise: number;
+  tax: TaxContext;
+}): BuiltInvoice {
+  return assemble(
+    [
+      {
+        kind: "addon",
+        description: input.description,
+        quantity: 1,
+        unitAmountPaise: nonNeg(input.amountPaise),
+        amountPaise: nonNeg(input.amountPaise),
+      },
+    ],
+    0,
+    input.tax,
+  );
+}
+
+/**
  * The catch-up charge for moving to a dearer plan mid-cycle.
  *
  * ★ Days are rounded to the NEAREST whole day, not up or down. Whole days

@@ -52,13 +52,7 @@ each job is a landmine the moment it does:
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
-| `storemink-billing` ⚠ NOT CREATED   | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
-
-⚠ **`billing` is now the one that must be created.** It stops being a no-op the
-moment `billing_subscriptions` has a row: it issues renewal invoices, advances
-paid cycles, opens grace windows and downgrades unpaid stores — none of which
-needs autopay. Without it a migrated subscriber is billed by nothing, from
-either system.
+| `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
@@ -66,8 +60,7 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-Seven exist; `billing` is intentionally not created yet (see Verifying). All of
-them: `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
+All eight exist. Each is `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
 `Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
 (`CRON_SECRET` is in Secret Manager and already wired to the prod service).
 
@@ -332,18 +325,23 @@ probe deliberately: with no queued import it is a no-op, whereas triggering
 possibly `"incomplete":true` for a few nights while the backlog drains, since
 retention has never run.
 
-> **⚠ `storemink-billing` HAS NOT BEEN CREATED.** It was deliberate while the
-> pass was inert; it no longer is. The original reasoning — "it would report
-> green hourly while charging nobody" — was written when the pass was skipped
-> wholesale for a missing gateway. Since 2026-08-13 pass 1 always runs and
-> **issues** each renewal invoice, which the merchant pays by hand, so the job
-> does real work with autopay still off.
->
-> **Its two preconditions are now:** `billing_01`…`06` applied to the production
-> database, and at least one row in `billing_subscriptions`. Verifying the
-> Razorpay subsequent-charge endpoint is NOT one of them — that only decides
-> whether the invoice is also debited automatically. Per the top of this file a
-> written reminder is not one anybody receives, so treat this as a task.
+`storemink-billing` was created and verified on **2026-08-13**. Triggered by
+hand: Cloud Run answered **200** to `Google-Cloud-Scheduler`, which also
+re-confirms the shared `CRON_SECRET`. Safe to probe because
+`billing_subscriptions` was empty, so all three passes were no-ops.
+
+It was deliberately withheld until then, on the reasoning that it "would report
+green hourly while charging nobody" — true while the whole collection pass was
+skipped for a missing gateway. Since the issuance/charging split it always
+**issues** each renewal invoice, which the merchant pays by hand, so it does real
+work with autopay still off. Verifying the Razorpay subsequent-charge endpoint
+was never a precondition for the JOB; it only decides whether an issued invoice
+is also debited automatically.
+
+⚠ **Watch its first real run**, which is the first hour after a merchant
+subscribes — that is when pass 1 stops being a no-op. Expect
+`collectionSkipped` set, `collect.manualRequired` counting the invoices issued,
+and a renewal email in the store's log.
 
 ## Staging
 

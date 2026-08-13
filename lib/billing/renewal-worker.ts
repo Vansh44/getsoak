@@ -78,6 +78,8 @@ interface DueRow {
   currentCycleSeq: number;
   currentPeriodEnd: string | null;
   billedLocations: number;
+  /** A booked release, which applies to the cycle this invoice is FOR. */
+  scheduledLocations: number | null;
   mandateId: string | null;
 }
 
@@ -177,6 +179,7 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
       currentCycleSeq: billingSubscriptions.currentCycleSeq,
       currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
       billedLocations: billingSubscriptions.billedLocations,
+      scheduledLocations: billingSubscriptions.scheduledLocations,
       mandateId: billingSubscriptions.mandateId,
     })
     .from(billingSubscriptions)
@@ -218,11 +221,18 @@ async function collectOne(
   const price = await input.priceFor(plan, period);
   const tax = await loadTaxContext(row.storeId);
 
+  // ★★ THE INVOICE IS FOR THE NEXT CYCLE, SO IT MUST USE THE COUNT THAT WILL
+  // APPLY THEN — the scheduled one when a release is booked. Pricing it at
+  // today's count and then dropping the count at the turn (advanceCycle) would
+  // charge the merchant a full extra cycle for a shop they released, which is the
+  // one direction "nobody is ever refunded" must not be allowed to mean.
+  const billedNext = row.scheduledLocations ?? row.billedLocations;
+
   // ★ Locations are billed only if the TARGET plan can have them. Charging for
   // POS on a plan that cannot use it is indefensible (the §POS-7 rule).
   const locations =
     limitsFor(plan).posLocationsIncluded > 0
-      ? { count: row.billedLocations, unitPaise: price.locationPaise }
+      ? { count: billedNext, unitPaise: price.locationPaise }
       : undefined;
 
   const built = buildSubscriptionInvoice({
@@ -555,6 +565,14 @@ async function advanceCycle(
       state: "active",
       graceStartedAt: null,
       graceEndsAt: null,
+      // ★ A BOOKED LOCATION RELEASE TAKES EFFECT HERE, in the same statement
+      // that turns the cycle — the merchant keeps (and keeps paying for) the
+      // shop until the period they bought runs out, then it goes. Doing it in a
+      // second UPDATE would let an interrupted run leave the count and the cycle
+      // disagreeing, with the merchant either paying for a shop they released or
+      // holding one they no longer pay for.
+      billedLocations: sql`coalesce(${billingSubscriptions.scheduledLocations}, ${billingSubscriptions.billedLocations})`,
+      scheduledLocations: null,
       updatedAt: input.now.toISOString(),
     })
     .where(
