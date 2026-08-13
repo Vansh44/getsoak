@@ -15,6 +15,7 @@ import {
   chargeUnavailableReason,
   getRecurringCharge,
 } from "@/lib/billing/gateway";
+import { reconcileStrandedAttempts } from "@/lib/billing/reconcile";
 
 // The billing heartbeat — the three renewal passes, in order.
 //
@@ -101,6 +102,12 @@ async function handle(request: Request) {
     priceFor,
   });
 
+  // ★★ RECONCILE BEFORE EVALUATING. A payment we never learned about is money
+  // already in — and pass 2 decides grace and downgrade from whether the
+  // invoice is paid. Running it after would downgrade a merchant whose payment
+  // this very request was about to discover.
+  const reconcile = await reconcileStrandedAttempts({ now });
+
   const evaluate = await evaluateCycleTurns({
     now,
     limit: RENEWAL_BATCH,
@@ -109,7 +116,8 @@ async function handle(request: Request) {
   });
   const downgrade = await downgradeExpired({ now, limit: RENEWAL_BATCH });
 
-  const errors = collect.errors + evaluate.errors + downgrade.errors;
+  const errors =
+    collect.errors + reconcile.errors + evaluate.errors + downgrade.errors;
 
   // More work than one batch could hold. Reported so a caller can run again
   // sooner, but NOT an error — a backlog draining is normal.
@@ -123,6 +131,7 @@ async function handle(request: Request) {
     ok: errors === 0,
     collectionSkipped: chargeBlocked,
     collect,
+    reconcile,
     evaluate,
     downgrade,
     more,

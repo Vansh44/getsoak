@@ -31,6 +31,9 @@ const gateway = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/billing/gateway", () => gateway);
 
+const recon = vi.hoisted(() => ({ reconcileStrandedAttempts: vi.fn() }));
+vi.mock("@/lib/billing/reconcile", () => recon);
+
 const pricing = vi.hoisted(() => ({
   getPlanPricingLive: vi.fn(),
   getExtraLocationPricingLive: vi.fn(),
@@ -69,6 +72,14 @@ beforeEach(() => {
   process.env.CRON_SECRET = SECRET;
   worker.collectDueRenewals.mockResolvedValue({ ...EMPTY_COLLECT });
   worker.evaluateCycleTurns.mockResolvedValue({ ...EMPTY_EVAL });
+  recon.reconcileStrandedAttempts.mockResolvedValue({
+    considered: 0,
+    recovered: 0,
+    failed: 0,
+    stillUnknown: 0,
+    flagged: 0,
+    errors: 0,
+  });
   worker.downgradeExpired.mockResolvedValue({ ...EMPTY_DOWN });
   gateway.getRecurringCharge.mockReturnValue(vi.fn());
   gateway.chargeUnavailableReason.mockReturnValue(null);
@@ -270,5 +281,51 @@ describe("status contract", () => {
     expect(body.collect).toMatchObject({ collected: 3, manualRequired: 1 });
     expect(body.evaluate).toBeDefined();
     expect(body.downgrade).toBeDefined();
+  });
+});
+
+describe("★★ reconciliation", () => {
+  it("runs BEFORE evaluate", async () => {
+    // A payment we never learned about is money already in, and pass 2 decides
+    // grace and downgrade from whether the invoice is paid. Running it after
+    // would downgrade a merchant whose payment this very request discovers.
+    await GET(req(`Bearer ${SECRET}`));
+    expect(
+      recon.reconcileStrandedAttempts.mock.invocationCallOrder[0],
+    ).toBeLessThan(worker.evaluateCycleTurns.mock.invocationCallOrder[0]);
+  });
+
+  it("runs even when the gateway charge is unavailable", async () => {
+    // Reconciliation reads the VERIFIED order endpoint, not the recurring one —
+    // so it works today, when nothing can be charged automatically.
+    gateway.getRecurringCharge.mockReturnValue(null);
+    gateway.chargeUnavailableReason.mockReturnValue("not verified");
+    await GET(req(`Bearer ${SECRET}`));
+    expect(recon.reconcileStrandedAttempts).toHaveBeenCalled();
+  });
+
+  it("reports what it did", async () => {
+    recon.reconcileStrandedAttempts.mockResolvedValue({
+      considered: 3,
+      recovered: 1,
+      failed: 1,
+      stillUnknown: 1,
+      flagged: 0,
+      errors: 0,
+    });
+    const body = await (await GET(req(`Bearer ${SECRET}`))).json();
+    expect(body.reconcile).toMatchObject({ recovered: 1, failed: 1 });
+  });
+
+  it("★ a reconciliation error 503s, so Scheduler retries", async () => {
+    recon.reconcileStrandedAttempts.mockResolvedValue({
+      considered: 1,
+      recovered: 0,
+      failed: 0,
+      stillUnknown: 0,
+      flagged: 0,
+      errors: 1,
+    });
+    expect((await GET(req(`Bearer ${SECRET}`))).status).toBe(503);
   });
 });

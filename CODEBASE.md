@@ -4893,6 +4893,40 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         `.invoice-sheet` print isolation and `PrintInvoiceButton`. The INNER
         classes are `sminv-*`, deliberately NOT the `inv-*` ones: those are shaped
         for the order invoice's different markup and would silently mis-style this.
+    - **★★ RECONCILIATION — SETTLING WHAT WE NEVER LEARNED**
+      (`lib/billing/reconcile.ts`, run first in the hourly cron).
+      `collect.ts` is deliberate that an UNKNOWN outcome is never a failure and
+      never retried, because a retry might charge twice — which is right, and left
+      the attempt in `unknown` forever with nothing to resolve it. `processing` is
+      the same: nothing tells us a merchant closed the payment window.
+      `billing_reconciliation_items` had existed since billing_04 with NOTHING
+      writing or reading it.
+      - **★ IT ASKS THE GATEWAY, IT DOES NOT GUESS.** The only evidence that
+        settles an attempt as paid is a CAPTURED payment on the order we created,
+        via `rzpFetchOrderPayments` + `capturedPayment` — the VERIFIED pair §18
+        has used in production, not the unverified recurring endpoint. So it works
+        today, with autopay off.
+      - **★★ THE TWO DIRECTIONS ARE NOT SYMMETRIC.** Finding money is safe and
+        runs after 15 minutes: a captured payment means they paid, and recording
+        it can only help. Declaring FAILURE frees the invoice for a fresh
+        attempt — so doing it to a payment still in flight invites a second
+        charge — and waits **72 hours**, only ever on the gateway's word that
+        nothing was captured. An ANCIENT attempt that WAS captured is recovered,
+        never failed: age is not evidence.
+      - **★ RECOVERY ADVANCES THE CYCLE.** Without it a merchant who really did
+        pay stays in grace and is downgraded, because the only thing that moves a
+        cycle is a paid invoice being NOTICED.
+      - **★ AN AMOUNT MISMATCH IS FLAGGED, NOT AUTO-FIXED.** The payment is
+        recorded either way — they paid — but what happens to the difference is a
+        human decision. Deduped by the partial unique index, so an hourly sweep
+        cannot bury the queue it exists to surface.
+      - **★ IT RUNS BEFORE PASS 2**, because pass 2 decides grace and downgrade
+        from whether the invoice is paid; running it after would downgrade a
+        merchant whose payment that very request discovers. Pinned by a test.
+      - ⚠ It only sees attempts that reached the gateway (`provider_order_id` set)
+        — one that died before that has nothing to ask about. And the OPEN items
+        have no operator UI yet: `listOpenReconciliationItems` exists and nothing
+        renders it.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,
