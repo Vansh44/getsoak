@@ -161,6 +161,7 @@ export const EVENT_KEYS = [
   // ── Plan & billing ──────────────────────────────────────────────────────
   "plan.changed",
   "plan.expiring",
+  "subscription.invoice_due",
   "subscription.payment_failed",
   "ai.credits_low",
   "ai.credits_purchased",
@@ -655,6 +656,21 @@ export const EVENTS: readonly EventDef[] = [
     // The exception to the rule above: nothing else warns BEFORE a plan
     // lapses, so this notification is the only sender and keeps its email.
     audiences: { "store-admins": BOTH },
+  },
+  {
+    key: "subscription.invoice_due",
+    label: "Renewal invoice issued",
+    description: "A subscription invoice was raised for the next cycle.",
+    group: "Plan & billing",
+    section: "ai",
+    severity: "info",
+    // In-app only — renewalDueTemplate already mails this one from
+    // billing@storemink.com (the dedicated-sender rule above). NOT configurable:
+    // while automatic collection is gated, this notice IS how a merchant learns
+    // they have to pay, and an opt-out would let someone silently lose their
+    // plan for a bill they switched off.
+    audiences: { "store-admins": IN_APP },
+    configurable: false,
   },
   {
     key: "subscription.payment_failed",

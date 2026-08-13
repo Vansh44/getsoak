@@ -164,6 +164,87 @@ export function subscriptionCancelledTemplate(d: {
   };
 }
 
+/**
+ * A renewal invoice has been issued for the next cycle.
+ *
+ * ★★ `autopay` CHANGES WHAT THIS MESSAGE IS, not just its wording. With a
+ * mandate it is a courtesy heads-up before a debit the merchant need do nothing
+ * about; without one it is a BILL, and doing nothing loses them their plan. Send
+ * the wrong variant and a merchant reasonably ignores it and is downgraded —
+ * which is why the flag is required rather than defaulted.
+ */
+export function renewalDueTemplate(d: {
+  storeName: string;
+  planName: string;
+  amountInr: number;
+  dueOn: string;
+  invoiceRef: string | null;
+  autopay: boolean;
+  manageUrl: string;
+}): BuiltEmail {
+  const store = escapeHtml(d.storeName);
+  const plan = escapeHtml(d.planName);
+  const ref = d.invoiceRef
+    ? `<p style="margin:0 0 12px; color:${EMAIL_THEME.muted}; font-size:13px;">Invoice ${escapeHtml(d.invoiceRef)}</p>`
+    : "";
+  return {
+    subject: d.autopay
+      ? `Your ${d.planName} plan renews on ${shortDate(d.dueOn)}`
+      : `${money(d.amountInr)} due for your ${d.planName} plan`,
+    html: shell(
+      d.autopay
+        ? `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Your plan renews soon</h1>
+           <p style="margin:0 0 12px;"><strong>${store}</strong>'s ${plan} plan renews on <strong>${shortDate(d.dueOn)}</strong>. We'll charge <strong>${money(d.amountInr)}</strong> to your saved payment method — there's nothing you need to do.</p>
+           ${ref}
+           <p style="margin:0 0 4px;">Want to change or cancel first? You can, any time before then.</p>
+           ${button(d.manageUrl, "Manage your plan")}`
+        : `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Time to renew</h1>
+           <p style="margin:0 0 12px;"><strong>${store}</strong>'s ${plan} plan is due for renewal. <strong>${money(d.amountInr)}</strong> is payable by <strong>${shortDate(d.dueOn)}</strong>.</p>
+           ${ref}
+           <p style="margin:0 0 4px;">Pay from your dashboard in a couple of taps. If it's not paid by the renewal date you'll get 48 hours' grace, then the store moves to the Free plan.</p>
+           ${button(d.manageUrl, "Pay now")}`,
+    ),
+  };
+}
+
+/**
+ * The cycle turned unpaid — the 48-hour grace clock is running.
+ *
+ * ★ `attempted` must be truthful. With automatic collection gated, "we couldn't
+ * take payment" describes a charge that never happened and sends the merchant
+ * to check a card nobody touched.
+ */
+export function renewalOverdueTemplate(d: {
+  storeName: string;
+  planName: string;
+  accessUntil: string;
+  attempted: boolean;
+  manageUrl: string;
+}): BuiltEmail {
+  const store = escapeHtml(d.storeName);
+  const plan = escapeHtml(d.planName);
+  const deadline = new Date(d.accessUntil).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Kolkata",
+  });
+  return {
+    subject: `Payment overdue — ${d.planName} ends in 48 hours`,
+    html: shell(
+      `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.danger};">Your plan ends in 48 hours</h1>
+       <p style="margin:0 0 12px;">${
+         d.attempted
+           ? `We couldn't collect payment for <strong>${store}</strong>'s ${plan} plan.`
+           : `<strong>${store}</strong>'s ${plan} renewal hasn't been paid.`
+       }</p>
+       <p style="margin:0 0 12px;">Pay by <strong>${deadline}</strong> to keep everything running. After that the store moves to the Free plan — your data is safe, but paid features pause, including the point of sale.</p>
+       ${button(d.manageUrl, "Pay now")}`,
+    ),
+  };
+}
+
 export function planDowngradedTemplate(d: {
   storeName: string;
   fromPlanName: string;

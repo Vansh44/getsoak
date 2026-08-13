@@ -32,13 +32,22 @@ vi.mock("@/lib/db/client", () => ({
 const repo = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
-  finalizeInvoice: vi.fn(),
+  finalizeInvoiceClaimed: vi.fn(),
   amountDueForInvoice: vi.fn(),
 }));
 vi.mock("./invoice-store", () => repo);
 
 const collector = vi.hoisted(() => ({ collectInvoice: vi.fn() }));
 vi.mock("./collect", () => collector);
+
+// Telling the merchant is best-effort and proved by its own suite; here it is a
+// seam, so a test can assert WHO was told and WHEN without sending mail.
+const dunning = vi.hoisted(() => ({
+  notifyInvoiceIssued: vi.fn(),
+  notifyGraceStarted: vi.fn(),
+  notifyDowngraded: vi.fn(),
+}));
+vi.mock("./dunning", () => dunning);
 
 import {
   classify,
@@ -88,7 +97,15 @@ beforeEach(() => {
     status: "draft",
     finalizedAt: null,
   });
-  repo.finalizeInvoice.mockResolvedValue({ id: "inv-1", status: "open" });
+  repo.finalizeInvoiceClaimed.mockResolvedValue({
+    invoice: {
+      id: "inv-1",
+      status: "open",
+      finalizedAt: "2026-09-01T00:00:00.000Z",
+      invoiceRef: "SM/2026-27/00004",
+    },
+    claimed: true,
+  });
   repo.amountDueForInvoice.mockResolvedValue(7_000_00);
   collector.collectInvoice.mockResolvedValue({
     status: "paid",
@@ -134,6 +151,73 @@ describe("collectDueRenewals", () => {
     expect(arg.periodEnd.toISOString()).toBe("2026-10-03T00:00:00.000Z");
   });
 
+  describe("★★ telling the merchant the invoice exists", () => {
+    // With collection gated this notice IS how a merchant learns they must pay.
+    // Silently issuing, waiting, then downgrading is not a billing system.
+
+    it("mails once, on the run that issued it", async () => {
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(dunning.notifyInvoiceIssued).toHaveBeenCalledTimes(1);
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0]).toMatchObject({
+        storeId: STORE,
+        plan: "pro",
+        // ₹5,000 plan + 2 billed locations × ₹1,000.
+        amountPaise: 7_000_00,
+        invoiceRef: "SM/2026-27/00004",
+      });
+    });
+
+    it("★★ says NOTHING on a later run — the hourly cron re-reads the same row", async () => {
+      // Without the finalize claim this would mail the same bill every hour for
+      // four days, which is how people learn to ignore an email.
+      repo.finalizeInvoiceClaimed.mockResolvedValue({
+        invoice: {
+          id: "inv-1",
+          status: "open",
+          finalizedAt: "2026-09-01T00:00:00.000Z",
+          invoiceRef: "SM/2026-27/00004",
+        },
+        claimed: false, // another run got there first
+      });
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(dunning.notifyInvoiceIssued).not.toHaveBeenCalled();
+    });
+
+    it("★ says nothing about an invoice that was ALREADY issued", async () => {
+      repo.ensureRenewalInvoice.mockResolvedValue({
+        id: "inv-1",
+        status: "open",
+        finalizedAt: "2026-08-30T00:00:00.000Z",
+        invoiceRef: "SM/2026-27/00004",
+      });
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(dunning.notifyInvoiceIssued).not.toHaveBeenCalled();
+    });
+
+    it("★★ autopay FALSE with no gateway — it is a bill, not a heads-up", async () => {
+      // A merchant told "we'll collect this automatically" does nothing, and is
+      // downgraded 48 hours after the cycle turns.
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(false);
+    });
+
+    it("★ autopay FALSE with a gateway but NO mandate", async () => {
+      seed([[{ ...DUE_ROW, mandateId: null }]]);
+      await collectDueRenewals({ now: NOW, charge, priceFor });
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(false);
+    });
+
+    it("autopay TRUE only with both", async () => {
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge, priceFor });
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(true);
+    });
+  });
+
   describe("★★ charge = null — ISSUE the invoice, do not charge", () => {
     // Issuing is not charging. When the pass was skipped wholesale for a missing
     // gateway, no invoice was ever written: pass 2 waited forever, grace never
@@ -149,7 +233,7 @@ describe("collectDueRenewals", () => {
     it("★ still FINALIZES it — the merchant pays against a document number", async () => {
       seed([[DUE_ROW]]);
       await collectDueRenewals({ now: NOW, charge: null, priceFor });
-      expect(repo.finalizeInvoice).toHaveBeenCalled();
+      expect(repo.finalizeInvoiceClaimed).toHaveBeenCalled();
     });
 
     it("★★ never calls the gateway", async () => {
@@ -186,14 +270,15 @@ describe("collectDueRenewals", () => {
         priceFor,
       });
       expect(res.collected).toBe(1);
-      expect(repo.finalizeInvoice).not.toHaveBeenCalled();
+      expect(repo.finalizeInvoiceClaimed).not.toHaveBeenCalled();
     });
   });
 
   it("★ finalizes BEFORE charging — the debit is against an issued document", async () => {
     seed([[DUE_ROW]]);
     await collectDueRenewals({ now: NOW, charge, priceFor });
-    const finalizeOrder = repo.finalizeInvoice.mock.invocationCallOrder[0];
+    const finalizeOrder =
+      repo.finalizeInvoiceClaimed.mock.invocationCallOrder[0];
     const chargeOrder = collector.collectInvoice.mock.invocationCallOrder[0];
     expect(finalizeOrder).toBeLessThan(chargeOrder);
   });
@@ -206,7 +291,7 @@ describe("collectDueRenewals", () => {
     });
     seed([[DUE_ROW]]);
     await collectDueRenewals({ now: NOW, charge, priceFor });
-    expect(repo.finalizeInvoice).not.toHaveBeenCalled();
+    expect(repo.finalizeInvoiceClaimed).not.toHaveBeenCalled();
   });
 
   it("★ skips an invoice that is already paid, without charging again", async () => {
@@ -296,6 +381,7 @@ describe("collectDueRenewals", () => {
 describe("evaluateCycleTurns — the boundary", () => {
   const TURNED = {
     storeId: STORE,
+    plan: "pro",
     period: "monthly",
     currentCycleSeq: 3,
     currentPeriodEnd: "2026-09-01T00:00:00.000Z",
@@ -361,6 +447,60 @@ describe("evaluateCycleTurns — the boundary", () => {
     // The WHERE carries both the store and the prior cycle_seq.
     expect(dbHolder.current.calls.where.length).toBeGreaterThan(0);
   });
+
+  describe("★★ the 48-hour warning", () => {
+    it("warns when grace starts, naming the deadline", async () => {
+      seed([[TURNED], [{ status: "open" }]]);
+      await evaluateCycleTurns({ now: NOW });
+      expect(dunning.notifyGraceStarted).toHaveBeenCalledTimes(1);
+      const arg = dunning.notifyGraceStarted.mock.calls[0][0];
+      expect(arg).toMatchObject({ storeId: STORE, plan: "pro" });
+      expect(arg.graceEndsAt.getTime() - NOW.getTime()).toBe(
+        GRACE_HOURS * 3_600_000,
+      );
+    });
+
+    it("★★ says nothing when the grace claim was already won", async () => {
+      // The row is re-read every hour for two days; without the conditional claim
+      // the merchant is warned 48 times about one missed payment.
+      dbHolder.current = makeDbMock({
+        selectQueue: [[TURNED], [{ status: "open" }]],
+        returning: [],
+      });
+      await evaluateCycleTurns({ now: NOW });
+      expect(dunning.notifyGraceStarted).not.toHaveBeenCalled();
+    });
+
+    it("★★ does NOT claim an attempt that never happened", async () => {
+      // "We couldn't take payment" sends the merchant to check a card nobody
+      // charged. Defaults to false, which is the truth while collection is gated.
+      seed([[TURNED], [{ status: "open" }]]);
+      await evaluateCycleTurns({ now: NOW });
+      expect(dunning.notifyGraceStarted.mock.calls[0][0].autopayAttempted).toBe(
+        false,
+      );
+    });
+
+    it("reports an attempt when autopay really is running", async () => {
+      seed([[TURNED], [{ status: "open" }]]);
+      await evaluateCycleTurns({ now: NOW, autopayConfigured: true });
+      expect(dunning.notifyGraceStarted.mock.calls[0][0].autopayAttempted).toBe(
+        true,
+      );
+    });
+
+    it("★ says nothing when the invoice was PAID", async () => {
+      seed([[TURNED], [{ status: "paid" }]]);
+      await evaluateCycleTurns({ now: NOW });
+      expect(dunning.notifyGraceStarted).not.toHaveBeenCalled();
+    });
+
+    it("★ says nothing while the payment is still processing", async () => {
+      seed([[TURNED], [{ status: "processing" }]]);
+      await evaluateCycleTurns({ now: NOW });
+      expect(dunning.notifyGraceStarted).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("downgradeExpired", () => {
@@ -375,6 +515,27 @@ describe("downgradeExpired", () => {
     const set = dbHolder.current.calls.set[0];
     expect(set.status).toBe("closed");
     expect(set.closedByName).toBe("System");
+  });
+
+  it("★★ tells the merchant, naming the plan they LOST", async () => {
+    // The claim sets plan to free, so the name has to be read before it — and
+    // "your Pro plan has ended" is a different message from "your plan ended".
+    seed([[{ storeId: STORE, plan: "pro" }]]);
+    dbHolder.current.db.execute = vi.fn(async () => ({ rows: [{ ok: true }] }));
+    await downgradeExpired({ now: NOW });
+    expect(dunning.notifyDowngraded).toHaveBeenCalledWith({
+      storeId: STORE,
+      fromPlan: "pro",
+    });
+  });
+
+  it("★★ says NOTHING when the claim was lost — no downgrade, no notice", async () => {
+    seed([[{ storeId: STORE, plan: "pro" }]]);
+    dbHolder.current.db.execute = vi.fn(async () => ({
+      rows: [{ ok: false }],
+    }));
+    await downgradeExpired({ now: NOW });
+    expect(dunning.notifyDowngraded).not.toHaveBeenCalled();
   });
 
   it("★★ closes the shift at ZERO variance — billing must not invent a discrepancy", async () => {

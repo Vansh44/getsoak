@@ -46,9 +46,14 @@ import { collectInvoice, type ChargeFn, type CollectResult } from "./collect";
 import {
   amountDueForInvoice,
   ensureRenewalInvoice,
-  finalizeInvoice,
+  finalizeInvoiceClaimed,
   loadTaxContext,
 } from "./invoice-store";
+import {
+  notifyDowngraded,
+  notifyGraceStarted,
+  notifyInvoiceIssued,
+} from "./dunning";
 import { buildSubscriptionInvoice } from "./invoice";
 
 /** How many subscriptions one pass will touch. Bounded so a Cloud Run request
@@ -243,13 +248,35 @@ async function collectOne(
 
   // ★ Finalize BEFORE charging. The document number is what the merchant is
   // being asked to pay against, and the pre-debit notification quotes it.
+  let justIssued: { claimed: boolean; ref: string | null } | null = null;
   if (!invoice.finalizedAt) {
-    const issued = await finalizeInvoice(invoice.id, now);
-    if (!issued) return "pending";
+    const issued = await finalizeInvoiceClaimed(invoice.id, now);
+    if (!issued.invoice) return "pending";
+    justIssued = { claimed: issued.claimed, ref: issued.invoice.invoiceRef };
   }
 
   const amountDue = await amountDueForInvoice(invoice.id);
   if (amountDue === null) return "pending"; // Never guess an amount (Rule 10).
+
+  // ★ TELL THE MERCHANT, once, on the run that actually issued it. Four days'
+  // notice before the cycle turns — and when collection is gated this notice IS
+  // how they learn they must pay, so it is not optional politeness.
+  // ⚠ AFTER the amount is known and OUTSIDE any transaction: an email is a
+  // network call, and holding a pooled connection across one is how a fleet-wide
+  // renewal exhausts the pool.
+  if (justIssued?.claimed) {
+    await notifyInvoiceIssued({
+      storeId: row.storeId,
+      plan,
+      amountPaise: amountDue,
+      dueAt: next.start,
+      invoiceRef: justIssued.ref,
+      // Autopay only if there is a gateway AND a mandate to charge. Saying
+      // "we'll collect this automatically" to someone with neither is how a
+      // merchant does nothing and loses their plan.
+      autopay: !!input.charge && !!row.mandateId,
+    });
+  }
 
   // ★ No gateway: the invoice is issued and OPEN, and that is the whole job.
   // `manual` is the honest bucket — it already means "the merchant must pay this
@@ -350,6 +377,17 @@ export async function evaluateCycleTurns(
   input: {
     now?: Date;
     limit?: number;
+    /**
+     * Is automatic collection actually running? It changes only what the
+     * overdue email SAYS — "we couldn't take payment" vs "this hasn't been
+     * paid" — and defaults to FALSE because claiming an attempt that never
+     * happened sends the merchant to check a card nobody charged.
+     *
+     * Passed in rather than read from `lib/billing/gateway.ts`, so this module
+     * keeps having no opinion about the provider (the same reason `charge` is
+     * injected).
+     */
+    autopayConfigured?: boolean;
   } = {},
 ): Promise<EvaluateSummary> {
   const now = input.now ?? new Date();
@@ -360,11 +398,18 @@ export async function evaluateCycleTurns(
     errors: 0,
   };
 
+  // ⚠ Collected INSIDE the transaction, mailed AFTER it commits. An email is a
+  // network call; sending it inside would hold a pooled connection open for the
+  // length of an HTTP request, and would also announce a grace window that a
+  // rollback then un-started.
+  const graced: { storeId: string; plan: string; graceEndsAt: Date }[] = [];
+
   try {
     await withService(async (db) => {
       const rows = await db
         .select({
           storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
           period: billingSubscriptions.period,
           currentCycleSeq: billingSubscriptions.currentCycleSeq,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
@@ -423,12 +468,16 @@ export async function evaluateCycleTurns(
         // deliberately not from the cycle boundary. If this worker was down for
         // a day, anchoring to the boundary would silently consume the merchant's
         // notice period for an outage that was ours (Rule 6's spirit).
-        await db
+        const deadline = graceEndsAt(now);
+        // ★ The conditional claim on `active` is what makes the notice
+        // exactly-once: an hourly heartbeat re-reads these rows, so without
+        // `returning()` the merchant would be warned every hour for two days.
+        const claimed = await db
           .update(billingSubscriptions)
           .set({
             state: "past_due",
             graceStartedAt: now.toISOString(),
-            graceEndsAt: graceEndsAt(now).toISOString(),
+            graceEndsAt: deadline.toISOString(),
             updatedAt: now.toISOString(),
           })
           .where(
@@ -436,13 +485,35 @@ export async function evaluateCycleTurns(
               eq(billingSubscriptions.storeId, row.storeId),
               eq(billingSubscriptions.state, "active"),
             ),
-          );
+          )
+          .returning({ storeId: billingSubscriptions.storeId });
+
+        if (claimed.length === 0) continue;
+        graced.push({
+          storeId: row.storeId,
+          plan: row.plan,
+          graceEndsAt: deadline,
+        });
         summary.graced += 1;
       }
     });
   } catch (err) {
     logError("billing.renewal.evaluate", err);
     summary.errors += 1;
+  }
+
+  // ★ This is the LAST message that can change the outcome — 48 hours from now
+  // the store loses its plan and its till. Best-effort, so a mail failure never
+  // becomes a billing error.
+  for (const g of graced) {
+    await notifyGraceStarted({
+      storeId: g.storeId,
+      plan: g.plan,
+      graceEndsAt: g.graceEndsAt,
+      // Nothing was attempted while collection is gated, and claiming otherwise
+      // sends the merchant to check a card nobody charged.
+      autopayAttempted: input.autopayConfigured ?? false,
+    });
   }
   return summary;
 }
@@ -594,11 +665,18 @@ export async function downgradeExpired(
     errors: 0,
   };
 
-  let candidates: string[] = [];
+  // ★ The PLAN is read here, before the claim — `billing_claim_downgrade()`
+  // sets it to free, so afterwards there is no way to tell the merchant what
+  // they lost. "Your Pro plan has ended" and "your plan has ended" are not the
+  // same message.
+  let candidates: { storeId: string; plan: string }[] = [];
   try {
     candidates = await withService(async (db) => {
       const rows = await db
-        .select({ storeId: billingSubscriptions.storeId })
+        .select({
+          storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
+        })
         .from(billingSubscriptions)
         .where(
           and(
@@ -609,7 +687,7 @@ export async function downgradeExpired(
           ),
         )
         .limit(input.limit ?? RENEWAL_BATCH);
-      return rows.map((r) => r.storeId);
+      return rows;
     });
   } catch (err) {
     logError("billing.renewal.downgrade_scan", err);
@@ -617,7 +695,7 @@ export async function downgradeExpired(
     return summary;
   }
 
-  for (const storeId of candidates) {
+  for (const { storeId, plan } of candidates) {
     try {
       const claimed = await withService(async (db) => {
         const res = await db.execute(
@@ -637,6 +715,10 @@ export async function downgradeExpired(
         summary.downgraded += 1;
         summary.shiftsClosed += 1;
         logInfo("billing.downgraded", { storeId });
+        // ★ The claim is exactly-once, so this mails once. AFTER the
+        // transaction commits — an email is a network call, and announcing a
+        // downgrade a rollback then undid would be worse than saying nothing.
+        await notifyDowngraded({ storeId, fromPlan: plan });
       }
     } catch (err) {
       logError("billing.renewal.downgrade", err, { storeId });

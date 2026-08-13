@@ -4661,6 +4661,52 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `manual-pay.ts` either, which is `server-only`. Third instance of this
       shape in the codebase, after `lib/logs/failure-types.ts` and
       `EXTRA_LOCATION_KEY` in `lib/plans.ts`.
+    - **★★ ISSUING AN INVOICE IS NOT CHARGING IT** (`lib/billing/renewal-worker.ts`,
+      `charge: ChargeFn | null`). The cron used to skip pass 1 ENTIRELY when the
+      gateway was unavailable — and pass 1 is what calls `ensureRenewalInvoice`,
+      so with collection gated **no invoice was ever written**. Pass 2 then found
+      nothing and recorded `waiting`; grace never opened; nobody was ever
+      downgraded. Every subscriber would have received free service past their
+      cycle end, indefinitely, while the job reported green hourly — and the
+      manual payment surface listed nothing, because there was nothing to list.
+      A null `charge` now issues and FINALIZES the invoice, then stops and
+      reports `manualRequired` — never `failed`, which starts the grace clock.
+      Still not a stub charge: an unreachable provider is an UNKNOWN outcome, so
+      every attempt would sit in reconciliation forever.
+    - **★★ `lib/billing/dunning.ts` — THE WORKER'S VOICE, AND WITHOUT IT THIS IS
+      NOT A BILLING SYSTEM.** Three moments the merchant can act on: the invoice
+      issued (four days' notice), the 48-hour overdue warning, and the
+      downgrade. With collection gated, that first email IS how a merchant
+      learns they must pay; silently issuing, waiting, then stopping their till
+      is the alternative. Email from here (platform correspondence from
+      `billing@storemink.com`), in-app from the registry — the §24
+      dedicated-sender rule, so `subscription.invoice_due` is IN_APP and
+      `configurable: false` (an opt-out would let someone lose their plan for a
+      bill they switched off).
+      - **★ EACH NOTICE RIDES A CLAIM THAT ALREADY EXISTED**, so none needed a
+        `notified_at` column: `finalizeInvoiceClaimed` (an invoice finalizes
+        once), the active→past_due UPDATE with `returning()` (once per grace
+        window), and `billing_claim_downgrade()`. The cron is an HOURLY
+        HEARTBEAT re-reading the same rows, so without that property each of
+        these mails the same merchant every hour — §23's pickup-reminder rule.
+      - **★ `finalizeInvoice` COULD NOT TELL "I finalized it" FROM "I observed
+        it finalized"** — it re-reads the row, so a caller that lost the race
+        still got a finalized invoice back and believed it won. Harmless for
+        control flow, not harmless for a bill: `claimDue` deliberately takes no
+        lock, so two overlapping runs would have mailed it twice.
+        `finalizeInvoiceClaimed` returns `{invoice, claimed}`.
+      - **★ AUTOPAY TRUE ONLY WITH A GATEWAY **AND** A MANDATE.** It decides
+        what the email IS — a heads-up before a debit, or a bill. A merchant
+        told "we'll collect this automatically" does nothing and is downgraded.
+        Same rule for `attempted` on the overdue notice: "we couldn't take
+        payment" describes a charge that never happened and sends them to check
+        a card nobody touched.
+      - **⚠ MAILED OUTSIDE THE TRANSACTION, ALWAYS.** An email is a network
+        call; sending it inside `withService` holds a pooled connection open for
+        an HTTP request (the reason `claimDue` takes no lock), and would
+        announce a grace window a rollback then un-started.
+      - **★ BEST-EFFORT, NEVER THROWS.** A mail outage must not fail a
+        collection, block a cycle advance, or abort a downgrade.
     - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
       `subscription-actions.ts` still drives **cancel** and **plan change** on
       the plans page, plus (1) **signup enrolment** —

@@ -272,9 +272,29 @@ export async function finalizeInvoice(
   invoiceId: string,
   now: Date = new Date(),
 ): Promise<InvoiceRow | null> {
+  return (await finalizeInvoiceClaimed(invoiceId, now)).invoice;
+}
+
+/**
+ * Finalize, and say whether THIS call was the one that did it.
+ *
+ * ★ "I finalized it" and "I observed it finalized" are different facts, and the
+ * plain `finalizeInvoice` above cannot tell them apart — it re-reads the row, so
+ * a caller that lost the race still gets a finalized invoice back and believes
+ * it won. That is harmless for control flow (either way the invoice is issued)
+ * and NOT harmless for anything that should happen once per invoice: the renewal
+ * worker mails the merchant here, and `claimDue` deliberately takes no lock, so
+ * two overlapping runs would send the same bill twice.
+ *
+ * The conditional UPDATE is the claim; `returning()` is how we hear about it.
+ */
+export async function finalizeInvoiceClaimed(
+  invoiceId: string,
+  now: Date = new Date(),
+): Promise<{ invoice: InvoiceRow | null; claimed: boolean }> {
   try {
     return await withService(async (db) => {
-      await db
+      const claimed = await db
         .update(billingInvoices)
         .set({
           finalizedAt: now.toISOString(),
@@ -286,12 +306,16 @@ export async function finalizeInvoice(
             eq(billingInvoices.id, invoiceId),
             sql`${billingInvoices.finalizedAt} is null`,
           ),
-        );
-      return readInvoice(db, invoiceId);
+        )
+        .returning({ id: billingInvoices.id });
+      return {
+        invoice: await readInvoice(db, invoiceId),
+        claimed: claimed.length > 0,
+      };
     });
   } catch (err) {
     logError("billing.finalize_invoice", err, { invoiceId });
-    return null;
+    return { invoice: null, claimed: false };
   }
 }
 

@@ -101,7 +101,12 @@ async function handle(request: Request) {
     priceFor,
   });
 
-  const evaluate = await evaluateCycleTurns({ now, limit: RENEWAL_BATCH });
+  const evaluate = await evaluateCycleTurns({
+    now,
+    limit: RENEWAL_BATCH,
+    // Only affects the wording of the overdue email — see evaluateCycleTurns.
+    autopayConfigured: !!charge,
+  });
   const downgrade = await downgradeExpired({ now, limit: RENEWAL_BATCH });
 
   const errors = collect.errors + evaluate.errors + downgrade.errors;
