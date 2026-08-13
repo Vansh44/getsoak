@@ -339,6 +339,11 @@ export const SECTIONS: DashboardSection[] = [
         href: "/dashboard/settings/domain",
         icon: "globe",
       },
+      {
+        label: "Shipping & delivery",
+        href: "/dashboard/settings/shipping",
+        icon: "shipping",
+      },
     ],
   },
   {

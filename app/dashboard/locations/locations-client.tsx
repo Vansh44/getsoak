@@ -19,7 +19,7 @@ import {
   type LocationType,
 } from "@/lib/locations/capabilities";
 import type { Plan } from "@/lib/plans";
-import type { LocationBillingState } from "@/app/actions/subscription-actions";
+import type { LocationBillingState } from "@/lib/billing/invoice-types";
 import { LocationBillingCard } from "./location-billing-card";
 
 interface FormState {

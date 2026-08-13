@@ -33,9 +33,10 @@ import {
   billingMandates,
   billingSubscriptions,
   posShifts,
+  stores,
 } from "@/drizzle/schema";
 import { logError, logInfo } from "@/lib/observability/logger";
-import { limitsFor, type Plan } from "@/lib/plans";
+import type { Plan } from "@/lib/plans";
 import {
   collectionCutoff,
   cycleFrom,
@@ -46,10 +47,17 @@ import { collectInvoice, type ChargeFn, type CollectResult } from "./collect";
 import {
   amountDueForInvoice,
   ensureRenewalInvoice,
-  finalizeInvoice,
+  finalizeInvoiceClaimed,
+  loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
+import {
+  notifyDowngraded,
+  notifyGraceStarted,
+  notifyInvoiceIssued,
+} from "./dunning";
 import { buildSubscriptionInvoice } from "./invoice";
+import { resolveNextCycle, type ScheduledFields } from "./next-cycle";
 
 /** How many subscriptions one pass will touch. Bounded so a Cloud Run request
  *  finishes; the cron self-chains while there is more. */
@@ -73,6 +81,11 @@ interface DueRow {
   currentCycleSeq: number;
   currentPeriodEnd: string | null;
   billedLocations: number;
+  /** Booked changes, which apply to the cycle this invoice is FOR. */
+  scheduledPlan: string | null;
+  scheduledPeriod: string | null;
+  scheduledLocations: number | null;
+  cancelAtPeriodEnd: boolean;
   mandateId: string | null;
 }
 
@@ -84,7 +97,18 @@ interface DueRow {
 export async function collectDueRenewals(input: {
   now?: Date;
   limit?: number;
-  charge: ChargeFn;
+  /**
+   * ★★ NULL = ISSUE THE INVOICE, DO NOT CHARGE. Issuing is not charging: it
+   * writes a document saying what is owed, which the merchant settles by hand on
+   * /dashboard/plans. Gating ISSUANCE behind the charge — which is what this
+   * pass used to do, by being skipped wholesale — meant no invoice was ever
+   * written, so pass 2 waited forever, grace never opened, nobody was ever
+   * downgraded, and every subscriber silently received free service past their
+   * cycle end. It also made the manual payment surface unreachable: it lists
+   * open invoices, and there were none. The two must be separable, because
+   * manual payment is a complete billing path on its own.
+   */
+  charge: ChargeFn | null;
   /** Injected so tests need no pricing table; production passes the LIVE
    *  reader, never a cached one — this number decides a charge. */
   priceFor: (
@@ -161,6 +185,10 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
       currentCycleSeq: billingSubscriptions.currentCycleSeq,
       currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
       billedLocations: billingSubscriptions.billedLocations,
+      scheduledPlan: billingSubscriptions.scheduledPlan,
+      scheduledPeriod: billingSubscriptions.scheduledPeriod,
+      scheduledLocations: billingSubscriptions.scheduledLocations,
+      cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
       mandateId: billingSubscriptions.mandateId,
     })
     .from(billingSubscriptions)
@@ -168,6 +196,11 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
       and(
         inArray(billingSubscriptions.state, ["active", "past_due", "grace"]),
         sql`${billingSubscriptions.planSource} <> 'comp'`,
+        // ★★ A CANCELLED SUBSCRIPTION IS NOT INVOICED. It ends at the period end,
+        // so raising a document for the cycle after it would bill a merchant who
+        // explicitly stopped — and, because grace and downgrade follow an unpaid
+        // invoice, would then chase them for it.
+        eq(billingSubscriptions.cancelAtPeriodEnd, false),
         isNotNull(billingSubscriptions.currentPeriodEnd),
         // A cycle beginning at or before the cutoff is inside the lead window.
         lte(
@@ -183,7 +216,7 @@ async function collectOne(
   row: DueRow,
   now: Date,
   input: {
-    charge: ChargeFn;
+    charge: ChargeFn | null;
     priceFor: (
       plan: Plan,
       period: BillingPeriod,
@@ -194,19 +227,29 @@ async function collectOne(
     }>;
   },
 ): Promise<"paid" | "failed" | "manual" | "pending"> {
-  const period: BillingPeriod = row.period === "yearly" ? "yearly" : "monthly";
-  const plan = row.plan as Plan;
+  // ★★ PRICE WHAT WILL APPLY NEXT CYCLE, not what applies today. `resolveNextCycle`
+  // is the ONE place scheduled plan / period / location changes are resolved, so
+  // this and `advanceCycle` cannot disagree — and if they did, the merchant would
+  // be billed for something they did not get, silently, a month later.
+  const nextShape = resolveNextCycle(row);
+  // A cancelled subscription is filtered out in claimDue; this is the belt to
+  // that braces, so a future caller cannot invoice one by accident.
+  if (nextShape.ending) return "pending";
+
+  const period: BillingPeriod = nextShape.period;
+  const plan = nextShape.plan as Plan;
   const periodStart = new Date(row.currentPeriodEnd!);
   const next = cycleFrom(periodStart, period, row.currentCycleSeq + 1);
 
   const price = await input.priceFor(plan, period);
   const tax = await loadTaxContext(row.storeId);
 
-  // ★ Locations are billed only if the TARGET plan can have them. Charging for
-  // POS on a plan that cannot use it is indefensible (the §POS-7 rule).
+  // Locations are billed only if the plan can have them — `resolveNextCycle`
+  // already zeroed the count for a plan without POS, so this is the shape, not
+  // the rule.
   const locations =
-    limitsFor(plan).posLocationsIncluded > 0
-      ? { count: row.billedLocations, unitPaise: price.locationPaise }
+    nextShape.billedLocations > 0
+      ? { count: nextShape.billedLocations, unitPaise: price.locationPaise }
       : undefined;
 
   const built = buildSubscriptionInvoice({
@@ -217,7 +260,9 @@ async function collectOne(
     tax,
   });
 
+  const parties = await loadInvoiceParties(row.storeId);
   const invoice = await ensureRenewalInvoice({
+    ...parties,
     storeId: row.storeId,
     cycleSeq: next.seq,
     periodStart: next.start,
@@ -232,13 +277,42 @@ async function collectOne(
 
   // ★ Finalize BEFORE charging. The document number is what the merchant is
   // being asked to pay against, and the pre-debit notification quotes it.
+  let justIssued: { claimed: boolean; ref: string | null } | null = null;
   if (!invoice.finalizedAt) {
-    const issued = await finalizeInvoice(invoice.id, now);
-    if (!issued) return "pending";
+    const issued = await finalizeInvoiceClaimed(invoice.id, now);
+    if (!issued.invoice) return "pending";
+    justIssued = { claimed: issued.claimed, ref: issued.invoice.invoiceRef };
   }
 
   const amountDue = await amountDueForInvoice(invoice.id);
   if (amountDue === null) return "pending"; // Never guess an amount (Rule 10).
+
+  // ★ TELL THE MERCHANT, once, on the run that actually issued it. Four days'
+  // notice before the cycle turns — and when collection is gated this notice IS
+  // how they learn they must pay, so it is not optional politeness.
+  // ⚠ AFTER the amount is known and OUTSIDE any transaction: an email is a
+  // network call, and holding a pooled connection across one is how a fleet-wide
+  // renewal exhausts the pool.
+  if (justIssued?.claimed) {
+    await notifyInvoiceIssued({
+      storeId: row.storeId,
+      plan,
+      amountPaise: amountDue,
+      dueAt: next.start,
+      invoiceRef: justIssued.ref,
+      // Autopay only if there is a gateway AND a mandate to charge. Saying
+      // "we'll collect this automatically" to someone with neither is how a
+      // merchant does nothing and loses their plan.
+      autopay: !!input.charge && !!row.mandateId,
+    });
+  }
+
+  // ★ No gateway: the invoice is issued and OPEN, and that is the whole job.
+  // `manual` is the honest bucket — it already means "the merchant must pay this
+  // themselves", which is exactly true here. Deliberately NOT a stub charge that
+  // always fails: an unreachable provider is an UNKNOWN outcome, not a decline,
+  // so every attempt would sit in reconciliation forever.
+  if (!input.charge) return "manual";
 
   const mandate = await loadMandate(row.mandateId);
   const outcome = await collectInvoice({
@@ -314,6 +388,8 @@ export interface EvaluateSummary {
   advanced: number;
   graced: number;
   waiting: number;
+  /** Subscriptions that reached the end of a cancelled cycle. */
+  ended: number;
   errors: number;
 }
 
@@ -332,6 +408,17 @@ export async function evaluateCycleTurns(
   input: {
     now?: Date;
     limit?: number;
+    /**
+     * Is automatic collection actually running? It changes only what the
+     * overdue email SAYS — "we couldn't take payment" vs "this hasn't been
+     * paid" — and defaults to FALSE because claiming an attempt that never
+     * happened sends the merchant to check a card nobody charged.
+     *
+     * Passed in rather than read from `lib/billing/gateway.ts`, so this module
+     * keeps having no opinion about the provider (the same reason `charge` is
+     * injected).
+     */
+    autopayConfigured?: boolean;
   } = {},
 ): Promise<EvaluateSummary> {
   const now = input.now ?? new Date();
@@ -339,15 +426,29 @@ export async function evaluateCycleTurns(
     advanced: 0,
     graced: 0,
     waiting: 0,
+    ended: 0,
     errors: 0,
   };
+
+  // ⚠ Collected INSIDE the transaction, mailed AFTER it commits. An email is a
+  // network call; sending it inside would hold a pooled connection open for the
+  // length of an HTTP request, and would also announce a grace window that a
+  // rollback then un-started.
+  const graced: { storeId: string; plan: string; graceEndsAt: Date }[] = [];
+  const ending: { storeId: string; plan: string }[] = [];
 
   try {
     await withService(async (db) => {
       const rows = await db
         .select({
           storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
           period: billingSubscriptions.period,
+          billedLocations: billingSubscriptions.billedLocations,
+          scheduledPlan: billingSubscriptions.scheduledPlan,
+          scheduledPeriod: billingSubscriptions.scheduledPeriod,
+          scheduledLocations: billingSubscriptions.scheduledLocations,
+          cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
           currentCycleSeq: billingSubscriptions.currentCycleSeq,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
         })
@@ -364,6 +465,23 @@ export async function evaluateCycleTurns(
         .for("update", { skipLocked: true });
 
       for (const row of rows) {
+        // ★★ A CANCELLED SUBSCRIPTION ENDS HERE, and there is no invoice to wait
+        // for — claimDue never raised one. Without this branch the merchant would
+        // sit in `waiting` forever: still `active`, still entitled to a paid plan
+        // they stopped paying for, and never actually cancelled.
+        if (row.cancelAtPeriodEnd) {
+          const ended = await endSubscription(db, {
+            storeId: row.storeId,
+            fromCycleSeq: row.currentCycleSeq,
+            now,
+          });
+          if (ended) {
+            ending.push({ storeId: row.storeId, plan: row.plan });
+            summary.ended += 1;
+          }
+          continue;
+        }
+
         const nextSeq = row.currentCycleSeq + 1;
         const [invoice] = await db
           .select({ status: billingInvoices.status })
@@ -391,7 +509,7 @@ export async function evaluateCycleTurns(
         if (invoice.status === "paid") {
           await advanceCycle(db, {
             storeId: row.storeId,
-            period: row.period,
+            scheduled: row,
             fromCycleSeq: row.currentCycleSeq,
             fromPeriodEnd: row.currentPeriodEnd!,
             now,
@@ -405,12 +523,16 @@ export async function evaluateCycleTurns(
         // deliberately not from the cycle boundary. If this worker was down for
         // a day, anchoring to the boundary would silently consume the merchant's
         // notice period for an outage that was ours (Rule 6's spirit).
-        await db
+        const deadline = graceEndsAt(now);
+        // ★ The conditional claim on `active` is what makes the notice
+        // exactly-once: an hourly heartbeat re-reads these rows, so without
+        // `returning()` the merchant would be warned every hour for two days.
+        const claimed = await db
           .update(billingSubscriptions)
           .set({
             state: "past_due",
             graceStartedAt: now.toISOString(),
-            graceEndsAt: graceEndsAt(now).toISOString(),
+            graceEndsAt: deadline.toISOString(),
             updatedAt: now.toISOString(),
           })
           .where(
@@ -418,13 +540,43 @@ export async function evaluateCycleTurns(
               eq(billingSubscriptions.storeId, row.storeId),
               eq(billingSubscriptions.state, "active"),
             ),
-          );
+          )
+          .returning({ storeId: billingSubscriptions.storeId });
+
+        if (claimed.length === 0) continue;
+        graced.push({
+          storeId: row.storeId,
+          plan: row.plan,
+          graceEndsAt: deadline,
+        });
         summary.graced += 1;
       }
     });
   } catch (err) {
     logError("billing.renewal.evaluate", err);
     summary.errors += 1;
+  }
+
+  // ★ A cancellation reaching its end IS a downgrade from the merchant's point of
+  // view — their plan stopped and they are on Free — so it reuses that notice
+  // rather than inventing a second one that says the same thing. They already
+  // know they cancelled; what they need is confirmation and the way back.
+  for (const e of ending) {
+    await notifyDowngraded({ storeId: e.storeId, fromPlan: e.plan });
+  }
+
+  // ★ This is the LAST message that can change the outcome — 48 hours from now
+  // the store loses its plan and its till. Best-effort, so a mail failure never
+  // becomes a billing error.
+  for (const g of graced) {
+    await notifyGraceStarted({
+      storeId: g.storeId,
+      plan: g.plan,
+      graceEndsAt: g.graceEndsAt,
+      // Nothing was attempted while collection is gated, and claiming otherwise
+      // sends the merchant to check a card nobody charged.
+      autopayAttempted: input.autopayConfigured ?? false,
+    });
   }
   return summary;
 }
@@ -444,17 +596,21 @@ async function advanceCycle(
   db: Db,
   input: {
     storeId: string;
-    period: string;
+    /** The row's plan/period/scheduled fields — resolved by resolveNextCycle. */
+    scheduled: ScheduledFields;
     fromCycleSeq: number;
     fromPeriodEnd: string;
     now: Date;
   },
 ): Promise<boolean> {
-  const period: BillingPeriod =
-    input.period === "yearly" ? "yearly" : "monthly";
+  // ★★ ONE RESOLVER, so what was PRICED at T−4d is what is WRITTEN at T0. The
+  // period matters twice over: it decides the plan amount AND the length of the
+  // cycle, so a monthly→yearly switch that ignored it would give the merchant a
+  // 30-day year or a 365-day month.
+  const shape = resolveNextCycle(input.scheduled);
   const next = cycleFrom(
     new Date(input.fromPeriodEnd),
-    period,
+    shape.period,
     input.fromCycleSeq + 1,
   );
   const claimed = await db
@@ -466,6 +622,16 @@ async function advanceCycle(
       state: "active",
       graceStartedAt: null,
       graceEndsAt: null,
+      // ★ EVERY BOOKED CHANGE TAKES EFFECT HERE, in the same statement that turns
+      // the cycle — the merchant keeps (and keeps paying for) what they bought
+      // until the period runs out, then it changes. Doing it in a second UPDATE
+      // would let an interrupted run leave the plan and the cycle disagreeing.
+      plan: shape.plan,
+      period: shape.period,
+      billedLocations: shape.billedLocations,
+      scheduledPlan: null,
+      scheduledPeriod: null,
+      scheduledLocations: null,
       updatedAt: input.now.toISOString(),
     })
     .where(
@@ -476,6 +642,54 @@ async function advanceCycle(
     )
     .returning({ storeId: billingSubscriptions.storeId });
   return claimed.length > 0;
+}
+
+/**
+ * End a cancelled subscription at its period end.
+ *
+ * ★ A CONDITIONAL CLAIM on the cycle it was told about, so a second run — or a
+ * resume racing the turn — cannot end it twice or end one that moved on.
+ *
+ * ★ THE PLAN IS DROPPED TO FREE IN THE SAME STATEMENT-PAIR as the state change.
+ * `stores.plan` is what every gate reads, so leaving it while marking the
+ * subscription `cancelled` would give away a paid plan indefinitely.
+ */
+async function endSubscription(
+  db: Db,
+  input: { storeId: string; fromCycleSeq: number; now: Date },
+): Promise<boolean> {
+  const claimed = await db
+    .update(billingSubscriptions)
+    .set({
+      state: "cancelled",
+      cancelAtPeriodEnd: false,
+      // The cycle is over and there is no next one. Clearing it keeps the
+      // billing_subscriptions_cycle_present CHECK satisfied, which requires a
+      // cycle only for active/past_due/grace.
+      currentPeriodStart: null,
+      currentPeriodEnd: null,
+      graceStartedAt: null,
+      graceEndsAt: null,
+      scheduledPlan: null,
+      scheduledPeriod: null,
+      scheduledLocations: null,
+      updatedAt: input.now.toISOString(),
+    })
+    .where(
+      and(
+        eq(billingSubscriptions.storeId, input.storeId),
+        eq(billingSubscriptions.currentCycleSeq, input.fromCycleSeq),
+        eq(billingSubscriptions.cancelAtPeriodEnd, true),
+      ),
+    )
+    .returning({ storeId: billingSubscriptions.storeId });
+  if (claimed.length === 0) return false;
+
+  await db
+    .update(stores)
+    .set({ plan: "free", planExpiresAt: null })
+    .where(eq(stores.id, input.storeId));
+  return true;
 }
 
 /**
@@ -500,7 +714,16 @@ export async function advanceAfterPayment(
       const [sub] = await db
         .select({
           storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
           period: billingSubscriptions.period,
+          billedLocations: billingSubscriptions.billedLocations,
+          // ★ The scheduled fields must come along: this path advances the cycle
+          // just as the worker does, so it has to apply the same booked changes
+          // or a merchant who pays during grace keeps a plan they downgraded off.
+          scheduledPlan: billingSubscriptions.scheduledPlan,
+          scheduledPeriod: billingSubscriptions.scheduledPeriod,
+          scheduledLocations: billingSubscriptions.scheduledLocations,
+          cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
           currentCycleSeq: billingSubscriptions.currentCycleSeq,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
           state: billingSubscriptions.state,
@@ -533,7 +756,7 @@ export async function advanceAfterPayment(
 
       return advanceCycle(db, {
         storeId,
-        period: sub.period,
+        scheduled: sub,
         fromCycleSeq: sub.currentCycleSeq,
         fromPeriodEnd: sub.currentPeriodEnd,
         now,
@@ -576,11 +799,18 @@ export async function downgradeExpired(
     errors: 0,
   };
 
-  let candidates: string[] = [];
+  // ★ The PLAN is read here, before the claim — `billing_claim_downgrade()`
+  // sets it to free, so afterwards there is no way to tell the merchant what
+  // they lost. "Your Pro plan has ended" and "your plan has ended" are not the
+  // same message.
+  let candidates: { storeId: string; plan: string }[] = [];
   try {
     candidates = await withService(async (db) => {
       const rows = await db
-        .select({ storeId: billingSubscriptions.storeId })
+        .select({
+          storeId: billingSubscriptions.storeId,
+          plan: billingSubscriptions.plan,
+        })
         .from(billingSubscriptions)
         .where(
           and(
@@ -591,7 +821,7 @@ export async function downgradeExpired(
           ),
         )
         .limit(input.limit ?? RENEWAL_BATCH);
-      return rows.map((r) => r.storeId);
+      return rows;
     });
   } catch (err) {
     logError("billing.renewal.downgrade_scan", err);
@@ -599,7 +829,7 @@ export async function downgradeExpired(
     return summary;
   }
 
-  for (const storeId of candidates) {
+  for (const { storeId, plan } of candidates) {
     try {
       const claimed = await withService(async (db) => {
         const res = await db.execute(
@@ -619,6 +849,10 @@ export async function downgradeExpired(
         summary.downgraded += 1;
         summary.shiftsClosed += 1;
         logInfo("billing.downgraded", { storeId });
+        // ★ The claim is exactly-once, so this mails once. AFTER the
+        // transaction commits — an email is a network call, and announcing a
+        // downgrade a rollback then undid would be worse than saying nothing.
+        await notifyDowngraded({ storeId, fromPlan: plan });
       }
     } catch (err) {
       logError("billing.renewal.downgrade", err, { storeId });

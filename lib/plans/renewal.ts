@@ -28,7 +28,7 @@ export interface RenewalInput {
   expiresAt: string | null;
   /** True once the plan itself has lapsed — the card's existing signal. */
   expired: boolean;
-  /** A live, authorised mandate exists (getSubscriptionState.active). */
+  /** A live, authorised mandate exists (SubscriptionView.autopay). */
   hasMandate: boolean;
   /** The merchant cancelled: it runs to the cycle end, then stops. */
   cancelAtPeriodEnd: boolean;
@@ -48,11 +48,18 @@ export function renewalTerm(input: RenewalInput): RenewalTerm {
   // date now marks — the last day of service, not the next charge.
   if (input.cancelAtPeriodEnd) return "expires";
 
-  // `halted` means Razorpay exhausted its retries: nothing further will be
-  // charged automatically, so this date is a deadline, not a renewal. `pending`
-  // is still retrying and can genuinely renew, so it stays a renewal — the
-  // card's Status field is what tells them a payment is failing.
-  if ((input.status ?? "").toLowerCase() === "halted") return "expires";
+  // A subscription whose payment has failed will not renew itself, so the date
+  // is a deadline rather than a renewal.
+  //
+  // `halted` is the OLD system's word for "the gateway exhausted its retries".
+  // `past_due` and `grace` are the NEW system's (§34) — the cycle turned unpaid
+  // and the 48-hour clock is running. All three mean the same thing to a
+  // merchant reading the card, so they map to the same term; a `pending` retry
+  // can still succeed and stays a renewal.
+  if (
+    ["halted", "past_due", "grace"].includes((input.status ?? "").toLowerCase())
+  )
+    return "expires";
 
   return "renews";
 }

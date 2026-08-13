@@ -1,7 +1,9 @@
 import { requireSectionAccess } from "../lib/access";
 import { getAiUsagePageData } from "@/app/actions/ai-credit-actions";
-import { getSubscriptionState } from "@/app/actions/subscription-actions";
-import { getPayableInvoices } from "@/app/actions/subscribe-actions";
+import {
+  getMySubscription,
+  getPayableInvoices,
+} from "@/app/actions/subscribe-actions";
 import { CREDIT_PACKS } from "@/lib/ai/credits";
 import { getPlanPricingLive } from "@/lib/plans/pricing";
 import { PlansBillingClient } from "./plans-client";
@@ -18,7 +20,7 @@ export default async function PlansBillingPage() {
   // in the upgrade dialog and take a different one from the card.
   const [data, subscription, pricing, invoices] = await Promise.all([
     getAiUsagePageData(),
-    getSubscriptionState(),
+    getMySubscription(),
     getPlanPricingLive(),
     // ★ What they OWE, above everything else on the page. While automatic
     // collection is gated (lib/billing/gateway.ts) this is the only way a

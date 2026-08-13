@@ -24,11 +24,22 @@ import { execFileSync } from "child_process";
 /** The values supabase/plans_01_schema.sql permits. Keep in step with the SQL. */
 const ALLOWED_SOURCES = ["operator", "billing", "system"];
 
-function grep(pattern: string, paths: string[]): string {
+/**
+ * grep with N lines of leading context, over BOTH app and lib.
+ *
+ * ⚠ `lib` is not optional: the billing writers moved there in the 2026-08-13
+ * cutover, and a guard that scans only `app` silently stops guarding them.
+ */
+function grepBlock(pattern: string, before: number): string {
   try {
-    return execFileSync("grep", ["-rEn", "--include=*.ts", pattern, ...paths], {
-      encoding: "utf8",
-    });
+    return execFileSync(
+      "grep",
+      ["-rEn", `-B${before}`, "--include=*.ts", pattern, "app", "lib"],
+      { encoding: "utf8" },
+    )
+      .split("\n")
+      .filter((l) => !/\.test\.ts[-:]/.test(l))
+      .join("\n");
   } catch {
     return ""; // grep exits 1 when nothing matches
   }
@@ -76,11 +87,39 @@ describe("plan_events audit coverage", () => {
     ).toEqual([]);
   });
 
-  it("★ a billing audit insert never shares a transaction with the plan update", () => {
-    // The activation must survive an audit failure. Both correct writers
-    // (platform.ts, plan-expiry) already isolate it; the billing ones did not,
-    // and their comment claimed "best-effort" while the code was anything but.
-    const hits = grep("Audit trail", ["app"]);
-    expect(hits).toContain("own transaction");
+  it("★★ every plan_events insert opens its OWN transaction", () => {
+    // The activation must survive an audit failure. `withService` wraps its
+    // callback in one BEGIN/COMMIT, so an insert sharing a callback with the
+    // `stores` update takes the plan down with it when the CHECK rejects it —
+    // which is exactly the outage above, and it was silent for months.
+    //
+    // ★ STRUCTURAL, not comment-based. This used to assert that a `grep`
+    // for "Audit trail" contained the words "own transaction", which stopped
+    // meaning anything the moment the file holding that comment was deleted
+    // (2026-08-13, the billing cutover) — it passed a `""` haystack for a while
+    // and then failed for the wrong reason. Now it checks the property: the
+    // insert is the FIRST db call inside its own withService.
+    const block = grepBlock("insert\\(planEvents\\)", 3);
+    expect(block, "no planEvents inserts found — did the table move?").not.toBe(
+      "",
+    );
+
+    // Each match arrives as up to 3 preceding lines then the insert. An insert
+    // that opens its own scope has `withService(` within those lines and no
+    // other `db.` call between.
+    const groups = block.split(/^--$/m).filter((g) => g.trim() !== "");
+    const offenders = groups.filter((g) => {
+      if (!/withService\(/.test(g)) return true;
+      const after = g.slice(g.search(/withService\(/));
+      const dbCalls = after.match(/\bdb\s*\.\w+/g) ?? [];
+      // Exactly one: the planEvents insert itself.
+      return dbCalls.length !== 1;
+    });
+
+    expect(
+      offenders,
+      "a plan_events insert must be alone in its withService — sharing one with " +
+        "the stores update lets a rejected audit row roll back a paid plan.",
+    ).toEqual([]);
   });
 });

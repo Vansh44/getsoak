@@ -36,6 +36,37 @@ jobs:
       - name: Run Tests
         run: npm run test
 
+      # ★★ CATCHES ORDER-DEPENDENT TESTS, which `npm run test` cannot: it runs
+      # files in declaration order, so a test that only passes because it happens
+      # to run before another one looks permanently green. Three did (fixed
+      # 2026-08-13, commit a10bbed) — all from `vi.clearAllMocks()` clearing CALLS
+      # but not IMPLEMENTATIONS, so a mockResolvedValue leaked forward. One of
+      # them hid a razorpay suite charging 150 for a 200 order.
+      #
+      # ★ FIXED SEED, deliberately. A random seed explores more permutations, but
+      # it makes the suite non-deterministically red — and a red that comes and
+      # goes teaches people to re-run rather than to trust it, which is the exact
+      # failure vitest.config.ts's exclude comment already records. A fixed seed
+      # gives one ordering that is NOT declaration order and is reproducible on
+      # demand, so a failure here is always actionable.
+      #
+      # ⚠ WHAT IT DOES NOT DO: one seed is one permutation. It will not find every
+      # order-dependence, only regressions that this ordering happens to expose.
+      # To hunt for more, run vitest DIRECTLY with another seed:
+      #
+      #   npx vitest run --coverage=false --sequence.shuffle --sequence.seed=777
+      #
+      # Not `npm run test:shuffle -- --sequence.seed=777`: the script already
+      # passes a seed, and vitest rejects the duplicate ("Expected a single value
+      # for option --sequence.seed"). Vitest prints the seed it used, so any
+      # failure — here or locally — is reproducible from the log.
+      #
+      # No coverage here (--coverage=false in the script): `npm run test` above
+      # already measured it, and instrumenting twice doubles the slowest step for
+      # nothing.
+      - name: Test Order Independence
+        run: npm run test:shuffle
+
       - name: Format Check
         run: npm run prettier --check
 

@@ -38,6 +38,7 @@ vi.mock("@/lib/payments/razorpay", () => rzp);
 
 const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
+  loadInvoiceParties: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
   finalizeInvoice: vi.fn(),
   amountDueForInvoice: vi.fn(),
@@ -80,6 +81,11 @@ beforeEach(() => {
     rateBps: 0,
     inclusive: false,
     supplierStateCode: null,
+    placeOfSupply: null,
+  });
+  store.loadInvoiceParties.mockResolvedValue({
+    supplierGstin: null,
+    customerGstin: null,
     placeOfSupply: null,
   });
   store.ensureRenewalInvoice.mockResolvedValue({
@@ -181,11 +187,61 @@ describe("startEnrolment", () => {
     expect(values.currentPeriodStart).toBeUndefined();
   });
 
-  it("★ finalizes BEFORE opening the payment", async () => {
+  it("★★ STAMPS the tax identifiers onto the invoice", async () => {
+    // These columns existed from billing_03 and NOBODY passed them, so every
+    // invoice stored NULL — leaving the document to name a GSTIN from LIVE
+    // settings, which is exactly what an immutable invoice must not do.
+    store.loadInvoiceParties.mockResolvedValue({
+      supplierGstin: "07AABCS1429B1ZX",
+      customerGstin: "29AAACM1234C1ZP",
+      placeOfSupply: "29",
+    });
     await startEnrolment(args);
-    expect(store.finalizeInvoice.mock.invocationCallOrder[0]).toBeLessThan(
-      collect.beginAttempt.mock.invocationCallOrder[0],
-    );
+    expect(store.ensureRenewalInvoice.mock.calls[0][0]).toMatchObject({
+      supplierGstin: "07AABCS1429B1ZX",
+      customerGstin: "29AAACM1234C1ZP",
+      placeOfSupply: "29",
+    });
+  });
+
+  it("★★ does NOT finalize — an enrolment is an OFFER, not an obligation", async () => {
+    // Finalizing here burned a number in the gapless GST series for a document
+    // nobody ever received, and made /dashboard/plans demand payment for a plan
+    // that was never granted. confirmEnrolment issues it once the money lands.
+    await startEnrolment(args);
+    expect(store.finalizeInvoice).not.toHaveBeenCalled();
+  });
+
+  it("★★ RESUMES the same Razorpay order when an attempt is in flight", async () => {
+    // Dismissing the modal leaves the attempt `processing` forever — nothing
+    // tells us a modal was closed — so this used to be a DEAD END: every later
+    // Subscribe answered "a payment is already in progress" and the merchant
+    // could never subscribe at all. A Razorpay order stays payable until paid.
+    collect.beginAttempt.mockResolvedValue(null);
+    seed([
+      [], // currentState: no subscription
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+    const res = await startEnrolment(args);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data).toMatchObject({
+      attemptId: "att-old",
+      providerOrderId: "order_old",
+      amountPaise: 5_000_00,
+    });
+    // ★ And it must NOT open a second order at the gateway.
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★ asks them to wait when the in-flight attempt has NO order to resume", async () => {
+    // Two Subscribe clicks racing, caught before either reached the gateway.
+    collect.beginAttempt.mockResolvedValue(null);
+    seed([[], []]);
+    const res = await startEnrolment(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/already in progress/i);
   });
 
   it("★ plants the idempotency key in the order notes", async () => {
@@ -301,6 +357,21 @@ describe("confirmEnrolment", () => {
     if (!res.ok) return;
     expect(res.data.plan).toBe("pro");
     expect(res.data.periodEnd).toBe(CYCLE_END);
+  });
+
+  it("★★ ISSUES the invoice now — the number is spent on a payment that HAPPENED", async () => {
+    // The gapless GST series must not be spent on an abandoned checkout, and the
+    // document should be dated to the payment, not to the Subscribe click.
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(store.finalizeInvoice).toHaveBeenCalledWith(INVOICE, NOW);
+  });
+
+  it("★ finalizes only AFTER the signature verifies", async () => {
+    rzp.verifyCheckoutSignature.mockReturnValue(false);
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(store.finalizeInvoice).not.toHaveBeenCalled();
   });
 
   it("★★ REFUSES an unverified signature, and settles nothing", async () => {

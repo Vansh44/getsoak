@@ -66,7 +66,23 @@ const PCT_COUPON = {
 
 describe("CouponField", () => {
   beforeEach(() => {
+    // ⚠ `clearAllMocks` clears CALLS, not IMPLEMENTATIONS. The two tests at the
+    // bottom of this file set `getAvailableStorefrontCoupons` to return a coupon,
+    // and that return value used to survive into every test that ran after them —
+    // so those tests rendered an "Available Coupons" list with its own Apply
+    // button, and `getByRole("button", { name: "Apply" })` found TWO.
+    //
+    // ★ IT PASSED ONLY BECAUSE OF DECLARATION ORDER. The two offenders are last,
+    // so nothing followed them. `vitest --sequence.shuffle` fails four tests here
+    // — which is how a suite that is green on your machine goes red on a CI runner
+    // that happens to schedule differently, with a message ("found multiple
+    // elements") that says nothing about the real cause.
+    //
+    // Restored explicitly rather than with `resetAllMocks()`, which would also
+    // wipe the `mockResolvedValue([])` set at the `vi.mock` factory above and
+    // leave the component awaiting `undefined`.
     vi.clearAllMocks();
+    vi.mocked(getAvailableStorefrontCoupons).mockResolvedValue([]);
     localStorage.clear();
   });
 

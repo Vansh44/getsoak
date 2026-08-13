@@ -53,6 +53,8 @@ import {
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import { creditToApply } from "@/lib/credit/apply";
 import { formatPrice } from "@/lib/pricing";
+import { getCheckoutShippingOptions } from "@/app/actions/shipping-actions";
+import type { CheckoutShippingOption } from "@/lib/shipping/types";
 import { Button } from "@/components/ui/button";
 import styles from "./checkout.module.css";
 
@@ -117,6 +119,14 @@ export default function CheckoutPage() {
   const [addrError, setAddrError] = useState<string | null>(null);
 
   const [notes, setNotes] = useState("");
+  const [shippingOptions, setShippingOptions] = useState<
+    CheckoutShippingOption[]
+  >([]);
+  const [selectedShippingRateId, setSelectedShippingRateId] = useState<
+    string | null
+  >(null);
+  const [shippingLoading, setShippingLoading] = useState(false);
+  const [shippingError, setShippingError] = useState<string | null>(null);
 
   // Payment method. Online payments render only when the store's gateway is
   // connected + enabled + plan-allowed (server-computed; placeOrder re-checks).
@@ -298,11 +308,18 @@ export default function CheckoutPage() {
     cart.couponValid ? cart.couponDiscount : 0,
   );
 
+  const selectedShippingOption =
+    shippingOptions.find((option) => option.id === selectedShippingRateId) ??
+    shippingOptions[0] ??
+    null;
+  const shippingAmount =
+    fulfilment === "pickup" ? 0 : (selectedShippingOption?.amount ?? 0);
+
   // The amount the order is actually FOR, before any credit is applied.
   const orderTotal =
     taxInfo?.enabled && !taxInfo.inclusive
-      ? cart.total + taxInfo.tax
-      : cart.total;
+      ? cart.total + taxInfo.tax + shippingAmount
+      : cart.total + shippingAmount;
 
   // Preview of the credit split, using the SAME pure function the server uses
   // — so what is shown here and what is charged cannot disagree on the rule.
@@ -313,6 +330,60 @@ export default function CheckoutPage() {
   });
 
   const selected = addresses.find((a) => a.id === selectedId) ?? null;
+
+  // Carrier availability depends on origin, destination, parcel and COD vs
+  // prepaid. Fetch only after an address exists, and discard a late response
+  // if the shopper switches address/payment/cart while it is in flight.
+  useEffect(() => {
+    if (fulfilment !== "delivery") {
+      // Clear the external quote when it no longer applies; retaining it would
+      // let a later switch back briefly submit a courier for the wrong mode.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShippingOptions([]);
+      setSelectedShippingRateId(null);
+      setShippingError(null);
+      setShippingLoading(false);
+      return;
+    }
+    if (!selected?.postal_code || !items.length) {
+      setShippingOptions([]);
+      setSelectedShippingRateId(null);
+      setShippingError(null);
+      return;
+    }
+    let active = true;
+    // This loading state represents an external Shiprocket/DB request, not
+    // derived React state.
+    setShippingLoading(true);
+    setShippingError(null);
+    getCheckoutShippingOptions({
+      items,
+      postalCode: selected.postal_code,
+      paymentMethod: resolvedPayMethod === "razorpay" ? "razorpay" : "cod",
+    })
+      .then((result) => {
+        if (!active) return;
+        setShippingOptions(result.options);
+        setShippingError(result.error ?? null);
+        setSelectedShippingRateId((current) =>
+          current && result.options.some((option) => option.id === current)
+            ? current
+            : (result.options[0]?.id ?? null),
+        );
+      })
+      .catch(() => {
+        if (!active) return;
+        setShippingOptions([]);
+        setSelectedShippingRateId(null);
+        setShippingError("Could not load delivery options. Try again.");
+      })
+      .finally(() => {
+        if (active) setShippingLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [fulfilment, items, resolvedPayMethod, selected?.postal_code]);
 
   // Not signed in → open the auth modal IN PLACE (no redirect). After sign-in
   // `customer` populates and the checkout renders right here.
@@ -573,6 +644,10 @@ export default function CheckoutPage() {
       toast.error("Choose the shop you'd like to collect from.");
       return;
     }
+    if (fulfilment === "delivery" && !selectedShippingOption) {
+      toast.error(shippingError || "Choose a delivery option.");
+      return;
+    }
     setPlacing(true);
 
     // Retry path: an online order was already placed for this exact cart —
@@ -599,6 +674,8 @@ export default function CheckoutPage() {
       // A collection has no delivery address to differ from, so the billing
       // question is only asked — and only sent — for a shipped order.
       fulfilment === "delivery" && !billingSame ? billing : null,
+      fulfilment === "delivery" ? selectedShippingOption?.id : null,
+      fulfilment === "delivery" ? selectedShippingOption?.amount : null,
     );
 
     if ("error" in result) {
@@ -1073,6 +1150,55 @@ export default function CheckoutPage() {
               )}
             </section>
 
+            {fulfilment === "delivery" && (
+              <section className={styles.card}>
+                <div className={styles.sectionHead}>
+                  <span className={styles.stepNum}>2</span>
+                  <h2 className={styles.sectionTitle}>Shipping Method</h2>
+                </div>
+
+                {!selected ? (
+                  <p className={styles.muted}>
+                    Choose a delivery address to see shipping prices.
+                  </p>
+                ) : shippingLoading ? (
+                  <p className={styles.muted}>Checking courier prices…</p>
+                ) : shippingError && shippingOptions.length === 0 ? (
+                  <div className={styles.formError}>{shippingError}</div>
+                ) : (
+                  <div className={styles.payStack}>
+                    {shippingOptions.map((option) => {
+                      const active = selectedShippingOption?.id === option.id;
+                      return (
+                        <button
+                          type="button"
+                          key={option.id}
+                          className={`${styles.payOption}${active ? "" : ` ${styles.payOptionMuted}`}`}
+                          onClick={() => setSelectedShippingRateId(option.id)}
+                          aria-pressed={active}
+                        >
+                          <span className={styles.payIcon}>
+                            <Truck size={22} />
+                          </span>
+                          <div>
+                            <div className={styles.payName}>{option.label}</div>
+                            <div className={styles.payDesc}>
+                              {option.description}
+                            </div>
+                          </div>
+                          <span className={styles.payCheck}>
+                            {option.amount === 0
+                              ? "FREE"
+                              : formatPrice(option.amount)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Billing address. Ticked by default because it matches the
                 delivery address on almost every order; only a shipped order
                 has one to differ from. */}
@@ -1127,10 +1253,12 @@ export default function CheckoutPage() {
               </section>
             )}
 
-            {/* Step 2 — Payment */}
+            {/* Step 3 — Payment */}
             <section className={styles.card}>
               <div className={styles.sectionHead}>
-                <span className={styles.stepNum}>2</span>
+                <span className={styles.stepNum}>
+                  {fulfilment === "delivery" ? "3" : "2"}
+                </span>
                 <h2 className={styles.sectionTitle}>Payment Method</h2>
               </div>
 
@@ -1319,7 +1447,13 @@ export default function CheckoutPage() {
                   <span>
                     {fulfilment === "pickup" ? "Pickup in store" : "Shipping"}
                   </span>
-                  <span className={styles.free}>Free</span>
+                  <span
+                    className={shippingAmount === 0 ? styles.free : undefined}
+                  >
+                    {fulfilment === "pickup" || shippingAmount === 0
+                      ? "Free"
+                      : formatPrice(shippingAmount)}
+                  </span>
                 </div>
                 {taxInfo?.enabled && taxInfo.tax > 0 && (
                   <div className={styles.row}>
@@ -1384,7 +1518,11 @@ export default function CheckoutPage() {
                 className={styles.placeBtn}
                 onClick={handlePlaceOrder}
                 disabled={
-                  placing || !selected || (policyRequired && !policyAgreed)
+                  placing ||
+                  !selected ||
+                  (policyRequired && !policyAgreed) ||
+                  (fulfilment === "delivery" &&
+                    (shippingLoading || !selectedShippingOption))
                 }
               >
                 {placing
@@ -1415,7 +1553,9 @@ export default function CheckoutPage() {
                 <Truck size={16} />{" "}
                 {fulfilment === "pickup"
                   ? "Free to collect in store"
-                  : "Free delivery on this order"}
+                  : selectedShippingOption
+                    ? `${selectedShippingOption.label} · ${selectedShippingOption.description}`
+                    : "Delivery price shown before you order"}
               </div>
               <div className={styles.trustItem}>
                 <Lock size={16} />{" "}

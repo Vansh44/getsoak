@@ -11,8 +11,15 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Building2, Loader2, MinusCircle, PlusCircle } from "lucide-react";
-import { changeBilledLocations } from "@/app/actions/subscription-actions";
-import type { LocationBillingState } from "@/app/actions/subscription-actions";
+import {
+  confirmBuyLocations,
+  releaseExtraLocations,
+  startBuyLocations,
+} from "@/app/actions/subscribe-actions";
+// ★ The TYPE comes from the pure module — a type re-export from a "use server"
+// file fails the build (see lib/billing/invoice-types.ts).
+import type { LocationBillingState } from "@/lib/billing/invoice-types";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 
 export function LocationBillingCard({
   state,
@@ -28,18 +35,65 @@ export function LocationBillingCard({
   const each = state.period === "yearly" ? "year" : "month";
   const price = state.pricePerPeriodInr.toLocaleString("en-IN");
 
-  const apply = (next: number) => {
+  // ★ BUYING TAKES A PAYMENT; RELEASING DOES NOT. Two different flows, because
+  // they are two different acts — the part period is charged on session, while a
+  // release only books a change for the end of the cycle already paid for.
+  const buy = (next: number) => {
     start(async () => {
-      const res = await changeBilledLocations(next);
+      const startRes = await startBuyLocations(next);
+      if (!startRes.ok) {
+        setConfirming(null);
+        // Not an error when the part period rounded to nothing — the location was
+        // granted and it says so.
+        toast.info(startRes.error);
+        router.refresh();
+        return;
+      }
+      const opened = await openRazorpayModal({
+        keyId: startRes.keyId,
+        rzpOrderId: startRes.providerOrderId,
+        amountPaise: startRes.amountPaise,
+        name: "StoreMink",
+        description: `Extra location · part period`,
+        onSuccess: async (res) => {
+          const done = await confirmBuyLocations(
+            startRes.invoiceId,
+            res.razorpay_payment_id,
+            res.razorpay_signature,
+          );
+          setConfirming(null);
+          if (!done.ok) {
+            // ★ Money may have moved. Never "failed" — the server's wording says
+            // not to pay again (§26's rule).
+            toast.info(done.error);
+          } else {
+            toast.success("Location added.");
+          }
+          router.refresh();
+        },
+        onDismiss: () => {
+          setConfirming(null);
+          toast.error("Payment wasn't completed.");
+        },
+      });
+      if (!opened) {
+        setConfirming(null);
+        toast.error("Couldn't open the payment window. Please try again.");
+      }
+    });
+  };
+
+  const release = (next: number) => {
+    start(async () => {
+      const res = await releaseExtraLocations(next);
       setConfirming(null);
-      if (res.error) {
+      if (!res.ok) {
         toast.error(res.error);
         return;
       }
-      // The message says WHEN it takes effect, which differs by direction —
-      // buying charges now, releasing waits for the cycle end. That distinction
-      // is the thing a merchant most needs to read, so it is the toast.
-      toast.success(res.message ?? "Updated.");
+      // The message says WHEN it takes effect, which is what a merchant most
+      // needs to read.
+      toast.success(res.message);
       router.refresh();
     });
   };
@@ -66,6 +120,13 @@ export function LocationBillingCard({
                 </>
               )}
             </p>
+            {/* A booked release, so the merchant is not left wondering whether
+                it registered. */}
+            {state.scheduled !== null && (
+              <p className="mt-1 text-xs text-[#b45309]">
+                Dropping to {state.scheduled} extra at the end of this cycle.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -82,11 +143,19 @@ export function LocationBillingCard({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {confirming === "buy" ? (
             <ConfirmRow
-              text={`Add a location for ₹${price}/${each}? You'll be charged the difference for the rest of this cycle.`}
-              confirmLabel="Add location"
+              text={
+                state.nextPurchaseInr > 0
+                  ? `Add a location for ₹${price}/${each}. You'll pay ₹${state.nextPurchaseInr.toLocaleString("en-IN")} now for the rest of this cycle, then ₹${price}/${each} from your next renewal.`
+                  : `Add a location for ₹${price}/${each}, billed from your next renewal.`
+              }
+              confirmLabel={
+                state.nextPurchaseInr > 0
+                  ? `Pay ₹${state.nextPurchaseInr.toLocaleString("en-IN")}`
+                  : "Add location"
+              }
               pending={pending}
               onCancel={() => setConfirming(null)}
-              onConfirm={() => apply(state.billed + 1)}
+              onConfirm={() => buy(state.billed + 1)}
             />
           ) : confirming === "release" ? (
             <ConfirmRow
@@ -94,7 +163,7 @@ export function LocationBillingCard({
               confirmLabel="Release"
               pending={pending}
               onCancel={() => setConfirming(null)}
-              onConfirm={() => apply(state.billed - 1)}
+              onConfirm={() => release(state.billed - 1)}
             />
           ) : (
             <>

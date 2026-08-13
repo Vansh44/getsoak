@@ -15,7 +15,8 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:shuffle": "vitest run --coverage=false --sequence.shuffle --sequence.seed=20260813"
   },
   "browserslist": [
     "chrome >= 111",

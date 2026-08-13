@@ -22,11 +22,16 @@ import {
   getSignupResumeInfo,
   type SlugCheck,
 } from "@/app/actions/store-signup";
+// ★ The NEW billing system (§34). The first cycle is a one-time ORDER paid on
+// session, not a Razorpay Subscription — StoreMink computes the amount and the
+// gateway only collects it, so a later price change needs nothing updated at the
+// provider. Razorpay cannot update a Subscription authorised by UPI or
+// e-mandate at all, which is why the old path had to go.
 import {
-  startSignupSubscription,
-  confirmSignupSubscription,
-} from "@/app/actions/subscription-actions";
-import { openRazorpaySubscriptionModal } from "@/lib/payments/razorpay-client";
+  startSignupSubscribe,
+  confirmSignupSubscribe,
+} from "@/app/actions/subscribe-actions";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import {
   CheckCircle2,
   ChevronRight,
@@ -547,42 +552,53 @@ export default function SignupPage() {
       return;
     }
 
-    const start = await startSignupSubscription(
+    const start = await startSignupSubscribe(
       store.storeId,
       selectedPlan,
       period,
     );
-    if ("error" in start) {
+    if (!start.ok) {
       setBusy(false);
       setError(start.error);
       return;
     }
 
-    const opened = await openRazorpaySubscriptionModal({
+    const opened = await openRazorpayModal({
       keyId: start.keyId,
-      subscriptionId: start.subscriptionId,
+      rzpOrderId: start.providerOrderId,
+      amountPaise: start.amountPaise,
       name: "StoreMink",
-      description: `${start.planName} plan — ${period} autopay`,
+      description: `${PLAN_META[selectedPlan].name} plan — first ${
+        period === "yearly" ? "year" : "month"
+      }`,
       prefill: {
         name: `${firstName} ${lastName}`.trim() || undefined,
         email: email || undefined,
         contact: phone || undefined,
       },
       onSuccess: async (res) => {
-        await confirmSignupSubscription(
+        const done = await confirmSignupSubscribe(
           store.storeId,
+          start.invoiceId,
           res.razorpay_payment_id,
-          res.razorpay_subscription_id,
           res.razorpay_signature,
         );
-        // Whether or not confirm returns instantly, the webhook + the
-        // dashboard's reconcile-on-read will finish activation. Head in.
+        // ★ GO TO THE DASHBOARD EITHER WAY. The store exists and the money has
+        // moved; parking a new merchant on the signup screen to read an error
+        // helps nobody. A confirm that did not land leaves an open invoice, which
+        // /dashboard/plans shows with a Pay button — unlike the old flow, there
+        // is no webhook this silently depends on.
+        if (!done.ok) {
+          console.error("signup: confirm subscription:", done.error);
+        }
         window.location.href = dashboardUrl(store.slug);
       },
       onDismiss: () => {
         setBusy(false);
+        // ★ The store is real and on Free — say so, because "payment failed" on
+        // the last step of signup reads as "your store wasn't created".
         setError(
-          "Payment wasn't completed. Retry, or continue on Free for now.",
+          "Payment wasn't completed. Your store is ready on the Free plan — you can upgrade any time from Plans & Billing.",
         );
       },
     });

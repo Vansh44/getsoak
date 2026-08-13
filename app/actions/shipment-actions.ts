@@ -116,6 +116,7 @@ async function orderForShipment(storeId: string, orderId: string) {
           locationId: orders.locationId,
           paymentMethod: orders.paymentMethod,
           shippingAddress: orders.shippingAddress,
+          shippingOption: orders.shippingOption,
           subtotal: orders.subtotal,
           shipping: orders.shipping,
           discount: orders.discount,
@@ -327,6 +328,23 @@ export async function bookShiprocketShipment(
     const physical = lines.filter((line) => line.requiresShipping);
     if (!physical.length) return { error: "This order has no physical items." };
     const address = (order.shippingAddress ?? {}) as Record<string, unknown>;
+    const quotedShipping =
+      order.shippingOption && typeof order.shippingOption === "object"
+        ? (order.shippingOption as Record<string, unknown>)
+        : {};
+    const quotedCourierId =
+      typeof quotedShipping.courierId === "string"
+        ? quotedShipping.courierId
+        : undefined;
+    const quotedCourierName =
+      typeof quotedShipping.courierName === "string"
+        ? quotedShipping.courierName
+        : null;
+    const quotedCarrierCost = Number(quotedShipping.carrierCost);
+    const quotedDeliveryAt =
+      typeof quotedShipping.estimatedDeliveryAt === "string"
+        ? quotedShipping.estimatedDeliveryAt
+        : null;
     const required = [
       "firstName",
       "addressLine1",
@@ -414,6 +432,12 @@ export async function bookShiprocketShipment(
             lengthCm: parcel.lengthCm,
             widthCm: parcel.widthCm,
             heightCm: parcel.heightCm,
+            courierId: parcelInput.courierId ?? quotedCourierId,
+            courierName: quotedCourierName,
+            shippingCost: Number.isFinite(quotedCarrierCost)
+              ? quotedCarrierCost
+              : null,
+            estimatedDeliveryAt: quotedDeliveryAt,
             codAmount,
             operationToken,
             operationLeaseUntil,
@@ -550,7 +574,7 @@ export async function bookShiprocketShipment(
         const awb = await assignShiprocketAwb(
           session.token,
           shipment.externalShipmentId!,
-          parcelInput.courierId,
+          parcelInput.courierId ?? shipment.courierId ?? quotedCourierId,
         );
         await withService((db) =>
           db

@@ -3,7 +3,7 @@ import { requireSectionAccess } from "../lib/access";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { getPosState } from "@/lib/pos/locations";
 import { listLocations } from "@/app/actions/location-actions";
-import { getLocationBillingState } from "@/app/actions/subscription-actions";
+import { getLocationBilling } from "@/app/actions/subscribe-actions";
 import { LocationsClient } from "./locations-client";
 
 export const metadata = { title: "Locations" };
@@ -21,7 +21,7 @@ export default async function LocationsPage() {
     listLocations(),
     // Null only when the viewer can't see the section, which requireSectionAccess
     // has already ruled out — but the card handles it rather than assuming.
-    getLocationBillingState(),
+    getLocationBilling(),
   ]);
 
   return (
