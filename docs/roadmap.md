@@ -508,8 +508,31 @@ same phone, **their signup collides with the row we invented for them**.
 
 ### Ships — an unclaimed customer, and a claim on signup
 
-**Migration.** `users.claimed_at timestamptz` (NULL = never had an account).
-Till-created rows get an id of `pos_<uuid>`, which the `text` PK already permits.
+**Migration.** `supabase/pos_13_customer_claim.sql` (⚠ **not applied**).
+`users.claimed_at timestamptz` (NULL = never had an account); till-created rows
+get an id of `pos_<uuid>`, which the `text` PK already permits.
+
+**★★ CORRECTED 2026-08-09, AFTER CHECKING THE LIVE SCHEMA. The note below said
+"rewrite the id, or update both tables in the same transaction". Neither works.**
+**SIX** tables reference `users.id` — `orders`, `customer_addresses`,
+`product_reviews`, `blog_comments`, `blogs.submitted_by`, `user_group_members` —
+and every one is **NOT DEFERRABLE** with `ON UPDATE NO ACTION`. The FK is checked
+at the end of each STATEMENT, so both orderings fail: update the parent and the
+children reference an id that is gone; update the children and they reference one
+that does not exist yet.
+
+**★ AND THE SCHEMA-FREE ALTERNATIVE IS WORSE.** "Insert the new row, repoint the
+children, delete the `pos_` row" needs no migration — but **five of those six FKs
+are `ON DELETE CASCADE`**. Miss one table in the repoint and the DELETE does not
+fail; it silently cascade-deletes that customer's ORDERS. A seventh FK added next
+year reintroduces it, and nothing tells whoever adds it that a hand-written list
+exists.
+
+So the migration puts `ON UPDATE CASCADE` on all six and lets the DATABASE keep
+the list: adoption becomes one statement, and a future FK either cascades
+correctly or fails loudly. `ON DELETE` is left exactly as it was — a different
+question this migration has no business answering. The file ends with a guard
+that FAILS if any FK to `users.id` still lacks the cascade.
 
 **★ AN UNCLAIMED ROW CAN NEVER LOG IN, AND THAT IS AUTOMATIC.** Customer RLS is
 `auth.uid() = users.id`; a `pos_…` id matches no Firebase uid, so these rows are
