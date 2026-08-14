@@ -244,6 +244,20 @@ export const REPRICE_HEADROOM_BPS = 15_000; // 1.5×
  *  reads this number on the authorisation screen. */
 const MANDATE_ROUNDING_PAISE = 1_000 * 100;
 
+/**
+ * ★★ RAZORPAY'S OWN CEILING on `token.max_amount` for a UPI mandate: ₹99,999.
+ * Documented in their recurring-payments API reference (checked 2026-08-14).
+ *
+ * A provisioned size above this has its AUTHORISATION ORDER REJECTED by the
+ * gateway — not the renewal, the setup — so without checking it the biggest
+ * merchants would be the only ones unable to configure autopay, and the error
+ * would arrive from Razorpay with nothing explaining it. Pro yearly with five
+ * extra locations already reaches ₹1,16,000.
+ *
+ * Use `mandateFitsGateway` rather than clamping to it; see the note there.
+ */
+export const MANDATE_MAX_GATEWAY_PAISE = 9_999_900;
+
 function roundUpTo(paise: number, step: number): number {
   return Math.ceil(paise / step) * step;
 }
@@ -289,4 +303,19 @@ export function mandateSizePaise(input: {
     (base * taxBps * REPRICE_HEADROOM_BPS) / (10_000 * 10_000),
   );
   return roundUpTo(provisioned, MANDATE_ROUNDING_PAISE);
+}
+
+/**
+ * Can a mandate this size exist at all?
+ *
+ * ★★ ASKED INSTEAD OF CLAMPING, and the difference matters. Capping the size at
+ * the ceiling would let the authorisation succeed and then leave every renewal
+ * above it routing to manual — so the merchant authorises autopay, is told it
+ * is set up, and is invoiced by hand forever. That is precisely the
+ * "promise a charge that never comes" failure the activation email was fixed
+ * for. Better to not offer autopay to a merchant we cannot collect from, and
+ * say so.
+ */
+export function mandateFitsGateway(sizePaise: number): boolean {
+  return sizePaise <= MANDATE_MAX_GATEWAY_PAISE;
 }

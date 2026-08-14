@@ -121,6 +121,169 @@ export async function rzpCreateOrder(
   });
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Recurring (autopay). Verified against Razorpay's published API reference on
+// 2026-08-14 — the endpoint paths and field names below are quoted from it, not
+// inferred. What is NOT verified is the live behaviour: see
+// docs/autopay-verification.md for the test-mode run that flips the flag in
+// lib/billing/gateway.ts.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface RzpCustomer {
+  id: string;
+  name?: string;
+  email?: string;
+  contact?: string;
+}
+
+/**
+ * A recurring mandate is attached to a CUSTOMER, not to an order, so one has to
+ * exist before the authorisation order is created.
+ *
+ * ★ `fail_existing: "0"` makes this IDEMPOTENT — Razorpay returns the existing
+ * customer instead of erroring when the email or contact already exists. That
+ * matters because a merchant who abandons checkout and comes back must not be
+ * blocked by their own half-finished first attempt.
+ */
+export async function rzpCreateCustomer(
+  creds: RazorpayCreds,
+  params: { name?: string; email?: string; contact?: string },
+): Promise<RzpResult<RzpCustomer>> {
+  if (!params.email && !params.contact) {
+    return {
+      ok: false,
+      error: "A customer needs an email or a phone number.",
+      outcome: "rejected",
+    };
+  }
+  return rzpFetch<RzpCustomer>(creds, "/customers", {
+    method: "POST",
+    body: JSON.stringify({
+      name: params.name,
+      email: params.email,
+      contact: params.contact,
+      fail_existing: "0",
+    }),
+  });
+}
+
+/** How often we may debit, and the ceiling per debit. */
+export interface RzpMandateTerms {
+  /**
+   * The most Razorpay will EVER let us debit under this mandate.
+   *
+   * ★★ CAPPED AT ₹99,999 BY RAZORPAY for UPI mandates — their documented
+   * maximum for `token.max_amount`. `lib/billing/cycle.ts` sizes the mandate and
+   * clamps to it; an amount above the ceiling routes to manual collection
+   * instead of failing at the gateway. Do not raise this without re-reading
+   * their docs.
+   */
+  maxAmountPaise: number;
+  /** Unix SECONDS. Razorpay wants a timestamp, not an ISO string. */
+  expireAtUnix: number;
+  frequency: "daily" | "weekly" | "monthly" | "yearly" | "as_presented";
+}
+
+/**
+ * The FIRST payment — the one that registers the mandate.
+ *
+ * It is an ordinary order plus `customer_id` and a `token` block; the customer
+ * approves both the payment and the standing authorisation in one checkout.
+ */
+export async function rzpCreateAuthorizationOrder(
+  creds: RazorpayCreds,
+  params: {
+    amountPaise: number;
+    customerId: string;
+    terms: RzpMandateTerms;
+    /** Omit to let the customer pick at checkout. "upi" pins UPI Autopay. */
+    method?: "upi" | "card" | "emandate" | "nach";
+    receipt?: string;
+    description?: string;
+    notes?: Record<string, string>;
+  },
+): Promise<RzpResult<RzpOrder>> {
+  if (!Number.isInteger(params.amountPaise) || params.amountPaise < 100) {
+    return {
+      ok: false,
+      error: "Amount too small for an online payment.",
+      outcome: "rejected",
+    };
+  }
+  return rzpFetch<RzpOrder>(creds, "/orders", {
+    method: "POST",
+    body: JSON.stringify({
+      amount: params.amountPaise,
+      currency: "INR",
+      customer_id: params.customerId,
+      ...(params.method ? { method: params.method } : {}),
+      token: {
+        max_amount: params.terms.maxAmountPaise,
+        expire_at: params.terms.expireAtUnix,
+        frequency: params.terms.frequency,
+      },
+      receipt: params.receipt,
+      description: params.description,
+      notes: params.notes,
+    }),
+  });
+}
+
+export interface RzpRecurringPayment {
+  razorpay_payment_id?: string;
+  razorpay_order_id?: string;
+  razorpay_signature?: string;
+  /** Present on some responses; absent ones are resolved by reconciliation. */
+  status?: string;
+}
+
+/**
+ * Charge an existing mandate — the SUBSEQUENT payment.
+ *
+ * ★★ IT NEEDS AN ORDER FIRST. `POST /payments/create/recurring` takes an
+ * `order_id`, so a charge is TWO calls: create the order, then charge it. The
+ * caller (lib/billing/gateway.ts) does both and treats a failure between them
+ * as UNKNOWN, because an order with no payment is indistinguishable from a
+ * payment we never read.
+ *
+ * ★ `email` and `contact` are MANDATORY per the API reference, which is why the
+ * mandate stores the customer id and the caller resolves the billing contact.
+ *
+ * ⚠ Razorpay documents that for some banks the payment stays `created` rather
+ * than reaching `captured` immediately (file-based charging). That is NOT a
+ * failure — `mapGatewayStatus` already resolves `created` to a non-terminal
+ * state, and reconciliation settles it later.
+ */
+export async function rzpChargeMandate(
+  creds: RazorpayCreds,
+  params: {
+    amountPaise: number;
+    orderId: string;
+    customerId: string;
+    tokenId: string;
+    email: string;
+    contact: string;
+    description?: string;
+    notes?: Record<string, string>;
+  },
+): Promise<RzpResult<RzpRecurringPayment>> {
+  return rzpFetch<RzpRecurringPayment>(creds, "/payments/create/recurring", {
+    method: "POST",
+    body: JSON.stringify({
+      email: params.email,
+      contact: params.contact,
+      amount: params.amountPaise,
+      currency: "INR",
+      order_id: params.orderId,
+      customer_id: params.customerId,
+      token: params.tokenId,
+      recurring: true,
+      description: params.description,
+      notes: params.notes,
+    }),
+  });
+}
+
 /** All payment attempts against a Razorpay order — the reconciliation source
  *  of truth (a `captured` payment here means the money was taken). */
 export async function rzpFetchOrderPayments(

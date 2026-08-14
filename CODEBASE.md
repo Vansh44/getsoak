@@ -5158,6 +5158,29 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the wrong order succeeds and then fails at runtime. `billing_06` was a
       no-op: `store_subscriptions` was empty in production, so there was nothing
       to migrate.
+    - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
+      `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
+      in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
+      The API shapes come from Razorpay's published reference (2026-08-14), not
+      inference. Two things shaped it:
+      - **★ A RECURRING CHARGE IS TWO CALLS.** `/payments/create/recurring`
+        requires an `order_id`, so an order is created and then charged. The gap
+        between them is the risk — an order created and a charge we never got an
+        answer to is indistinguishable from one that worked — so every failure
+        maps deliberately and the DEFAULT is `unknown`, never `failed`. A
+        missing status is read as `created` (Razorpay documents file-based bank
+        charging leaving it there), never as `captured`.
+      - **★★ ₹99,999 IS RAZORPAY'S CEILING on `token.max_amount`**, and Pro
+        yearly with five extra locations provisions to ₹1,16,000 — so their
+        AUTHORISATION ORDER is rejected and they cannot set autopay up at all.
+        `mandateFitsGateway()` answers that rather than clamping: a clamped
+        mandate would be created, never usable, and the merchant told autopay
+        was on — the same "promise a charge that never comes" failure the
+        activation email was fixed for. The existing invariant test caught the
+        clamp, which is why it isn't one.
+        **⚠ STILL OFF, and one piece is genuinely missing: the checkout never
+        captures a token**, so no mandate is ever registered and `activateMandate`
+        remains dead code. `RECURRING_CHARGE_VERIFIED` gates the rest.
     - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
       not the system. Every path (enrolment, manual payment, plan change, location
       purchase) confirms ON SESSION against a verified one-time checkout, and the

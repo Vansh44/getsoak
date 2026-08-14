@@ -59,6 +59,10 @@ export type ChargeFn = (input: {
   amountPaise: number;
   idempotencyKey: string;
   providerTokenId: string;
+  /** Razorpay requires the customer the token belongs to. */
+  providerCustomerId: string | null;
+  /** Which store is being billed — the implementation resolves its contact. */
+  storeId: string;
   description: string;
 }) => Promise<RzpResult<ChargeResponse>>;
 
@@ -336,6 +340,8 @@ export interface CollectInput {
     status: MandateStatus | null;
     maxAmountPaise: number | null;
     providerTokenId: string | null;
+    /** Razorpay attaches a mandate to a CUSTOMER; the charge needs both. */
+    providerCustomerId?: string | null;
   } | null;
   charge: ChargeFn;
   now?: Date;
@@ -390,6 +396,8 @@ export async function collectInvoice(
       amountPaise: input.amountDuePaise,
       idempotencyKey: begun.idempotencyKey,
       providerTokenId: tokenId,
+      providerCustomerId: input.mandate?.providerCustomerId ?? null,
+      storeId: input.storeId,
       description: input.description,
     });
   } catch (err) {

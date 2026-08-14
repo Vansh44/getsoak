@@ -362,6 +362,7 @@ async function loadMandate(mandateId: string | null) {
           status: billingMandates.status,
           maxAmountPaise: billingMandates.maxAmountPaise,
           providerTokenId: billingMandates.providerTokenId,
+          providerCustomerId: billingMandates.providerCustomerId,
         })
         .from(billingMandates)
         .where(eq(billingMandates.id, mandateId))
@@ -372,6 +373,7 @@ async function loadMandate(mandateId: string | null) {
         status: row.status as MandateStatus,
         maxAmountPaise: row.maxAmountPaise,
         providerTokenId: row.providerTokenId,
+        providerCustomerId: row.providerCustomerId,
       };
     });
   } catch (err) {
