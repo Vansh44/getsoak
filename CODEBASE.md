@@ -502,7 +502,17 @@ wholesip/
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
 │   ├── shipping/              # ★ §35 checkout policy/types + pure rate translation +
 │   │                          # server-only origin-aware Shiprocket quotation
-│   ├── phone.ts               # Indian mobile normalization shared by checkout and Shiprocket
+│   ├── sms/                   # ★ §37 India DLT rules (PURE): template check +
+│   │                          # positional render + carrier-match + 6-char
+│   │                          # sender header + segment cost. No provider yet.
+│   ├── phone.ts               # ★ Indian mobile normalization — the ONE copy.
+│   │                          # Shared by checkout, Shiprocket AND the POS
+│   │                          # customer claim (§36): a second copy there had
+│   │                          # already drifted, accepting placeholders like
+│   │                          # 8888888888, and (store_id, phone) is UNIQUE —
+│   │                          # so the second cashier who typed one to skip the
+│   │                          # field would have silently attached their walk-in
+│   │                          # to the first one's record
 │   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
 │   │                          # quoted fields w/ embedded delimiters+newlines, quote-
 │   │                          # aware delimiter sniffing for Excel's semicolons, ragged
@@ -5421,6 +5431,52 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Backfill: none.** Every existing row came from a real signup and is
       claimed by definition, but `claimed_at` stays NULL rather than being
       invented — nothing reads it to decide who may log in; the id shape does.
+
+37. **SMS — India's DLT rules, and why this is not a switch** (roadmap Step 5,
+    IN PROGRESS — pure rules only). `lib/sms/dlt.ts`.
+    - **★★ THE ROADMAP SAID "UNLOCKING THEM IS THE WORK". IT WAS WRONG.** TRAI's
+      TCCCPR requires every business sending commercial SMS to an Indian number
+      to register on an operator-run DLT portal: a **Principal Entity** (PE-ID),
+      a **sender header** (6 characters, alphabetic for transactional), and
+      **every message template** with its variables marked. A body that does not
+      match an approved template, or a header not registered to that entity, is
+      **blocked at the carrier** — no bounce, no useful error, it just never
+      arrives. Registration takes 7–21 business days.
+    - **★ SO SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE
+      EMAIL (§24).** The header IS the merchant's registered identity, so
+      StoreMink cannot send on their behalf from a generic one. `available:
+false` in `lib/notifications/channels.ts` must therefore NOT simply be
+      flipped: a channel switched on with no registration accepts a "yes" it can
+      never honour, which is the exact thing that flag exists to prevent.
+    - **★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates are
+      free text with `{{token}}` substitution, validated only for unknown tokens.
+      DLT is the opposite — the body is FIXED at registration and only marked
+      variables may vary. An SMS body cannot be authored in the notification
+      console the way an email body is; it is authored on the DLT portal,
+      approved there, and MIRRORED here with its template id.
+      `renderDltBody` is positional, not named, because `{#var#}` carries no
+      name: the portal approves a SHAPE, and mapping named event values onto it
+      is where a mirror drifts from a registration.
+    - **★ A SEGMENT IS A UNIT OF COST, AND ONE CHARACTER RE-PRICES A WHOLE
+      MESSAGE.** GSM-7 fits 160 characters; one character outside that set — an
+      emoji, curly quotes, or **₹** — forces the entire message to UCS-2 at 70.
+      A 150-character template costs one segment until someone types a rupee
+      sign, then three. `smsSegments` is what makes that visible before a
+      merchant is billed for it.
+    - **★ `bodyMatchesTemplate` ASKS WHAT THE CARRIER ASKS, FIRST.** A drifted
+      body is dropped silently, and "the customer never got the message" is not
+      a diagnosis anyone can act on.
+    - **⚠ DELIBERATELY NOT ENCODED:** the maximum variables per template, and
+      whether a variable may open a message. Operator documentation asserts these
+      inconsistently, and a rule invented here would reject templates the
+      merchant's own portal approved — leaving them unable to tell whose rule
+      they broke. What IS enforced is universal: the body must match apart from
+      its variables, and a variable may not END the message (which would leave it
+      with no fixed tail).
+    - **Not built:** the provider client, credential storage, the SMS queue and
+      worker, and opt-out (STOP) handling. All of them follow from one unmade
+      decision — BYO Twilio per merchant, or brokered through StoreMink's own
+      account — which changes the schema, the connection UI and who bills whom.
 
 ## 6. Commands
 

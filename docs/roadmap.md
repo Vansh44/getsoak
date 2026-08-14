@@ -597,14 +597,66 @@ till.
 **Email is DONE** — it shipped with Step 4, because capturing an address that
 nothing sends to would be a field promising a receipt that never arrives.
 
-What is left is WhatsApp/SMS via Twilio behind the existing channel abstraction —
-`sms` and `whatsapp` are already declared and `available: false` in
-`lib/notifications/channels.ts`. Unlocking them is the work; the fan-out, the
-queue and the templates exist. ⚠ Unlike email, these DO belong in the spine: a
-phone number identifies a customer row the till has already created (§36), so
-there is a recipient to route to.
+### ★★ CORRECTED 2026-08-15, AFTER CHECKING TRAI'S RULES
 
-**Effort: ~1 week** for Twilio.
+**This step said "unlocking them is the work; the fan-out, the queue and the
+templates exist." That is wrong, and wrong in a way that changes the design.**
+
+TRAI's TCCCPR requires every business sending commercial SMS to an Indian number
+to register on an operator-run **DLT** portal. Three things are registered, and
+all three are per-BUSINESS, not per-platform:
+
+1. the **Principal Entity** (a PE-ID),
+2. the **sender header** — 6 characters, alphabetic for transactional,
+3. **every message template**, with its variables marked.
+
+A message whose body does not match an approved template, or whose header is not
+registered to that entity, is **blocked at the carrier**. It does not bounce and
+it does not error usefully — it simply never arrives. Registration takes
+**7–21 business days**.
+
+Three consequences, none of them optional:
+
+**★ SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE EMAIL.**
+StoreMink cannot send from a generic header, because the header IS the
+merchant's registered identity. There is no "turn on SMS" switch that could ever
+work on its own — which is why `available: false` must not simply be flipped.
+
+**★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates are free
+text with `{{token}}` substitution, validated only for unknown tokens. DLT is the
+opposite: the body is FIXED at registration and only marked variables may vary.
+An SMS body therefore cannot be authored in the notification console the way an
+email body is — it is authored on the DLT portal, approved there, and MIRRORED
+here with its template id.
+
+**★ A SEGMENT IS A UNIT OF COST, AND ONE CHARACTER RE-PRICES A WHOLE MESSAGE.**
+GSM-7 fits 160 characters; a single character outside that set — an emoji, curly
+quotes, or **₹** — forces the entire message to UCS-2 at 70. A 150-character
+template costs one segment until someone types a rupee sign, then three.
+
+### Shipped — the pure rules
+
+`lib/sms/dlt.ts` (+ 30 tests), which is all of the above that can be settled
+without a provider account, a merchant registration or a phone:
+`checkDltTemplate`, `renderDltBody` (positional, because `{#var#}` carries no
+name), `bodyMatchesTemplate` (the carrier asks this, so we ask it first),
+`normalizeSenderHeader`, and `smsSegments`.
+
+⚠ Deliberately NOT encoded: the maximum variables per template, and whether a
+variable may open a message. Operator documentation asserts these
+inconsistently, and a rule invented here would reject templates the merchant's
+own portal approved — leaving them unable to tell whose rule they broke.
+
+### ⚠ BLOCKED ON ONE DECISION — see the note at the end of this file
+
+Whether merchants bring their own Twilio account or send through StoreMink's
+changes the schema, the connection UI and who bills whom. The rest of the step —
+provider client, credential storage, the SMS queue and worker, opt-out (STOP)
+handling — follows from it and is not worth building twice.
+
+**Effort after that decision: ~1 week.** WhatsApp is a separate track: it needs
+no DLT, but it needs Meta Business verification and Meta-approved templates, so
+it is not a cheaper substitute.
 
 ---
 

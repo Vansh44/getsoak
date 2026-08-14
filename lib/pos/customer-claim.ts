@@ -12,6 +12,8 @@
 // of the feature, not a side effect of it.
 // ---------------------------------------------------------------------------
 
+import { normalizeIndianMobile } from "@/lib/phone";
+
 /** Prefix marking a row the till invented rather than a signup creating. */
 export const POS_CUSTOMER_PREFIX = "pos_";
 
@@ -114,20 +116,21 @@ export function validatePosCustomer(
  * "9876543210" is the SAME person, and if the two strings differ they get two
  * rows and lose their history. Returns "" when it isn't a recognisable mobile,
  * rather than storing something that can never be matched.
+ *
+ * ★★ IT DELEGATES TO `normalizeIndianMobile` RATHER THAN REIMPLEMENTING IT.
+ * A second copy would drift, and this one already had: it accepted repeated-digit
+ * placeholders like 8888888888, which the shared one rejects. That is not
+ * cosmetic — `(store_id, phone)` is UNIQUE, so the SECOND cashier who typed
+ * 8888888888 to get past the field would have silently ATTACHED their walk-in to
+ * the FIRST one's record, merging two unrelated customers' order history. The
+ * shared helper exists because Shiprocket rejects those numbers; the reason to
+ * reject them here is different and stronger.
+ *
+ * ⚠ The return type differs deliberately — "" rather than null — because every
+ * caller here feeds a NOT NULL text column and a falsy check reads the same.
  */
 export function normalizePhone(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  const digits = raw.replace(/\D/g, "");
-  // Strip the country code in either of the forms people type it.
-  const local =
-    digits.startsWith("91") && digits.length === 12
-      ? digits.slice(2)
-      : digits.startsWith("0") && digits.length === 11
-        ? digits.slice(1)
-        : digits;
-  // An Indian mobile is 10 digits starting 6–9. Anything else is a landline, a
-  // typo, or a partial entry — none of which will ever match a signup.
-  return /^[6-9]\d{9}$/.test(local) ? local : "";
+  return normalizeIndianMobile(raw) ?? "";
 }
 
 /** Split a single typed name into the two columns `users` actually has. */

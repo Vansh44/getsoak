@@ -99,6 +99,17 @@ describe("normalizePhone", () => {
     expect(normalizePhone(null)).toBe("");
     expect(normalizePhone(9876543210)).toBe("");
   });
+
+  // ★★ NOT COSMETIC. `(store_id, phone)` is UNIQUE, so the second cashier who
+  // typed 8888888888 to get past the field would have ATTACHED their walk-in to
+  // the first one's record — two unrelated customers' order history merged.
+  // This is why it delegates to lib/phone.ts instead of keeping its own copy.
+  it.each([["8888888888"], ["9999999999"], ["7777777777"]])(
+    "rejects the repeated-digit placeholder %s",
+    (input) => {
+      expect(normalizePhone(input)).toBe("");
+    },
+  );
 });
 
 describe("validatePosCustomer", () => {
@@ -130,6 +141,14 @@ describe("validatePosCustomer", () => {
 
   it("rejects an unusable phone rather than storing it", () => {
     expect(validatePosCustomer({ name: "Asha", phone: "12345" }).ok).toBe(
+      false,
+    );
+  });
+
+  // The cashier's way of skipping a required field. Two of them would merge
+  // two customers, because (store_id, phone) is unique.
+  it("rejects a placeholder number a cashier typed to get past the field", () => {
+    expect(validatePosCustomer({ name: "Asha", phone: "8888888888" }).ok).toBe(
       false,
     );
   });
