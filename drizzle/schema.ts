@@ -5442,3 +5442,92 @@ export const dataJobIssues = pgTable("data_job_issues", {
     .defaultNow()
     .notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// SMS (§37). Hand-added rather than introspected — supabase/sms_01_schema.sql
+// is not applied yet, so drizzle-kit has nothing to read.
+// ---------------------------------------------------------------------------
+
+export const storeSmsProviders = pgTable("store_sms_providers", {
+  storeId: uuid("store_id").primaryKey().notNull(),
+  provider: text().default("twilio").notNull(),
+  accountSid: text("account_sid").notNull(),
+  // AES-256-GCM under PAYMENT_CRED_KEY. Encrypted, not hashed: the token is
+  // PRESENTED to the provider on every request.
+  authTokenEnc: text("auth_token_enc").notNull(),
+  // The merchant's DLT registration. Without these nothing reaches an Indian
+  // handset, which is why they are not nullable.
+  senderHeader: text("sender_header").notNull(),
+  dltEntityId: text("dlt_entity_id").notNull(),
+  enabled: boolean().default(false).notNull(),
+  verifiedAt: timestamp("verified_at", { withTimezone: true, mode: "string" }),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const storeSmsTemplates = pgTable("store_sms_templates", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  eventKey: text("event_key").notNull(),
+  audience: text().notNull(),
+  dltTemplateId: text("dlt_template_id").notNull(),
+  body: text().notNull(),
+  // The ordered mapping from named event values onto the template's unnamed
+  // {#var#} positions.
+  variables: jsonb().default([]).notNull(),
+  enabled: boolean().default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const smsLogs = pgTable("sms_logs", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id"),
+  toPhone: text("to_phone").notNull(),
+  senderHeader: text("sender_header"),
+  eventKey: text("event_key"),
+  body: text(),
+  // What the merchant was BILLED — one non-GSM-7 character re-prices a whole
+  // message from 160 characters per segment to 70.
+  segments: integer().default(0).notNull(),
+  provider: text().default("twilio").notNull(),
+  status: text().notNull(),
+  error: text(),
+  providerMessageId: text("provider_message_id"),
+  dltTemplateId: text("dlt_template_id"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});
+
+export const notificationSmsQueue = pgTable("notification_sms_queue", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id"),
+  eventId: uuid("event_id"),
+  recipientId: text("recipient_id").notNull(),
+  recipientType: text("recipient_type").notNull(),
+  phone: text().notNull(),
+  eventKey: text("event_key").notNull(),
+  values: jsonb().default([]).notNull(),
+  status: text().default("pending").notNull(),
+  attempts: integer().default(0).notNull(),
+  nextAttemptAt: timestamp("next_attempt_at", {
+    withTimezone: true,
+    mode: "string",
+  })
+    .defaultNow()
+    .notNull(),
+  error: text(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
+});
