@@ -33,6 +33,15 @@
 --   update users first    → children now reference an id that is gone
 --   update children first → they reference an id that does not exist yet
 --
+-- ⚠ THREE OF THOSE CONSTRAINTS ARE NAMED AFTER A COLUMN THEY DO NOT USE.
+-- `product_reviews_customer_id_fkey`, `blog_comments_customer_id_fkey` and
+-- `user_group_members_customer_id_fkey` all sit on **`user_id`** — leftovers
+-- from the customers→users rename, where the constraint names were never
+-- updated. Reading the column off the constraint NAME is how the first version
+-- of this migration failed in Cloud SQL Studio ("column customer_id referenced
+-- in foreign key constraint does not exist"). Query pg_constraint.conkey for
+-- the real column; never infer it from the name.
+--
 -- ★ AND THE ALTERNATIVE IS WORSE. "Insert the new row, repoint the children,
 -- delete the pos_ row" avoids a schema change — but five of those six FKs are
 -- ON DELETE CASCADE. Miss one table in the repoint and the DELETE does not
@@ -70,22 +79,31 @@ ALTER TABLE public.customer_addresses
     FOREIGN KEY (user_id) REFERENCES public.users(id)
     ON UPDATE CASCADE ON DELETE CASCADE;
 
+-- ⚠ The constraint is NAMED …_customer_id_fkey but the COLUMN is `user_id`
+-- (a customers→users rename that never reached the constraint name). The name
+-- is kept so this stays a modification rather than a second constraint.
 ALTER TABLE public.product_reviews
   DROP CONSTRAINT IF EXISTS product_reviews_customer_id_fkey,
   ADD CONSTRAINT product_reviews_customer_id_fkey
-    FOREIGN KEY (customer_id) REFERENCES public.users(id)
+    FOREIGN KEY (user_id) REFERENCES public.users(id)
     ON UPDATE CASCADE ON DELETE CASCADE;
 
+-- ⚠ The constraint is NAMED …_customer_id_fkey but the COLUMN is `user_id`
+-- (a customers→users rename that never reached the constraint name). The name
+-- is kept so this stays a modification rather than a second constraint.
 ALTER TABLE public.blog_comments
   DROP CONSTRAINT IF EXISTS blog_comments_customer_id_fkey,
   ADD CONSTRAINT blog_comments_customer_id_fkey
-    FOREIGN KEY (customer_id) REFERENCES public.users(id)
+    FOREIGN KEY (user_id) REFERENCES public.users(id)
     ON UPDATE CASCADE ON DELETE CASCADE;
 
+-- ⚠ The constraint is NAMED …_customer_id_fkey but the COLUMN is `user_id`
+-- (a customers→users rename that never reached the constraint name). The name
+-- is kept so this stays a modification rather than a second constraint.
 ALTER TABLE public.user_group_members
   DROP CONSTRAINT IF EXISTS user_group_members_customer_id_fkey,
   ADD CONSTRAINT user_group_members_customer_id_fkey
-    FOREIGN KEY (customer_id) REFERENCES public.users(id)
+    FOREIGN KEY (user_id) REFERENCES public.users(id)
     ON UPDATE CASCADE ON DELETE CASCADE;
 
 -- ⚠ SET NULL, not CASCADE, on delete — a blog outlives its author here. Kept.
