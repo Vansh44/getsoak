@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "baseline": {
+    "id": "baseline:cloudsql-2026-08-14",
+    "description": "Cloud SQL schema after the platform billing rebuild and before Shiprocket logistics",
+    "verify": {
+      "tables": [
+        "admins",
+        "billing_accounts",
+        "billing_invoice_items",
+        "billing_invoices",
+        "billing_mandates",
+        "billing_payment_attempts",
+        "billing_subscriptions",
+        "billing_webhook_events",
+        "order_items",
+        "orders",
+        "plan_events",
+        "products",
+        "product_variants",
+        "store_locations",
+        "stores"
+      ],
+      "columns": [
+        "billing_invoices.invoice_ref",
+        "billing_invoices.status",
+        "billing_mandates.provider_token_id",
+        "billing_payment_attempts.idempotency_key",
+        "billing_subscriptions.current_cycle_seq",
+        "orders.fulfilment_type",
+        "orders.location_id",
+        "stores.plan"
+      ]
+    }
+  },
+  "migrations": [
+    {
+      "id": "20260814_0001_logistics_shiprocket",
+      "description": "Shiprocket logistics, fulfilment orders, shipments, and immutable parcel snapshots",
+      "file": "../../supabase/logistics_01_shiprocket.sql",
+      "transaction": true,
+      "requires": ["baseline:cloudsql-2026-08-14"],
+      "verify": {
+        "tables": [
+          "fulfilment_order_items",
+          "fulfilment_orders",
+          "location_logistics_mappings",
+          "shipment_events",
+          "shipment_items",
+          "shipments",
+          "store_logistics_providers"
+        ],
+        "columns": [
+          "order_items.height_cm",
+          "order_items.length_cm",
+          "order_items.requires_shipping",
+          "order_items.sku",
+          "order_items.weight_grams",
+          "order_items.width_cm",
+          "product_variants.requires_shipping",
+          "product_variants.weight_grams",
+          "products.requires_shipping",
+          "products.weight_grams",
+          "shipments.idempotency_key",
+          "shipments.operation_lease_until"
+        ],
+        "constraints": [
+          "product_variants_weight_nonnegative",
+          "products_weight_nonnegative",
+          "shipments_idempotency_key_key"
+        ],
+        "rlsTables": [
+          "fulfilment_order_items",
+          "fulfilment_orders",
+          "location_logistics_mappings",
+          "shipment_events",
+          "shipment_items",
+          "shipments",
+          "store_logistics_providers"
+        ]
+      }
+    },
+    {
+      "id": "20260814_0002_schema_drift_repair",
+      "description": "Repair the production credit-note formatter and canonicalize the legacy scheduled-plan constraint",
+      "file": "sql/20260814_0002_schema_drift_repair.sql",
+      "transaction": true,
+      "requires": ["20260814_0001_logistics_shiprocket"],
+      "verify": {
+        "constraints": ["store_subscriptions_scheduled_plan_check"],
+        "functions": [
+          "sm_credit_note_ref(integer,integer)",
+          "sm_pad(integer,integer)"
+        ],
+        "queries": [
+          {
+            "name": "credit-note identifiers grow without truncating",
+            "sql": "select public.sm_credit_note_ref(1001, 12345)",
+            "equals": "CRN1001123452"
+          },
+          {
+            "name": "existing-width credit-note identifiers are unchanged",
+            "sql": "select public.sm_credit_note_ref(1001, 1)",
+            "equals": "CRN100100015"
+          }
+        ]
+      }
+    }
+  ]
+}

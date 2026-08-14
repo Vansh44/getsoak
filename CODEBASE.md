@@ -30,7 +30,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
-| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build). Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -1044,6 +1044,22 @@ wholesip/
 │   │                          # policy still inlines `FROM admins`. RUN AS postgres.
 │   │                          # Applied to staging + prod 2026-07-22. (+ rollback)
 │   └── perf_*.sql             # index / RLS performance migrations
+│
+├── drizzle/migrations/        # ★ Existing-DB migration ledger manifest. A verified
+│   ├── manifest.json          # legacy baseline + ordered immutable SQL references,
+│                              # SHA-256 checksums and object-level postconditions.
+│                              # `schema_migrations` itself is bootstrapped by the
+│                              # admin-only runner; it is not an application table.
+│   └── sql/                   # New forward-only SQL. 0002 repairs the production
+│                              # credit-note formatter drift (bare lpad truncated
+│                              # legal serials beyond 9,999) and canonicalizes the
+│                              # scheduled-plan constraint in both environments.
+├── scripts/
+│   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
+│   │                          # guard, advisory lock, one transaction per migration,
+│   │                          # checksum drift/unknown-row refusal, RLS/table/column/
+│   │                          # constraint postconditions + complete schema fingerprint
+│   └── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
 │
 ├── brand/tasks/               # AI copy TASK prompts (product-desc.md, seo-meta.md), read at
 │                              # runtime by product actions + traced into the serverless bundle via

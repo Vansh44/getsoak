@@ -1,8 +1,9 @@
 # GCP Cutover Checklist — going live on Google Cloud
 
 > The go-live checklist to fully cut StoreMink from **Supabase + Vercel** to
-> **GCP** (Cloud SQL + Identity Platform + GCS + Cloud Run). Staging is already
-> fully migrated and verified; this tracks the remaining **prod cutover**.
+> **GCP** (Cloud SQL + Identity Platform + GCS + Cloud Run). The platform is
+> live on Cloud Run; this document now retains the historical cutover and the
+> release checks that remain operational.
 >
 > Detailed runbooks: [`gcp-migration-phase4-cloud-run.md`](gcp-migration-phase4-cloud-run.md)
 > (Vercel→Cloud Run) and [`gcp-migration-phase5-6.md`](gcp-migration-phase5-6.md)
@@ -23,9 +24,10 @@
   serving LEGACY media URLs until the backfill. So the old §4 code items
   ("remove Supabase Storage fallback", "drop `NEXT_PUBLIC_SUPABASE_*`") are
   already done — see below.
-- ▶ **Remaining:** prod Identity Platform + user import, final data load (if any
-  real data), media backfill, deploy Cloud Run, LB/DNS, crons → Scheduler,
-  decommission.
+- ✅ **Cloud Run + Cloud Scheduler are live** for staging and production. Eight
+  schedulers are enabled; branch promotion is `f1` → `staging` → `main`.
+- ▶ **Remaining:** finish the legacy media cleanup/decommission items below and
+  use the checksummed database release gate for every future schema change.
 
 > **⚠ DB TOPOLOGY CHANGED (2026-07-22): one instance, not two.** To cut cost the
 > two Cloud SQL instances were **consolidated into a single instance
@@ -90,7 +92,7 @@ not separate instances or projects.
 
 ---
 
-## 2. Dry run — prod Cloud SQL, before the window
+## 2. Dry run — prod Cloud SQL, before the window (historical)
 
 - [ ] Apply the schema to prod Cloud SQL in order:
       `drizzle/manual/0000_compat_setup.sql` → `0001_schema.sql` →
@@ -99,6 +101,11 @@ not separate instances or projects.
       columns → text; entity PKs + `store_id` stay uuid).
 - [ ] Full app pass against prod Cloud SQL (Host-header trick on the Cloud Run
       URL: `curl -H "X-Forwarded-Host: storemink.com" <run-url>/`).
+
+> Do not repeat this hand-applied sequence on an existing environment. Existing
+> databases now use `npm run db:migrate` and `public.schema_migrations`; see
+> [`drizzle/manual/README.md`](../drizzle/manual/README.md). The runner verifies
+> the baseline, records immutable checksums, and refuses the wrong database.
 
 ---
 
@@ -176,8 +183,10 @@ not separate instances or projects.
 
 ## Rollback
 
-- **Hosting:** point DNS back to Vercel.
-- **Database:** point `lib/db` env back at Supabase Postgres (the Drizzle code +
-  `auth.uid()` shim work against either).
-
-Both stay reversible until the Supabase project is deleted.
+- **Application:** route traffic to the preceding healthy Cloud Run revision.
+- **Database:** migrations are forward-only unless their reviewed runbook says
+  otherwise. Restore to a separate database from PITR before considering an
+  in-place restore; validate the data first.
+- **Release rule:** an additive database migration may remain while the app is
+  rolled back. Never execute a destructive SQL rollback merely to match an old
+  image.
