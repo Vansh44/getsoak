@@ -603,18 +603,19 @@ UPI or e-mandate — every amount change (tier, period, locations) goes through
 dead for most Indian merchants, and add-ons are deprecated. StoreMink computes
 the amount; the gateway only collects it.
 
-| Phase                                                | State                               |
-| ---------------------------------------------------- | ----------------------------------- |
-| 1 · Architecture + the 13 defects it replaces        | ✅ done                             |
-| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging               |
-| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                             |
-| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                             |
-| 4 · Signup enrolment on the new system               | ⏭ **blocks deleting the old path** |
-| 5 · Buying an extra location on the new system       | ⏭ **blocks deleting the old path** |
-| 6 · Webhook processor off the request path           | ⏳                                  |
-| 7 · Reconciliation detectors + dunning notifications | ⏳                                  |
-| 8 · AI-credit invoicing                              | ⏳                                  |
-| 9 · Delete `subscription-actions.ts` + the rzp plans | ⏳ after 4 and 5                    |
+| Phase                                                | State                                 |
+| ---------------------------------------------------- | ------------------------------------- |
+| 1 · Architecture + the 13 defects it replaces        | ✅ done                               |
+| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                 |
+| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                               |
+| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                               |
+| 4 · Signup enrolment on the new system               | ✅ done                               |
+| 5 · Buying an extra location on the new system       | ✅ done                               |
+| 6 · Webhook processor off the request path           | ⏳ **only needed for autopay**        |
+| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)         |
+| 8 · AI-credit invoicing                              | ✅ done                               |
+| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                    |
+| 10 · Autopay — mandate capture + recurring charge    | ⏳ **blocked on a test-mode account** |
 
 **★ AUTOPAY IS OFF, BUT THE SYSTEM IS NOT.** `RECURRING_CHARGE_VERIFIED` is false
 because the Razorpay subsequent-charge signature is unverified, so
@@ -622,6 +623,27 @@ because the Razorpay subsequent-charge signature is unverified, so
 merchant pays it on `/dashboard/plans`, and grace and downgrade run as designed.
 Six Razorpay facts need a test-mode account to settle; they are listed in the
 spec's §10 rather than guessed.
+
+**★★ AUTOPAY IS FIVE PARTS, AND ONLY ONE IS BUILT — do not read
+`RECURRING_CHARGE_VERIFIED` as the last switch.** No merchant has a mandate
+today, and none can get one:
+
+1. `rzpCreateOrder` takes only `{amountPaise, receipt, notes}` — no
+   `customer_id`, no `token`, no `recurring` flag. The enrolment order is a
+   plain one-time order, so nothing at the gateway is asked to register a
+   mandate. **Not built.**
+2. The `/dashboard/plans` checkout does not request a recurring token, so
+   nothing comes back to record. **Not built.**
+3. `confirmEnrolment` accepts a `mandate` and `activateMandate` writes it.
+   **Built — and currently DEAD CODE**, because no caller passes one.
+4. `rzpChargeRecurring` throws. **Not built** (deliberately; see `gateway.ts`).
+5. Recurring outcomes arrive asynchronously, so phase 6's webhook processor is
+   part of autopay, not separate from it. **Not built.**
+
+So `mandateActivated` is false for every merchant, every activation email
+correctly withholds a renewal date, and `collectionRoute` always routes to
+manual. That is coherent and safe — it is simply not one flag away from
+automatic.
 
 **★ THERE IS ONE BILLING SYSTEM NOW.** `subscription-actions.ts`,
 `lib/payments/subscription.ts`, the `razorpay_plans` cache and the five
@@ -645,6 +667,7 @@ hand, which was the step that mattered.
 | Sale round trips                | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path                                                                                      |
 | Live **Razorpay** run           | Refunds and metered billing have never touched a real account                                                                                                     |
 | `data_jobs` retention           | §32 prunes logs but not CSV job rows; needs two policies + two `created_at` indexes                                                                               |
+| `billing_webhook_events` growth | One row per delivery, forever — not in `RETENTION_POLICIES`. One entry, no index needed                                                                           |
 
 ---
 
