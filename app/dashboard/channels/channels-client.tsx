@@ -86,7 +86,16 @@ const TWILIO_CHANNEL: ChannelDef = {
   category: "sms",
   tagline: "Order updates by SMS, on your own DLT registration",
   accent: "#f22f46",
+  // Fallback only — the wordmark below wins whenever it loads.
   icon: MessageSquare,
+  logo: "/channels/twilio.svg",
+  // Measured from the artwork's own bounding box (99.7 × 30), not eyeballed.
+  // ⚠ The file shipped with viewBox="-14.955 -7.5 129.61 45" — ~23% horizontal
+  // and 33% vertical padding baked in — which at height 24 would have drawn a
+  // 16px mark next to Shiprocket's 24px one. The viewBox is trimmed to the
+  // artwork so the two carry the same optical weight; nothing about the paths
+  // changed.
+  logoAspect: 99.7 / 30,
 };
 
 const CHANNELS: ChannelDef[] = [
@@ -106,6 +115,23 @@ const CHANNELS: ChannelDef[] = [
 
 // Brand logo when the channel ships one, else a tinted icon tile. `height`
 // drives the size; the logo keeps its natural aspect (wordmarks render wide).
+//
+// ★★ AN SVG MUST SKIP THE OPTIMIZER, OR IT IS A BROKEN IMAGE. `next/image`
+// answers 400 — "image type is not allowed" — for any SVG unless
+// `dangerouslyAllowSVG` is set, and there is no automatic fallback: the <img>
+// still points at /_next/image and simply fails to load. That is why the
+// Shiprocket logo was rendering broken here before this line existed.
+//
+// ★ `unoptimized` PER-IMAGE, NOT `dangerouslyAllowSVG` GLOBALLY. That flag
+// would apply to every SVG next/image touches, including remote ones matched by
+// `remotePatterns` — and merchant-uploaded media lives in a public GCS bucket
+// (§7). An SVG can carry script, so allowing the optimizer to serve
+// merchant-supplied ones same-origin is an XSS vector. These logos are
+// first-party files in public/, so scoping the exemption to them costs nothing.
+//
+// Nothing is lost by skipping it: the optimizer RASTERISES (the .webp control
+// comes back as image/jpeg), which for a vector logo is strictly worse than the
+// 6 KB original.
 function ChannelLogo({ def, height }: { def: ChannelDef; height: number }) {
   if (def.logo) {
     const width = Math.round(height * (def.logoAspect ?? 1));
@@ -115,6 +141,7 @@ function ChannelLogo({ def, height }: { def: ChannelDef; height: number }) {
         alt={`${def.name} logo`}
         width={width}
         height={height}
+        unoptimized={def.logo.endsWith(".svg")}
         className="object-contain"
         style={{ maxWidth: "80%", height: "auto" }}
       />
@@ -1224,8 +1251,8 @@ function TwilioModal({
       >
         <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
           <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#f22f46]/10">
-              <MessageSquare className="h-5 w-5 text-[#f22f46]" />
+            <span className="flex h-10 w-[7.5rem] items-center justify-center">
+              <ChannelLogo def={TWILIO_CHANNEL} height={24} />
             </span>
             <div>
               <h2 className="text-base font-semibold text-[#111827]">
