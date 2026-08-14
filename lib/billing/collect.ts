@@ -32,6 +32,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { withService, type Db } from "@/lib/db/client";
 import { billingInvoices, billingPaymentAttempts } from "@/drizzle/schema";
 import { logError, logWarn } from "@/lib/observability/logger";
+import { notifyInvoicePaid } from "./receipts";
 import type { RzpResult } from "@/lib/payments/razorpay";
 import { collectionRoute, type MandateStatus } from "./cycle";
 import {
@@ -180,12 +181,13 @@ export async function settleAttempt(
 ): Promise<PaymentState | null> {
   const now = extra.now ?? new Date();
   try {
-    return await withService(async (db) => {
+    const settled = await withService(async (db) => {
       const [current] = await db
         .select({
           id: billingPaymentAttempts.id,
           state: billingPaymentAttempts.state,
           invoiceId: billingPaymentAttempts.invoiceId,
+          storeId: billingPaymentAttempts.storeId,
         })
         .from(billingPaymentAttempts)
         .where(eq(billingPaymentAttempts.id, attemptId))
@@ -205,7 +207,12 @@ export async function settleAttempt(
             incoming,
           });
         }
-        return decision.state;
+        return {
+          state: decision.state,
+          becamePaid: false,
+          storeId: null,
+          invoiceId: current.invoiceId,
+        };
       }
 
       const claimed = await db
@@ -231,9 +238,29 @@ export async function settleAttempt(
 
       if (claimed.length === 0) return null;
 
-      await syncInvoiceStatus(db, current.invoiceId, now);
-      return decision.state;
+      const sync = await syncInvoiceStatus(db, current.invoiceId, now);
+      return {
+        state: decision.state,
+        becamePaid: sync.becamePaid,
+        storeId: sync.becamePaid ? current.storeId : null,
+        invoiceId: current.invoiceId,
+      };
     });
+
+    if (!settled) return null;
+
+    // ★★ THE RECEIPT, from the ONE place an invoice becomes paid — so enrolment,
+    // manual payment, a plan change, a location purchase and reconciliation all
+    // send exactly one, and none of them has to remember to.
+    //
+    // ⚠ AFTER the transaction, always: an email is a network call, and sending
+    // it inside would hold a pooled connection open for an HTTP request and
+    // announce a payment a rollback then undid. Best-effort — the money is
+    // recorded either way.
+    if (settled.becamePaid && settled.storeId) {
+      await notifyInvoicePaid(settled.storeId, settled.invoiceId);
+    }
+    return settled.state;
   } catch (err) {
     logError("billing.settle_attempt", err, { attemptId, incoming });
     return null;
@@ -248,7 +275,23 @@ export async function settleAttempt(
  * `void` and `uncollectible` are DECISIONS, so this leaves them alone rather
  * than reviving an invoice the downgrade path deliberately closed.
  */
-async function syncInvoiceStatus(db: Db, invoiceId: string, now: Date) {
+/**
+ * Bring the invoice's status in line with its attempts.
+ *
+ * ★★ RETURNS WHETHER THIS CALL MADE IT PAID, which is what lets a receipt be
+ * sent exactly once from one place. The transition is CLAIMED — the WHERE
+ * excludes `paid` when moving TO paid — so a second settle on an
+ * already-paid invoice matches no row and reports false.
+ *
+ * ⚠ That claim also fixes a quieter bug: `paidAt` used to be rewritten on every
+ * subsequent sync, so a second attempt settling later moved the timestamp on an
+ * invoice that had been paid for days.
+ */
+async function syncInvoiceStatus(
+  db: Db,
+  invoiceId: string,
+  now: Date,
+): Promise<{ becamePaid: boolean }> {
   const attempts = await db
     .select({ state: billingPaymentAttempts.state })
     .from(billingPaymentAttempts)
@@ -258,7 +301,7 @@ async function syncInvoiceStatus(db: Db, invoiceId: string, now: Date) {
     attempts.map((a) => a.state as PaymentState),
   );
 
-  await db
+  const claimed = await db
     .update(billingInvoices)
     .set({
       status: next,
@@ -268,10 +311,19 @@ async function syncInvoiceStatus(db: Db, invoiceId: string, now: Date) {
     .where(
       and(
         eq(billingInvoices.id, invoiceId),
-        // Never revive a closed invoice.
-        inArray(billingInvoices.status, ["open", "processing", "paid"]),
+        // Never revive a closed invoice — and when moving TO paid, never
+        // re-claim one that already is.
+        inArray(
+          billingInvoices.status,
+          next === "paid"
+            ? ["open", "processing"]
+            : ["open", "processing", "paid"],
+        ),
       ),
-    );
+    )
+    .returning({ id: billingInvoices.id });
+
+  return { becamePaid: next === "paid" && claimed.length > 0 };
 }
 
 export interface CollectInput {

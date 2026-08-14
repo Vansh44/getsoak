@@ -4979,6 +4979,37 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         despite being a money path. It now has ten, covering the invoicing half
         only; the plan gate, the `add_ai_credits` RPC and reconcile-on-read are
         still uncovered.
+    - **★★ `lib/billing/receipts.ts` — THE ACKNOWLEDGEMENTS, AND ALL THREE WERE
+      REGRESSIONS.** The old path sent them (`planActivatedTemplate` from
+      `confirmSubscription`, `paymentReceiptTemplate` and
+      `subscriptionCancelledTemplate` from the webhook) and deleting it took them
+      with it — so for a few days a merchant could subscribe, pay ₹50,000 and hear
+      nothing at all, which is worse than the system it replaced. Kept SEPARATE
+      from `dunning.ts`: dunning means debt collection, and a module holding both
+      the chasing and the thank-yous ends up called "billing-emails-2".
+      - **★★ THE RECEIPT COMES FROM `settleAttempt`**, the ONE place an invoice
+        transitions to paid — so enrolment, manual payment, a plan change, a
+        location purchase AND reconciliation each send exactly one, and none of
+        them has to remember to. `syncInvoiceStatus` now CLAIMS that transition
+        (its WHERE excludes `paid` when moving to paid) and reports it, which is
+        what makes "exactly one" true. ⚠ That claim also fixed a quieter bug:
+        `paid_at` used to be rewritten on every later sync, so a second attempt
+        settling days afterwards moved the timestamp on an already-paid invoice.
+      - **★ A CREDIT PURCHASE GETS NO SUBSCRIPTION RECEIPT.** A mail reading
+        "your Pro plan is active" for a ₹59 credit pack is wrong; credits have
+        their own confirmation (`ai.credits_purchased`).
+      - **★ THE ACTIVATION MAIL WITHHOLDS THE RENEWAL DATE WITH NO MANDATE.** The
+        template's copy says autopay is set up, so naming a date beside it
+        promises a charge that never comes — and the merchant waits, and is
+        downgraded. Same rule as the invoice-issued notice.
+    - **★ SUBSCRIPTION FAILURES REACH THE FAILURES FEED** (§33). `FAILURE_SOURCES`
+      gained a `subscription` entry reading `billing_payment_attempts` where
+      `state = 'failed'`. Deliberately NOT folded into the existing `payment`
+      source: that one is a SHOPPER's checkout failing (the merchant's revenue),
+      this is the MERCHANT's plan payment failing (they are heading for a
+      downgrade). Different audience, different consequence. It sorts on
+      `resolved_at`, not `created_at` — an attempt can sit in flight for days, so
+      the creation time would bury a fresh failure down a time-ordered feed.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,

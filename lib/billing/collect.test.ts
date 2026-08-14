@@ -28,6 +28,9 @@ vi.mock("@/lib/observability/logger", () => ({
 }));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
+const receipts = vi.hoisted(() => ({ notifyInvoicePaid: vi.fn() }));
+vi.mock("./receipts", () => receipts);
+
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async (fn: any) => fn(dbHolder.current.db)),
 }));
@@ -155,6 +158,94 @@ describe("settleAttempt", () => {
     });
     expect(await settleAttempt(ATTEMPT, "captured")).toBe("captured");
     expect(dbHolder.current.calls.set[0]).toMatchObject({ state: "captured" });
+  });
+
+  describe("★★ the receipt", () => {
+    // ONE place an invoice becomes paid, so enrolment, manual payment, a plan
+    // change, a location purchase and reconciliation each send exactly one — and
+    // none of them has to remember to.
+
+    it("sends when the invoice BECOMES paid", async () => {
+      seed({
+        selects: [
+          [
+            {
+              id: ATTEMPT,
+              state: "processing",
+              invoiceId: INVOICE,
+              storeId: "store-1",
+            },
+          ],
+          [{ state: "captured" }],
+        ],
+        returning: [{ state: "captured" }, { id: INVOICE }],
+      });
+      await settleAttempt(ATTEMPT, "captured");
+      expect(receipts.notifyInvoicePaid).toHaveBeenCalledWith(
+        "store-1",
+        INVOICE,
+      );
+    });
+
+    it("★★ sends NOTHING when the paid claim found no row — it was already paid", async () => {
+      // The invoice UPDATE excludes `paid` when moving TO paid, so a second
+      // settle matches nothing. Without that claim every later attempt on the
+      // same invoice would re-send the receipt.
+      //
+      // ⚠ The two UPDATEs have to be told apart: the ATTEMPT claim must succeed
+      // (or settleAttempt returns early and this passes for the wrong reason —
+      // which it did, until the mutation caught it) while the INVOICE claim must
+      // find nothing. The shared `returning` option cannot express that, so the
+      // update step is sequenced by hand.
+      seed({
+        selects: [
+          [
+            {
+              id: ATTEMPT,
+              state: "processing",
+              invoiceId: INVOICE,
+              storeId: "store-1",
+            },
+          ],
+          [{ state: "captured" }],
+        ],
+      });
+      const perCall = [[{ state: "captured" }], []];
+      let n = 0;
+      dbHolder.current.db.update = vi.fn(() => ({
+        set: vi.fn(() => {
+          const rows = perCall[n++] ?? [];
+          const step: any = {
+            where: vi.fn(() => step),
+            returning: vi.fn(async () => rows),
+            then: (r: any) => r({ rowCount: rows.length }),
+          };
+          return step;
+        }),
+      }));
+
+      await settleAttempt(ATTEMPT, "captured");
+      expect(receipts.notifyInvoicePaid).not.toHaveBeenCalled();
+    });
+
+    it("★ sends nothing for a FAILED settle", async () => {
+      seed({
+        selects: [
+          [
+            {
+              id: ATTEMPT,
+              state: "processing",
+              invoiceId: INVOICE,
+              storeId: "store-1",
+            },
+          ],
+          [{ state: "failed" }],
+        ],
+        returning: [{ state: "failed" }],
+      });
+      await settleAttempt(ATTEMPT, "failed");
+      expect(receipts.notifyInvoicePaid).not.toHaveBeenCalled();
+    });
   });
 
   it("★ sets resolved_at on a terminal state (the CHECK requires it)", async () => {

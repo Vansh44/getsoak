@@ -51,6 +51,9 @@ const collect = vi.hoisted(() => ({
 }));
 vi.mock("./collect", () => collect);
 
+const receipts = vi.hoisted(() => ({ notifyPlanActivated: vi.fn() }));
+vi.mock("./receipts", () => receipts);
+
 import { confirmEnrolment, startEnrolment } from "./enrol";
 
 const STORE = "store-1";
@@ -372,6 +375,29 @@ describe("confirmEnrolment", () => {
     seedConfirm();
     await confirmEnrolment(args);
     expect(store.finalizeInvoice).not.toHaveBeenCalled();
+  });
+
+  it("★★ WELCOMES the merchant — the old path did, and deleting it took that with it", async () => {
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(receipts.notifyPlanActivated).toHaveBeenCalledWith(
+      expect.objectContaining({ storeId: STORE, invoiceId: INVOICE }),
+    );
+  });
+
+  it("★ says nothing when the signature failed", async () => {
+    rzp.verifyCheckoutSignature.mockReturnValue(false);
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(receipts.notifyPlanActivated).not.toHaveBeenCalled();
+  });
+
+  it("★★ reports autopay HONESTLY — a mandate, or none", async () => {
+    // The template says autopay is set up; promising a renewal date to someone
+    // with no mandate is how they wait for a charge that never comes.
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(receipts.notifyPlanActivated.mock.calls[0][0].autopay).toBe(false);
   });
 
   it("★★ REFUSES an unverified signature, and settles nothing", async () => {

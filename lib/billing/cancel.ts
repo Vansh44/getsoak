@@ -34,6 +34,7 @@ import { withService } from "@/lib/db/client";
 import { billingMandates, billingSubscriptions } from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
 import type { SubscriptionView } from "./invoice-types";
+import { notifySubscriptionCancelled } from "./receipts";
 
 export type CancelResult<T> =
   | { ok: true; data: T }
@@ -63,6 +64,7 @@ export async function cancelAtPeriodEnd(input: {
 
   let sub:
     | {
+        plan: string;
         state: string;
         currentPeriodEnd: string | null;
         cancelAtPeriodEnd: boolean;
@@ -74,6 +76,8 @@ export async function cancelAtPeriodEnd(input: {
     sub = await withService(async (db) => {
       const [row] = await db
         .select({
+          // Named so the confirmation can say WHICH plan is ending.
+          plan: billingSubscriptions.plan,
           state: billingSubscriptions.state,
           currentPeriodEnd: billingSubscriptions.currentPeriodEnd,
           cancelAtPeriodEnd: billingSubscriptions.cancelAtPeriodEnd,
@@ -137,6 +141,15 @@ export async function cancelAtPeriodEnd(input: {
   const mandateRevoked = sub.mandateId
     ? await revokeMandate(sub.mandateId, now)
     : false;
+
+  // ★ Confirm it. A cancellation with no acknowledgement leaves the merchant
+  // unsure whether it took — and the one thing they want to know is what they
+  // keep, and until when. Best-effort: the cancellation is already committed.
+  await notifySubscriptionCancelled({
+    storeId: input.storeId,
+    plan: sub.plan,
+    accessUntil: sub.currentPeriodEnd,
+  });
 
   return {
     ok: true,

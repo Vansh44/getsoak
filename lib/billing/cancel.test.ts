@@ -21,6 +21,9 @@ vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async (fn: any) => fn(dbHolder.current.db)),
 }));
 
+const receipts = vi.hoisted(() => ({ notifySubscriptionCancelled: vi.fn() }));
+vi.mock("./receipts", () => receipts);
+
 import {
   cancelAtPeriodEnd,
   getSubscriptionView,
@@ -49,6 +52,7 @@ describe("cancelAtPeriodEnd", () => {
     seed([
       [
         {
+          plan: "pro",
           state: "active",
           currentPeriodEnd: PERIOD_END,
           cancelAtPeriodEnd: false,
@@ -80,6 +84,23 @@ describe("cancelAtPeriodEnd", () => {
     expect(
       dbHolder.current.calls.set.some((s: any) => s.status === "revoked"),
     ).toBe(true);
+  });
+
+  it("★★ CONFIRMS it, naming the plan and what they keep", async () => {
+    // A cancellation with no acknowledgement leaves the merchant unsure it took.
+    seedActive({ plan: "pro" });
+    await cancelAtPeriodEnd(args);
+    expect(receipts.notifySubscriptionCancelled).toHaveBeenCalledWith({
+      storeId: STORE,
+      plan: "pro",
+      accessUntil: PERIOD_END,
+    });
+  });
+
+  it("★ says nothing when there was nothing to cancel", async () => {
+    seed([[]]);
+    await cancelAtPeriodEnd(args);
+    expect(receipts.notifySubscriptionCancelled).not.toHaveBeenCalled();
   });
 
   it("★ clears any booked change — it is moot once they are leaving", async () => {
