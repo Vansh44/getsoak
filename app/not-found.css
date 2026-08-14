@@ -28,13 +28,9 @@
   padding: clamp(20px, 3.4vw, 40px) clamp(20px, 4.5vw, 56px);
   background: var(--canvas);
   color: var(--ink);
-  font-family:
-    var(--font-outfit),
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
+  /* Use the root layout's global product font. The previous Outfit override
+     made this one StoreMink-owned page look like a merchant storefront. */
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -91,11 +87,13 @@
   text-decoration: none;
   width: fit-content;
 }
-.sm404-brand span {
+.sm404-wordmark {
+  display: inline;
+}
+.sm404-wordmark span {
   color: var(--brand);
 }
-.sm404-mark {
-  display: block;
+.sm404-brand img {
   flex: none;
 }
 
