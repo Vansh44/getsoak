@@ -346,7 +346,8 @@ wholesip/
 │   │   │                      # country,city}) — writes admins name + settings.
 │   │   │                      # business location, returns {slug,storeId} —,
 │   │   │                      # getSignupResumeInfo (resume wizard after Google
-│   │   │                      # redirect / refreshed tab)
+│   │   │                      # redirect / refreshed tab). Tested across slug,
+│   │   │                      # identity, location, rollback and consent gates.
 │   │   ├── signup-email-otp.ts # Authenticated, rate-limited 6-digit email proof;
 │   │   │                      # signed httpOnly hash cookie, capped attempts,
 │   │   │                      # marks Firebase emailVerified only on success
@@ -370,7 +371,9 @@ wholesip/
 │   │                          # the challenge CNAME, and requires the LB to be the
 │   │                          # domain's only A-record destination before serving;
 │   │                          # then starts automatic Google META verification /
-│   │                          # Search Console sitemap registration (retry by cron)
+│   │                          # Search Console sitemap registration (retry by cron).
+│   │                          # Tested across permissions, transitions, deprovisioning
+│   │                          # order and failure containment.
 │   │   ├── page-actions.ts    # ★ Custom-page CRUD + draft/publish (see §11): createPage/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role
@@ -385,6 +388,8 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
+│   │   │                      # and expose only safe connection state. Tested across
+│   │   │                      # permissions, validation, rotation and location mapping.
 │   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
 │   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware). Tested.
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
@@ -1994,7 +1999,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
       two public counters are per-IP rate-limited via `lib/rate-limit`, since
       `view_count` drives both the Popular ordering and search ranking) and
       operator CRUD (articles + categories, publish/unpublish, reorder) under
-      `withService` after the gate. **`deleteHelpCategory` refuses a non-empty
+      `withService` after the gate. These actions are tested across public
+      throttles, the operator dual gate, validation/sanitization, atomic category
+      deletion, media cleanup, indexing and AI drafting failures.
+      **`deleteHelpCategory` refuses a non-empty
       category** (atomic `NOT EXISTS` guard on the DELETE — the conditional-write
       pattern): the FK is `ON DELETE SET NULL`, so deleting one would strand its
       articles with no category and therefore no URL. Storefront reads

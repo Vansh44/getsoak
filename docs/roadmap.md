@@ -66,9 +66,15 @@ email safety, personal preferences, audience routing and failed-delivery retry.
 Shipment and shipping actions are also covered: server-side catalog pricing,
 stock and PIN validation; connection and location mapping gates; booking leases;
 resumable provider stages; pickup, tracking, NDR and cancellation; and the
-manual-courier fallback. Browser pickup verification is next. This gate does
-not change Step 4's place in the product roadmap; it decides when the
-already-built system is safe to expose to real transactions.
+manual-courier fallback. The remaining exposed action pass now covers help
+centre public/operator boundaries, Shiprocket connection secrets and warehouse
+mapping, custom-domain state transitions and store-signup provisioning/rollback.
+The code-only action hardening is complete. The release gate remains open:
+browser pickup still needs an authorized disposable environment/data set, then
+Razorpay refunds and billing need test-mode credentials; autopay follows only
+after those real provider behaviours are observed. This gate does not change
+Step 4's place in the product roadmap; it decides when the already-built system
+is safe to expose to real transactions.
 
 ---
 
