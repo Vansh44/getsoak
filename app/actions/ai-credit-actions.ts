@@ -15,6 +15,10 @@
 import { and, desc, eq, lte, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { emitEvent } from "@/lib/notifications/record";
+import {
+  draftCreditInvoice,
+  issueCreditInvoice,
+} from "@/lib/billing/credit-invoice";
 import { aiCreditLedger, aiCreditPurchases, stores } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { effectivePlan, planAllows } from "@/lib/plans";
@@ -102,6 +106,16 @@ async function settlePurchase(
       err instanceof Error ? err.message : err,
     );
   }
+
+  // ★★ ISSUE THE DOCUMENT HERE, because this is the ONE place a purchase becomes
+  // paid — the confirm path AND the reconcile-on-read sweep both arrive here.
+  // Hooking only `confirmCreditPurchase` would leave every purchase settled by
+  // reconciliation without an invoice, which is exactly the case where the
+  // merchant is already unsure what happened.
+  //
+  // ★ AFTER the credits, and best-effort: a merchant who paid gets what they
+  // bought even if the document fails to issue.
+  await issueCreditInvoice(purchase.id);
 }
 
 // Reconcile-on-read: any stale pending purchase for this store is checked
@@ -308,6 +322,21 @@ export async function startCreditPurchase(
     );
     return { error: "Couldn't start the payment. Please try again." };
   }
+
+  // ★ A DRAFT invoice, raised only once the order exists — so a purchase that
+  // died at the gateway leaves no document behind at all. It carries no number
+  // yet; `settlePurchase` finalizes it when the money lands, which is what keeps
+  // an abandoned checkout from burning one in the gapless GST series.
+  //
+  // Best-effort and AFTER everything the sale depends on: a merchant must be able
+  // to buy credits even if the document cannot be prepared.
+  await draftCreditInvoice({
+    storeId,
+    purchaseId,
+    packLabel: pack.name,
+    credits: pack.credits,
+    amountPaise,
+  });
 
   return {
     success: true,

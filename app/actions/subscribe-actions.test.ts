@@ -23,6 +23,9 @@ vi.mock("next/cache", () => ({
 // the constant is all this file needs.
 vi.mock("@/lib/store/resolve", () => ({ STORE_TAG: "stores" }));
 
+const auth = vi.hoisted(() => ({ getServerUser: vi.fn() }));
+vi.mock("@/lib/auth/server-user", () => auth);
+
 const access = vi.hoisted(() => ({
   getManagerUserId: vi.fn(),
   getActingStoreId: vi.fn(),
@@ -57,9 +60,11 @@ vi.mock("@/lib/billing/manual-pay", () => manual);
 
 import {
   confirmPayInvoice,
+  confirmSignupSubscribe,
   confirmSubscribe,
   getPayableInvoices,
   startPayInvoice,
+  startSignupSubscribe,
   startSubscribe,
 } from "./subscribe-actions";
 
@@ -75,6 +80,7 @@ beforeEach(() => {
   seed();
   access.getManagerUserId.mockResolvedValue("admin-1");
   access.getActingStoreId.mockResolvedValue(STORE);
+  auth.getServerUser.mockResolvedValue({ id: "admin-1", email: "o@acme.test" });
   enrol.ensureBillingAccount.mockResolvedValue(true);
   enrol.startEnrolment.mockResolvedValue({
     ok: true,
@@ -231,42 +237,16 @@ describe("startSubscribe — the gate", () => {
   });
 });
 
-describe("★ startSubscribe — never billed by both systems", () => {
-  it("★★ refuses when the OLD system has a live mandate", async () => {
-    seed([[{ rzpSubscriptionId: "sub_old", status: "active" }]]);
-    const res = await startSubscribe("pro", "monthly");
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.error).toMatch(/already has a subscription/i);
-    expect(enrol.startEnrolment).not.toHaveBeenCalled();
-  });
-
-  it("proceeds when the old row exists but its mandate is dead", async () => {
-    seed([[{ rzpSubscriptionId: "sub_old", status: "cancelled" }]]);
-    expect((await startSubscribe("pro", "monthly")).ok).toBe(true);
-  });
-
-  it("proceeds when the old row has no gateway subscription at all", async () => {
-    seed([[{ rzpSubscriptionId: null, status: "created" }]]);
-    expect((await startSubscribe("pro", "monthly")).ok).toBe(true);
-  });
-
-  it("★★ FAILS CLOSED when the legacy check itself errors", async () => {
-    // If we cannot tell whether the old system is billing them, refusing costs
-    // one merchant a retry; enrolling anyway could bill the same store twice
-    // from two systems with no single place to stop it.
-    dbHolder.current = {
-      db: {
-        select: () => {
-          throw new Error("db down");
-        },
-      },
-    };
-    const res = await startSubscribe("pro", "monthly");
-    expect(res.ok).toBe(false);
-    expect(enrol.startEnrolment).not.toHaveBeenCalled();
-  });
-});
+// ⚠ The "never billed by both systems" block was DELETED with the old path
+// (2026-08-13). `hasLegacySubscription` existed to stop a store being enrolled on
+// the new system while `store_subscriptions` held a live Razorpay mandate — and
+// with `subscription-actions.ts` gone, nothing can create one. The table remains
+// as an audit trail that nothing reads.
+//
+// ★ If a legacy row is ever found in a live database, the fix is to cancel the
+// GATEWAY subscription, not to reinstate this guard: our code no longer bills
+// from that row, so the only thing that could still take money is Razorpay's own
+// timer, which a guard here cannot reach.
 
 describe("startSubscribe — pricing", () => {
   it("★ prices from the LIVE readers", async () => {
@@ -384,5 +364,132 @@ describe("confirmSubscribe", () => {
     seed([[{ plan: "free" }]]);
     await confirmSubscribe(...ok);
     expect(revalidateTag).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signup — the same act, from the platform host.
+// ---------------------------------------------------------------------------
+
+describe("★★ signup enrolment", () => {
+  // The wizard runs on storemink.com, where getActingStoreId() cannot resolve
+  // the store that was created seconds ago — so the client passes its id, and
+  // the ownership check is the ENTIRE security boundary.
+
+  /** superadmin row for the claimed store, then no legacy subscription. */
+  function seedOwner(role = "superadmin") {
+    dbHolder.current = makeDbMock({ selectQueue: [[{ role }], []] });
+  }
+
+  describe("startSignupSubscribe", () => {
+    it("starts the enrolment for the named store", async () => {
+      seedOwner();
+      const res = await startSignupSubscribe(STORE, "pro", "yearly");
+      expect(res.ok).toBe(true);
+      expect(enrol.startEnrolment.mock.calls[0][0]).toMatchObject({
+        storeId: STORE,
+        plan: "pro",
+        period: "yearly",
+      });
+    });
+
+    it("★★ REFUSES a store the caller does not own", async () => {
+      // Without this, anyone signed in could post another store's id and buy —
+      // or attach — a subscription on it.
+      seedOwner("manager");
+      const res = await startSignupSubscribe(
+        "someone-elses-store",
+        "pro",
+        "monthly",
+      );
+      expect(res.ok).toBe(false);
+      expect(enrol.startEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★ refuses when the caller has no admin row for it at all", async () => {
+      dbHolder.current = makeDbMock({ selectQueue: [[], []] });
+      expect((await startSignupSubscribe(STORE, "pro", "monthly")).ok).toBe(
+        false,
+      );
+      expect(enrol.startEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★ refuses when nobody is signed in", async () => {
+      auth.getServerUser.mockResolvedValue(null);
+      seedOwner();
+      expect((await startSignupSubscribe(STORE, "pro", "monthly")).ok).toBe(
+        false,
+      );
+      expect(enrol.startEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★★ FAILS CLOSED when the ownership read errors", async () => {
+      // A database blip must refuse, never authorise.
+      dbHolder.current = makeDbMock({ selectQueue: [] });
+      dbHolder.current.db.select = () => {
+        throw new Error("db down");
+      };
+      const res = await startSignupSubscribe(STORE, "pro", "monthly");
+      expect(res.ok).toBe(false);
+      // ⚠ Assert the REASON, not just the refusal. `hasLegacySubscription` also
+      // fails closed on the same broken select, so `ok: false` alone is
+      // satisfied whether or not the ownership gate held — which let a mutation
+      // that returned the user id regardless of role pass this test.
+      if (res.ok) return;
+      expect(res.error).toMatch(/permission/i);
+      expect(enrol.startEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★ refuses a non-string store id", async () => {
+      seedOwner();
+      expect((await startSignupSubscribe(null, "pro", "monthly")).ok).toBe(
+        false,
+      );
+      expect((await startSignupSubscribe("", "pro", "monthly")).ok).toBe(false);
+    });
+
+    it("★ still validates the plan — a signup caller gets no shortcut", async () => {
+      seedOwner();
+      expect((await startSignupSubscribe(STORE, "free", "monthly")).ok).toBe(
+        false,
+      );
+      expect(enrol.startEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★ does NOT use the host-resolved store", async () => {
+      // getActingStoreId() would hand back the fallback store on the platform
+      // host, which is how a signup payment lands on the wrong tenant.
+      seedOwner();
+      await startSignupSubscribe(STORE, "pro", "monthly");
+      expect(access.getActingStoreId).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("confirmSignupSubscribe", () => {
+    it("settles against the named store", async () => {
+      seedOwner();
+      const res = await confirmSignupSubscribe(STORE, "inv-1", "pay_1", "sig");
+      expect(res.ok).toBe(true);
+      expect(enrol.confirmEnrolment.mock.calls[0][0]).toMatchObject({
+        storeId: STORE,
+        invoiceId: "inv-1",
+        providerPaymentId: "pay_1",
+      });
+    });
+
+    it("★★ REFUSES to settle a payment against a store the caller does not own", async () => {
+      seedOwner("cashier");
+      const res = await confirmSignupSubscribe(STORE, "inv-1", "pay_1", "sig");
+      expect(res.ok).toBe(false);
+      expect(enrol.confirmEnrolment).not.toHaveBeenCalled();
+    });
+
+    it("★ refuses a malformed payment payload", async () => {
+      seedOwner();
+      expect((await confirmSignupSubscribe(STORE, "inv-1", "", "sig")).ok).toBe(
+        false,
+      );
+      expect(enrol.confirmEnrolment).not.toHaveBeenCalled();
+    });
   });
 });

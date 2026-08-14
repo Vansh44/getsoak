@@ -7,33 +7,48 @@
  * makes the gate on each one load-bearing rather than decorative: these take a
  * merchant's money and change what their store is entitled to.
  *
- * ★ RUNS ALONGSIDE the old `subscription-actions.ts`, which still drives
- * `/dashboard/plans`. Nothing here retires that path — the cutover is its own
- * step, and until it happens a store must not be enrolled in both.
- * `startSubscribe` refuses when the OLD system already has a live mandate for
- * the store, so the two cannot both be billing the same merchant.
+ * ★ THE ONLY BILLING PATH. `subscription-actions.ts` and the Razorpay
+ * Subscriptions machinery behind it were deleted on 2026-08-13 — StoreMink owns
+ * the amount and the schedule now, so nothing here asks a provider to change a
+ * plan (which is the call that never worked on UPI or e-mandate).
  */
 
 import { revalidateTag } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
+import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
-import { storeSubscriptions, stores } from "@/drizzle/schema";
-import { STORE_TAG } from "@/lib/store/resolve";
+import { admins, stores } from "@/drizzle/schema";
+import { getCurrentStore, STORE_TAG } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
-import { hasLiveMandate } from "@/lib/payments/plan-change";
 import {
   getExtraLocationPricingLive,
   getPlanPricingLive,
 } from "@/lib/plans/pricing";
-import { PLAN_IDS, type Plan } from "@/lib/plans";
-import type { PayableInvoice } from "@/lib/billing/invoice-types";
+import { PLAN_IDS, PLAN_META, type Plan } from "@/lib/plans";
+import type {
+  LocationBillingState,
+  PayableInvoice,
+  SubscriptionView,
+} from "@/lib/billing/invoice-types";
 import {
   confirmInvoicePayment,
   listPayableInvoices,
   startInvoicePayment,
   type PaymentStart,
 } from "@/lib/billing/manual-pay";
+import {
+  cancelAtPeriodEnd,
+  getSubscriptionView,
+  resumeSubscription,
+} from "@/lib/billing/cancel";
+import { confirmPlanChange, startPlanChange } from "@/lib/billing/plan-change";
+import {
+  confirmLocationPurchase,
+  getLocationBillingState as readLocationBillingState,
+  releaseLocations,
+  startLocationPurchase,
+} from "@/lib/billing/locations";
 import {
   auditEnrolment,
   confirmEnrolment,
@@ -80,29 +95,6 @@ function isPaidPlan(plan: unknown): plan is Plan {
   return plan === "basic" || plan === "pro";
 }
 
-/** Does the OLD system already bill this store? */
-async function hasLegacySubscription(storeId: string): Promise<boolean> {
-  try {
-    return await withService(async (db) => {
-      const [row] = await db
-        .select({
-          rzpSubscriptionId: storeSubscriptions.rzpSubscriptionId,
-          status: storeSubscriptions.status,
-        })
-        .from(storeSubscriptions)
-        .where(eq(storeSubscriptions.storeId, storeId))
-        .limit(1);
-      return !!row?.rzpSubscriptionId && hasLiveMandate(row.status);
-    });
-  } catch (err) {
-    // ★ FAILS CLOSED. If we cannot tell whether the old system is billing them,
-    // refusing costs one merchant a retry; enrolling them anyway could bill the
-    // same store twice, from two systems, with no single place to stop it.
-    logError("billing.legacy_check", err, { storeId });
-    return true;
-  }
-}
-
 /**
  * Begin subscribing: issue the first invoice and open a Razorpay order.
  *
@@ -119,22 +111,31 @@ export async function startSubscribe(
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
+  return startSubscribeForStore(await getActingStoreId(), plan, period);
+}
 
+/**
+ * ★ THE CORE, shared by the dashboard and by signup.
+ *
+ * The two differ ONLY in how the store and the caller are resolved: the
+ * dashboard reads the store from the host, and signup cannot — the wizard runs
+ * on the PLATFORM host, where `getActingStoreId()` has no store to resolve. So
+ * the signup entry point names the store explicitly and proves the caller owns
+ * it. Everything after that is identical, and must stay in one place: a second
+ * copy of the plan validation, the legacy-mandate check or the price lookup is
+ * how a merchant ends up billed differently depending on which screen they
+ * subscribed from.
+ */
+async function startSubscribeForStore(
+  storeId: string,
+  plan: unknown,
+  period: unknown,
+): Promise<SubscribeStart> {
   if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
     return { ok: false, error: "Choose a paid plan." };
   }
   const billingPeriod: BillingPeriod =
     period === "yearly" ? "yearly" : "monthly";
-
-  const storeId = await getActingStoreId();
-
-  if (await hasLegacySubscription(storeId)) {
-    return {
-      ok: false,
-      error:
-        "This store already has a subscription. Cancel it before starting a new one.",
-    };
-  }
 
   // Best-effort: an invoice can be issued without a billing profile, and
   // blocking a sale on optional identity fields would be the wrong trade.
@@ -164,7 +165,21 @@ export async function confirmSubscribe(
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
+  return confirmSubscribeForStore(
+    await getActingStoreId(),
+    invoiceId,
+    providerPaymentId,
+    signature,
+  );
+}
 
+/** ★ THE CORE — see startSubscribeForStore for why this split exists. */
+async function confirmSubscribeForStore(
+  storeId: string,
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<SubscribeConfirm> {
   if (
     typeof invoiceId !== "string" ||
     typeof providerPaymentId !== "string" ||
@@ -175,8 +190,6 @@ export async function confirmSubscribe(
   ) {
     return { ok: false, error: "That payment couldn't be confirmed." };
   }
-
-  const storeId = await getActingStoreId();
 
   // Read the plan BEFORE activation so the audit row can name what it moved
   // from. Best-effort: a missing `from` is a worse audit row, not a reason to
@@ -221,6 +234,80 @@ export async function confirmSubscribe(
     periodEnd: confirmed.data.periodEnd,
     autopay: confirmed.data.mandateActivated,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Signup — the merchant's FIRST subscription, bought during the wizard.
+//
+// ★ WHY THESE EXIST AT ALL. The wizard runs on the PLATFORM host
+// (storemink.com/platform/signup), where there is no store to resolve from the
+// Host header — `getActingStoreId()` would return the fallback store. The store
+// has just been created a few lines earlier in the wizard, so the client knows
+// its id and passes it; these entry points prove the caller OWNS it and then
+// delegate to the same core the dashboard uses.
+//
+// ★ THE STORE ID FROM THE CLIENT IS NOT TRUSTED. `assertStoreSuperadmin` is the
+// whole security boundary here: without it, anyone signed in could post another
+// store's id and start — or settle — a subscription against it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The signed-in user's id, if they are the SUPERADMIN of this store.
+ *
+ * ★ Superadmin, not any admin: this buys a plan with a card. It mirrors the
+ * check the old signup flow used, deliberately — a new path to the same act must
+ * not be easier to pass than the one it replaces.
+ *
+ * Returns null on a read failure, so a database blip refuses rather than
+ * authorises.
+ */
+async function assertStoreSuperadmin(storeId: unknown): Promise<string | null> {
+  if (typeof storeId !== "string" || !storeId) return null;
+  const user = await getServerUser();
+  if (!user) return null;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ role: admins.role })
+        .from(admins)
+        .where(and(eq(admins.id, user.id), eq(admins.storeId, storeId)))
+        .limit(1),
+    );
+    return rows[0]?.role === "superadmin" ? user.id : null;
+  } catch (err) {
+    logError("billing.assert_superadmin", err, { storeId });
+    return null;
+  }
+}
+
+/** Begin the first subscription during signup. */
+export async function startSignupSubscribe(
+  storeId: unknown,
+  plan: unknown,
+  period: unknown,
+): Promise<SubscribeStart> {
+  const userId = await assertStoreSuperadmin(storeId);
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  return startSubscribeForStore(storeId as string, plan, period);
+}
+
+/** Settle it. */
+export async function confirmSignupSubscribe(
+  storeId: unknown,
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<SubscribeConfirm> {
+  const userId = await assertStoreSuperadmin(storeId);
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  return confirmSubscribeForStore(
+    storeId as string,
+    invoiceId,
+    providerPaymentId,
+    signature,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -300,4 +387,355 @@ export async function confirmPayInvoice(
   if (done.data.planRestored) revalidateTag(STORE_TAG, "max");
 
   return { ok: true, planRestored: done.data.planRestored };
+}
+
+// ---------------------------------------------------------------------------
+// Extra locations — metered, and billed WITH the subscription (§34, POS 7).
+//
+// ★ The old path did this with `rzpUpdateSubscription`, which Razorpay does not
+// support for UPI or e-mandate mandates — so for most Indian merchants buying a
+// location silently did not work. Here StoreMink prices it: the part period is a
+// one-off payment on the verified checkout, and every future cycle is billed from
+// `billed_locations` by the renewal worker.
+// ---------------------------------------------------------------------------
+
+/** Read-only, so gated on VIEW of the section the merchant is looking at. */
+export async function getLocationBilling(): Promise<LocationBillingState | null> {
+  const userId = await getManagerUserId("locations");
+  if (!userId) return null;
+  const [storeId, store, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+    getExtraLocationPricingLive(),
+  ]);
+  return readLocationBillingState({ storeId, store, locationPrice });
+}
+
+export type LocationPurchaseResult =
+  | {
+      ok: true;
+      invoiceId: string;
+      providerOrderId: string;
+      keyId: string;
+      amountPaise: number;
+      targetCount: number;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Begin buying extra locations.
+ *
+ * ★ Gated on `ai`, not `locations`: this spends money, so it is the billing gate
+ * rather than the one that merely manages shops.
+ */
+export async function startBuyLocations(
+  requested: unknown,
+): Promise<LocationPurchaseResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (typeof requested !== "number" || !Number.isInteger(requested)) {
+    return { ok: false, error: "Choose a whole number of extra locations." };
+  }
+
+  const [storeId, store, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+    // LIVE — this number becomes a charge, so never the cached reader.
+    getExtraLocationPricingLive(),
+  ]);
+  const started = await startLocationPurchase({
+    storeId,
+    store,
+    requested,
+    locationPrice,
+  });
+  if (!started.ok) return { ok: false, error: started.error };
+  return { ok: true, ...started.data };
+}
+
+export type LocationConfirmResult =
+  | { ok: true; billedLocations: number }
+  | { ok: false; error: string };
+
+export async function confirmBuyLocations(
+  invoiceId: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<LocationConfirmResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (
+    typeof invoiceId !== "string" ||
+    typeof providerPaymentId !== "string" ||
+    typeof signature !== "string" ||
+    !invoiceId ||
+    !providerPaymentId ||
+    !signature
+  ) {
+    return { ok: false, error: "That payment couldn't be confirmed." };
+  }
+
+  const storeId = await getActingStoreId();
+  const done = await confirmLocationPurchase({
+    storeId,
+    invoiceId,
+    providerPaymentId,
+    signature,
+  });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  // The allowance is a plan gate, so every reader must see the new number.
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, billedLocations: done.data.billedLocations };
+}
+
+export type ReleaseLocationsResult =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+/**
+ * Book a reduction for the end of the current cycle.
+ *
+ * ★ No money moves, in either direction — they keep what they paid for until it
+ * runs out, and nobody is refunded (§15b).
+ */
+export async function releaseExtraLocations(
+  requested: unknown,
+): Promise<ReleaseLocationsResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (typeof requested !== "number" || !Number.isInteger(requested)) {
+    return { ok: false, error: "Choose a whole number of extra locations." };
+  }
+
+  const [storeId, store] = await Promise.all([
+    getActingStoreId(),
+    getCurrentStore(),
+  ]);
+  const done = await releaseLocations({ storeId, store, requested });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  const when = done.data.effectiveAt
+    ? new Date(done.data.effectiveAt).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      })
+    : null;
+  return {
+    ok: true,
+    message: when
+      ? `Booked. You keep the location until ${when}, then stop paying for it.`
+      : "Booked. You keep the location until this cycle ends.",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Cancelling, resuming, and changing plan.
+//
+// ★ None of these calls the gateway to change a schedule — StoreMink owns the
+// amount and the dates, so cancelling is a flag and a downgrade is a booked
+// change. Only a DEARER change moves money, and it does so through the same
+// one-off checkout as enrolment and location purchases.
+// ---------------------------------------------------------------------------
+
+/** The subscription card's data. Read-only, so gated on VIEW. */
+export async function getMySubscription(): Promise<SubscriptionView> {
+  const userId = await getManagerUserId("ai");
+  const storeId = await getActingStoreId();
+  // No permission still returns the neutral view rather than throwing — the page
+  // renders other things, and `active: false` simply hides the controls.
+  if (!userId) {
+    return {
+      plan: null,
+      period: null,
+      status: null,
+      currentEnd: null,
+      cancelAtPeriodEnd: false,
+      scheduledPlan: null,
+      scheduledPeriod: null,
+      scheduledLocations: null,
+      autopay: false,
+      active: false,
+    };
+  }
+  return getSubscriptionView(storeId);
+}
+
+export type CancelActionResult =
+  | { ok: true; message: string }
+  | { ok: false; error: string };
+
+export async function cancelMySubscription(): Promise<CancelActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+
+  const storeId = await getActingStoreId();
+  const done = await cancelAtPeriodEnd({ storeId });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  const until = done.data.accessUntil
+    ? new Date(done.data.accessUntil).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      })
+    : null;
+  return {
+    ok: true,
+    // ★ The promise has to match what will happen. Access runs to the end of the
+    // cycle only if there IS one — between authorising and the first charge there
+    // isn't, and promising a plan they were never charged for sets up the wrong
+    // expectation.
+    message: until
+      ? `Cancelled. You keep your plan until ${until}, then move to Free.`
+      : "Cancelled. No further payments will be taken.",
+  };
+}
+
+export async function resumeMySubscription(): Promise<CancelActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+
+  const storeId = await getActingStoreId();
+  const done = await resumeSubscription({ storeId });
+  if (!done.ok) return { ok: false, error: done.error };
+  return {
+    ok: true,
+    // ⚠ Autopay is NOT restored — the mandate was withdrawn on cancel and only
+    // the merchant can authorise a new one. Saying otherwise has them expect a
+    // charge that never comes, and be downgraded for it.
+    message: done.data.autopay
+      ? "Resumed. Your plan will renew as normal."
+      : "Resumed. Autopay is off, so we'll ask you to pay each renewal.",
+  };
+}
+
+export type PlanChangeActionResult =
+  | {
+      ok: true;
+      /** Present when a payment is needed to apply it now. */
+      payment?: {
+        invoiceId: string;
+        providerOrderId: string;
+        keyId: string;
+        amountPaise: number;
+      };
+      scheduled: boolean;
+      message: string;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Move to a different plan or billing period.
+ *
+ * ★ The DIRECTION decides the timing, and the server decides the direction —
+ * there is no "apply now" option to pick, because on a downgrade that means a
+ * refund (§15b).
+ */
+export async function changeMyPlan(
+  plan: unknown,
+  period: unknown,
+): Promise<PlanChangeActionResult> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
+    return { ok: false, error: "Choose a paid plan." };
+  }
+  const billingPeriod: BillingPeriod =
+    period === "yearly" ? "yearly" : "monthly";
+
+  const [storeId, locationPrice] = await Promise.all([
+    getActingStoreId(),
+    getExtraLocationPricingLive(),
+  ]);
+  const started = await startPlanChange({
+    storeId,
+    targetPlan: plan,
+    targetPeriod: billingPeriod,
+    priceFor,
+    locationPrice,
+  });
+  if (!started.ok) return { ok: false, error: started.error };
+
+  const name = PLAN_META[plan].name;
+  if (started.data.payment) {
+    return {
+      ok: true,
+      payment: started.data.payment,
+      scheduled: false,
+      message: `Moving to ${name}.`,
+    };
+  }
+  // Applied free (a part period that rounded to nothing) or booked for later.
+  if (started.data.scheduled) {
+    const when = started.data.effectiveAt
+      ? new Date(started.data.effectiveAt).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          timeZone: "Asia/Kolkata",
+        })
+      : null;
+    return {
+      ok: true,
+      scheduled: true,
+      message: when
+        ? `Booked. You keep your current plan until ${when}, then move to ${name} billed ${billingPeriod}.`
+        : `Booked. You'll move to ${name} at the end of this cycle.`,
+    };
+  }
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, scheduled: false, message: `You're on ${name}.` };
+}
+
+export async function confirmMyPlanChange(
+  invoiceId: unknown,
+  plan: unknown,
+  period: unknown,
+  providerPaymentId: unknown,
+  signature: unknown,
+): Promise<{ ok: true; plan: Plan } | { ok: false; error: string }> {
+  const userId = await getManagerUserId("ai");
+  if (!userId)
+    return { ok: false, error: "You don't have permission to do this." };
+  if (
+    typeof invoiceId !== "string" ||
+    typeof providerPaymentId !== "string" ||
+    typeof signature !== "string" ||
+    !invoiceId ||
+    !providerPaymentId ||
+    !signature
+  ) {
+    return { ok: false, error: "That payment couldn't be confirmed." };
+  }
+  // ★ RE-VALIDATED, not trusted: the plan and period come from the client, and
+  // the invoice carries only the location count.
+  if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
+    return { ok: false, error: "That plan isn't valid." };
+  }
+  const billingPeriod: BillingPeriod =
+    period === "yearly" ? "yearly" : "monthly";
+
+  const storeId = await getActingStoreId();
+  const done = await confirmPlanChange({
+    storeId,
+    invoiceId,
+    targetPlan: plan,
+    targetPeriod: billingPeriod,
+    providerPaymentId,
+    signature,
+  });
+  if (!done.ok) return { ok: false, error: done.error };
+
+  revalidateTag(STORE_TAG, "max");
+  return { ok: true, plan: done.data.plan };
 }

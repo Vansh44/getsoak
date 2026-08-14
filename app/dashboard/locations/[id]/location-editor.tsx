@@ -217,8 +217,16 @@ export function LocationEditor({
 
           {(
             [
-              ["line1", "Street address", "sm:col-span-2"],
-              ["line2", "Apartment, unit, floor (optional)", "sm:col-span-2"],
+              [
+                "line1",
+                "House / flat number and street address",
+                "sm:col-span-2",
+              ],
+              [
+                "line2",
+                "Area, landmark, unit or floor (optional)",
+                "sm:col-span-2",
+              ],
               ["city", "City", ""],
               ["state", "State", ""],
               ["postalCode", "Postcode", ""],

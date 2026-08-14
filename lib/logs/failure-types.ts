@@ -12,7 +12,8 @@ export type FailureSourceKey =
   | "notification"
   | "refund"
   | "import"
-  | "payment";
+  | "payment"
+  | "subscription";
 
 /**
  * Which store's failures to read.
@@ -73,5 +74,16 @@ export const FAILURE_SOURCE_META: FailureSourceMeta[] = [
     key: "payment",
     label: "Payment",
     blurb: "Checkouts where the money never arrived.",
+  },
+  {
+    // ★ A SEPARATE SOURCE FROM `payment`, deliberately. That one is a SHOPPER's
+    // checkout failing — the merchant's own revenue. This is the MERCHANT's
+    // subscription payment to StoreMink failing, which costs them their plan.
+    // Different audience, different consequence; folding them together would
+    // bury one in the other.
+    key: "subscription",
+    label: "Subscription",
+    blurb:
+      "Plan payments that failed — the merchant is heading for a downgrade.",
   },
 ];

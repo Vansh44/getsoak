@@ -51,17 +51,22 @@ import {
 } from "@/lib/fulfilment/pickup";
 import { holdStock, releaseHold } from "@/lib/inventory/reservations";
 import { formatAddressLine } from "@/lib/locations/address";
+import { ensureFulfilmentOrder } from "@/lib/logistics/fulfilment";
 import {
   recordStorePolicyConsent,
   getCheckoutPolicies,
 } from "@/lib/legal/store-consent";
 import { summariseItems } from "@/lib/notifications/format";
+import { formatIndianMobile } from "@/lib/phone";
 import {
   rowToBillingSettings,
   rowToTaxClass,
   type BillingSettings,
   type TaxClass,
 } from "@/lib/billing/types";
+import { packageForShippingLines } from "@/lib/shipping/rates";
+import { quoteShippingForOrder } from "@/lib/shipping/quote";
+import type { ShippingOptionSnapshot } from "@/lib/shipping/types";
 
 // Aliased select for store_billing_settings preserving the snake_case row shape
 // rowToBillingSettings expects (Drizzle would otherwise return camelCase keys).
@@ -709,6 +714,12 @@ export async function placeOrder(
   /** Only when it differs from the delivery address. Null = same as shipping,
    *  which is what the invoice already falls back to. */
   billingInput?: BillingAddressInput | null,
+  /** The courier/rate the shopper picked from the server-issued quote. The
+   *  order action quotes again and accepts only a currently available id. */
+  selectedShippingRateId?: string | null,
+  /** Displayed amount paired with the selected id. A changed provider quote is
+   *  shown again instead of silently charging more than the shopper accepted. */
+  selectedShippingRateAmount?: number | null,
 ): Promise<CheckoutResult> {
   // Authenticate the shopper via the identity seam (session-backed).
   const user = await getServerUser();
@@ -770,6 +781,10 @@ export async function placeOrder(
     if (!cleanField(form[key] as string | undefined)) {
       return { error: `${label} is required.` };
     }
+  }
+  const deliveryPhone = formatIndianMobile(form.phone);
+  if (!deliveryPhone) {
+    return { error: "Enter a valid 10-digit Indian mobile number." };
   }
 
   // The order belongs to the store the shopper is actually on (the host),
@@ -837,6 +852,13 @@ export async function placeOrder(
         // stock to run out of (roadmap Phase D).
         track_inventory: products.trackInventory,
         allow_backorder: products.allowBackorder,
+        sku: products.sku,
+        hsn_code: products.hsnCode,
+        requires_shipping: products.requiresShipping,
+        weight_grams: products.weightGrams,
+        length_cm: products.lengthCm,
+        width_cm: products.widthCm,
+        height_cm: products.heightCm,
       })
       .from(products)
       .where(
@@ -876,6 +898,12 @@ export async function placeOrder(
       selling_price: number;
       track_inventory?: boolean | null;
       allow_backorder?: boolean | null;
+      sku: string;
+      requires_shipping: boolean | null;
+      weight_grams: number | null;
+      length_cm: number | null;
+      width_cm: number | null;
+      height_cm: number | null;
     }
   >();
   if (variantIds.length > 0) {
@@ -887,6 +915,12 @@ export async function placeOrder(
           selling_price: productVariants.sellingPrice,
           track_inventory: productVariants.trackInventory,
           allow_backorder: productVariants.allowBackorder,
+          sku: productVariants.sku,
+          requires_shipping: productVariants.requiresShipping,
+          weight_grams: productVariants.weightGrams,
+          length_cm: productVariants.lengthCm,
+          width_cm: productVariants.widthCm,
+          height_cm: productVariants.heightCm,
         })
         .from(productVariants)
         .where(
@@ -916,6 +950,13 @@ export async function placeOrder(
     tax_rate: number;
     tax_amount: number;
     tax_class_name: string | null;
+    sku: string;
+    hsn_code: string | null;
+    requires_shipping: boolean;
+    weight_grams: number | null;
+    length_cm: number | null;
+    width_cm: number | null;
+    height_cm: number | null;
   }> = [];
 
   for (const item of items) {
@@ -926,6 +967,14 @@ export async function placeOrder(
     let price = dbProduct.selling_price;
     const name = dbProduct.name;
     let variantName: string | null = null;
+    let logistics = {
+      sku: dbProduct.sku,
+      requires_shipping: dbProduct.requires_shipping,
+      weight_grams: dbProduct.weight_grams,
+      length_cm: dbProduct.length_cm,
+      width_cm: dbProduct.width_cm,
+      height_cm: dbProduct.height_cm,
+    };
 
     if (item.variantId) {
       const dbVariant = variantsMap.get(item.variantId);
@@ -933,6 +982,15 @@ export async function placeOrder(
         return { error: `Variant no longer available: ${item.variantName}` };
       price = dbVariant.selling_price;
       variantName = dbVariant.name;
+      logistics = {
+        sku: dbVariant.sku,
+        requires_shipping:
+          dbVariant.requires_shipping ?? dbProduct.requires_shipping,
+        weight_grams: dbVariant.weight_grams ?? dbProduct.weight_grams,
+        length_cm: dbVariant.length_cm ?? dbProduct.length_cm,
+        width_cm: dbVariant.width_cm ?? dbProduct.width_cm,
+        height_cm: dbVariant.height_cm ?? dbProduct.height_cm,
+      };
     }
 
     const taxInfo = resolveTax(dbProduct);
@@ -948,6 +1006,8 @@ export async function placeOrder(
       tax_rate: taxInfo.rate,
       tax_amount: 0,
       tax_class_name: taxInfo.name,
+      ...logistics,
+      hsn_code: dbProduct.hsn_code,
     });
   }
 
@@ -972,7 +1032,8 @@ export async function placeOrder(
     }
   }
 
-  const shipping = 0; // Hardcoded free shipping for now
+  let shipping = 0;
+  let shippingOption: ShippingOptionSnapshot | null = null;
 
   // 3c. Compute tax from each line's resolved rate, on the DISCOUNTED amount
   //     (see lib/billing/tax.ts). Exclusive: tax is ADDED to the total.
@@ -993,7 +1054,7 @@ export async function placeOrder(
     it.tax_amount = taxResult.lines[idx]?.tax ?? 0;
   });
 
-  const total = Math.max(
+  let total = Math.max(
     0,
     subtotal - discount + shipping + (billing.pricesIncludeTax ? 0 : tax),
   );
@@ -1015,7 +1076,7 @@ export async function placeOrder(
     postalCode: cleanField(form.postalCode),
     country: cleanField(form.country),
     email: cleanField(form.email),
-    phone: cleanField(form.phone),
+    phone: deliveryPhone,
   };
   const notes = cleanField(form.notes, MAX_NOTES_LEN) || null;
 
@@ -1116,6 +1177,102 @@ export async function placeOrder(
   const holdDays = pickupAt ? await pickupHoldDays() : 0;
   const readyDays = pickupAt ? await pickupReadyDays() : 0;
 
+  // Price shipping AFTER the fulfilment location is resolved: live carrier
+  // rates depend on the origin PIN code. The provider is re-queried here rather
+  // than trusting the browser's displayed amount or courier id.
+  if (pickupAt) {
+    shippingOption = {
+      id: "pickup:free",
+      label: "Pickup in store",
+      description:
+        readyDays === 0 ? "Available today" : `Ready in ${readyDays} days`,
+      amount: 0,
+      carrierCost: null,
+      courierId: null,
+      courierName: null,
+      estimatedDeliveryMinDays: readyDays,
+      estimatedDeliveryMaxDays: readyDays,
+      estimatedDeliveryAt: null,
+      freeShippingApplied: true,
+      provider: "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  } else if (!validItems.some((item) => item.requires_shipping)) {
+    shippingOption = {
+      id: "digital:none",
+      label: "No delivery required",
+      description: "Digital products",
+      amount: 0,
+      carrierCost: null,
+      courierId: null,
+      courierName: null,
+      estimatedDeliveryMinDays: null,
+      estimatedDeliveryMaxDays: null,
+      estimatedDeliveryAt: null,
+      freeShippingApplied: true,
+      provider: "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  } else {
+    const shippingQuote = await quoteShippingForOrder({
+      storeId,
+      fulfilmentLocationId,
+      deliveryPostcode: cleanField(form.postalCode),
+      cod: paymentMethod === "cod",
+      merchandiseSubtotal: subtotal,
+      parcel: packageForShippingLines(
+        validItems.map((item) => ({
+          quantity: item.quantity,
+          requiresShipping: item.requires_shipping,
+          weightGrams: item.weight_grams,
+          lengthCm: item.length_cm,
+          widthCm: item.width_cm,
+          heightCm: item.height_cm,
+        })),
+      ),
+    });
+    if (!shippingQuote.options.length) {
+      await releaseCoupon();
+      return {
+        error:
+          shippingQuote.error || "Delivery is not available for this address.",
+      };
+    }
+    const selectedRate = selectedShippingRateId
+      ? shippingQuote.options.find(
+          (option) => option.id === selectedShippingRateId,
+        )
+      : shippingQuote.options[0];
+    if (!selectedRate) {
+      await releaseCoupon();
+      return {
+        error:
+          "That delivery rate changed. Review the latest options and try again.",
+      };
+    }
+    if (
+      selectedShippingRateId &&
+      typeof selectedShippingRateAmount === "number" &&
+      Math.abs(selectedRate.amount - selectedShippingRateAmount) > 0.009
+    ) {
+      await releaseCoupon();
+      return {
+        error:
+          "That delivery price changed. Review the latest options and try again.",
+      };
+    }
+    shipping = selectedRate.amount;
+    shippingOption = {
+      ...selectedRate,
+      provider: selectedRate.courierId ? "shiprocket" : "manual",
+      quotedAt: new Date().toISOString(),
+    };
+  }
+  total = Math.max(
+    0,
+    subtotal - discount + shipping + (billing.pricesIncludeTax ? 0 : tax),
+  );
+
   // A separate billing address is optional and trimmed/capped exactly like the
   // shipping one — it prints on the invoice, so it is merchant-visible text
   // from an untrusted source.
@@ -1176,6 +1333,7 @@ export async function placeOrder(
         tax,
         taxInclusive: billing.pricesIncludeTax,
         shipping,
+        shippingOption,
         discount,
         total,
         currency: "INR",
@@ -1392,6 +1550,13 @@ export async function placeOrder(
     taxRate: item.tax_rate,
     taxAmount: item.tax_amount,
     taxClassName: item.tax_class_name,
+    hsnCode: item.hsn_code,
+    sku: item.sku,
+    requiresShipping: item.requires_shipping,
+    weightGrams: item.weight_grams,
+    lengthCm: item.length_cm,
+    widthCm: item.width_cm,
+    heightCm: item.height_cm,
   }));
 
   let itemsFailed = false;
@@ -1408,6 +1573,18 @@ export async function placeOrder(
     await deleteOrder();
     await releaseCoupon();
     return { error: "Failed to save order items. Please try again." };
+  }
+
+  // Shopify's durable split: the order records the sale; this work object says
+  // which location must prepare it. A migration rolling out moments after the
+  // app must not lose a paid order, so this is self-healing and booking repeats
+  // it before calling a carrier.
+  if (!pickupAt) {
+    await ensureFulfilmentOrder({
+      storeId,
+      orderId: order.id,
+      locationId: fulfilmentLocationId,
+    }).catch((err) => console.error("create fulfilment order:", errMsg(err)));
   }
 
   const orderRef = (order as { order_ref?: string }).order_ref ?? "";

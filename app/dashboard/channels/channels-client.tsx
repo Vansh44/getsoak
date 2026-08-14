@@ -11,6 +11,9 @@ import {
   Unplug,
   X,
   Search,
+  Truck,
+  Copy,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -19,12 +22,18 @@ import {
   setRazorpayEnabled,
   type ChannelState,
 } from "@/app/actions/payment-provider-actions";
+import {
+  disconnectShiprocket,
+  rotateShiprocketWebhookSecret,
+  saveShiprocketCredentials,
+  setShiprocketEnabled,
+  syncShiprocketPickupLocations,
+  type ShiprocketChannelState,
+} from "@/app/actions/logistics-provider-actions";
 
 // ---------------------------------------------------------------------------
 // Channel catalog — data-driven so new channels (logistics, SMS, marketplace…)
-// are a one-line addition here later. For now the only live channel is the
-// store's own Razorpay payment gateway; everything else the reference shows is
-// intentionally not built yet.
+// are a one-line addition here later.
 // ---------------------------------------------------------------------------
 
 type Category =
@@ -52,6 +61,17 @@ interface ChannelDef {
   logoAspect?: number;
 }
 
+const SHIPROCKET_CHANNEL: ChannelDef = {
+  id: "shiprocket",
+  name: "Shiprocket",
+  category: "logistics",
+  tagline: "Courier booking, labels, tracking & NDR",
+  accent: "#7357e8",
+  icon: Truck,
+  logo: "/channels/shiprocket.svg",
+  logoAspect: 854.34 / 189.9,
+};
+
 const CHANNELS: ChannelDef[] = [
   {
     id: "razorpay",
@@ -60,9 +80,10 @@ const CHANNELS: ChannelDef[] = [
     tagline: "Accept UPI, cards & netbanking at checkout",
     accent: "#0b6cff",
     icon: CreditCard,
-    logo: "/channels/razorpay.svg",
+    logo: "/channels/razorpay.webp",
     logoAspect: 132 / 38, // Razorpay wordmark
   },
+  SHIPROCKET_CHANNEL,
 ];
 
 // Brand logo when the channel ships one, else a tinted icon tile. `height`
@@ -149,14 +170,19 @@ function Toggle({
 
 export function ChannelsClient({
   initialState,
+  initialShiprocketState,
   canManage,
 }: {
   initialState: ChannelState;
+  initialShiprocketState: ShiprocketChannelState;
   canManage: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [state, setState] = useState(initialState);
+  const [shiprocketState, setShiprocketState] = useState(
+    initialShiprocketState,
+  );
   const [tab, setTab] = useState<"all" | Category>("all");
   const [query, setQuery] = useState("");
   // Which channel's connect/manage modal is open.
@@ -164,9 +190,18 @@ export function ChannelsClient({
 
   const refresh = () => startTransition(() => router.refresh());
 
-  // Razorpay is the only channel with real connection state today.
-  const isConnected = (id: string) => id === "razorpay" && state.connected;
-  const isEnabled = (id: string) => id === "razorpay" && state.enabled;
+  const isConnected = (id: string) =>
+    id === "razorpay"
+      ? state.connected
+      : id === "shiprocket"
+        ? shiprocketState.connected
+        : false;
+  const isEnabled = (id: string) =>
+    id === "razorpay"
+      ? state.enabled
+      : id === "shiprocket"
+        ? shiprocketState.enabled
+        : false;
 
   const categories = useMemo(() => {
     const present = new Set(CHANNELS.map((c) => c.category));
@@ -187,17 +222,25 @@ export function ChannelsClient({
   const active = visible.filter((c) => isConnected(c.id));
   const available = visible.filter((c) => !isConnected(c.id));
 
-  async function handleToggle() {
-    const next = !state.enabled;
-    const res = await setRazorpayEnabled(next);
+  async function handleToggle(id: string) {
+    const next = !isEnabled(id);
+    const res =
+      id === "shiprocket"
+        ? await setShiprocketEnabled(next)
+        : await setRazorpayEnabled(next);
     if (res.error) {
       toast.error(res.error);
       return;
     }
-    setState((s) => ({ ...s, enabled: next }));
-    toast.success(
-      next ? "Online payments enabled." : "Online payments paused.",
-    );
+    if (id === "shiprocket") {
+      setShiprocketState((s) => ({ ...s, enabled: next }));
+      toast.success(next ? "Shiprocket enabled." : "Shiprocket paused.");
+    } else {
+      setState((s) => ({ ...s, enabled: next }));
+      toast.success(
+        next ? "Online payments enabled." : "Online payments paused.",
+      );
+    }
     refresh();
   }
 
@@ -265,7 +308,10 @@ export function ChannelsClient({
               }
               toggle={
                 canManage ? (
-                  <Toggle on={isEnabled(c.id)} onClick={handleToggle} />
+                  <Toggle
+                    on={isEnabled(c.id)}
+                    onClick={() => handleToggle(c.id)}
+                  />
                 ) : null
               }
               onClick={() => setOpenId(c.id)}
@@ -305,6 +351,329 @@ export function ChannelsClient({
           onRefresh={refresh}
         />
       )}
+      {openId === "shiprocket" && (
+        <ShiprocketModal
+          state={shiprocketState}
+          canManage={canManage}
+          onClose={() => setOpenId(null)}
+          onState={setShiprocketState}
+          onRefresh={refresh}
+        />
+      )}
+    </div>
+  );
+}
+
+function ShiprocketModal({
+  state,
+  canManage,
+  onClose,
+  onState,
+  onRefresh,
+}: {
+  state: ShiprocketChannelState;
+  canManage: boolean;
+  onClose: () => void;
+  onState: React.Dispatch<React.SetStateAction<ShiprocketChannelState>>;
+  onRefresh: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showForm, setShowForm] = useState(!state.connected);
+  const [busy, setBusy] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState(state.webhookUrl);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    const result = await saveShiprocketCredentials(email, password);
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    setWebhookSecret(result.webhookSecret ?? null);
+    setWebhookUrl(result.webhookUrl ?? null);
+    setPassword("");
+    setShowForm(false);
+    onState((s) => ({
+      ...s,
+      connected: true,
+      enabled: true,
+      accountEmail: email.trim().toLowerCase(),
+      webhookUrl: result.webhookUrl ?? s.webhookUrl,
+    }));
+    toast.success("Shiprocket connected. Now sync your warehouse locations.");
+    onRefresh();
+  }
+
+  async function handleSync() {
+    setBusy(true);
+    const result = await syncShiprocketPickupLocations();
+    setBusy(false);
+    if (result.error) toast.error(result.error);
+    if (result.synced) {
+      onState((s) => ({ ...s, mappedLocations: result.synced ?? 0 }));
+      toast.success(
+        `${result.synced} fulfilment location${result.synced === 1 ? "" : "s"} synced.`,
+      );
+    }
+    for (const item of result.skipped ?? []) {
+      toast.warning(`${item.location}: ${item.reason}`);
+    }
+    onRefresh();
+  }
+
+  async function handleRotate() {
+    setBusy(true);
+    const result = await rotateShiprocketWebhookSecret();
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    setWebhookSecret(result.webhookSecret ?? null);
+    setWebhookUrl(result.webhookUrl ?? webhookUrl);
+    toast.success("Webhook token rotated. Update it in Shiprocket now.");
+  }
+
+  async function handleToggle() {
+    setBusy(true);
+    const next = !state.enabled;
+    const result = await setShiprocketEnabled(next);
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    onState((s) => ({ ...s, enabled: next }));
+    toast.success(next ? "Shiprocket enabled." : "Shiprocket paused.");
+    onRefresh();
+  }
+
+  async function handleDisconnect() {
+    if (
+      !window.confirm(
+        "Disconnect Shiprocket? Existing shipment records remain, but new bookings and live tracking will stop.",
+      )
+    )
+      return;
+    setBusy(true);
+    const result = await disconnectShiprocket();
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    onState({
+      connected: false,
+      enabled: false,
+      accountEmail: null,
+      connectionId: null,
+      webhookUrl: null,
+      mappedLocations: 0,
+      eligibleLocations: state.eligibleLocations,
+    });
+    toast.success("Shiprocket disconnected.");
+    onRefresh();
+    onClose();
+  }
+
+  async function copy(value: string, label: string) {
+    await navigator.clipboard.writeText(value);
+    toast.success(`${label} copied.`);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl rounded-xl bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-[7.5rem] items-center justify-center">
+              <ChannelLogo def={SHIPROCKET_CHANNEL} height={24} />
+            </span>
+            <div>
+              <h2 className="text-base font-semibold text-[#111827]">
+                Shiprocket
+              </h2>
+              <p className="text-xs text-[#5b6472]">
+                Courier aggregation on your own account
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          {state.connected && !showForm ? (
+            <>
+              <div className="rounded-lg border border-[rgba(17,24,39,0.08)] bg-[#f9fafb] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-[#111827]">
+                      {state.accountEmail}
+                    </p>
+                    <p className="mt-1 text-xs text-[#5b6472]">
+                      Password and API token are encrypted and never displayed.
+                    </p>
+                  </div>
+                  <ShieldCheck className="h-5 w-5 text-green-600" />
+                </div>
+                <div className="mt-3 text-xs text-[#5b6472]">
+                  {state.mappedLocations} of {state.eligibleLocations}{" "}
+                  online-fulfilment locations synced
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-violet-100 bg-violet-50/50 p-4">
+                <p className="text-sm font-semibold text-[#111827]">
+                  Live tracking webhook
+                </p>
+                <p className="mt-1 text-xs text-[#5b6472]">
+                  In Shiprocket, open Settings → API → Webhooks. Paste this URL
+                  and use the token as the <code>x-api-key</code> header.
+                </p>
+                {webhookUrl && (
+                  <button
+                    type="button"
+                    onClick={() => copy(webhookUrl, "Webhook URL")}
+                    className="mt-3 flex w-full items-center justify-between gap-2 rounded-md border bg-white px-3 py-2 text-left font-mono text-xs text-[#344054]"
+                  >
+                    <span className="truncate">{webhookUrl}</span>
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                  </button>
+                )}
+                {webhookSecret ? (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => copy(webhookSecret, "Webhook token")}
+                      className="flex w-full items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left font-mono text-xs text-amber-900"
+                    >
+                      <span className="truncate">{webhookSecret}</span>
+                      <Copy className="h-3.5 w-3.5 shrink-0" />
+                    </button>
+                    <p className="mt-1 text-[11px] text-amber-700">
+                      Copy now. This token will not be shown again.
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleRotate}
+                    disabled={!canManage || busy}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" /> Generate a new webhook
+                    token
+                  </button>
+                )}
+              </div>
+
+              {canManage && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="dash-btn dash-btn-primary"
+                    onClick={handleSync}
+                    disabled={busy}
+                  >
+                    Sync warehouses
+                  </button>
+                  <button
+                    type="button"
+                    className="dash-btn"
+                    onClick={handleToggle}
+                    disabled={busy}
+                  >
+                    {state.enabled ? "Pause" : "Resume"}
+                  </button>
+                  <button
+                    type="button"
+                    className="dash-btn"
+                    onClick={() => setShowForm(true)}
+                    disabled={busy}
+                  >
+                    Replace login
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                    onClick={handleDisconnect}
+                    disabled={busy}
+                  >
+                    <Unplug className="h-4 w-4" /> Disconnect
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <form onSubmit={handleSave} className="space-y-4">
+              <p className="text-sm text-[#5b6472]">
+                Use a dedicated Shiprocket API user. We verify the login before
+                storing it; bookings and charges stay in the merchant&apos;s
+                Shiprocket account.
+              </p>
+              <div>
+                <label
+                  htmlFor="sr-email"
+                  className="mb-1.5 block text-sm font-medium text-[#344054]"
+                >
+                  API user email
+                </label>
+                <input
+                  id="sr-email"
+                  type="email"
+                  className="dash-input w-full"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                  disabled={!canManage || busy}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="sr-password"
+                  className="mb-1.5 block text-sm font-medium text-[#344054]"
+                >
+                  API user password
+                </label>
+                <input
+                  id="sr-password"
+                  type="password"
+                  className="dash-input w-full"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  autoComplete="off"
+                  disabled={!canManage || busy}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="dash-btn dash-btn-primary"
+                  disabled={!canManage || busy}
+                >
+                  {busy ? "Verifying…" : "Verify & connect"}
+                </button>
+                {state.connected && (
+                  <button
+                    type="button"
+                    className="dash-btn"
+                    onClick={() => setShowForm(false)}
+                    disabled={busy}
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -488,7 +857,7 @@ function RazorpayModal({
         <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
           <div className="flex items-center gap-3">
             <Image
-              src="/channels/razorpay.svg"
+              src="/channels/razorpay.webp"
               alt="Razorpay logo"
               width={Math.round(28 * (132 / 38))}
               height={28}

@@ -18,11 +18,25 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
-import { orderItems, orders, products, storeLocations } from "@/drizzle/schema";
+import {
+  orderItems,
+  orders,
+  products,
+  shipmentEvents,
+  shipments,
+  storeLocations,
+} from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
-import { requireStorefrontStoreId } from "@/lib/store/resolve";
+import { getCurrentStore, requireStorefrontStoreId } from "@/lib/store/resolve";
 import { logError } from "@/lib/observability/logger";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import { effectivePlan } from "@/lib/plans";
+import { isPosEnabled } from "@/lib/pos/locations";
+import {
+  isLocationType,
+  locationCan,
+  normalizeCapabilities,
+} from "@/lib/locations/capabilities";
 import { rateLimit } from "@/lib/rate-limit";
 import { emitEvent } from "@/lib/notifications/record";
 import {
@@ -31,6 +45,10 @@ import {
   rulesFromSettings,
 } from "@/lib/orders/cancellation";
 import { approveCancellation } from "@/lib/orders/approve-cancellation";
+import {
+  shipmentStatusLabel,
+  type ShipmentStatus,
+} from "@/lib/logistics/status";
 
 export interface MyOrderRow {
   id: string;
@@ -52,6 +70,8 @@ export interface MyOrderRow {
    *  to drive over, and the badge is the only thing that says which. */
   fulfilment_type: string;
   pickup_status: string | null;
+  /** 'pos' means the purchase was rung up at a StoreMink till. */
+  sales_channel: string;
 }
 
 export interface MyOrderItem {
@@ -85,7 +105,34 @@ export interface MyOrderDetail extends Omit<MyOrderRow, "thumbnails"> {
   pickup_code: string | null;
   pickup_location_name: string | null;
   pickup_location_address: Record<string, unknown> | null;
+  sale_location_name: string | null;
+  sale_location_address: Record<string, unknown> | null;
   items: MyOrderItem[];
+  shipments: MyOrderShipment[];
+}
+
+export interface MyOrderHistoryCapabilities {
+  /** A currently usable StoreMink till exists at an active shop. */
+  supportsPos: boolean;
+  /** Checkout currently offers collection at an active eligible shop. */
+  supportsPickup: boolean;
+}
+
+export interface MyOrderShipment {
+  id: string;
+  status: ShipmentStatus;
+  status_label: string;
+  courier_name: string | null;
+  awb: string | null;
+  tracking_url: string | null;
+  estimated_delivery_at: string | null;
+  events: Array<{
+    id: string;
+    description: string | null;
+    status: string;
+    location: string | null;
+    occurred_at: string;
+  }>;
 }
 
 /** The signed-in shopper's orders on THIS store, newest first. */
@@ -113,6 +160,7 @@ export async function getMyOrders(): Promise<{
             currency: orders.currency,
             fulfilment_type: orders.fulfilmentType,
             pickup_status: orders.pickupStatus,
+            sales_channel: orders.salesChannel,
           })
           .from(orders)
           .where(
@@ -181,6 +229,72 @@ export async function getMyOrders(): Promise<{
   }
 }
 
+/**
+ * Which physical-store journeys this storefront can truthfully advertise.
+ *
+ * A setting alone is not enough. POS also needs an active shop whose `pos`
+ * capability is usable; pickup needs its merchant setting AND an active shop
+ * whose plan-gated `pickup` capability is usable. A warehouse, disabled shop,
+ * expired plan, or a store using an unrelated external till therefore cannot
+ * create a misleading empty "In store" tab.
+ */
+export async function getMyOrderHistoryCapabilities(): Promise<MyOrderHistoryCapabilities> {
+  const user = await getServerUser();
+  if (!user) return { supportsPos: false, supportsPickup: false };
+
+  const storeId = await requireStorefrontStoreId();
+  try {
+    const [store, settings, locations] = await Promise.all([
+      getCurrentStore(),
+      getStoreSettings(),
+      withService((db) =>
+        db
+          .select({
+            type: storeLocations.type,
+            active: storeLocations.active,
+            capabilities: storeLocations.capabilities,
+          })
+          .from(storeLocations)
+          .where(
+            and(
+              eq(storeLocations.storeId, storeId),
+              eq(storeLocations.active, true),
+            ),
+          ),
+      ),
+    ]);
+    const plan = effectivePlan(store);
+    const activeShops = locations.filter((location) => {
+      const type = isLocationType(location.type) ? location.type : "shop";
+      return location.active && type === "shop";
+    });
+    const can = (capability: "pos" | "pickup") =>
+      activeShops.some((location) => {
+        const type = isLocationType(location.type) ? location.type : "shop";
+        return locationCan(
+          normalizeCapabilities(location.capabilities, type),
+          capability,
+          { plan },
+        );
+      });
+
+    return {
+      supportsPos: isPosEnabled(store) && can("pos"),
+      supportsPickup:
+        settings["fulfilment.offerPickup"] === true && can("pickup"),
+    };
+  } catch (error) {
+    // Fail closed for current capability advertising. The list itself still
+    // shows historical orders, and the page independently keeps the tab when
+    // one of those orders is an in-store journey.
+    logError("customer orders: channel capability read failed", error, {
+      userId: user.id,
+      storeId,
+    });
+    return { supportsPos: false, supportsPickup: false };
+  }
+}
+
 /** One of the shopper's own orders, with its line items. */
 export async function getMyOrder(
   orderId: string,
@@ -213,6 +327,7 @@ export async function getMyOrder(
             notes: orders.notes,
             fulfilment_type: orders.fulfilmentType,
             pickup_status: orders.pickupStatus,
+            sales_channel: orders.salesChannel,
             pickup_ready_at: orders.pickupReadyAt,
             pickup_expires_at: orders.pickupExpiresAt,
             pickup_code: orders.pickupCode,
@@ -223,6 +338,14 @@ export async function getMyOrder(
             pickup_location_address: sql<Record<string, unknown> | null>`(
               select l.address from ${storeLocations} l
                where l.id = ${orders.pickupLocationId}
+            )`,
+            sale_location_name: sql<string | null>`(
+              select l.name from ${storeLocations} l
+               where l.id = ${orders.locationId}
+            )`,
+            sale_location_address: sql<Record<string, unknown> | null>`(
+              select l.address from ${storeLocations} l
+               where l.id = ${orders.locationId}
             )`,
           })
           .from(orders)
@@ -255,6 +378,69 @@ export async function getMyOrder(
           .where(eq(orderItems.orderId, orderId))
           .orderBy(asc(orderItems.createdAt));
 
+        // Shipments are service-only because they contain provider internals.
+        // The ownership + host-store check above has already proven this is
+        // the shopper's order; return only the customer-safe tracking fields.
+        const shipmentRows = await withService((service) =>
+          service
+            .select({
+              id: shipments.id,
+              status: shipments.status,
+              courier_name: shipments.courierName,
+              awb: shipments.awb,
+              tracking_url: shipments.trackingUrl,
+              estimated_delivery_at: shipments.estimatedDeliveryAt,
+            })
+            .from(shipments)
+            .where(
+              and(
+                eq(shipments.orderId, orderId),
+                eq(shipments.storeId, storeId),
+              ),
+            )
+            .orderBy(asc(shipments.createdAt)),
+        );
+        const eventRows = shipmentRows.length
+          ? await withService((service) =>
+              service
+                .select({
+                  id: shipmentEvents.id,
+                  shipment_id: shipmentEvents.shipmentId,
+                  description: shipmentEvents.description,
+                  status: shipmentEvents.status,
+                  location: shipmentEvents.location,
+                  occurred_at: shipmentEvents.occurredAt,
+                })
+                .from(shipmentEvents)
+                .where(
+                  inArray(
+                    shipmentEvents.shipmentId,
+                    shipmentRows.map((shipment) => shipment.id),
+                  ),
+                )
+                .orderBy(desc(shipmentEvents.occurredAt)),
+            )
+          : [];
+        const customerShipments: MyOrderShipment[] = shipmentRows.map(
+          (shipment) => {
+            const status = shipment.status as ShipmentStatus;
+            return {
+              ...shipment,
+              status,
+              status_label: shipmentStatusLabel(status),
+              events: eventRows
+                .filter((event) => event.shipment_id === shipment.id)
+                .map((event) => ({
+                  id: event.id,
+                  description: event.description,
+                  status: event.status,
+                  location: event.location,
+                  occurred_at: event.occurred_at,
+                })),
+            };
+          },
+        );
+
         return {
           order: {
             ...order,
@@ -265,6 +451,7 @@ export async function getMyOrder(
             item_count: items.reduce((n, i) => n + i.quantity, 0),
             first_item: items[0]?.name ?? null,
             items,
+            shipments: customerShipments,
           },
         };
       },

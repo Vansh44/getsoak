@@ -1,0 +1,164 @@
+/* ---------------------------------------------------------------------------
+ * A StoreMink subscription invoice.
+ *
+ * ★ Scoped `sminv-*`, NOT the `inv-*` names in components/invoice/invoice.css.
+ * Those are shaped for the merchant's own ORDER invoice, whose markup differs
+ * (`.inv-title` is a container with an h1 inside there; here the h1 IS the
+ * title). Reusing them would silently mis-style this sheet.
+ *
+ * The `.invoice-sheet` class on the <article> is deliberately SHARED, because it
+ * is what `invoice.css`'s `@media print` block isolates — everything else on the
+ * page is hidden and the sheet is laid flat. That rule is generic and worth
+ * inheriting; the inner layout is not.
+ * ------------------------------------------------------------------------- */
+
+.sminv-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.sminv-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #111827;
+}
+
+.sminv-ref {
+  margin: 4px 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.sminv-meta {
+  text-align: right;
+  min-width: 220px;
+}
+
+.sminv-meta p {
+  margin: 0 0 3px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.sminv-label {
+  color: #6b7280;
+}
+
+.sminv-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  padding: 20px 0;
+}
+
+.sminv-parties h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+}
+
+.sminv-parties p {
+  margin: 0 0 2px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.sminv-name {
+  font-weight: 600 !important;
+  color: #111827 !important;
+}
+
+.sminv-items {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.sminv-items th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6b7280;
+  padding: 8px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.sminv-items td {
+  padding: 10px 0;
+  font-size: 13px;
+  border-bottom: 1px solid #f3f4f6;
+  vertical-align: top;
+}
+
+.sminv-items .num {
+  text-align: right;
+  /* Tabular figures so a column of amounts lines up on the decimal. */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 16px;
+}
+
+.sminv-totals {
+  margin-left: auto;
+  margin-top: 16px;
+  width: 280px;
+}
+
+.sminv-totals p {
+  margin: 0 0 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sminv-total-strong {
+  margin-top: 10px !important;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+  font-weight: 700;
+  font-size: 15px !important;
+  color: #111827;
+}
+
+.sminv-foot {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.sminv-foot p {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .sminv-head,
+  .sminv-parties {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+  .sminv-meta {
+    text-align: left;
+    min-width: 0;
+  }
+  .sminv-totals {
+    width: 100%;
+  }
+}

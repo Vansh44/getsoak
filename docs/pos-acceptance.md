@@ -14,12 +14,13 @@ stories are here.**
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                                             | Why                                                                                        |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                            |
-| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                            |
-| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
-| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                   |
+| Prerequisite                                                                                             | Why                                                                                               |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                                   |
+| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                                   |
+| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
+| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                          |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
 are applied. `locations_10` is pending a `postgres` migration run; the three
@@ -511,6 +512,48 @@ would otherwise see a foreign order in their history.
 Enter a business buyer's GSTIN.
 **Expect:** format-validated, uppercased, printed. It works with no customer
 attached.
+
+### Customer Online / In-store history
+
+**PS-7.17a — Delivery-only stores stay simple**
+On a store with pickup off and no active shop that can use StoreMink POS, sign
+in as a shopper and open `/orders`.
+**Expect:** no Online/In store tabs. The ordinary combined order list/empty
+state remains. An external till does not count because StoreMink cannot attach
+or read its receipts.
+
+**PS-7.17b — A working physical journey reveals the split**
+Enable StoreMink POS at an active `pos`-capable shop, or enable checkout pickup
+with an active `pickup`-capable shop, then open `/orders`.
+**Expect:** equal-width **Online** and **In store** tabs. Home-delivery website
+orders are Online; StoreMink till sales and pickup orders are In store.
+
+**PS-7.17c ★ — A setting cannot advertise a journey by itself**
+Leave POS/pickup settings on but deactivate the only eligible shop, remove its
+capability, use only a warehouse, or let the Pro plan expire.
+**Expect:** the In store tab is not offered to a customer with no physical-store
+history. Settings, location capability, active state and effective plan must all
+agree.
+
+**PS-7.17d ★ — Disabling a feature never hides a receipt**
+Attach a customer to a POS sale and place a pickup order, then disable POS and
+pickup (or deactivate the location). Sign in as that customer.
+**Expect:** In store remains visible and both historical orders remain there.
+Feature gates stop future journeys; they never erase or conceal customer-owned
+history.
+
+**PS-7.17e — Each tab has useful empty guidance**
+Open a tab with no matching orders.
+**Expect:** a centred channel-specific icon, title and explanation. Online links
+to Shop; pickup-capable In store links to Shop for pickup; POS-only In store
+explains that the cashier must attach the customer's account.
+
+**PS-7.17f ★ — A POS receipt is not presented as delivery**
+Open a customer-linked POS order from In store.
+**Expect:** an **In store** badge, “Purchased in store”, the sale location,
+items, totals and invoice. No shipment timeline and no empty delivery-address
+card. An anonymous walk-in remains invisible until roadmap Step 4 adds safe
+claim/merge identity.
 
 **PS-7.18 — Offline-ish speed**
 Throttle the network to slow-3G and search the catalogue.
@@ -1691,7 +1734,193 @@ destination gated above `sell`), and typing `/pos/returns` gives an
 explanation — not a silent redirect, because a manager who sent them there
 should see why. Pickups stays available: handing collections over is their job.
 
-## 11. Known gaps
+## 11. Shiprocket logistics
+
+Use a Shiprocket test account/API user and an order routed to an active
+`online_fulfil` warehouse with a complete Indian address.
+
+**PS-SH.1 — The merchant connects their account, not ours**
+Channels → Shiprocket → enter the API-user email/password.
+**Expect:** wrong credentials are refused before save; correct credentials show
+the email but never the password/token. Shiprocket charges and settlement stay
+in that merchant's account.
+
+**PS-SH.2 ★ — The webhook secret is write-only**
+Connect or rotate the webhook token, copy it, close/reopen the dialog.
+**Expect:** Shiprocket accepts the provider-neutral URL (it contains none of its
+reserved provider keywords); the URL remains visible but the token does not.
+The old token gets 401 as soon as it is rotated; the new token works in
+`x-api-key`.
+
+**PS-SH.3 — Only fulfilment warehouses sync**
+Keep one shop without `online_fulfil`, enable it on a warehouse, then Sync.
+**Expect:** only the warehouse is created/mapped in Shiprocket. Re-sync keeps
+the same stable pickup code rather than making another warehouse. If house or
+flat details were entered in the location's second address line, they become
+Shiprocket's primary address; short address fragments do not produce raw JSON
+validation messages.
+
+**PS-SH.4 ★ — A bad warehouse is named, not silently replaced**
+Remove its PIN code and Sync.
+**Expect:** the location is skipped with the exact missing-address instruction;
+it is never mapped to the default shop.
+
+**PS-SH.5 — Product logistics survive later edits**
+Give a product/variant weight and dimensions, place an order, then change them.
+**Expect:** the parcel defaults use the order-line snapshots from purchase time,
+not the newly edited product.
+
+**PS-SH.6 ★ — An order and warehouse work are different records**
+Place a delivery order and inspect its fulfilment data.
+**Expect:** one order, one location-assigned fulfilment order, and its line
+allocations. No AWB or Shiprocket ID appears on `orders`.
+
+**PS-SH.7 — Packing produces an AWB and label**
+Open the delivery order, confirm packed measurements, Book with Shiprocket.
+**Expect:** the Shiprocket order/shipment, AWB, courier, tracking URL and label
+are saved; order becomes Processing and fulfilment becomes In progress.
+
+**PS-SH.7a ★ — Bad delivery phones fail before the carrier and can be fixed**
+Try checkout with `8888888888`, then open a legacy pending delivery with that
+phone and no Shiprocket IDs. **Expect:** checkout refuses the placeholder; the
+drawer's Delivery card accepts a real Indian mobile, stores it as `+91` plus ten
+digits, and Retry booking succeeds. Once any Shiprocket order/shipment/AWB is
+stored, StoreMink refuses the edit and directs staff to Shiprocket.
+
+**PS-SH.8 ★★ — Retrying cannot create a second parcel**
+Make label generation fail after Shiprocket assigned the AWB, then retry Book.
+**Expect:** StoreMink retains the external shipment/AWB and resumes at the
+missing stage. Shiprocket has one order and one AWB, not two.
+
+**PS-SH.9 — Pickup and manifest are warehouse actions**
+On Ready to ship, Schedule pickup.
+**Expect:** status becomes Pickup scheduled; manifest appears when Shiprocket
+returns one. A temporary manifest failure does not undo the successful pickup.
+
+**PS-SH.10 — Another courier still works**
+Without Shiprocket (or by choice), Use another courier; enter carrier/AWB/link.
+**Expect:** the shipment is saved as Manual, order becomes Shipped, and the
+customer sees the same safe courier/tracking information.
+
+**PS-SH.11 ★ — Duplicate webhooks are exactly once**
+POST the same authenticated Shiprocket event twice.
+**Expect:** both requests are accepted, one `shipment_event` exists, and no
+duplicate notification/status change is emitted.
+
+**PS-SH.12 ★★ — Late webhooks never send a parcel backwards**
+Record Delivered, then send In transit; or send an old Picked up after Out for
+delivery.
+**Expect:** history may retain the evidence, but shipment/order remain at the
+furthest valid state. A cancelled order is never revived by a carrier callback.
+
+**PS-SH.13 — The customer follows the parcel**
+As that shopper, open `/orders/<id>` after scans arrive.
+**Expect:** status, courier, AWB, tracking link and recent scans/location/time.
+No raw webhook payload, provider order ID, credential, internal error or pickup
+mapping is exposed.
+
+**PS-SH.14 — Delivery closes the journey**
+Send a Delivered callback while the order is Processing or Shipped.
+**Expect:** shipment and order become Delivered, `delivered_at` is stamped, and
+the return window now has its actual starting point.
+
+**PS-SH.15 — NDR offers the two real decisions**
+Send an undelivered/NDR callback.
+**Expect:** dashboard says action required and offers Re-attempt or Return to
+origin; the chosen action reaches Shiprocket and moves to the appropriate
+provider-neutral state.
+
+**PS-SH.16 — Cancellation stops at courier custody**
+Cancel a Ready-to-ship AWB, then try on a Picked-up parcel.
+**Expect:** the first calls Shiprocket and becomes Cancelled; the second is
+refused with guidance to use Shiprocket support/NDR. Cancelling a parcel does
+not silently cancel/refund the commercial order.
+
+**PS-SH.17 — Pausing is reversible, disconnecting preserves evidence**
+Pause Shiprocket, attempt a booking, resume it, then disconnect after an order
+has shipped.
+**Expect:** paused booking is refused; resume works; disconnect removes the
+credential/mappings but historical shipment/events remain readable.
+
+**PS-SH.18 — Store scope is absolute**
+As staff of store A, request an order/shipment belonging to store B and POST its
+AWB to store A's connection URL.
+**Expect:** no data/action. Connection id, store id, order id and normal
+permission checks all agree before any mutation.
+
+**PS-SH.19 — Shipping policy has one obvious home**
+Open Settings → Shipping & delivery. **Expect:** always-free, fixed-rate and
+live Shiprocket pricing are configured here; Channels still contains only the
+Shiprocket account connection, warehouse sync and webhook.
+
+**PS-SH.20 — A fixed fee ignores the destination**
+Choose Fixed rate, enter ₹50 and set a 3–7 day estimate. Checkout with two valid
+Indian PIN codes. **Expect:** both show Standard shipping, ₹50 and 3–7 days;
+the order subtotal, shipping and total persist as separate values.
+
+**PS-SH.21 — Free above uses the merchandise subtotal**
+Set fixed ₹50 and free above ₹500. Test baskets of ₹499 and ₹500, then apply a
+coupon to the ₹500 basket. **Expect:** ₹499 pays ₹50; ₹500 is free. The rule is
+based on merchandise subtotal before coupon discounts, as the settings screen
+says, so applying the coupon does not unexpectedly add shipping back.
+
+**PS-SH.22 — Live courier choices include price and promise**
+Enable live Shiprocket rates with a synced fulfilment location, valid parcel
+measurements and a serviceable address. **Expect:** checkout shows either the
+cheapest courier or up to five (per setting), sorted by customer price, with
+the adjusted charge and handling-inclusive delivery estimate. Switching COD to
+prepaid re-quotes serviceability.
+
+**PS-SH.23 ★ — The browser never sets the shipping price**
+Tamper with the displayed amount or submit an unavailable courier id.
+**Expect:** `placeOrder` re-fetches the current server quote. A missing choice
+defaults safely to the cheapest current option for old clients; a named choice
+or displayed price that changed is refused with “rate changed,” and no order is
+written.
+
+**PS-SH.24 — The checkout promise is durable**
+Place a live-rate order, then change shipping settings or Shiprocket rates.
+**Expect:** `orders.shipping_option` still records the selected courier,
+customer charge, provider cost, ETA and quote time. Booking proposes that
+courier and copies its cost/ETA to the shipment; a provider rejection remains a
+normal retryable carrier error.
+
+**PS-SH.25 — Pickup and digital goods are never charged delivery**
+Choose store pickup, then separately check out a digital-only basket.
+**Expect:** both are ₹0 and make no Shiprocket serviceability request. A physical
+delivery with an invalid/unserviceable PIN cannot be ordered while live rates
+are selected.
+
+**PS-SH.26 — The header remembers where delivery is going**
+As a signed-in customer with a default saved address, open the storefront on a
+fresh browser profile. Then enter a different valid PIN in the header and
+refresh. **Expect:** the default city/state appears automatically first; the
+deliberately entered PIN wins after refresh. A signed-out shopper's entered PIN
+also survives refresh on that store origin.
+
+**PS-SH.27 — Current location is permissioned and recoverable**
+Open the header location panel. Confirm no browser location prompt appeared
+before clicking “Use my current location”; click it once with permission and
+once with permission denied. **Expect:** success fills the reverse-geocoded PIN
+and location label. Denial explains that a PIN can still be entered; browsing
+and purchasing remain usable.
+
+**PS-SH.28 ★ — A PDP promise uses the checkout engine**
+On classic and grocery product pages, enter a serviceable PIN under free, fixed
+₹50/free-above-₹500 and live Shiprocket modes. Change variant and quantity.
+**Expect:** the page shows online-stock availability, customer charge and ETA
+from the selected variant/quantity. Free-above follows merchandise subtotal;
+live mode shows the cheapest current courier and says when more choices will be
+available at checkout. Invalid/unserviceable PINs show a useful refusal.
+
+**PS-SH.29 ★ — A PDP cannot invent price, stock or parcel data**
+Tamper with product/variant/quantity in a delivery-check request, including a
+variant from another product/store and an unpublished product. Burst more than
+30 requests in one minute from one IP. **Expect:** the server re-reads all
+catalog/logistics values under the request host, rejects invalid references and
+rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
+
+## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
 
@@ -1714,3 +1943,8 @@ Real and deliberate, so nobody files them as bugs:
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |
+| ~~**Live delivery rates at checkout**~~                            | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                        |
+| **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                         |
+| **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                              |
+| **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                       |
+| **Shiprocket browser/API smoke test pending**                      | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                            |

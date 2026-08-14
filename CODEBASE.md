@@ -30,7 +30,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
-| Deploy    | Vercel (current); **migrating to Google Cloud Run** (Dockerfile + cloudbuild.yaml, GCP Phase 4 — see docs/gcp-migration-phase4-cloud-run.md). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → prettier → build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build). Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -110,7 +110,8 @@ wholesip/
 │   ├── robots.ts / sitemap.ts
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
-│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart providers
+│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
+│   │   │                      # delivery-location providers
 │   │   ├── page.tsx           # Store homepage = store_pages row with slug "" (the
 │   │   │                      # "homepage sentinel"); reads published/preview sections
 │   │   │                      # just like [pageSlug]. Edited in /dashboard/builder (§11)
@@ -125,7 +126,11 @@ wholesip/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
 │   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
 │   │   │   │                  #   [id] detail (status timeline, items, totals,
-│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   invoice link) + capability-aware Online /
+│   │   │   │                  #   In store tabs. `order-history.tsx` groups
+│   │   │   │                  #   StoreMink POS sales and pickup journeys; the
+│   │   │   │                  #   split stays hidden for delivery-only stores.
+│   │   │   │                  #   Double-locked: withUser (RLS
 │   │   │   │                  #   customer_id = auth.uid()) AND host store id
 │   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
 │   │   │   │                  #   the customer rows the fan-out has always
@@ -170,6 +175,8 @@ wholesip/
 │   │       │                  # immediately while anonymous visitors dynamically
 │   │       │                  # import the Web SDK only when account UI opens.
 │   │       ├── cart/          # CartProvider, CartDrawer, CouponField
+│   │       ├── delivery/      # ★ remembered/default/current delivery location UI +
+│   │       │                  # server-priced PDP PIN availability/charge/ETA (§35)
 │   │       ├── header/ footer/  # nav from store_menus via MenuProvider (§11 menu builder)
 │   │       ├── homepage/      # Shared per-section renderer (featured products,
 │   │       │                  # blog carousel, promo banner, shop-by-category…)
@@ -278,8 +285,9 @@ wholesip/
 │   │   ├── branding/          # per-store branding editor (logo, colors)
 │   │   ├── billing/           # ★ Invoices & Billing (§17): tax config + tax-class
 │   │   │                      # manager + invoice-template editor (billing.css)
-│   │   ├── channels/          # ★ Channels (§18): connect the store's OWN Razorpay
-│   │   │                      # gateway (verify & save, pause/resume, disconnect)
+│   │   ├── channels/          # ★ Channels (§18/§35): connect the store's OWN Razorpay
+│   │   │                      # and Shiprocket accounts; pause/resume, sync warehouse
+│   │   │                      # pickup mappings and configure the tracking webhook
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
@@ -294,7 +302,7 @@ wholesip/
 │   │   │                      # ★ failures/ = everything that DIDN'T work, read
 │   │   │                      # across the other tables (§33). FIVE logs, ONE
 │   │   │                      # `activity` permission
-│   │   └── settings/          # account/ + domain/ + ★ notifications/ (§22 CONSOLE:
+│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) + ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
@@ -375,6 +383,12 @@ wholesip/
 │   │   │                      # reconcileMyOrderPayment. Tested.
 │   │   ├── payment-provider-actions.ts # ★ Channels (§18): get/save/enable/disconnect the
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
+│   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
+│   │   │                      # credentials, rotate webhook tokens, sync warehouses
+│   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
+│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware)
+│   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
+│   │   │                      # staged idempotency plus a provider-independent manual fallback
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
@@ -392,7 +406,8 @@ wholesip/
 │   │   │                      # re-parses every chunk server-side, row-atomic. Gated on
 │   │   │                      # the RESOURCE's own section, never a key of its own. Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
-│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # getMyOrders/getMyOrder + physical-store channel
+│   │   │                      # capability resolution. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
 │   │   │                      # DIFFERENT store while browsing this one.
 │   │   │                      # ★ cancelMyOrder (§26): ONE button, TWO outcomes —
@@ -420,6 +435,9 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── webhooks/logistics/[connectionId]/ # ★ §35 authenticated carrier events;
+│       │                      # provider-neutral URL accepted by Shiprocket; duplicate and
+│       │                      # out-of-order safe, raw payload service-only
 │       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
 │       │                      # cron): coupon campaigns + notification emails
 │       │                      # (§22). Self-chains while either has work left
@@ -445,9 +463,9 @@ wholesip/
 │       │                      # merchants and removes plans). A declined
 │       │                      # payment or a downgrade is 200, not an outage;
 │       │                      # only a thrown pass is 503. ⚠ While the Razorpay
-│       │                      # charge endpoint is unverified, collection is
-│       │                      # SKIPPED and `collectionSkipped` is set — a
-│       │                      # green run then means NOBODY IS BEING CHARGED
+│       │                      # charge endpoint is unverified `collectionSkipped`
+│       │                      # is set — AUTOPAY is off, but pass 1 still ISSUES
+│       │                      # every invoice, payable by hand on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
 │       │                      # activity_events 365d, email_logs 90d — windows
@@ -469,6 +487,12 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
+│   │                          # session, fulfilment work, stable status machine and tracking
+│   │                          # ingestion/order synchronization. Pure boundaries tested.
+│   ├── shipping/              # ★ §35 checkout policy/types + pure rate translation +
+│   │                          # server-only origin-aware Shiprocket quotation
+│   ├── phone.ts               # Indian mobile normalization shared by checkout and Shiprocket
 │   ├── csv/                   # ★ §31: PURE RFC 4180 codec. parse.ts (BOM, CRLF/LF/CR,
 │   │                          # quoted fields w/ embedded delimiters+newlines, quote-
 │   │                          # aware delimiter sniffing for Excel's semicolons, ragged
@@ -538,6 +562,9 @@ wholesip/
 │   │                          # Takes a `runner` so the dashboard keeps its
 │   │                          # withUser(admin) scope while the customer path uses
 │   │                          # withService after proving ownership itself.
+│   │                          # history-channels.ts: pure Online/In-store grouping
+│   │                          # and tab-visibility rules (current POS/pickup OR
+│   │                          # historical receipt; never hide owned history).
 │   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
 │   │                          # every event, its audiences + default channels),
 │   │                          # render.ts (audience-aware copy, pure), record.ts
@@ -831,6 +858,11 @@ wholesip/
 │   ├── orders_table.sql       # ★ orders + order_items (+ RLS + updated_at trigger). NO
 │   │                          # customer INSERT policy by design — placeOrder writes with
 │   │                          # the service role; customers/admins get SELECT/manage (convention #12).
+│   ├── logistics_01_shiprocket.sql # ★ §35 physical product/order snapshots plus
+│   │                          # fulfilment orders, parcels, events, credentials and pickup maps;
+│   │                          # all logistics tables are service-role only
+│   ├── shipping_01_checkout_rates.sql # ★ §35 merchant rate policy + immutable
+│   │                          # orders.shipping_option checkout promise
 │   ├── locations_04_reservations.sql  # ★ stock_reservations + hold/commit/release
 │   │                          # RPCs; available = on_hand - reserved
 │   ├── locations_10_default_online_fulfil.sql  # ★ auto-created Main locations
@@ -1013,6 +1045,22 @@ wholesip/
 │   │                          # Applied to staging + prod 2026-07-22. (+ rollback)
 │   └── perf_*.sql             # index / RLS performance migrations
 │
+├── drizzle/migrations/        # ★ Existing-DB migration ledger manifest. A verified
+│   ├── manifest.json          # legacy baseline + ordered immutable SQL references,
+│                              # SHA-256 checksums and object-level postconditions.
+│                              # `schema_migrations` itself is bootstrapped by the
+│                              # admin-only runner; it is not an application table.
+│   └── sql/                   # New forward-only SQL. 0002 repairs the production
+│                              # credit-note formatter drift (bare lpad truncated
+│                              # legal serials beyond 9,999) and canonicalizes the
+│                              # scheduled-plan constraint in both environments.
+├── scripts/
+│   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
+│   │                          # guard, advisory lock, one transaction per migration,
+│   │                          # checksum drift/unknown-row refusal, RLS/table/column/
+│   │                          # constraint postconditions + complete schema fingerprint
+│   └── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│
 ├── brand/tasks/               # AI copy TASK prompts (product-desc.md, seo-meta.md), read at
 │                              # runtime by product actions + traced into the serverless bundle via
 │                              # next.config.ts. brand.md + the file-based /product-desc & /seo-meta
@@ -1096,7 +1144,23 @@ wholesip/
 7. **Next.js 16 caution**: APIs may differ from training data — check
    `node_modules/next/dist/docs/` before using unfamiliar APIs (AGENTS.md rule).
 8. **Tests**: `npm run test` (vitest, coverage). CI also runs `lint`, `typecheck`,
-   `prettier --check`, `build` — all must pass.
+   **`test:shuffle`**, `prettier --check`, `build` — all must pass.
+   **★★ `test:shuffle` IS NOT A DUPLICATE RUN.** `npm run test` executes files in
+   DECLARATION ORDER, so a test that passes only because it happens to run before
+   another one looks permanently green. Three did (fixed 2026-08-13), all from the
+   same cause: **`vi.clearAllMocks()` clears CALLS, not IMPLEMENTATIONS**, so a
+   `mockResolvedValue`/`mockRejectedValue` set inside one test leaks into every
+   test after it — and the offenders were declared LAST in their files, so nothing
+   followed them. One hid a razorpay suite charging ₹150 for a ₹200 order.
+   **Restore defaults explicitly in `beforeEach`**; `resetAllMocks()` is NOT the
+   fix here, because in this Vitest `mockReset` restores an implementation passed
+   to `vi.fn(impl)` but WIPES a `mockResolvedValue` set at a `vi.mock` factory, and
+   this repo uses both forms — which is also why a global `mockReset: true` is a
+   prerequisite refactor rather than a config flag.
+   ⚠ The seed is FIXED (one ordering, reproducible): a randomly-red suite teaches
+   people to re-run rather than trust it. One seed is one permutation, so it
+   catches regressions this ordering exposes, not all of them — hunt for more with
+   `npx vitest run --coverage=false --sequence.shuffle --sequence.seed=<n>`.
 9. **Features are settings-based** (see §9): configurable behavior goes through
    `lib/settings/registry.ts` — add the setting there (key, label, default,
    `section` = the dashboard permission section that owns it, optional
@@ -4646,23 +4710,392 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `manual-pay.ts` either, which is `server-only`. Third instance of this
       shape in the codebase, after `lib/logs/failure-types.ts` and
       `EXTRA_LOCATION_KEY` in `lib/plans.ts`.
-    - **⚠ THE OLD PATH IS STILL THERE, AND TWO FEATURES BLOCK ITS REMOVAL.**
-      `subscription-actions.ts` still drives **cancel** and **plan change** on
-      the plans page, plus (1) **signup enrolment** —
-      `app/platform/signup/page.tsx` calls `startSignupSubscription`, and
-      `startSubscribe` cannot serve it because `getActingStoreId()` does not
-      resolve on the platform host — and (2) **buying an extra location**, where
-      the new system READS `billed_locations` but has no way to change it.
-      Deleting the old actions before those two are rebuilt would break signup
-      and remove a paid feature. Nothing bills twice in the meantime:
-      `startSubscribe` refuses when the old system holds a live mandate, and
-      fails closed on a read error.
-    - **⚠ NOTHING IS APPLIED TO ANY DATABASE**, and the four SQL files have an
-      apply-order dependency (see the tree). The Drizzle types describe tables
-      that do not exist yet: that typechecks and fails at query time.
-    - **⚠ Six Razorpay facts are still unverified** (exact subsequent-charge
+    - **★★ ISSUING AN INVOICE IS NOT CHARGING IT** (`lib/billing/renewal-worker.ts`,
+      `charge: ChargeFn | null`). The cron used to skip pass 1 ENTIRELY when the
+      gateway was unavailable — and pass 1 is what calls `ensureRenewalInvoice`,
+      so with collection gated **no invoice was ever written**. Pass 2 then found
+      nothing and recorded `waiting`; grace never opened; nobody was ever
+      downgraded. Every subscriber would have received free service past their
+      cycle end, indefinitely, while the job reported green hourly — and the
+      manual payment surface listed nothing, because there was nothing to list.
+      A null `charge` now issues and FINALIZES the invoice, then stops and
+      reports `manualRequired` — never `failed`, which starts the grace clock.
+      Still not a stub charge: an unreachable provider is an UNKNOWN outcome, so
+      every attempt would sit in reconciliation forever.
+    - **★★ `lib/billing/dunning.ts` — THE WORKER'S VOICE, AND WITHOUT IT THIS IS
+      NOT A BILLING SYSTEM.** Three moments the merchant can act on: the invoice
+      issued (four days' notice), the 48-hour overdue warning, and the
+      downgrade. With collection gated, that first email IS how a merchant
+      learns they must pay; silently issuing, waiting, then stopping their till
+      is the alternative. Email from here (platform correspondence from
+      `billing@storemink.com`), in-app from the registry — the §24
+      dedicated-sender rule, so `subscription.invoice_due` is IN_APP and
+      `configurable: false` (an opt-out would let someone lose their plan for a
+      bill they switched off).
+      - **★ EACH NOTICE RIDES A CLAIM THAT ALREADY EXISTED**, so none needed a
+        `notified_at` column: `finalizeInvoiceClaimed` (an invoice finalizes
+        once), the active→past_due UPDATE with `returning()` (once per grace
+        window), and `billing_claim_downgrade()`. The cron is an HOURLY
+        HEARTBEAT re-reading the same rows, so without that property each of
+        these mails the same merchant every hour — §23's pickup-reminder rule.
+      - **★ `finalizeInvoice` COULD NOT TELL "I finalized it" FROM "I observed
+        it finalized"** — it re-reads the row, so a caller that lost the race
+        still got a finalized invoice back and believed it won. Harmless for
+        control flow, not harmless for a bill: `claimDue` deliberately takes no
+        lock, so two overlapping runs would have mailed it twice.
+        `finalizeInvoiceClaimed` returns `{invoice, claimed}`.
+      - **★ AUTOPAY TRUE ONLY WITH A GATEWAY **AND** A MANDATE.** It decides
+        what the email IS — a heads-up before a debit, or a bill. A merchant
+        told "we'll collect this automatically" does nothing and is downgraded.
+        Same rule for `attempted` on the overdue notice: "we couldn't take
+        payment" describes a charge that never happened and sends them to check
+        a card nobody touched.
+      - **⚠ MAILED OUTSIDE THE TRANSACTION, ALWAYS.** An email is a network
+        call; sending it inside `withService` holds a pooled connection open for
+        an HTTP request (the reason `claimDue` takes no lock), and would
+        announce a grace window a rollback then un-started.
+      - **★ BEST-EFFORT, NEVER THROWS.** A mail outage must not fail a
+        collection, block a cycle advance, or abort a downgrade.
+    - **★ SIGNUP ENROLS ON THE NEW SYSTEM** (`startSignupSubscribe` /
+      `confirmSignupSubscribe`). The wizard runs on the PLATFORM host, where
+      `getActingStoreId()` resolves the FALLBACK store rather than the one created
+      seconds earlier — so the client names the store and
+      **`assertStoreSuperadmin` is the entire security boundary**: without it any
+      signed-in user could post another store's id and buy, or settle, a
+      subscription on it. Superadmin, not any admin, mirroring the old gate — a
+      new path to the same act must not be easier to pass than the one it
+      replaces — and it returns null on a read error, so a blip refuses rather
+      than authorises. Both entry points delegate to
+      `startSubscribeForStore`/`confirmSubscribeForStore`, the SAME cores the
+      dashboard uses: a second copy of the plan validation, legacy-mandate check
+      or price lookup is how a merchant gets billed differently depending on
+      which screen they subscribed from.
+    - **★★ AN ENROLMENT IS AN OFFER; A RENEWAL IS AN OBLIGATION.**
+      `startEnrolment` deliberately does NOT finalize its invoice —
+      `confirmEnrolment` does, once the payment verifies. Finalizing up front did
+      three bad things at once: it burned a number in the gapless GST series for
+      a document nobody ever received (the exact waste that allocating ON
+      finalize exists to prevent), it made the invoice `open` so
+      `/dashboard/plans` demanded payment for a plan that was never granted, and
+      it dated the document to the Subscribe click rather than the payment. The
+      renewal worker still finalizes BEFORE charging, because there the merchant
+      already has the plan and genuinely owes it.
+    - **★★ A DISMISSED CHECKOUT USED TO BE A PERMANENT DEAD END.** Closing the
+      Razorpay modal leaves the attempt `processing` forever — nothing tells us a
+      modal was closed — and `billing_payment_attempts_one_in_flight` then
+      refused every later attempt, so "A payment is already in progress" was the
+      answer to Subscribe FOREVER. Reproducible in two clicks. `startEnrolment`
+      now hands back the SAME Razorpay order, which stays payable until paid —
+      the §18 "Retry payment" pattern, with no staleness guess and no risk of a
+      second charge. ⚠ Only a `processing` attempt is resumable: the index also
+      covers `created` (no order exists yet) and `authorized` (money already
+      authorized — re-opening checkout would invite a second authorization).
+    - **★★ EXTRA LOCATIONS ARE BOUGHT ON THE NEW SYSTEM** (`lib/billing/locations.ts`,
+      `supabase/billing_07_addon_invoices.sql`). The old path called
+      `rzpUpdateSubscription`, which Razorpay does not support for UPI or
+      e-mandate mandates — so for most Indian merchants buying a location silently
+      did not work at all, and could not be made to. Here StoreMink prices it: the
+      part period is a one-off payment on the verified checkout, and every future
+      cycle is billed from `billed_locations` by the renewal worker, needing no
+      gateway call.
+      - **★ A THIRD INVOICE KIND, `addon`, carrying NO `cycle_seq`.** A renewal
+        invoice is one per cycle and idempotent on it; a mid-cycle purchase happens
+        at an arbitrary moment and can happen twice in one cycle. Because
+        `billing_invoices_one_per_cycle` is already partial on
+        `cycle_seq is not null`, several addons per cycle need NO index change —
+        the same trick `ai_credits` relies on.
+      - **★★ THE GRANTED COUNT LIVES ON THE INVOICE** (`addon_target_count`), not
+        in the confirm request. `confirm` is a public server action, so reading
+        the count from the client would let a caller be granted more locations
+        than it paid for.
+      - **★ BUYING APPLIES NOW; RELEASING WAITS FOR THE CYCLE END** — the §15b
+        rule, whose point is that **nobody is ever refunded**. A release writes
+        `scheduled_locations`, and `advanceCycle` applies it in the SAME statement
+        that turns the cycle; writing `billed_locations` down at once would refuse
+        a merchant a shop they own and are still paying for.
+      - **★★ AND THE INVOICE FOR THE NEXT CYCLE MUST BE PRICED WITH THE SCHEDULED
+        COUNT.** Pricing at today's count and then dropping it at the turn charges
+        a full extra cycle for a released shop — the one direction "nobody is
+        refunded" must not be allowed to mean. So `collectOne` reads
+        `scheduledLocations ?? billedLocations`, and a release booked INSIDE the
+        T−4d window is REFUSED with the date it becomes possible again, because
+        that invoice is already issued and immutable. Closing that properly needs
+        the schedule to carry the cycle it applies from.
+      - **★ THE MANDATE CEILING IS CHECKED BEFORE THE SALE.** The part period is
+        on-session and unaffected by it, but every future cycle is debited
+        automatically against a ceiling fixed when autopay was authorised. Selling
+        a location that makes the next renewal undebitable is how a paying
+        merchant gets downgraded.
+      - **★ A ZERO PART PERIOD GRANTS IT INSTEAD OF CHARGING ₹0** — at the end of
+        a cycle the proration rounds to nothing and Razorpay refuses a ₹0 order.
+        The merchant gains a few hours; the next renewal bills it in full.
+    - **★★ CANCELLING IS A FLAG, NOT A GATEWAY CALL** (`lib/billing/cancel.ts`).
+      The old path asked Razorpay to cancel the Subscription, so it could fail for
+      reasons unrelated to the merchant's intent — commonest being _"Subscription
+      cannot be cancelled since no billing cycle is going on"_, which hit anyone
+      cancelling before their first charge and left them stuck. Now
+      `cancel_at_period_end = true`, which cannot fail for a provider's reasons.
+      - **★ THE MANDATE IS REVOKED IMMEDIATELY**, even though the flag alone stops
+        the next charge. A live mandate is standing permission to debit; someone
+        who cancelled has withdrawn it, and "it doesn't matter, nothing will
+        charge it" is the reasoning that turns one bug into a debit.
+      - **★ RESUMING EXISTS NOW** — the old flow could not offer it, because the
+        gateway subscription was gone. ⚠ It does NOT restore autopay: only the
+        merchant can authorise a new mandate, and saying otherwise has them expect
+        a charge that never comes.
+      - **★ `claimDue` SKIPS a cancelled subscription** and `evaluateCycleTurns`
+        ENDS it at the period end. Without the second half the merchant sits in
+        `waiting` forever — still entitled to a plan they stopped paying for.
+    - **★★ PLAN AND PERIOD CHANGES** (`lib/billing/plan-change.ts`). Dearer applies
+      NOW and is paid for through the SAME `addon` invoice a location purchase
+      uses; cheaper or equal books `scheduled_plan`/`scheduled_period` for the
+      cycle end. One payment shape for every mid-cycle charge means one place
+      money can go wrong, not three. Period changes are first-class at last —
+      they were impossible before because `scheduled_plan` cannot express
+      "same tier, different period".
+    - **★★ `lib/billing/next-cycle.ts` — ONE RESOLVER, because THREE callers must
+      agree days apart:** pass 1 PRICES the next invoice at T−4d, pass 2 WRITES the
+      shape at T0, and the plans page TELLS the merchant. If pricing and writing
+      disagree someone is billed for something they did not get, silently, a month
+      later. It also decides two things that are easy to get wrong separately:
+      **a cancellation is not a change** (`ending` wins over any booked downgrade —
+      applying it would renew them onto a plan they explicitly stopped), and **a
+      plan with no POS carries no billable locations** (zeroed here, so the invoice
+      and the write cannot differ; the stored count is NOT cleared, so returning to
+      Pro resumes billing for shops they still hold).
+    - **★★ TAX IS OPERATOR-CONFIGURED, ON A REAL SCREEN**
+      (`/dashboard/billing` on the platform host; `lib/billing/platform-settings.ts`).
+      `platform_billing_settings` had existed since `billing_01` with NOTHING
+      writing it, so tax could only be switched on by hand-editing SQL — the
+      requirement (owner, 2026-08-11) was schema-only until now. Superadmin to
+      edit, any operator to read, because "are we charging GST?" is a support
+      question that needs no write grant.
+      - **★ ENABLING IT REQUIRES A GSTIN, A STATE AND A LEGAL NAME.** The first is
+        also a DB CHECK (`platform_billing_tax_needs_gstin`) — an invoice charging
+        GST while naming no GSTIN is not a valid tax invoice and the merchant
+        cannot claim input credit against it. The state is NOT a constraint but is
+        just as load-bearing: `splitGst` compares it against the merchant's to
+        choose CGST+SGST vs IGST, so without it every invoice is silently treated
+        as intra-state.
+      - **★★ THE GSTIN CARRIES THE STATE, and a mismatch is refused.** Its first
+        two digits ARE the state code (`stateCodeFromGstin`), so if they disagree
+        with the state selected one of them is a typo — and the resulting wrong
+        tax split is invisible on the invoice and expensive at filing time.
+      - **★★ INCLUSIVE vs EXCLUSIVE CHANGES WHAT MERCHANTS PAY**, not how the
+        invoice reads, so the screen states the consequence in rupees against a
+        ₹5,000 plan rather than naming the modes. It must match what the pricing
+        page advertises or every merchant is over- or under-charged from the next
+        invoice onward.
+      - **★ TURNING TAX ON IS NEVER RETROACTIVE** — finalized invoices are
+        immutable by trigger — and the screen says so, because the intuition
+        ("I've added my GSTIN, now everything is a tax invoice") is the opposite.
+      - `GST_STATES` + `gstStateName` live in the PURE `lib/billing/gst.ts`, so the
+        client form can import them; `platform-settings.ts` is `server-only` and
+        `PlatformTaxSettings` therefore lives in `invoice-types.ts` (the third
+        instance of that split). The retired codes `25` and `28` are deliberately
+        omitted from the picker but still parse, because a merchant's stored code
+        may be one.
+    - **★★ MERCHANTS CAN SEE AND PRINT THEIR INVOICES**
+      (`/dashboard/plans/invoices`, `lib/billing/invoice-history.ts`). The gapless
+      FY series, the immutability triggers and the tax snapshot all existed to
+      produce a document nothing could retrieve — the only reader was
+      `listPayableInvoices`, which shows what is OWED, so a merchant who had paid
+      ₹50,000 for a year had no receipt.
+      - **★ ONLY FINALIZED INVOICES ARE DOCUMENTS.** A draft has no number (the
+        trigger allocates one on finalize precisely so an abandoned checkout does
+        not burn one), and enrolment and add-on purchases BOTH leave drafts behind
+        whenever a payment window is closed. Showing one would present an
+        unnumbered, unpaid row as a bill.
+      - **★★ THE TAX IDENTIFIERS WERE NEVER SNAPSHOTTED, and now are.**
+        `supplier_gstin` / `customer_gstin` / `place_of_supply` have existed since
+        billing_03; every creator ACCEPTED them and no caller passed one, so every
+        invoice stored NULL. The document would then have had to name a GSTIN from
+        LIVE settings — so an operator correcting one in September would rewrite
+        what April's invoice claims. `loadInvoiceParties` + a stamp at all four
+        creation sites fixes it. ⚠ The NAMES and ADDRESSES are still read live,
+        because no column stores them; closing that needs a `parties jsonb`.
+      - **★★ A NO-TAX INVOICE IS A VALID INVOICE** and must not pretend otherwise:
+        titled "Invoice" not "Tax Invoice", NO GST line at all (a "GST ₹0" row on a
+        document naming no GSTIN reads as a claim), and a footer saying why. It is
+        the state every invoice is in today.
+      - **★ The GST split comes from the tax AMOUNT** (`splitGstPaise`), never
+        recomputed from the rate, so the halves always re-sum to what was charged.
+        Intra-state ⇒ CGST+SGST, inter-state ⇒ IGST, decided by comparing the
+        supplier GSTIN's first two digits with the snapshotted place of supply.
+      - Printable HTML, not a server PDF — the §17 decision, reusing that module's
+        `.invoice-sheet` print isolation and `PrintInvoiceButton`. The INNER
+        classes are `sminv-*`, deliberately NOT the `inv-*` ones: those are shaped
+        for the order invoice's different markup and would silently mis-style this.
+    - **★★ RECONCILIATION — SETTLING WHAT WE NEVER LEARNED**
+      (`lib/billing/reconcile.ts`, run first in the hourly cron).
+      `collect.ts` is deliberate that an UNKNOWN outcome is never a failure and
+      never retried, because a retry might charge twice — which is right, and left
+      the attempt in `unknown` forever with nothing to resolve it. `processing` is
+      the same: nothing tells us a merchant closed the payment window.
+      `billing_reconciliation_items` had existed since billing_04 with NOTHING
+      writing or reading it.
+      - **★ IT ASKS THE GATEWAY, IT DOES NOT GUESS.** The only evidence that
+        settles an attempt as paid is a CAPTURED payment on the order we created,
+        via `rzpFetchOrderPayments` + `capturedPayment` — the VERIFIED pair §18
+        has used in production, not the unverified recurring endpoint. So it works
+        today, with autopay off.
+      - **★★ THE TWO DIRECTIONS ARE NOT SYMMETRIC.** Finding money is safe and
+        runs after 15 minutes: a captured payment means they paid, and recording
+        it can only help. Declaring FAILURE frees the invoice for a fresh
+        attempt — so doing it to a payment still in flight invites a second
+        charge — and waits **72 hours**, only ever on the gateway's word that
+        nothing was captured. An ANCIENT attempt that WAS captured is recovered,
+        never failed: age is not evidence.
+      - **★ RECOVERY ADVANCES THE CYCLE.** Without it a merchant who really did
+        pay stays in grace and is downgraded, because the only thing that moves a
+        cycle is a paid invoice being NOTICED.
+      - **★ AN AMOUNT MISMATCH IS FLAGGED, NOT AUTO-FIXED.** The payment is
+        recorded either way — they paid — but what happens to the difference is a
+        human decision. Deduped by the partial unique index, so an hourly sweep
+        cannot bury the queue it exists to surface.
+      - **★ IT RUNS BEFORE PASS 2**, because pass 2 decides grace and downgrade
+        from whether the invoice is paid; running it after would downgrade a
+        merchant whose payment that very request discovers. Pinned by a test.
+      - ⚠ It only sees attempts that reached the gateway (`provider_order_id` set)
+        — one that died before that has nothing to ask about.
+      - **★★ THE QUEUE IS A SCREEN NOW**
+        (`/dashboard/billing/reconciliation` on the platform host, filtered by
+        `?status=`; `listReconciliationItems` / `countOpenReconciliationItems` /
+        `resolveReconciliationItem`). Every item is a discrepancy the sweep
+        deliberately refused to decide, so leaving them readable only by SQL
+        meant the one queue in the system that EXISTS to summon a human summoned
+        nobody. The Billing & tax page carries the open count, amber when it is
+        not zero.
+        - **★★ CLOSING AN ITEM MOVES NO MONEY, and the screen says so at the
+          point of action** rather than in a header nobody re-reads. Refunding a
+          difference or issuing a credit happens on the store's own billing
+          screens, chosen by a person. A button here that "fixed" a discrepancy
+          would be a money movement nobody reviewed — and worse, it would leave
+          the queue looking clean. Pinned by a test, because that sentence is the
+          only thing standing between the two readings.
+        - **★ THREE OUTCOMES**, since "resolved" alone is a lie in two common
+          cases: genuinely settled, needs chasing (`manual_review`), and turned
+          out not to matter (`ignored`). Collapsing them loses the difference
+          between "dealt with" and "decided not to".
+        - **★ A NOTE IS REQUIRED**, in the UI and again in the action. The row
+          records that a human looked; without what they FOUND it is an
+          audit trail that proves only that somebody clicked.
+        - **★ THE CLOSE IS A CONDITIONAL CLAIM** on `status = 'open'`, so two
+          operators working the queue at once cannot overwrite each other's
+          verdict — the loser is told it was already closed.
+        - **★ ANY OPERATOR MAY CLOSE, not just a superadmin.** This records a
+          judgement rather than moving money, and a queue only the owner can
+          clear is a queue nobody clears. Who did it is stored either way.
+        - **★ A NULL STORE IS ITSELF THE PROBLEM** — an orphan payment nobody
+          can attribute — so the row says "needs attributing" rather than
+          rendering a blank that reads as a bug.
+        - ⚠ **TEST GAP**: the db mock does not evaluate WHERE clauses, so the
+          `status = 'open'` predicate is argued rather than pinned; the
+          behaviour that depends on it (a zero-row claim reported as
+          already-closed) IS covered.
+    - **★★ AI CREDIT PURCHASES NOW PRODUCE AN INVOICE**
+      (`lib/billing/credit-invoice.ts`, `supabase/billing_08_ai_credit_invoice.sql`).
+      `kind = 'ai_credits'` has existed since billing_03 and
+      `buildAiCreditsInvoice` / `createAiCreditsInvoice` were written, tested and
+      NEVER CALLED — a credit purchase produced no document at all. Survivable
+      while merchants could see no invoices; once `/dashboard/plans/invoices`
+      listed them, a purchase appearing nowhere is a receipt they cannot produce.
+      - **★ CREDITS GET THEIR OWN INVOICE, never a line on a subscription one**
+        (spec §1, §14). They are a one-off at an arbitrary moment; a subscription
+        invoice covers a period and is idempotent on its cycle. Carrying no
+        `cycle_seq` is what keeps it outside `billing_invoices_one_per_cycle`, so
+        a merchant can buy twice in a month.
+      - **★★ ISSUED FROM `settlePurchase`, THE ONE PLACE A PURCHASE BECOMES PAID**
+        — reached both from `confirmCreditPurchase` and from the reconcile-on-read
+        sweep. Hooking only the confirm path would leave every reconciled purchase
+        without a document, which is exactly the case where the merchant is
+        already unsure what happened. Pinned by a mutation.
+      - **★ DRAFT AT PURCHASE, FINALIZED ON PAYMENT** — the enrolment rule, so an
+        abandoned checkout never burns a number. And the draft is raised AFTER the
+        gateway order, so a purchase that died there leaves no document at all.
+      - **★ The link lives on the PURCHASE** (`ai_credit_purchases.invoice_id`,
+        UNIQUE where not null), not on the invoice: `billing_invoices` is the
+        generic document table and already carries one product-specific column, so
+        a second would start a pattern of one per product.
+      - **⚠ APPLY `billing_08` BEFORE DEPLOYING.** Without the column the link
+        UPDATE throws, the function returns null, and credit purchases keep
+        working with no document — but each leaves an orphan DRAFT invoice, which
+        is harmless (invisible, unnumbered, never finalized) and untidy.
+      - **⚠ Purchases made BEFORE this get no invoice, deliberately.** Issuing one
+        today would put a number from the CURRENT financial year's series on a
+        months-old sale, which is worse than no number.
+      - ⚠ `app/actions/ai-credit-actions.ts` had NO tests at all before this,
+        despite being a money path. It now has ten, covering the invoicing half
+        only; the plan gate, the `add_ai_credits` RPC and reconcile-on-read are
+        still uncovered.
+    - **★★ `lib/billing/receipts.ts` — THE ACKNOWLEDGEMENTS, AND ALL THREE WERE
+      REGRESSIONS.** The old path sent them (`planActivatedTemplate` from
+      `confirmSubscription`, `paymentReceiptTemplate` and
+      `subscriptionCancelledTemplate` from the webhook) and deleting it took them
+      with it — so for a few days a merchant could subscribe, pay ₹50,000 and hear
+      nothing at all, which is worse than the system it replaced. Kept SEPARATE
+      from `dunning.ts`: dunning means debt collection, and a module holding both
+      the chasing and the thank-yous ends up called "billing-emails-2".
+      - **★★ THE RECEIPT COMES FROM `settleAttempt`**, the ONE place an invoice
+        transitions to paid — so enrolment, manual payment, a plan change, a
+        location purchase AND reconciliation each send exactly one, and none of
+        them has to remember to. `syncInvoiceStatus` now CLAIMS that transition
+        (its WHERE excludes `paid` when moving to paid) and reports it, which is
+        what makes "exactly one" true. ⚠ That claim also fixed a quieter bug:
+        `paid_at` used to be rewritten on every later sync, so a second attempt
+        settling days afterwards moved the timestamp on an already-paid invoice.
+      - **★ A CREDIT PURCHASE GETS NO SUBSCRIPTION RECEIPT.** A mail reading
+        "your Pro plan is active" for a ₹59 credit pack is wrong; credits have
+        their own confirmation (`ai.credits_purchased`).
+      - **★ THE ACTIVATION MAIL WITHHOLDS THE RENEWAL DATE WITH NO MANDATE.** The
+        template's copy says autopay is set up, so naming a date beside it
+        promises a charge that never comes — and the merchant waits, and is
+        downgraded. Same rule as the invoice-issued notice.
+    - **★ SUBSCRIPTION FAILURES REACH THE FAILURES FEED** (§33). `FAILURE_SOURCES`
+      gained a `subscription` entry reading `billing_payment_attempts` where
+      `state = 'failed'`. Deliberately NOT folded into the existing `payment`
+      source: that one is a SHOPPER's checkout failing (the merchant's revenue),
+      this is the MERCHANT's plan payment failing (they are heading for a
+      downgrade). Different audience, different consequence. It sorts on
+      `resolved_at`, not `created_at` — an attempt can sit in flight for days, so
+      the creation time would bury a fresh failure down a time-ordered feed.
+    - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
+      `lib/payments/subscription.ts` (the `razorpay_plans` cache,
+      `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,
+      `mandateMaxPaise`), the five `rzp*Subscription`/`rzpCreatePlan` client calls,
+      and `verifySubscriptionSignature` — a near-identical verifier with the
+      REVERSE operand order sitting next to the real one is what autocomplete picks
+      by mistake. The `store_subscriptions` and `razorpay_plans` TABLES remain as
+      the old system's audit trail; nothing reads them.
+      - **★ `createLocation` WAS STILL READING `store_subscriptions`** for the
+        allowance and would have read 0 — silently refusing every merchant the
+        extra locations they PAY FOR, with an error telling them to go and buy what
+        they already own. Now reads `billing_subscriptions`. This is the class of
+        breakage a deletion causes: the compiler is happy, because the table still
+        exists.
+      - **★ THE RAZORPAY WEBHOOK ROUTE IS KEPT, ACTING ON NOTHING.** It used to
+        write `stores.plan` from `subscription.*` events; those now describe a
+        gateway object StoreMink does not manage, so applying one would move a plan
+        on the word of a timer our state machine knows nothing about. It still
+        verifies the raw-body HMAC and records the exactly-once event marker —
+        deleting the route would 404 every delivery (a retry storm that reads as
+        our outage) and throw away the two pieces the new system's webhooks will
+        need. ⚠ `billing_webhook_events` is not in §32's retention policies and
+        grows one row per delivery.
+    - **✅ `billing_01`…`07` ARE APPLIED** to both `storemink` and
+      `storemink_staging` (2026-08-13). ⚠ They have an apply-order dependency
+      (see the tree) — `billing_03`'s tables must exist before `billing_02`'s
+      function is CALLED, because plpgsql resolves table names at call time, so
+      the wrong order succeeds and then fails at runtime. `billing_06` was a
+      no-op: `store_subscriptions` was empty in production, so there was nothing
+      to migrate.
+    - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
+      not the system. Every path (enrolment, manual payment, plan change, location
+      purchase) confirms ON SESSION against a verified one-time checkout, and the
+      renewal worker issues invoices the merchant pays by hand. What is unverified:
+      exact subsequent-charge
       endpoint signature, recurring webhook event names, retry and
-      payment-failure behaviour, e-mandate specifics, MCC restrictions). Listed
+      payment-failure behaviour, e-mandate specifics, MCC restrictions. Listed
       in the design doc's §10 rather than guessed; several need a test-mode
       account to settle.
     - **13 defects found in the current billing code while mapping it**, two of
@@ -4670,6 +5103,96 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       can overwrite a comp DOWNWARD; a scheduled location release never lands,
       so Razorpay bills the cheaper plan while the allowance keeps granting the
       released slots free). Ten live in code this rebuild deletes.
+
+35. **Logistics — Shopify-shaped fulfilment, Shiprocket first.**
+    `supabase/logistics_01_shiprocket.sql` deliberately separates four facts:
+    `orders` are what a customer bought; `fulfilment_orders` are warehouse work
+    assigned to a location; `shipments` are physical parcels/AWBs; and
+    `shipment_events` are the append-only carrier history. This is the same
+    separation that makes Shopify fulfilment extensible. StoreMink still ships a
+    whole order from one routed location in v1, but no Shiprocket identifier is
+    stored on `orders`, so later split fulfilment does not require an extraction
+    migration. `shipment_items` and `fulfilment_order_items` already model the
+    allocation.
+    - **Checkout snapshots logistics data.** Products carry `requires_shipping`,
+      grams and centimetres; variants may inherit or override. `placeOrder`
+      copies SKU/HSN/physical values onto each `order_item`, then best-effort
+      creates the location work object after durable lines exist. Booking calls
+      `ensureFulfilmentOrder` too, which self-heals legacy orders and interrupted
+      deployments.
+    - **Each merchant brings their OWN Shiprocket account.** Channels verifies
+      the API-user login before storing it. The password and cached token use the
+      existing channel encryption key (`PAYMENT_CRED_KEY`); neither is returned.
+      The connection can be paused without deleting history. The generated
+      callback uses the provider-neutral `/api/webhooks/logistics/...` path
+      because Shiprocket rejects webhook URLs containing its reserved provider
+      keywords. Active locations
+      with `online_fulfil` sync to stable Shiprocket pickup codes through
+      `location_logistics_mappings`; incomplete addresses are named and skipped,
+      never silently mapped to another warehouse. The pickup adapter promotes
+      house/flat/road details from either saved location-address line and folds
+      short secondary fragments into the primary line, matching Shiprocket's
+      per-line validation without forcing existing merchants to re-enter data.
+    - **Booking is a resumable state machine, not one giant API call.**
+      `shipment-actions.ts` first claims a unique local idempotency key, then
+      creates the Shiprocket order, assigns an AWB, generates the label and
+      finally marks the fulfilment in progress. Every provider id is persisted
+      immediately. If label generation times out after the AWB exists, retry
+      resumes at label generation instead of creating a second parcel. Warehouse
+      staff then schedule pickup and get a manifest. A manual courier fallback
+      records the same provider-neutral shipment/events and marks the order
+      shipped without pretending Shiprocket handled it.
+      Checkout and booking share strict Indian-mobile normalization, including
+      rejection of repeated placeholder numbers. Before any carrier identifier
+      exists, staff may correct the frozen delivery phone in the order drawer;
+      after Shiprocket accepts the parcel it is immutable in StoreMink.
+    - **Carrier state is not order state.** `lib/logistics/status.ts` maps
+      Shiprocket's numeric/text vocabulary to stable parcel statuses and refuses
+      terminal or backwards transitions from late webhooks. The provider-neutral
+      webhook route is addressed by connection UUID and authenticates
+      Shiprocket's `x-api-key`
+      against a SHA-256 hash; the token is shown only on creation/rotation.
+      Events dedupe by content hash. Picked-up/in-transit/NDR/RTO move an eligible
+      order to `shipped`; delivered moves it to `delivered` and stamps
+      `delivered_at`. Cancelled orders are never revived. Customers receive only
+      safe tracking fields/events after their normal owner+host check; raw
+      payloads, credentials and provider IDs remain service-only.
+    - **Operational UI.** The order drawer computes a parcel starting point from
+      line snapshots, then supports booking, label/manifest links, pickup,
+      tracking refresh, pre-pickup cancellation and NDR re-attempt/RTO. Product
+      editing captures physical measurements. Customer order detail shows the
+      courier, AWB, external tracking link and the latest scans.
+    - **Checkout shipping policy is separate from the channel.** Channels answers
+      “which provider account fulfils this”; Settings → Shipping & delivery
+      answers “what does the customer pay and see.” `store_shipping_settings`
+      supports always-free, one fixed order rate, or live Shiprocket choices; an
+      optional merchandise-subtotal threshold makes fixed/live delivery free.
+      Manual modes publish a merchant-entered day range. Live mode requests
+      serviceability from the routed location with the authoritative parcel,
+      declared value and COD flag, adds handling time/optional markup, and shows
+      either the cheapest or five sorted couriers. `placeOrder` quotes again and
+      stores the exact selected promise in `orders.shipping_option`; shipment
+      booking uses that courier and carries the quoted provider cost/ETA.
+      Digital-only and pickup orders remain ₹0 without a carrier call.
+    - **Delivery discovery starts before checkout.** The storefront shell owns a
+      host-local remembered delivery location. A signed-in shopper's default
+      address fills it automatically unless they deliberately chose another PIN
+      on this browser; “Use my current location” requests browser permission and
+      reverse-geocodes only after a click. The header displays that destination.
+      Every classic/grocery PDP can check a six-digit PIN. Its public,
+      IP-rate-limited server action re-reads the published product/variant,
+      online stock, physical measurements, fulfilment location and shipping
+      policy, then returns the cheapest current option/ETA (or an unavailable
+      reason). The product quantity participates in free-above pricing. Checkout
+      still re-quotes authoritatively, especially because payment method can
+      change COD serviceability. PDPs no longer claim “delivered tomorrow” or a
+      hardcoded free-above amount.
+    - **Deliberate v1 limits.** StoreMink does not yet expose postal zones,
+      price/weight rate tables, product-specific shipping profiles, split one
+      order across multiple warehouses/parcels, purchase return labels, or
+      reconcile weight disputes/COD remittances. The schema and adapter boundary
+      are ready for these, but claiming full Shopify parity before those workflows
+      exist would be false.
 
 ## 6. Commands
 
@@ -4704,6 +5227,8 @@ npm run build       # production build
 npm run lint        # eslint
 npm run typecheck   # tsc --noEmit
 npm run test        # vitest run --coverage
+npm run test:shuffle # ★ the SAME suite in a different (fixed-seed) order — the only
+                    #   thing that catches order-dependent tests. CI runs it.
 npm run test:watch  # vitest watch
 npm run format      # prettier --write
 ```

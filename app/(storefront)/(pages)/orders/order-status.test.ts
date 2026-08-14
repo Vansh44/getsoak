@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   customerStatusLabel,
   isPickup,
+  isPosSale,
   orderProgress,
   pickupNote,
   PAYMENT_LABEL,
@@ -180,6 +181,13 @@ describe("isPickup / PAYMENT_LABEL", () => {
       false,
     );
     expect(isPickup({ status: "pending" })).toBe(false);
+  });
+
+  it("recognises only StoreMink till sales as POS purchases", () => {
+    expect(isPosSale({ status: "completed", sales_channel: "pos" })).toBe(true);
+    expect(isPosSale({ status: "delivered", sales_channel: "online" })).toBe(
+      false,
+    );
   });
 
   // The header read "Placed 5 Aug 2026 · pay_at_store" on every collection order.

@@ -2,7 +2,7 @@
 // The Razorpay REST client — the NETWORK surface.
 //
 // The pure helpers in this module (verifyCheckoutSignature,
-// verifySubscriptionSignature, verifyWebhookSignature, capturedPayment) are
+// verifyWebhookSignature, capturedPayment) are
 // covered in payments.test.ts alongside the AES helpers. This file is
 // everything that talks to Razorpay, which had no tests at all.
 //
@@ -24,15 +24,10 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  rzpCancelSubscription,
   rzpCreateOrder,
-  rzpCreatePlan,
-  rzpCreateSubscription,
   rzpFetchOrderPayments,
   rzpFetchPaymentRefunds,
-  rzpFetchSubscription,
   rzpRefund,
-  rzpUpdateSubscription,
   validateCredentials,
 } from "./razorpay";
 
@@ -440,112 +435,5 @@ describe("validateCredentials", () => {
     expect(await validateCredentials(CREDS)).toMatchObject({
       outcome: "unknown",
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Subscriptions
-// ---------------------------------------------------------------------------
-
-describe("subscription calls", () => {
-  it("creates a plan with the price nested under item", async () => {
-    const fetchMock = respond({ json: { id: "plan_1" } });
-    await rzpCreatePlan(CREDS, {
-      period: "monthly",
-      amountPaise: 50000,
-      name: "Basic monthly",
-    });
-    const { url, body } = sent(fetchMock);
-    expect(url).toBe("https://api.razorpay.com/v1/plans");
-    expect(body).toEqual({
-      period: "monthly",
-      interval: 1,
-      item: { name: "Basic monthly", amount: 50000, currency: "INR" },
-    });
-  });
-
-  it("creates a subscription that starts now", async () => {
-    const fetchMock = respond({ json: { id: "sub_1" } });
-    await rzpCreateSubscription(CREDS, { planId: "plan_1", totalCount: 120 });
-    const { body } = sent(fetchMock);
-    expect(body).toEqual({
-      plan_id: "plan_1",
-      total_count: 120,
-      customer_notify: 1,
-    });
-    // ★ Absent, not null: sending start_at: null would schedule nothing and
-    // Razorpay would reject the shape.
-    expect(body).not.toHaveProperty("start_at");
-  });
-
-  it("★ schedules a future start when one is given", async () => {
-    // How a downgrade waits for the paid cycle to end instead of refunding.
-    const fetchMock = respond({ json: { id: "sub_1" } });
-    await rzpCreateSubscription(CREDS, {
-      planId: "plan_1",
-      totalCount: 120,
-      startAt: 1893456000,
-      notes: { store_id: "s1" },
-    });
-    expect(sent(fetchMock).body).toMatchObject({
-      start_at: 1893456000,
-      notes: { store_id: "s1" },
-    });
-  });
-
-  it("treats a startAt of 0 as no schedule", async () => {
-    // Unix epoch is not a real start time; the falsy guard is right.
-    const fetchMock = respond({ json: {} });
-    await rzpCreateSubscription(CREDS, {
-      planId: "p",
-      totalCount: 1,
-      startAt: 0,
-    });
-    expect(sent(fetchMock).body).not.toHaveProperty("start_at");
-  });
-
-  it("fetches one subscription by id", async () => {
-    const fetchMock = respond({ json: { id: "sub_1", status: "active" } });
-    const res = await rzpFetchSubscription(CREDS, "sub_1");
-    expect(res).toEqual({ ok: true, data: { id: "sub_1", status: "active" } });
-    expect(sent(fetchMock).url).toBe(
-      "https://api.razorpay.com/v1/subscriptions/sub_1",
-    );
-  });
-
-  it.each([
-    [true, 1],
-    [false, 0],
-  ])("cancels with cancel_at_cycle_end %s → %i", async (flag, expected) => {
-    const fetchMock = respond({ json: {} });
-    await rzpCancelSubscription(CREDS, "sub_1", flag);
-    const { url, body } = sent(fetchMock);
-    expect(url).toBe("https://api.razorpay.com/v1/subscriptions/sub_1/cancel");
-    // Razorpay wants 1/0, not a JSON boolean.
-    expect(body).toEqual({ cancel_at_cycle_end: expected });
-  });
-
-  it.each(["now", "cycle_end"] as const)(
-    "updates a plan with schedule_change_at %s",
-    async (when) => {
-      const fetchMock = respond({ json: {} });
-      await rzpUpdateSubscription(CREDS, "sub_1", {
-        planId: "plan_2",
-        scheduleChangeAt: when,
-      });
-      const { init, body } = sent(fetchMock);
-      expect(init.method).toBe("PATCH");
-      expect(body).toEqual({
-        plan_id: "plan_2",
-        schedule_change_at: when,
-        customer_notify: 1,
-      });
-    },
-  );
-
-  it("escapes a subscription id into every path that takes one", async () => {
-    const fetchMock = respond({ json: {} });
-    await rzpFetchSubscription(CREDS, "sub 1/x");
-    expect(sent(fetchMock).url).toContain("/subscriptions/sub%201%2Fx");
   });
 });

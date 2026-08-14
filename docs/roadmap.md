@@ -32,6 +32,9 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
+| —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
+| —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
@@ -56,6 +59,68 @@ to end in a browser_. Steps 1 and 3 finish it.
 ---
 
 # Part 1 — What to build
+
+---
+
+## Delivered foundation — Shiprocket logistics ✅ DONE
+
+The delivery lifecycle is no longer an order-status dropdown pretending to be
+a warehouse. `logistics_01_shiprocket.sql` adds Shopify-shaped fulfilment work,
+parcels and append-only carrier events; each merchant connects their own
+Shiprocket API user in Channels and maps every `online_fulfil` location to a
+pickup address. Location address lines are normalized for Shiprocket's primary
+address and minimum-length rules, including older locations whose house/flat
+details were saved in the optional second line.
+
+The order drawer now covers the warehouse path: confirm the packed weight and
+dimensions, create the Shiprocket order, persist its IDs before continuing,
+assign an AWB, generate the label, schedule pickup and expose the manifest.
+Checkout rejects malformed or repeated-placeholder Indian mobile numbers, and
+the drawer lets staff correct a legacy order's delivery phone before any
+Shiprocket order/shipment/AWB exists, then retry booking.
+Every stage is resumable under one local idempotency key. A timeout after AWB
+creation therefore retries the missing label instead of buying a second
+shipment. A merchant can record another courier manually without losing the
+same tracking/order semantics.
+
+Shiprocket webhook and manual refresh both feed one provider-neutral,
+duplicate-safe, non-regressing status machine. Pickup, transit, delivery, NDR
+and RTO propagate to the order/customer timeline; the dashboard can ask for a
+re-attempt or return-to-origin. Credentials, raw events and carrier internals
+are service-only, while the shopper sees courier, AWB, tracking link and scans.
+
+**Deployment state:** `supabase/logistics_01_shiprocket.sql` is enrolled in the
+checksummed migration ledger and applied to staging **and production**
+(2026-08-14). The remaining merchant setup is to set `PAYMENT_CRED_KEY`, connect
+the merchant account, sync warehouses, and copy the generated provider-neutral
+URL/token into Shiprocket's webhook settings. The callback path deliberately
+omits Shiprocket's reserved provider keywords so its dashboard accepts the
+address.
+
+**Added checkout layer:** `shipping_01_checkout_rates.sql` and Settings →
+Shipping & delivery let each merchant choose always-free, one fixed order rate,
+or live Shiprocket courier rates, with an optional free-above threshold. Manual
+rates carry a merchant-entered delivery range; live rates include handling time,
+an optional price adjustment, and either the cheapest courier or up to five
+choices. Checkout re-prices from the selected fulfilment location and freezes
+the chosen courier/customer charge/carrier cost/ETA on the order; booking uses
+that courier by default.
+
+**Added storefront discovery:** the fixed header now remembers a delivery PIN,
+prefers a signed-in shopper's default saved address, and offers an explicit
+browser-location lookup. Classic and grocery product pages check that PIN
+against online warehouse stock and the same free/fixed/Shiprocket quote engine
+used at checkout, showing availability, charge and handling-inclusive ETA. The
+PDP passes only ids/PIN/quantity; the server re-reads every commercial value.
+The oversized PDP gap below the fixed header and the old hardcoded “tomorrow” /
+“free over ₹499” claims are removed.
+
+**Still not in the completed layers:** postal zones, weight/price rate tables,
+product-specific shipping profiles, multi-parcel or multi-location splits,
+return-label purchasing, weight-dispute and COD-remittance reconciliation.
+Those are later Shopify-parity layers, not hidden inside an “integrated” badge.
+
+Acceptance: **PS-SH.1–SH.29**.
 
 ---
 
@@ -378,6 +443,26 @@ confirmation email and the order page.
 
 ## Step 4 — POS customer capture, the Shopify way
 
+### Shipped foundation — channel-aware shopper history
+
+`/orders` now separates **Online** from **In store** only when that second
+journey is real. In store includes StoreMink POS purchases linked to the signed-
+in customer and online pickup orders. The split is shown when the store has an
+effective POS setting plus an active POS-capable shop, when checkout pickup is
+enabled plus an active pickup-capable shop, or when the customer owns a
+historical POS/pickup order. That last condition is deliberate: disabling POS,
+pickup, a location or a plan may stop future sales but must never hide an owned
+receipt. Delivery-only stores keep the simpler single history.
+
+POS detail pages now say **Purchased in store**, show the sale location and do
+not render a courier timeline or an empty delivery address. A pickup stays an
+online checkout source internally but is grouped under In store because it is
+a shop-visit journey for the customer.
+
+The remaining gap is still the identity work below: only POS sales explicitly
+attached to an existing customer can appear today. Anonymous walk-ins cannot be
+claimed later until Step 4 ships the unclaimed-customer adoption transaction.
+
 ### What Shopify does
 
 1. Cart → **Add customer** → search, or **create one inline** (name, email,
@@ -520,43 +605,71 @@ UPI or e-mandate — every amount change (tier, period, locations) goes through
 dead for most Indian merchants, and add-ons are deprecated. StoreMink computes
 the amount; the gateway only collects it.
 
-| Phase                                                | State                               |
-| ---------------------------------------------------- | ----------------------------------- |
-| 1 · Architecture + the 13 defects it replaces        | ✅ done                             |
-| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging               |
-| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                             |
-| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                             |
-| 4 · Signup enrolment on the new system               | ⏭ **blocks deleting the old path** |
-| 5 · Buying an extra location on the new system       | ⏭ **blocks deleting the old path** |
-| 6 · Webhook processor off the request path           | ⏳                                  |
-| 7 · Reconciliation detectors + dunning notifications | ⏳                                  |
-| 8 · AI-credit invoicing                              | ⏳                                  |
-| 9 · Delete `subscription-actions.ts` + the rzp plans | ⏳ after 4 and 5                    |
+| Phase                                                | State                                 |
+| ---------------------------------------------------- | ------------------------------------- |
+| 1 · Architecture + the 13 defects it replaces        | ✅ done                               |
+| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                 |
+| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                               |
+| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                               |
+| 4 · Signup enrolment on the new system               | ✅ done                               |
+| 5 · Buying an extra location on the new system       | ✅ done                               |
+| 6 · Webhook processor off the request path           | ⏳ **only needed for autopay**        |
+| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)         |
+| 8 · AI-credit invoicing                              | ✅ done                               |
+| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                    |
+| 10 · Autopay — mandate capture + recurring charge    | ⏳ **blocked on a test-mode account** |
 
-**★ AUTOMATIC COLLECTION IS SWITCHED OFF, AND A GREEN CRON RUN MEANS NOBODY IS
-BEING CHARGED.** `RECURRING_CHARGE_VERIFIED` is false because the Razorpay
-subsequent-charge signature is unverified, so the worker sets
-`collectionSkipped` and every renewal is settled by hand on
-`/dashboard/plans`. Six Razorpay facts need a test-mode account to settle; they
-are listed in the spec's §10 rather than guessed.
+**★ AUTOPAY IS OFF, BUT THE SYSTEM IS NOT.** `RECURRING_CHARGE_VERIFIED` is false
+because the Razorpay subsequent-charge signature is unverified, so
+`collectionSkipped` is set — but pass 1 still ISSUES every renewal invoice, the
+merchant pays it on `/dashboard/plans`, and grace and downgrade run as designed.
+Six Razorpay facts need a test-mode account to settle; they are listed in the
+spec's §10 rather than guessed.
 
-**★ THE MIGRATION NEEDS A HUMAN FIRST.** `billing_06` moves our records only —
-Razorpay keeps charging an `active` subscription on its own timer, so the
-gateway subscription must be cancelled before it runs or the store is billed
-twice, from two systems, with no single place to stop it.
+**★★ AUTOPAY IS FIVE PARTS, AND ONLY ONE IS BUILT — do not read
+`RECURRING_CHARGE_VERIFIED` as the last switch.** No merchant has a mandate
+today, and none can get one:
+
+1. `rzpCreateOrder` takes only `{amountPaise, receipt, notes}` — no
+   `customer_id`, no `token`, no `recurring` flag. The enrolment order is a
+   plain one-time order, so nothing at the gateway is asked to register a
+   mandate. **Not built.**
+2. The `/dashboard/plans` checkout does not request a recurring token, so
+   nothing comes back to record. **Not built.**
+3. `confirmEnrolment` accepts a `mandate` and `activateMandate` writes it.
+   **Built — and currently DEAD CODE**, because no caller passes one.
+4. `rzpChargeRecurring` throws. **Not built** (deliberately; see `gateway.ts`).
+5. Recurring outcomes arrive asynchronously, so phase 6's webhook processor is
+   part of autopay, not separate from it. **Not built.**
+
+So `mandateActivated` is false for every merchant, every activation email
+correctly withholds a renewal date, and `collectionRoute` always routes to
+manual. That is coherent and safe — it is simply not one flag away from
+automatic.
+
+**★ THERE IS ONE BILLING SYSTEM NOW.** `subscription-actions.ts`,
+`lib/payments/subscription.ts`, the `razorpay_plans` cache and the five
+`rzp*Subscription` calls were deleted on 2026-08-13. The `store_subscriptions`
+table remains as the old system's audit trail; nothing reads it.
+
+**The migration turned out to be a no-op.** `store_subscriptions` was empty in
+production by the time `billing_06` was applied, so there was nothing to move —
+and the one live subscriber's gateway subscription had already been cancelled by
+hand, which was the step that mattered.
 
 ---
 
 ## Also outstanding — unglamorous, worth scheduling
 
-| Item                          | Why it matters                                                                         |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| Catalogue **delta** sync      | Every register re-pulls the whole catalogue every 5 min — O(catalogue), forever        |
-| Money-event **audit**         | All 6 `posAudit` sites are auth-only; discounts, overrides and till refunds leave none |
-| Analytics **location filter** | Store-wide figures only, on a multi-location product                                   |
-| Sale round trips              | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path           |
-| Live **Razorpay** run         | Refunds and metered billing have never touched a real account                          |
-| `data_jobs` retention         | §32 prunes logs but not CSV job rows; needs two policies + two `created_at` indexes    |
+| Item                            | Why it matters                                                                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Catalogue **delta** sync        | Every register re-pulls the whole catalogue every 5 min — O(catalogue), forever                                                                                   |
+| Money-event **audit**           | All 6 `posAudit` sites are auth-only; discounts, overrides and till refunds leave none                                                                            |
+| Analytics **dashboard rebuild** | Spec: `docs/analytics-and-search-console-plan.md` — metric contract → persistent editor → commerce widgets → Search Console; includes the missing location filter |
+| Sale round trips                | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path                                                                                      |
+| Live **Razorpay** run           | Refunds and metered billing have never touched a real account                                                                                                     |
+| `data_jobs` retention           | §32 prunes logs but not CSV job rows; needs two policies + two `created_at` indexes                                                                               |
+| `billing_webhook_events` growth | One row per delivery, forever — not in `RETENTION_POLICIES`. One entry, no index needed                                                                           |
 
 ---
 

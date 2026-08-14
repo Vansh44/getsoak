@@ -168,6 +168,7 @@ export const aiCreditPurchases = pgTable(
     amountInr: integer("amount_inr").notNull(),
     rzpOrderId: text("rzp_order_id"),
     rzpPaymentId: text("rzp_payment_id"),
+    invoiceId: uuid("invoice_id"),
     status: text().default("pending").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
@@ -358,6 +359,7 @@ export const billingInvoices = pgTable(
     fyLabel: text("fy_label"),
     /** The renewal invoice's idempotency key. Null for ai_credits. */
     cycleSeq: integer("cycle_seq"),
+    addonTargetCount: integer("addon_target_count"),
     periodStart: timestamp("period_start", {
       withTimezone: true,
       mode: "string",
@@ -1702,6 +1704,27 @@ export const orderItems = pgTable(
       .default(0)
       .notNull(),
     hsnCode: text("hsn_code"),
+    // Logistics snapshots (logistics_01). These belong to the ORDER LINE, not
+    // a live product: changing a product tomorrow must not change the parcel
+    // already waiting on today's packing bench.
+    sku: text(),
+    requiresShipping: boolean("requires_shipping").default(true).notNull(),
+    weightGrams: integer("weight_grams"),
+    lengthCm: numeric("length_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    widthCm: numeric("width_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    heightCm: numeric("height_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
   },
   (table) => [
     index("idx_order_items_order_id").using(
@@ -1819,6 +1842,9 @@ export const orders = pgTable(
     shipping: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
+    // The checkout promise, frozen at purchase time. Carrier rates and ETAs
+    // change; support and fulfilment must see what this customer selected.
+    shippingOption: jsonb("shipping_option"),
     discount: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
@@ -2243,6 +2269,25 @@ export const productVariants = pgTable(
     allowBackorder: boolean("allow_backorder").default(false).notNull(),
     variantNo: integer("variant_no").notNull(),
     barcode: text(),
+    // Nullable = inherit the product's logistics value. A size/pack variant
+    // can override any physical measurement without duplicating the rest.
+    requiresShipping: boolean("requires_shipping"),
+    weightGrams: integer("weight_grams"),
+    lengthCm: numeric("length_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    widthCm: numeric("width_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    heightCm: numeric("height_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
   },
   (table) => [
     index("idx_product_variants_store_id").using(
@@ -2373,6 +2418,25 @@ export const products = pgTable(
     // system-generated Luhn `sku`, which is ours and immutable.
     barcode: text(),
     hsnCode: text("hsn_code"),
+    // Physical shipping data (logistics_01). Weight is stored in grams; the
+    // Shiprocket adapter converts to kilograms only at its API boundary.
+    requiresShipping: boolean("requires_shipping").default(true).notNull(),
+    weightGrams: integer("weight_grams"),
+    lengthCm: numeric("length_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    widthCm: numeric("width_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
+    heightCm: numeric("height_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
   },
   (table) => [
     index("idx_products_category").using(
@@ -2664,6 +2728,69 @@ export const storeBillingSettings = pgTable(
       for: "select",
       to: ["public"],
     }),
+  ],
+);
+
+// What the CUSTOMER pays for delivery. Provider credentials remain in
+// store_logistics_providers; this policy deliberately lives separately so a
+// merchant can use Shiprocket operationally while charging a flat or free rate.
+export const storeShippingSettings = pgTable(
+  "store_shipping_settings",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    mode: text().default("free").notNull(),
+    flatRate: numeric("flat_rate", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    freeAbove: numeric("free_above", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    manualMinDays: integer("manual_min_days").default(3).notNull(),
+    manualMaxDays: integer("manual_max_days").default(7).notNull(),
+    handlingDays: integer("handling_days").default(1).notNull(),
+    carrierAdjustmentType: text("carrier_adjustment_type")
+      .default("none")
+      .notNull(),
+    carrierAdjustmentValue: numeric("carrier_adjustment_value", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    showAllCouriers: boolean("show_all_couriers").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_shipping_settings_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_shipping_settings_mode_check",
+      sql`mode = ANY (ARRAY['free'::text, 'flat'::text, 'shiprocket'::text])`,
+    ),
+    check(
+      "store_shipping_settings_adjustment_check",
+      sql`carrier_adjustment_type = ANY (ARRAY['none'::text, 'fixed'::text, 'percentage'::text])`,
+    ),
+    check(
+      "store_shipping_settings_values_check",
+      sql`flat_rate >= 0 AND (free_above IS NULL OR free_above > 0) AND manual_min_days BETWEEN 0 AND 60 AND manual_max_days BETWEEN manual_min_days AND 90 AND handling_days BETWEEN 0 AND 30 AND carrier_adjustment_value >= 0`,
+    ),
   ],
 );
 
@@ -3581,6 +3708,388 @@ export const storePaymentProviders = pgTable(
       "store_payment_providers_provider_check",
       sql`provider = 'razorpay'::text`,
     ),
+  ],
+);
+
+// Logistics credentials are separate from payment credentials: a merchant can
+// pause Shiprocket without touching Razorpay, and every provider connection has
+// its own webhook identity. Service-role only (logistics_01_shiprocket.sql).
+export const storeLogisticsProviders = pgTable(
+  "store_logistics_providers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    provider: text().notNull(),
+    accountEmail: text("account_email"),
+    credentialSecretEnc: text("credential_secret_enc"),
+    tokenEnc: text("token_enc"),
+    tokenExpiresAt: timestamp("token_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    webhookSecretHash: text("webhook_secret_hash"),
+    enabled: boolean().default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("store_logistics_providers_store_provider_key").on(
+      table.storeId,
+      table.provider,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_logistics_providers_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_logistics_providers_provider_check",
+      sql`provider = ANY (ARRAY['shiprocket'::text, 'manual'::text])`,
+    ),
+  ],
+);
+
+export const locationLogisticsMappings = pgTable(
+  "location_logistics_mappings",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+    provider: text().notNull(),
+    externalPickupCode: text("external_pickup_code").notNull(),
+    externalLocationId: text("external_location_id"),
+    syncedAt: timestamp("synced_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("location_logistics_mappings_location_provider_key").on(
+      table.locationId,
+      table.provider,
+    ),
+    unique("location_logistics_mappings_store_pickup_key").on(
+      table.storeId,
+      table.provider,
+      table.externalPickupCode,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "location_logistics_mappings_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "location_logistics_mappings_location_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "location_logistics_mappings_provider_check",
+      sql`provider = 'shiprocket'::text`,
+    ),
+  ],
+);
+
+// Shopify calls this the work assigned to a location. It is intentionally not
+// the same row as an Order: one order may later split across locations.
+export const fulfilmentOrders = pgTable(
+  "fulfilment_orders",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    orderId: uuid("order_id").notNull(),
+    locationId: uuid("location_id"),
+    status: text().default("open").notNull(),
+    holdReason: text("hold_reason"),
+    assignedAt: timestamp("assigned_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    fulfilledAt: timestamp("fulfilled_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("fulfilment_orders_store_status_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.status.asc().nullsLast().op("text_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    index("fulfilment_orders_order_idx").using(
+      "btree",
+      table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    unique("fulfilment_orders_order_location_key").on(
+      table.orderId,
+      table.locationId,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "fulfilment_orders_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "fulfilment_orders_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "fulfilment_orders_location_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "fulfilment_orders_status_check",
+      sql`status = ANY (ARRAY['open'::text, 'in_progress'::text, 'on_hold'::text, 'fulfilled'::text, 'cancelled'::text])`,
+    ),
+  ],
+);
+
+export const fulfilmentOrderItems = pgTable(
+  "fulfilment_order_items",
+  {
+    fulfilmentOrderId: uuid("fulfilment_order_id").notNull(),
+    orderItemId: uuid("order_item_id").notNull(),
+    quantity: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.fulfilmentOrderId, table.orderItemId] }),
+    foreignKey({
+      columns: [table.fulfilmentOrderId],
+      foreignColumns: [fulfilmentOrders.id],
+      name: "fulfilment_order_items_fulfilment_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderItemId],
+      foreignColumns: [orderItems.id],
+      name: "fulfilment_order_items_order_item_id_fkey",
+    }).onDelete("cascade"),
+    check("fulfilment_order_items_quantity_check", sql`quantity > 0`),
+  ],
+);
+
+export const shipments = pgTable(
+  "shipments",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    orderId: uuid("order_id").notNull(),
+    fulfilmentOrderId: uuid("fulfilment_order_id").notNull(),
+    locationId: uuid("location_id"),
+    connectionId: uuid("connection_id"),
+    provider: text().notNull(),
+    status: text().default("draft").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    externalOrderId: text("external_order_id"),
+    externalShipmentId: text("external_shipment_id"),
+    awb: text(),
+    courierId: text("courier_id"),
+    courierName: text("courier_name"),
+    trackingUrl: text("tracking_url"),
+    labelUrl: text("label_url"),
+    manifestUrl: text("manifest_url"),
+    weightGrams: integer("weight_grams").notNull(),
+    lengthCm: numeric("length_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    widthCm: numeric("width_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    heightCm: numeric("height_cm", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }).notNull(),
+    shippingCost: numeric("shipping_cost", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    }),
+    codAmount: numeric("cod_amount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
+    estimatedDeliveryAt: timestamp("estimated_delivery_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    pickupScheduledAt: timestamp("pickup_scheduled_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    pickedUpAt: timestamp("picked_up_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    deliveredAt: timestamp("delivered_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    ndrReason: text("ndr_reason"),
+    lastError: text("last_error"),
+    operationToken: text("operation_token"),
+    operationLeaseUntil: timestamp("operation_lease_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("shipments_order_idx").using(
+      "btree",
+      table.orderId.asc().nullsLast().op("uuid_ops"),
+      table.createdAt.asc().nullsLast().op("timestamptz_ops"),
+    ),
+    index("shipments_store_status_idx").using(
+      "btree",
+      table.storeId.asc().nullsLast().op("uuid_ops"),
+      table.status.asc().nullsLast().op("text_ops"),
+      table.createdAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    uniqueIndex("shipments_provider_awb_idx")
+      .using(
+        "btree",
+        table.provider.asc().nullsLast().op("text_ops"),
+        table.awb.asc().nullsLast().op("text_ops"),
+      )
+      .where(sql`provider = 'shiprocket' AND awb IS NOT NULL`),
+    uniqueIndex("shipments_external_shipment_idx")
+      .using(
+        "btree",
+        table.connectionId.asc().nullsLast().op("uuid_ops"),
+        table.externalShipmentId.asc().nullsLast().op("text_ops"),
+      )
+      .where(
+        sql`connection_id IS NOT NULL AND external_shipment_id IS NOT NULL`,
+      ),
+    unique("shipments_idempotency_key_key").on(table.idempotencyKey),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "shipments_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "shipments_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.fulfilmentOrderId],
+      foreignColumns: [fulfilmentOrders.id],
+      name: "shipments_fulfilment_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.locationId],
+      foreignColumns: [storeLocations.id],
+      name: "shipments_location_id_fkey",
+    }).onDelete("set null"),
+    foreignKey({
+      columns: [table.connectionId],
+      foreignColumns: [storeLogisticsProviders.id],
+      name: "shipments_connection_id_fkey",
+    }).onDelete("set null"),
+    check(
+      "shipments_provider_check",
+      sql`provider = ANY (ARRAY['shiprocket'::text, 'manual'::text])`,
+    ),
+    check(
+      "shipments_status_check",
+      sql`status = ANY (ARRAY['draft'::text, 'booking'::text, 'ready_to_ship'::text, 'pickup_scheduled'::text, 'picked_up'::text, 'in_transit'::text, 'out_for_delivery'::text, 'delivered'::text, 'ndr'::text, 'rto_initiated'::text, 'rto_in_transit'::text, 'rto_delivered'::text, 'cancelled'::text, 'lost'::text, 'damaged'::text, 'error'::text])`,
+    ),
+    check("shipments_weight_check", sql`weight_grams > 0`),
+    check(
+      "shipments_dimensions_check",
+      sql`length_cm > 0 AND width_cm > 0 AND height_cm > 0`,
+    ),
+  ],
+);
+
+export const shipmentItems = pgTable(
+  "shipment_items",
+  {
+    shipmentId: uuid("shipment_id").notNull(),
+    orderItemId: uuid("order_item_id").notNull(),
+    quantity: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.shipmentId, table.orderItemId] }),
+    foreignKey({
+      columns: [table.shipmentId],
+      foreignColumns: [shipments.id],
+      name: "shipment_items_shipment_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderItemId],
+      foreignColumns: [orderItems.id],
+      name: "shipment_items_order_item_id_fkey",
+    }).onDelete("cascade"),
+    check("shipment_items_quantity_check", sql`quantity > 0`),
+  ],
+);
+
+export const shipmentEvents = pgTable(
+  "shipment_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    shipmentId: uuid("shipment_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventHash: text("event_hash").notNull(),
+    status: text().notNull(),
+    externalStatus: text("external_status"),
+    externalCode: text("external_code"),
+    description: text(),
+    location: text(),
+    occurredAt: timestamp("occurred_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    payload: jsonb().default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("shipment_events_event_hash_key").on(table.eventHash),
+    index("shipment_events_shipment_time_idx").using(
+      "btree",
+      table.shipmentId.asc().nullsLast().op("uuid_ops"),
+      table.occurredAt.desc().nullsFirst().op("timestamptz_ops"),
+    ),
+    foreignKey({
+      columns: [table.shipmentId],
+      foreignColumns: [shipments.id],
+      name: "shipment_events_shipment_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "shipment_events_store_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 

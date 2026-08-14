@@ -19,6 +19,7 @@ import {
 } from "@/lib/inventory/status";
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import { ShareButtons } from "@/app/(storefront)/components/share-buttons";
+import { ProductDeliveryEstimator } from "@/app/(storefront)/components/delivery/product-delivery-estimator";
 import { RelatedProducts, type RelatedProduct } from "./related-products";
 import { GroceryProductDetail } from "./grocery-product-detail";
 import ReviewsSection, {
@@ -223,7 +224,7 @@ export default function ProductDetailClient({
 
   if (grocery) {
     return (
-      <main className="shop-main gpdp-main">
+      <main className="shop-main pdp-page gpdp-main">
         <GroceryProductDetail
           product={product}
           gallery={gallery}
@@ -244,6 +245,14 @@ export default function ProductDetailClient({
           maxQty={maxQty}
           onAddToCart={handleAddToCart}
           onBuyNow={handleBuyNow}
+          deliveryEstimator={
+            <ProductDeliveryEstimator
+              productId={product.id}
+              variantId={selectedVariant?.id ?? null}
+              quantity={qty}
+              outOfStock={outOfStock}
+            />
+          }
         />
 
         <ReviewsSection
@@ -291,7 +300,7 @@ export default function ProductDetailClient({
   }
 
   return (
-    <main className="shop-main">
+    <main className="shop-main pdp-page">
       <nav className="shop-breadcrumb">
         <Link href="/shop">Shop</Link>
         <span>/</span>
@@ -451,6 +460,13 @@ export default function ProductDetailClient({
               </div>
             </div>
           )}
+
+          <ProductDeliveryEstimator
+            productId={product.id}
+            variantId={selectedVariant?.id ?? null}
+            quantity={qty}
+            outOfStock={outOfStock}
+          />
 
           <div className="pdp-qty">
             <label className="pdp-qty-label">Quantity</label>

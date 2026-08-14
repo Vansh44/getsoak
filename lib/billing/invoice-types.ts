@@ -37,3 +37,174 @@ export interface PayableInvoice {
   dueAt: string | null;
   createdAt: string;
 }
+
+/**
+ * What the Locations page renders for metered extra locations (§34, POS 7).
+ *
+ * Here for the same reason `PayableInvoice` is: the card is a CLIENT component,
+ * `lib/billing/locations.ts` is `server-only`, and a `type` re-export from the
+ * `"use server"` action file fails the build.
+ */
+export interface LocationBillingState {
+  /** Locations the plan includes at no extra cost. */
+  included: number;
+  /** Extra locations currently paid for. */
+  billed: number;
+  /** Locations that exist right now. */
+  existing: number;
+  /** included + billed — the ceiling createLocation enforces. */
+  allowance: number;
+  /** Extra locations that MUST stay paid for, given what exists. */
+  required: number;
+  /** Paid slots sitting unused, which could be released. */
+  releasable: number;
+  /** Set when a release is already booked for the end of this cycle. */
+  scheduled: number | null;
+  pricePerPeriodInr: number;
+  period: "monthly" | "yearly";
+  /** What buying ONE more costs right now, part-period. */
+  nextPurchaseInr: number;
+  canBuy: boolean;
+  blockedReason?: string;
+}
+
+/**
+ * The subscription, as the plans page shows it (§34).
+ *
+ * Replaces the old `SubscriptionState`. Two differences worth noting: `status`
+ * carries OUR state vocabulary (`active`/`past_due`/`grace`/…), not Razorpay's,
+ * and `scheduledPeriod` exists — the old shape could not express "same tier,
+ * different billing period", which is why period changes were impossible.
+ */
+export interface SubscriptionView {
+  plan: string | null;
+  period: "monthly" | "yearly" | null;
+  /** Our state machine's value. Null when there is no subscription. */
+  status: string | null;
+  /** End of the paid period: the next charge, or the last day of service. */
+  currentEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  scheduledPlan: string | null;
+  scheduledPeriod: "monthly" | "yearly" | null;
+  /** A booked location release. */
+  scheduledLocations: number | null;
+  /** True when autopay is authorised, so it renews without being asked. */
+  autopay: boolean;
+  /** True when there is a live subscription to cancel or change. */
+  active: boolean;
+}
+
+/**
+ * StoreMink's OWN tax identity, as the operator console edits it (§34).
+ *
+ * Here rather than in `lib/billing/platform-settings.ts` for the same reason as
+ * everything else in this file: that module is `server-only`, and the form is a
+ * client component.
+ */
+export interface PlatformTaxSettings {
+  legalName: string | null;
+  gstin: string | null;
+  address: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    postalCode?: string;
+  };
+  /** NUMERIC GST state code ("07", "29") — the origin for intra/inter decisions. */
+  stateCode: string | null;
+  taxEnabled: boolean;
+  taxRateBps: number;
+  /** True = the advertised price INCLUDES tax; false = tax is added on top. */
+  taxInclusive: boolean;
+  invoicePrefix: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/** Address shape shared by both parties on an invoice. */
+export interface InvoiceAddress {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  postalCode?: string;
+}
+
+/** One row of a merchant's invoice history. */
+export interface InvoiceSummary {
+  id: string;
+  invoiceRef: string | null;
+  kind: string;
+  status: string;
+  totalPaise: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  finalizedAt: string | null;
+  paidAt: string | null;
+}
+
+export interface InvoiceLineView {
+  kind: string;
+  description: string;
+  quantity: number;
+  unitAmountPaise: number;
+  amountPaise: number;
+}
+
+/**
+ * One issued invoice, as the printable document renders it.
+ *
+ * ★ The tax figures and identifiers come from the invoice's OWN row — see
+ * `lib/billing/invoice-history.ts` for why that distinction is load-bearing.
+ */
+export interface InvoiceDocument {
+  id: string;
+  invoiceRef: string | null;
+  kind: string;
+  status: string;
+  issuedAt: string | null;
+  paidAt: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  subtotalPaise: number;
+  discountPaise: number;
+  taxPaise: number;
+  totalPaise: number;
+  taxRateBps: number | null;
+  supplierGstin: string | null;
+  customerGstin: string | null;
+  placeOfSupply: string | null;
+  items: InvoiceLineView[];
+  supplier: { legalName: string; address: InvoiceAddress };
+  customer: {
+    legalName: string | null;
+    address: InvoiceAddress;
+    billingEmail: string | null;
+  };
+}
+
+/**
+ * One row of the operator reconciliation queue (§34).
+ *
+ * Here rather than in `lib/billing/reconcile.ts` for the usual reason: that
+ * module is `server-only` and the queue is rendered by a client component.
+ */
+export interface ReconciliationItem {
+  id: string;
+  storeId: string | null;
+  /** Null when the item maps to no store — an orphan gateway payment. */
+  storeName: string | null;
+  storeSlug: string | null;
+  kind: string;
+  status: string;
+  invoiceId: string | null;
+  attemptId: string | null;
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
+  expectedPaise: number | null;
+  observedPaise: number | null;
+  detail: unknown;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  createdAt: string;
+}

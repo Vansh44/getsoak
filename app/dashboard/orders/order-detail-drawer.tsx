@@ -20,6 +20,7 @@ import {
   Loader2,
   MapPin,
   Package,
+  Pencil,
   Store,
   Truck,
   X,
@@ -28,12 +29,14 @@ import {
 import { formatPrice } from "@/lib/pricing";
 import {
   getOrderDetail,
+  updateOrderDeliveryPhone,
   updateOrderStatus,
   type OrderDetail,
 } from "@/app/actions/order-actions";
 import { locationAddressLines } from "@/lib/locations/address";
 import { RefundPanel } from "./refund-panel";
 import { PickupBadge, isPickupOrder, pickupStageLabel } from "./pickup-badge";
+import { ShipmentPanel } from "./shipment-panel";
 
 const ORDER_STATUSES = [
   "pending",
@@ -141,6 +144,8 @@ export function OrderDetailDrawer({
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState("");
   // Derived (not effect state), so we never setState synchronously in the effect.
   const loading = orderId !== null && loadedId !== orderId;
 
@@ -153,6 +158,8 @@ export function OrderDetailDrawer({
       if (cancelled) return;
       if (res.error) toast.error(res.error);
       setDetail(res.order ?? null);
+      setEditingPhone(false);
+      setPhoneDraft("");
       setLoadedId(orderId);
     });
     return () => {
@@ -185,6 +192,21 @@ export function OrderDetailDrawer({
         return;
       }
       toast.success("Order updated");
+      await reload();
+      onChanged();
+    });
+  }
+
+  function saveDeliveryPhone() {
+    if (!detail) return;
+    startSaving(async () => {
+      const res = await updateOrderDeliveryPhone(detail.id, phoneDraft);
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("Delivery phone updated. Retry the shipment booking.");
+      setEditingPhone(false);
       await reload();
       onChanged();
     });
@@ -435,8 +457,66 @@ export function OrderDetailDrawer({
                         {ship.name}
                       </div>
                     )}
-                    {ship.phone && (
-                      <div className="text-muted-foreground">{ship.phone}</div>
+                    {!isPickupOrder(detail) &&
+                    ["pending", "processing"].includes(detail.status) ? (
+                      editingPhone ? (
+                        <div className="mt-2 rounded-md bg-muted/40 p-2">
+                          <label className="text-xs font-medium text-muted-foreground">
+                            Delivery phone
+                          </label>
+                          <input
+                            type="tel"
+                            inputMode="tel"
+                            autoFocus
+                            value={phoneDraft}
+                            onChange={(event) =>
+                              setPhoneDraft(event.target.value)
+                            }
+                            placeholder="98765 43210"
+                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+                          />
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              disabled={saving}
+                              onClick={saveDeliveryPhone}
+                              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                            >
+                              {saving ? "Saving…" : "Save phone"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={saving}
+                              onClick={() => setEditingPhone(false)}
+                              className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-muted-foreground">
+                            {ship.phone || "No phone on file"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPhoneDraft(ship.phone);
+                              setEditingPhone(true);
+                            }}
+                            className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
+                          >
+                            <Pencil className="h-3 w-3" /> Edit phone
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      ship.phone && (
+                        <div className="text-muted-foreground">
+                          {ship.phone}
+                        </div>
+                      )
                     )}
                     {ship.line && (
                       <div className="mt-1 text-muted-foreground">
@@ -461,6 +541,16 @@ export function OrderDetailDrawer({
                 )}
               </div>
             </section>
+
+            {!isPickupOrder(detail) && (
+              <ShipmentPanel
+                orderId={detail.id}
+                onChanged={async () => {
+                  await reload();
+                  onChanged();
+                }}
+              />
+            )}
 
             {detail.notes && (
               <section>

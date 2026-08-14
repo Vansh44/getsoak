@@ -55,6 +55,9 @@ vi.mock("@/lib/db/client", () => ({
 vi.mock("@/lib/fulfilment/resolve", () => ({
   resolveFulfilmentLocation: vi.fn(async () => null),
 }));
+vi.mock("@/lib/shipping/quote", () => ({
+  quoteShippingForOrder: vi.fn(),
+}));
 
 import {
   placeOrder,
@@ -80,6 +83,7 @@ import {
 import { makeDbMock, sqlText, sqlParamValues } from "./_test-helpers";
 import { orders, orderItems } from "@/drizzle/schema";
 import type { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
+import { quoteShippingForOrder } from "@/lib/shipping/quote";
 
 const STORE = "a0000000-0000-4000-8000-000000000001";
 
@@ -87,7 +91,7 @@ const validForm: CheckoutFormData = {
   firstName: "Ada",
   lastName: "Lovelace",
   email: "ada@example.com",
-  phone: "9999999999",
+  phone: "9876543210",
   addressLine1: "1 Analytical Engine Rd",
   city: "London",
   state: "England",
@@ -138,6 +142,10 @@ describe("placeOrder", () => {
     vi.mocked(getServerUser).mockResolvedValue({ id: "user-1" } as any);
     vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
     vi.mocked(validateCoupon).mockResolvedValue({} as any);
+    vi.mocked(quoteShippingForOrder).mockResolvedValue({
+      options: [],
+      error: "No courier available",
+    });
   });
 
   it("rejects an anonymous caller", async () => {
@@ -171,6 +179,15 @@ describe("placeOrder", () => {
     expect("error" in result && result.error).toMatch(/city is required/i);
   });
 
+  it("rejects a phone number Shiprocket cannot deliver to", async () => {
+    const result = await placeOrder(
+      { ...validForm, phone: "+91 88888 88888" },
+      [oneItem()],
+    );
+    expect("error" in result && result.error).toMatch(/valid 10-digit/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
   it("rejects when rate-limited", async () => {
     vi.mocked(rateLimit).mockResolvedValue({ allowed: false } as any);
     const result = await placeOrder(validForm, [oneItem()]);
@@ -195,6 +212,103 @@ describe("placeOrder", () => {
     expect(inserted.customerId).toBe("user-1");
     // Marked so cancellation restocks it exactly once (order-actions claim).
     expect(inserted.stockStatus).toBe("reserved");
+  });
+
+  it("re-quotes a physical order and snapshots the selected shipping promise", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          productRow({
+            requires_shipping: true,
+            weight_grams: 300,
+            length_cm: 12,
+            width_cm: 8,
+            height_cm: 4,
+          }),
+        ],
+        [],
+        [],
+      ],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+    vi.mocked(quoteShippingForOrder).mockResolvedValue({
+      options: [
+        {
+          id: "shiprocket:7",
+          label: "Fast Courier",
+          description: "Delivery in 2–3 days",
+          amount: 50,
+          carrierCost: 45,
+          courierId: "7",
+          courierName: "Fast Courier",
+          estimatedDeliveryMinDays: 2,
+          estimatedDeliveryMaxDays: 3,
+          estimatedDeliveryAt: "2026-08-17T12:00:00.000Z",
+          freeShippingApplied: false,
+        },
+      ],
+    });
+
+    const result = await placeOrder(
+      { ...validForm, postalCode: "201301", country: "India" },
+      [oneItem()],
+      null,
+      "cod",
+      null,
+      null,
+      "shiprocket:7",
+      50,
+    );
+
+    expect("success" in result && result.success).toBe(true);
+    const inserted = dbHolder.current.calls.values[0];
+    expect(inserted.shipping).toBe(50);
+    expect(inserted.total).toBe(250);
+    expect(inserted.shippingOption).toMatchObject({
+      id: "shiprocket:7",
+      courierId: "7",
+      amount: 50,
+      carrierCost: 45,
+      provider: "shiprocket",
+    });
+  });
+
+  it("does not silently charge a changed live delivery price", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow({ requires_shipping: true })], [], []],
+    });
+    vi.mocked(quoteShippingForOrder).mockResolvedValue({
+      options: [
+        {
+          id: "shiprocket:7",
+          label: "Fast Courier",
+          description: "Delivery in 2–3 days",
+          amount: 60,
+          carrierCost: 55,
+          courierId: "7",
+          courierName: "Fast Courier",
+          estimatedDeliveryMinDays: 2,
+          estimatedDeliveryMaxDays: 3,
+          estimatedDeliveryAt: "2026-08-17T12:00:00.000Z",
+          freeShippingApplied: false,
+        },
+      ],
+    });
+
+    const result = await placeOrder(
+      { ...validForm, postalCode: "201301", country: "India" },
+      [oneItem()],
+      null,
+      "cod",
+      null,
+      null,
+      "shiprocket:7",
+      50,
+    );
+
+    expect("error" in result && result.error).toMatch(/price changed/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("applies a validated coupon, rounds the discount, and increments usage", async () => {
@@ -507,6 +621,13 @@ describe("placeOrder — razorpay", () => {
     vi.mocked(getServerUser).mockResolvedValue({ id: "user-1" } as any);
     vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
     vi.mocked(validateCoupon).mockResolvedValue({} as any);
+    // ⚠ `clearAllMocks` clears CALLS, not IMPLEMENTATIONS, so the store-credit
+    // block's balance used to leak in here: the order total stayed ₹200 (credit
+    // is a payment, not a discount — §29) while the CHARGE dropped to ₹150, and
+    // this suite's whole point is that the gateway is asked for the
+    // server-computed amount. Reset explicitly so the razorpay tests describe a
+    // customer with no credit.
+    vi.mocked(getCreditBalance).mockResolvedValue(0);
     vi.mocked(getStoreGateway).mockResolvedValue(GATEWAY as any);
     vi.mocked(rzpCreateOrder).mockResolvedValue({
       ok: true,

@@ -39,6 +39,49 @@
   color: var(--sm-ink-soft);
 }
 
+/* Online / In store follows the reference's quiet, full-width treatment. It
+   only renders when the store has a real physical-store journey (or the
+   shopper has historical receipts there), so this never advertises a feature
+   the merchant cannot fulfil. */
+.tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: -6px 0 34px;
+  border-bottom: 2px solid rgba(var(--sm-shadow-rgb), 0.12);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  padding: 14px 16px 13px;
+  background: transparent;
+  color: var(--sm-ink-faint);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--sm-ink);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--sm-accent);
+  outline-offset: 3px;
+  border-radius: var(--sm-radius-sm);
+}
+
+.tabActive {
+  color: var(--sm-accent);
+  border-bottom-color: var(--sm-accent);
+}
+
 .card {
   background: var(--sm-surface);
   border: 1px solid rgba(var(--sm-shadow-rgb), 0.1);
@@ -439,7 +482,19 @@ a.card:hover {
 
 .empty {
   text-align: center;
-  padding: 64px 24px;
+  padding: 72px 24px 64px;
+}
+
+.emptyIcon {
+  width: 88px;
+  height: 88px;
+  margin: 0 auto 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sm-ink-faint);
+  background: rgba(var(--sm-shadow-rgb), 0.045);
 }
 
 .emptyTitle {
@@ -450,6 +505,9 @@ a.card:hover {
 
 .emptyText {
   margin-top: 8px;
+  max-width: 590px;
+  margin-left: auto;
+  margin-right: auto;
   font-size: 15px;
   color: var(--sm-ink-soft);
 }
@@ -464,6 +522,21 @@ a.card:hover {
   font-size: 15px;
   font-weight: 500;
   text-decoration: none;
+}
+
+@media (max-width: 560px) {
+  .tabs {
+    margin-bottom: 22px;
+  }
+
+  .tab {
+    padding-inline: 8px;
+    font-size: 15px;
+  }
+
+  .empty {
+    padding: 48px 12px;
+  }
 }
 
 .back {

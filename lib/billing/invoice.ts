@@ -11,7 +11,7 @@
  */
 
 import { isIntraState, splitGstPaise, type GstSplitPaise } from "./gst";
-import type { BillingPeriod } from "@/lib/payments/subscription";
+import type { BillingPeriod } from "@/lib/plans/location-billing";
 
 /** A line on an invoice. `kind` must explain itself (spec §13). */
 export interface InvoiceLine {
@@ -250,6 +250,35 @@ export function buildAiCreditsInvoice(input: {
       {
         kind: "ai_credits",
         description: `AI credits · ${input.packLabel} (${Math.max(0, Math.floor(input.credits))} credits)`,
+        quantity: 1,
+        unitAmountPaise: nonNeg(input.amountPaise),
+        amountPaise: nonNeg(input.amountPaise),
+      },
+    ],
+    0,
+    input.tax,
+  );
+}
+
+/**
+ * A mid-cycle add-on — today, extra locations bought part way through a period.
+ *
+ * ★ ONE LINE, kind `addon`, and NO cycle_seq on the invoice that carries it. It
+ * is a one-off document dated to the day it was paid, not a periodic one: a
+ * merchant may buy a shop in January and another in February, and each is its own
+ * receipt. The recurring cost then rides the next subscription invoice's
+ * `location` line, so nothing is billed twice.
+ */
+export function buildAddonInvoice(input: {
+  description: string;
+  amountPaise: number;
+  tax: TaxContext;
+}): BuiltInvoice {
+  return assemble(
+    [
+      {
+        kind: "addon",
+        description: input.description,
         quantity: 1,
         unitAmountPaise: nonNeg(input.amountPaise),
         amountPaise: nonNeg(input.amountPaise),

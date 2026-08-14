@@ -19,10 +19,15 @@ import "server-only";
  *     outcome, not a decline — every one of them would sit in reconciliation
  *     forever, indistinguishable from a real outage.
  *
- * Returning null instead means the renewal worker SKIPS collection entirely: no
- * attempt rows, no phantom state, and the cron reports plainly that collection
- * is not configured. Nothing downstream misreads it, because nothing downstream
- * runs.
+ * Returning null instead means the renewal worker ISSUES each invoice and does
+ * not charge it: no attempt rows, no phantom state, and the cron reports plainly
+ * that collection is not configured. The merchant pays on /dashboard/plans,
+ * which is a complete billing path on its own.
+ *
+ * ★ NULL MUST NOT STOP ISSUANCE. It did until 2026-08-13 — the whole pass was
+ * skipped — so no invoice was ever written, nobody was ever downgraded, every
+ * subscriber got free service past their cycle end, and the manual payment
+ * surface had nothing to list. Issuing a document is not taking money.
  *
  * ── To finish this ────────────────────────────────────────────────────────
  *  1. Confirm the subsequent-charge endpoint and request body against a

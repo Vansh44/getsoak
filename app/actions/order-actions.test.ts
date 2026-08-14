@@ -31,7 +31,12 @@ vi.mock("@/lib/db/client", () => ({
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
 
-import { getOrders, getOrderDetail, updateOrderStatus } from "./order-actions";
+import {
+  getOrders,
+  getOrderDetail,
+  updateOrderDeliveryPhone,
+  updateOrderStatus,
+} from "./order-actions";
 import {
   getManagerIdentity,
   getManagerUserId,
@@ -297,6 +302,67 @@ describe("order-actions", () => {
       const result = await updateOrderStatus("o1", "cancelled");
       expect(result.success).toBe(true);
       expect(dbHolder.current.calls.execute).toHaveLength(0);
+    });
+  });
+
+  describe("updateOrderDeliveryPhone", () => {
+    it("rejects an invalid placeholder before reading the order", async () => {
+      const result = await updateOrderDeliveryPhone("o1", "8888888888");
+      expect(result.error).toMatch(/valid 10-digit/i);
+      expect(dbHolder.current.calls.select).toHaveLength(0);
+    });
+
+    it("updates a pending delivery before Shiprocket has carrier IDs", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [
+            {
+              status: "pending",
+              fulfilmentType: "delivery",
+              shippingAddress: { firstName: "Ada", phone: "8888888888" },
+            },
+          ],
+          [
+            {
+              externalOrderId: null,
+              externalShipmentId: null,
+              awb: null,
+            },
+          ],
+        ],
+      });
+      const result = await updateOrderDeliveryPhone("o1", "+91 98765 43210");
+      expect(result.success).toBe(true);
+      expect(dbHolder.current.calls.set[0]).toMatchObject({
+        shippingAddress: {
+          firstName: "Ada",
+          phone: "+919876543210",
+        },
+      });
+    });
+
+    it("refuses an edit after Shiprocket has accepted the parcel", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [
+            {
+              status: "processing",
+              fulfilmentType: "delivery",
+              shippingAddress: { phone: "8888888888" },
+            },
+          ],
+          [
+            {
+              externalOrderId: "sr-order-1",
+              externalShipmentId: "sr-shipment-1",
+              awb: null,
+            },
+          ],
+        ],
+      });
+      const result = await updateOrderDeliveryPhone("o1", "9876543210");
+      expect(result.error).toMatch(/already accepted/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
     });
   });
 });

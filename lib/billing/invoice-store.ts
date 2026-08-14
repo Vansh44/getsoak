@@ -94,12 +94,85 @@ export async function loadTaxContext(storeId: string): Promise<TaxContext> {
   }
 }
 
+/**
+ * The tax IDENTIFIERS to stamp on one invoice, alongside the rate.
+ *
+ * ★★ THESE COLUMNS EXISTED AND WERE NEVER WRITTEN. `billing_invoices` has carried
+ * `supplier_gstin`, `customer_gstin` and `place_of_supply` since billing_03 —
+ * every creator accepted them as optional arguments and no caller passed one, so
+ * every invoice stored NULL. The document could then only name a GSTIN by reading
+ * LIVE settings, which defeats the point of an immutable invoice: an operator
+ * correcting a GSTIN in September would silently rewrite what April's invoice
+ * claims to have been issued under.
+ *
+ * ⚠ THE NAMES AND ADDRESSES ARE STILL NOT SNAPSHOTTED — no column exists for
+ * them, so the document renders those live. The GSTINs, the place of supply, the
+ * rate and every amount ARE fixed, which is the legally significant part; a
+ * company rename would restate the label on old invoices but not what they
+ * charged or under whose registration. Closing that fully needs a `parties jsonb`
+ * column.
+ */
+export interface InvoiceParties {
+  supplierGstin: string | null;
+  customerGstin: string | null;
+  placeOfSupply: string | null;
+}
+
+const NO_PARTIES: InvoiceParties = {
+  supplierGstin: null,
+  customerGstin: null,
+  placeOfSupply: null,
+};
+
+/**
+ * Read them for one store.
+ *
+ * ★ Falls back to all-null rather than throwing, matching `loadTaxContext`: a
+ * read failure must not fail a renewal, and an invoice with no GSTIN block is
+ * exactly what a tax-OFF invoice looks like anyway.
+ */
+export async function loadInvoiceParties(
+  storeId: string,
+): Promise<InvoiceParties> {
+  try {
+    return await withService(async (db) => {
+      const [settings] = await db
+        .select({
+          gstin: platformBillingSettings.gstin,
+          taxEnabled: platformBillingSettings.taxEnabled,
+        })
+        .from(platformBillingSettings)
+        .limit(1);
+      const [account] = await db
+        .select({
+          gstin: billingAccounts.gstin,
+          stateCode: billingAccounts.stateCode,
+        })
+        .from(billingAccounts)
+        .where(eq(billingAccounts.storeId, storeId))
+        .limit(1);
+      return {
+        // ★ Only when tax is ON. Stamping our GSTIN onto an invoice that charges
+        // no GST would make it look like a tax invoice that forgot the tax.
+        supplierGstin: settings?.taxEnabled ? (settings.gstin ?? null) : null,
+        customerGstin: account?.gstin ?? null,
+        placeOfSupply: account?.stateCode ?? null,
+      };
+    });
+  } catch (err) {
+    logError("billing.load_invoice_parties", err, { storeId });
+    return NO_PARTIES;
+  }
+}
+
 /** Shared shape for writing an invoice + its lines in one transaction. */
 interface CreateInput {
   storeId: string;
-  kind: "subscription" | "ai_credits";
+  kind: "subscription" | "ai_credits" | "addon";
   built: BuiltInvoice;
   cycleSeq?: number | null;
+  /** Addon only: the billed-location count this invoice buys. */
+  addonTargetCount?: number | null;
   periodStart?: Date | null;
   periodEnd?: Date | null;
   dueAt?: Date | null;
@@ -131,6 +204,7 @@ async function insertInvoiceWithLines(
       totalPaise: built.totalPaise,
       taxRateBps: built.taxRateBps,
       cycleSeq: input.cycleSeq ?? null,
+      addonTargetCount: input.addonTargetCount ?? null,
       periodStart: input.periodStart?.toISOString() ?? null,
       periodEnd: input.periodEnd?.toISOString() ?? null,
       dueAt: input.dueAt?.toISOString() ?? null,
@@ -257,6 +331,46 @@ export async function createAiCreditsInvoice(input: {
 }
 
 /**
+ * A mid-cycle add-on invoice (extra locations).
+ *
+ * ★ `targetCount` IS THE GRANT, recorded on the document. `confirm` is a public
+ * server action, so reading the count from the client would let a caller be
+ * granted more locations than it paid for; reading it from the invoice means it
+ * can only ever be what the price was computed for.
+ *
+ * Deliberately NOT idempotent on anything: two purchases in one cycle are two
+ * separate documents, which is why `billing_invoices_one_per_cycle` is partial on
+ * `cycle_seq is not null` and an addon carries none.
+ */
+export async function createAddonInvoice(input: {
+  storeId: string;
+  built: BuiltInvoice;
+  targetCount: number;
+  supplierGstin?: string | null;
+  customerGstin?: string | null;
+  placeOfSupply?: string | null;
+}): Promise<InvoiceRow | null> {
+  try {
+    return await withService(async (db) => {
+      const id = await insertInvoiceWithLines(db, {
+        storeId: input.storeId,
+        kind: "addon",
+        built: input.built,
+        cycleSeq: null,
+        addonTargetCount: input.targetCount,
+        supplierGstin: input.supplierGstin,
+        customerGstin: input.customerGstin,
+        placeOfSupply: input.placeOfSupply,
+      });
+      return id ? readInvoice(db, id) : null;
+    });
+  } catch (err) {
+    logError("billing.create_addon_invoice", err, { storeId: input.storeId });
+    return null;
+  }
+}
+
+/**
  * Issue the invoice: stamp `finalized_at`, which fires the trigger that
  * allocates the gapless document number, and open it for collection.
  *
@@ -272,9 +386,29 @@ export async function finalizeInvoice(
   invoiceId: string,
   now: Date = new Date(),
 ): Promise<InvoiceRow | null> {
+  return (await finalizeInvoiceClaimed(invoiceId, now)).invoice;
+}
+
+/**
+ * Finalize, and say whether THIS call was the one that did it.
+ *
+ * ★ "I finalized it" and "I observed it finalized" are different facts, and the
+ * plain `finalizeInvoice` above cannot tell them apart — it re-reads the row, so
+ * a caller that lost the race still gets a finalized invoice back and believes
+ * it won. That is harmless for control flow (either way the invoice is issued)
+ * and NOT harmless for anything that should happen once per invoice: the renewal
+ * worker mails the merchant here, and `claimDue` deliberately takes no lock, so
+ * two overlapping runs would send the same bill twice.
+ *
+ * The conditional UPDATE is the claim; `returning()` is how we hear about it.
+ */
+export async function finalizeInvoiceClaimed(
+  invoiceId: string,
+  now: Date = new Date(),
+): Promise<{ invoice: InvoiceRow | null; claimed: boolean }> {
   try {
     return await withService(async (db) => {
-      await db
+      const claimed = await db
         .update(billingInvoices)
         .set({
           finalizedAt: now.toISOString(),
@@ -286,12 +420,16 @@ export async function finalizeInvoice(
             eq(billingInvoices.id, invoiceId),
             sql`${billingInvoices.finalizedAt} is null`,
           ),
-        );
-      return readInvoice(db, invoiceId);
+        )
+        .returning({ id: billingInvoices.id });
+      return {
+        invoice: await readInvoice(db, invoiceId),
+        claimed: claimed.length > 0,
+      };
     });
   } catch (err) {
     logError("billing.finalize_invoice", err, { invoiceId });
-    return null;
+    return { invoice: null, claimed: false };
   }
 }
 

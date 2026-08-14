@@ -82,7 +82,16 @@ function rpcParams(i: number): unknown[] {
 }
 
 beforeEach(() => {
+  // ⚠ `clearAllMocks` clears CALLS, not IMPLEMENTATIONS. One test below sets
+  // `releaseHold` to REJECT (proving a stock failure never blocks a
+  // cancellation), and that rejection used to survive into every later test —
+  // aborting the release loop after the first hold, so "releases each held
+  // reservation" saw one call instead of two.
+  //
+  // ★ It passed only because of declaration order: the rejecting test is last.
+  // `vitest --sequence.shuffle` fails it.
   vi.clearAllMocks();
+  vi.mocked(releaseHold).mockResolvedValue(true);
   seed();
 });
 

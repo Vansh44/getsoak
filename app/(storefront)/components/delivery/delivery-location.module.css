@@ -1,0 +1,199 @@
+.root {
+  position: relative;
+  flex: 0 1 210px;
+  min-width: 0;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 210px;
+  min-height: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-control);
+  background: color-mix(in srgb, var(--sm-surface) 88%, transparent);
+  color: var(--sm-ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.trigger > svg:first-child {
+  flex: 0 0 auto;
+  color: var(--sm-accent, var(--brand-primary));
+}
+
+.trigger > svg:last-child {
+  flex: 0 0 auto;
+  opacity: 0.65;
+}
+
+.triggerCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.triggerCopy small {
+  margin-bottom: 3px;
+  color: var(--sm-ink-faint);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.triggerCopy strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 80;
+  width: min(340px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-card);
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  box-shadow: 0 18px 50px rgba(var(--sm-shadow-rgb), 0.18);
+}
+
+.title {
+  display: block;
+  font-size: 15px;
+}
+
+.help {
+  margin: 5px 0 14px;
+  color: var(--sm-ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form {
+  display: flex;
+  gap: 8px;
+}
+
+.form input {
+  min-width: 0;
+  flex: 1;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-sm);
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.form input:focus {
+  border-color: var(--sm-accent, var(--brand-primary));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sm-accent) 16%, transparent);
+}
+
+.form button {
+  padding: 0 15px;
+  border: none;
+  border-radius: var(--sm-radius-sm);
+  background: var(--sm-ink);
+  color: var(--sm-on-ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.locate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sm-accent, var(--brand-primary));
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.locate:disabled {
+  opacity: 0.55;
+}
+
+.error {
+  margin: 10px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:global(.sm-header-market) .trigger {
+  border-color: color-mix(in srgb, var(--sm-header-fg) 22%, transparent);
+  background: color-mix(in srgb, var(--sm-header-fg) 10%, transparent);
+  color: var(--sm-header-fg, var(--sm-on-ink));
+}
+
+:global(.sm-header-market) .triggerCopy small,
+:global(.sm-header-market) .trigger > svg:first-child {
+  color: color-mix(in srgb, var(--sm-header-fg) 75%, transparent);
+}
+
+.drawerRoot {
+  display: none;
+  flex: none;
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.drawerRoot .trigger {
+  width: 100%;
+  max-width: none;
+  background: var(--sm-sand);
+}
+
+.drawerRoot .panel {
+  position: static;
+  width: 100%;
+  margin-top: 8px;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  .root:not(.drawerRoot) {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .drawerRoot {
+    display: block;
+  }
+}
