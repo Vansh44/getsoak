@@ -5466,10 +5466,53 @@ false` in `lib/notifications/channels.ts` must therefore NOT simply be
     merchant's own portal approved — leaving them unable to tell whose rule
     they broke. What IS enforced is universal: the body must match apart from
     its variables, and a variable may not END the message (which would leave it
-    with no fixed tail). - **Not built:** the provider client, credential storage, the SMS queue and
-    worker, and opt-out (STOP) handling. All of them follow from one unmade
-    decision — BYO Twilio per merchant, or brokered through StoreMink's own
-    account — which changes the schema, the connection UI and who bills whom.
+    with no fixed tail). - **★ BYO PER STORE, decided 2026-08-15** (owner). Merchants connect their own
+    Twilio account in **Channels → Twilio SMS**; StoreMink never fronts the
+    carrier bill and never carries their spam risk. Schema in
+    `supabase/sms_01_schema.sql` (⚠ **not applied**): `store_sms_providers`
+    (the `store_payment_providers` shape — service-role only, auth token
+    AES-256-GCM under `PAYMENT_CRED_KEY`, encrypted rather than hashed because
+    it is PRESENTED on every request), `store_sms_templates`, `sms_logs` and
+    `notification_sms_queue`. - **★ THE DLT FIELDS ARE NOT NULL, not optional extras.** A connection stored
+    without a sender header and Entity ID looks connected and delivers
+    nothing — the carrier drops it silently, so the merchant gets no error to
+    act on. `saveSmsCredentials` verifies by FETCHING the account rather than
+    sending (verifying by sending costs money and puts a test SMS on
+    somebody's phone) and refuses a suspended account, which authenticates
+    perfectly and delivers nothing. Pausing keeps the credentials; only
+    Disconnect discards them, and the confirm says so — the header and entity
+    id live on the DLT portal and cannot be retyped from memory. - **★★ `lib/sms/send.ts` IS THE CHOKE POINT**, with `send-coverage.test.ts`
+    written at the SAME TIME as the channel rather than retroactively. The
+    email guard was written after eight scattered `resend.emails.send` calls
+    had accumulated recording nothing; there is no reason to rediscover that
+    on the second channel. It fails on a direct `twilioSendSms` call, on
+    anything reaching `api.twilio.com` outside the client, and if the choke
+    point stops writing a row for any of sent/failed/skipped. - **★ THE CLIENT'S OUTCOME VOCABULARY IS THE POINT** (`lib/sms/twilio.ts`,
+    plain fetch, the razorpay.ts shape): `rejected` is a verdict, `unknown` is
+    a timeout or a 5xx where the message may well have gone. Collapsing them
+    is what makes a retry send someone the same message twice — §26's refund
+    rule, reused. - **★ SMS LOGS ARE A SIXTH LOG** (`/dashboard/logs/sms-logs`), on the SAME
+    `activity` section, plus their own **Failures** source — separate from
+    Email because an SMS has a failure cause email never has (a body that
+    drifted from its registered template) and one chip cannot stand for two
+    remedies. The extra column is **segments**, because that is what the
+    merchant is billed. ⚠ The page says the thing merchants otherwise learn the
+    hard way: **a message a carrier blocked for not matching its DLT template
+    appears here as SENT.** Carriers drop those silently, so a delivery report
+    is the only place they exist. - **★ TEMPLATES ARE A MIRROR, NOT AN EDITOR**
+    (`app/actions/sms-template-actions.ts`). Validated on save against the pure
+    rules; the variable mapping must match the template's shape exactly, and
+    names are checked against the SAME `variableNamesFor` the email validator
+    uses, so a token that works in an email body is not mysteriously rejected
+    here. Cost is derived on read, never stored, so it cannot go stale against
+    an edited body. - **⚠ NOTHING SENDS YET, and `available: false` in
+    `lib/notifications/channels.ts` is CORRECT rather than an oversight** —
+    flipping it would let a merchant switch on a channel with no registration
+    behind it, accepting exactly the "yes" that flag exists to prevent. Left to
+    build: the queue worker, per-store channel resolution (connected AND
+    enabled AND a template for that event+audience), recipient phone
+    resolution, the template editor UI in the notification console, and opt-out
+    (STOP) handling.
 
 ## 6. Commands
 

@@ -647,16 +647,34 @@ variable may open a message. Operator documentation asserts these
 inconsistently, and a rule invented here would reject templates the merchant's
 own portal approved — leaving them unable to tell whose rule they broke.
 
-### ⚠ BLOCKED ON ONE DECISION — see the note at the end of this file
+### Decided 2026-08-15 — BYO per store
 
-Whether merchants bring their own Twilio account or send through StoreMink's
-changes the schema, the connection UI and who bills whom. The rest of the step —
-provider client, credential storage, the SMS queue and worker, opt-out (STOP)
-handling — follows from it and is not worth building twice.
+Merchants connect their own Twilio account in **Channels → Twilio SMS**.
+StoreMink never fronts the carrier bill and never carries their spam risk.
 
-**Effort after that decision: ~1 week.** WhatsApp is a separate track: it needs
-no DLT, but it needs Meta Business verification and Meta-approved templates, so
-it is not a cheaper substitute.
+**Shipped since:** the schema (`supabase/sms_01_schema.sql`, ⚠ **not applied**),
+the Twilio client and the `lib/sms/send.ts` choke point with its coverage guard,
+the Channels connection card, the SMS log as a sixth log plus a Failures source,
+and the DLT template mirror actions. See CODEBASE §37.
+
+### ⚠ NOTHING SENDS YET
+
+`sms` is still `available: false` in `lib/notifications/channels.ts`, and that is
+correct rather than an oversight — flipping it would let a merchant switch on a
+channel with no registration behind it, accepting exactly the "yes" that flag
+exists to prevent. What is left:
+
+1. **The queue worker** — drain `notification_sms_queue` on the existing cron,
+   with the retry/backoff shape `notification-worker.ts` uses.
+2. **Per-store channel resolution** — connected AND enabled AND a template for
+   that event and audience. This replaces the static `available` flag for SMS.
+3. **Recipient phone resolution** — the `customerEmailFor` counterpart.
+4. **The template editor UI** in the notification console (the actions exist).
+5. **Opt-out (STOP) handling**, which is not optional.
+
+WhatsApp remains out of scope (owner, 2026-08-15). It needs no DLT but does need
+Meta Business verification and Meta-approved templates, so it is a separate track
+rather than a cheaper substitute.
 
 ---
 
