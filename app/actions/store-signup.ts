@@ -23,6 +23,7 @@ const RESERVED = new Set([
   "www",
   "app",
   "help",
+  "pos",
   "themes",
   "api",
   "admin",

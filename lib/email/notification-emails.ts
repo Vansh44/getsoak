@@ -1,21 +1,16 @@
 // ---------------------------------------------------------------------------
 // Notification email templates — the second delivery channel for the event
-// spine (CODEBASE.md §22).
+// spine (CODEBASE.md §24).
 //
-// ══ ONE GLOBAL DESIGN, NOT A PER-STORE ONE ════════════════════════════════
-// Every store's notification emails use the SAME neutral palette: white card on
-// light grey, near-black text, one dark button. The only per-store things are
-// the LOGO and the STORE NAME.
+// ══ ONE GLOBAL DESIGN, SAFELY BRANDED ══════════════════════════════════════
+// Every store's notification email uses the same neutral foundation: white
+// card, near-black text, restrained borders. Identity comes from the logo/name
+// and ONE safe version of the store accent on the card edge, links and CTA.
+// `emailAccentColor` darkens light accents until white button text reaches WCAG
+// AA contrast; malformed colours fall back to neutral ink.
 //
-// Why not the store's accent colour: a merchant picks a storefront accent for a
-// storefront. Pushed through an email it lands on colour-managed clients, dark
-// mode, and a button that has to stay legible at any hue — and the failure mode
-// is a customer receiving something that looks broken. Shopify's transactional
-// emails are near-monochrome for the same reason. Identity comes from the logo.
-//
-// (The OTHER email types — coupon campaigns, blog/enquiry/billing — still use
-// the older `wrapBrandedEmail` layout in lib/email/layout.ts. Unifying them is
-// a follow-up, not a silent side effect of this change.)
+// Other email types use the `wrapBrandedEmail` adapter in lib/email/layout.ts.
+// They share the shell but do not opt into notification-specific accent chrome.
 //
 // Bodies are HTML written by the merchant (or our default), with {{tokens}}
 // substituted and every value escaped: they are DB-derived names going into
@@ -29,6 +24,7 @@ import { PLATFORM_EMAIL_DOMAIN } from "@/lib/email/sender";
 import {
   EMAIL_FONT,
   EMAIL_THEME,
+  emailAccentColor,
   emailButton,
   emailFooter,
   emailHeading,
@@ -46,6 +42,8 @@ import {
 } from "@/lib/email/line-items";
 
 export interface NotificationEmailItem {
+  /** Event key drives the action label; optional for legacy queue fixtures. */
+  eventKey?: string | null;
   title: string;
   /** HTML body (already substituted), or plain text for legacy callers. */
   body: string | null;
@@ -98,6 +96,36 @@ function footer(brand: StoreBrand, baseUrl: string, isTeam: boolean): string {
 </p>`;
 }
 
+const CUSTOMER_ACTIONS: Record<string, string> = {
+  "order.ready_for_pickup": "View collection details",
+  "order.pickup_expiring": "View collection details",
+  "order.return_approved": "View return",
+  "order.return_rejected": "View return",
+  "order.exchange_ready": "Track replacement order",
+  "blog.approved": "Read your post",
+  "blog.rejected": "View your submissions",
+};
+
+const TEAM_ACTIONS: Record<string, string> = {
+  "order.cancellation_requested": "Review cancellation",
+  "order.payment_failed": "Review payment",
+  "order.return_requested": "Review return",
+  "inventory.low_stock": "Manage inventory",
+  "inventory.out_of_stock": "Manage inventory",
+  "enquiry.received": "Read enquiry",
+  "blog.submitted": "Review post",
+  "subscription.payment_failed": "Update billing",
+};
+
+function actionLabel(item: NotificationEmailItem, isTeam: boolean): string {
+  const key = item.eventKey ?? "";
+  if (isTeam) return TEAM_ACTIONS[key] ?? "View in dashboard";
+  if (CUSTOMER_ACTIONS[key]) return CUSTOMER_ACTIONS[key];
+  return key.startsWith("order.") || item.url?.startsWith("/orders")
+    ? "View your order"
+    : "View details";
+}
+
 /**
  * One event, one email — the "instant" digest setting.
  *
@@ -113,14 +141,15 @@ export function renderNotificationEmail(opts: {
 }): RenderedEmail {
   const { item, brand, baseUrl, isTeam = true } = opts;
   const href = absoluteUrl(item.url, baseUrl);
+  const accent = emailAccentColor(brand);
 
   // Order: what happened → what was bought → what to do about it. The summary
   // sits above the button because the button is the exit, not the content.
   const bodyHtml = `
 ${emailHeading(item.title)}
-${inlineEmailStyles(item.body ?? "")}
+${inlineEmailStyles(item.body ?? "", accent)}
 ${renderOrderSummary(item.summary ?? null)}
-${href ? emailButton(href, isTeam ? "View in dashboard" : "View your order") : ""}`;
+${href ? emailButton(href, actionLabel(item, isTeam), accent) : ""}`;
 
   return {
     subject: item.title,
@@ -128,6 +157,7 @@ ${href ? emailButton(href, isTeam ? "View in dashboard" : "View your order") : "
       brand,
       bodyHtml,
       footerHtml: emailFooter(brand, footer(brand, baseUrl, isTeam)),
+      accentColor: accent,
       // First line of the body, stripped — what an inbox shows next to the
       // subject. Without it clients grab whatever markup comes first.
       preheader: (item.body ?? "")
@@ -156,6 +186,7 @@ export function renderNotificationDigest(opts: {
   isTeam?: boolean;
 }): RenderedEmail {
   const { items, brand, baseUrl, digest, isTeam = true } = opts;
+  const accent = emailAccentColor(brand);
 
   const rows = items
     .map((item) => {
@@ -172,7 +203,7 @@ export function renderNotificationDigest(opts: {
       return `<tr>
   <td style="padding:15px 0; border-bottom:1px solid ${EMAIL_THEME.hairline};">
     <div style="font-family:${EMAIL_FONT}; font-size:15px; font-weight:600; color:${EMAIL_THEME.ink};">
-      ${href ? `<a href="${escapeHtml(href)}" style="color:${EMAIL_THEME.ink}; text-decoration:none;">${title}</a>` : title}
+      ${href ? `<a href="${escapeHtml(href)}" style="color:${accent}; text-decoration:none;">${title}</a>` : title}
     </div>
     ${
       summary
@@ -197,7 +228,7 @@ export function renderNotificationDigest(opts: {
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
 ${rows}
 </table>
-${emailButton(dashboardUrl, "Open dashboard")}`;
+${emailButton(dashboardUrl, "Open dashboard", accent)}`;
 
   return {
     subject: `${countLabel(items.length)} from ${brand.name}`,
@@ -205,6 +236,7 @@ ${emailButton(dashboardUrl, "Open dashboard")}`;
       brand,
       bodyHtml,
       footerHtml: emailFooter(brand, footer(brand, baseUrl, isTeam)),
+      accentColor: accent,
       preheader: `${countLabel(items.length)} ${window}`,
     }),
   };

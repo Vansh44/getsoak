@@ -41,6 +41,7 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | Host                                                         | Behavior                                                                                                          |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
+| `pos.storemink.com` / `pos.localhost`                        | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
 | `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
 | `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
 | `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
@@ -78,7 +79,7 @@ permission sections, which read the database. Pinned by `proxy.test.ts`.
 
 ### Tenant resolution — `lib/store/`
 
-- `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
+- `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `isPosHost`, `isThemesHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
 - `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome). **Call `revalidateTag(STORE_TAG)` after any store create/settings/domain change.**
 - `brand.ts` — per-store branding (colors/logo) consumed by `app/(storefront)/components/brand-provider.tsx`.
 
@@ -107,7 +108,8 @@ wholesip/
 │   ├── layout.tsx             # Root layout
 │   ├── globals.css
 │   ├── loading.tsx
-│   ├── robots.ts / sitemap.ts
+│   ├── robots.ts / sitemap.ts # Host-aware discovery for platform, help, POS,
+│   │                          # themes, and eligible merchant stores
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
 │   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
@@ -346,7 +348,8 @@ wholesip/
 │   │   │                      # country,city}) — writes admins name + settings.
 │   │   │                      # business location, returns {slug,storeId} —,
 │   │   │                      # getSignupResumeInfo (resume wizard after Google
-│   │   │                      # redirect / refreshed tab)
+│   │   │                      # redirect / refreshed tab). Tested across slug,
+│   │   │                      # identity, location, rollback and consent gates.
 │   │   ├── signup-email-otp.ts # Authenticated, rate-limited 6-digit email proof;
 │   │   │                      # signed httpOnly hash cookie, capped attempts,
 │   │   │                      # marks Firebase emailVerified only on success
@@ -370,7 +373,9 @@ wholesip/
 │   │                          # the challenge CNAME, and requires the LB to be the
 │   │                          # domain's only A-record destination before serving;
 │   │                          # then starts automatic Google META verification /
-│   │                          # Search Console sitemap registration (retry by cron)
+│   │                          # Search Console sitemap registration (retry by cron).
+│   │                          # Tested across permissions, transitions, deprovisioning
+│   │                          # order and failure containment.
 │   │   ├── page-actions.ts    # ★ Custom-page CRUD + draft/publish (see §11): createPage/
 │   │   │                      # updatePageMeta/savePageDraft/publishPage/unpublishPage/
 │   │   │                      # deletePage/ensureHomepage, gated builder, service-role
@@ -385,10 +390,13 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
+│   │   │                      # and expose only safe connection state. Tested across
+│   │   │                      # permissions, validation, rotation and location mapping.
 │   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
-│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware)
+│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware). Tested.
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
-│   │   │                      # staged idempotency plus a provider-independent manual fallback
+│   │   │                      # staged idempotency plus a provider-independent manual fallback.
+│   │   │                      # Tested across leases, resumable stages and terminal-state gates.
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
@@ -424,7 +432,9 @@ wholesip/
 │   │   │                      # internal); customer wording derives from `kind`
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
-│   │   │                      # activity feed, preference get/save, pruneNotifications.
+│   │   │                      # activity feed, preference get/save and delivery retry.
+│   │   │                      # Tested across recipient/host scoping, permissions,
+│   │   │                      # validation, writes, email safety and dead-letter recovery.
 │   │   │                      # Scope = HOST-derived (store, or platform when
 │   │   │                      # storemink.com) — never getCurrentStoreId()'s fallback.
 │   │   ├── address-actions.ts # ★ Customer saved-address book (own-row RLS, tested):
@@ -707,7 +717,9 @@ wholesip/
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
 │   │                          # trigger-worker, blog/enquiry notifications.
 │   │                          # ★ notification-emails.ts (§22: single + digest
-│   │                          # templates, pure/escaped) + notification-worker.ts
+│   │                          # templates, event-specific CTAs, pure/escaped) +
+│   │                          # shell.ts (mobile table shell, contrast-safe accent)
+│   │                          # + notification-worker.ts
 │   │                          # (claims notification_email_queue, GROUPS by
 │   │                          # recipient into one digest, retries with backoff).
 │   │                          # ★ send-batch.ts (per-message outcomes so one bad
@@ -1991,7 +2003,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
       two public counters are per-IP rate-limited via `lib/rate-limit`, since
       `view_count` drives both the Popular ordering and search ranking) and
       operator CRUD (articles + categories, publish/unpublish, reorder) under
-      `withService` after the gate. **`deleteHelpCategory` refuses a non-empty
+      `withService` after the gate. These actions are tested across public
+      throttles, the operator dual gate, validation/sanitization, atomic category
+      deletion, media cleanup, indexing and AI drafting failures.
+      **`deleteHelpCategory` refuses a non-empty
       category** (atomic `NOT EXISTS` guard on the DELETE — the conditional-write
       pattern): the FK is `ON DELETE SET NULL`, so deleting one would strand its
       articles with no category and therefore no URL. Storefront reads
@@ -2019,6 +2034,15 @@ group, span}` (span = columns of the 4-wide desktop grid),
 22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
     An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
     SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    The public product site is separately served at **`pos.storemink.com`** by
+    rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
+    uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
+    submits that sitemap alongside the apex, help and themes hosts.
+    `app/platform/pos/structured-data.ts` emits a connected Organization +
+    WebSite + SoftwareApplication graph (visible feature list and the live Pro
+    price included), so the product host resolves to StoreMink's shared company
+    identity instead of presenting as an unrelated site. The old
+    `storemink.com/pos` URL remains a canonicalized compatibility alias.
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
     Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered
     billing is BUILT (Phase 7, see below); the v1 hard gate at 2 is gone**.
@@ -3137,12 +3161,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
       (store-scoped, `store-admins`, BOTH channels, `configurable: false` —
       nobody can have turned it off before they had an account). The two are
       the same moment for different audiences, which is the §23 rule working as
-      intended, not duplication. - **SOME COPY IS HAND-WRITTEN** (`BESPOKE` in default-templates.ts). The
-      generated shape — intro, then a Reference/Who/When fact list — is right
-      for a report and wrong for anything a person should feel something about;
-      a welcome rendered as a fact list reads like a receipt for existing. Keep
-      the map small: an event that only needs a better opening line belongs in
-      `INTRO`. - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+      intended, not duplication.
+    - **CUSTOMER TRANSACTIONAL COPY IS HAND-WRITTEN.**
+      `CUSTOMER_BLUEPRINTS` in `default-templates.ts` covers the complete
+      customer order, pickup, cancellation, return, exchange, refund and blog
+      journey. It leads with the decision, shows only the facts that matter and
+      never claims money moved before `order.refund_issued` says it did. Pickup
+      mail makes the collection code the focal point. The action-heavy team
+      paths (new order, cancellation, failed payment, return and stock alerts)
+      have their own `TEAM_BLUEPRINTS`; lower-risk team events keep the compact
+      generated report. Store/domain milestones remain bespoke prose.
+    - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
@@ -3270,8 +3299,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
       receipt back into staff mail. `groupRows` keys on recipient_type too:
       one person can be BOTH (an owner ordering from their own store), and
       grouped without it their staff and customer rows shared one digest
-      rendered with whichever sorted first. Regression-tested in both
-      directions. - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
+      rendered with whichever sorted first. The settings preview and test-send
+      carry the active audience through the same renderer too; customer previews
+      previously showed a staff CTA/footer even though the real queued message
+      did not. Regression-tested in both directions.
+    - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
       pure + tested). It cannot come through the merchant template system:
       template values are ESCAPED strings — that escaping is the XSS boundary —
       so a table would arrive as visible markup. It renders between the body and
@@ -3298,12 +3330,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
       summary — printing "Total ₹343.00" directly above a table ending in
       ₹343.00 is what makes an email look auto-generated. The fact list keeps
       what the table doesn't: reference, payment method, when. The tokens stay
-      declared, so a merchant who wants them can still use them. - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): the same neutral
-      palette for every store — white card, near-black text, one dark button.
-      The storefront accent is deliberately unused: pushed into an email it must
-      survive colour-managed clients and forced dark mode, and the failure mode
-      is a customer receiving something that looks broken. Identity comes from
-      the logo. Every email type routes through it.
+      declared, so a merchant who wants them can still use them.
+    - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): a neutral, table-safe
+      shell, the store logo/name and one restrained brand accent. Notification
+      CTAs use `emailAccentColor`, which preserves a valid merchant hue but
+      darkens it until white text reaches WCAG AA contrast; malformed values
+      fall back to ink. The same safe colour edges the notification card and
+      links, while the content stays near-black on white. Mobile media rules
+      tighten the card at 620 px, and the rendered order/pickup/refund/team-alert
+      samples have no horizontal overflow at 390 px. Semantic template classes
+      (`email-lead/details/detail/label/code/note`) are inlined for clients that
+      strip styles and remain readable as ordinary HTML without them.
     - **Email is a QUEUE, never an inline send** (`notification_email_queue`):
       the fan-out enqueues, `lib/email/notification-worker.ts` drains it from
       `/api/cron/send-emails`. A Resend round-trip must never sit on a
@@ -5394,8 +5431,8 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   Verification APIs, and create the `storemink-seo-refresh` Cloud Scheduler job.
   `lib/seo/store-indexing.ts` is the single store discovery pipeline: publish
   paths call it after commit, and `/api/cron/seo-refresh` registers the platform,
-  help, and themes sitemaps before reconciling every active/launched/non-demo
-  store daily. StoreMink subdomains submit under the
+  help, POS, and themes sitemaps before reconciling every
+  active/launched/non-demo store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
   sitemap submission. Google's META verification response is a complete HTML

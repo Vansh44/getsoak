@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import {
   parseHost,
   isHelpHost,
+  isPosHost,
   isThemesHost,
   IS_PRODUCTION_PLATFORM,
 } from "@/lib/store/host";
@@ -51,6 +52,17 @@ export async function proxy(request: NextRequest) {
   if (isHelpHost(host) && !pathname.startsWith("/help")) {
     const url = request.nextUrl.clone();
     url.pathname = `/help${pathname === "/" ? "" : pathname}`;
+    return NextResponse.rewrite(url);
+  }
+
+  // --- POS product site: pos.storemink.com -> /platform/pos/* ---
+  // This is the public product/marketing surface. A merchant's operational
+  // register remains `{slug}.storemink.com/pos` and reaches the credential gate
+  // below. Unknown paths stay under the POS route tree and therefore 404 rather
+  // than accidentally exposing unrelated platform pages on this host.
+  if (isPosHost(host) && !pathname.startsWith("/platform/pos")) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/platform/pos${pathname === "/" ? "" : pathname}`;
     return NextResponse.rewrite(url);
   }
 

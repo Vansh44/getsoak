@@ -2,10 +2,17 @@ import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
 import { LEGAL_DOCS } from "@/lib/legal/documents";
 import { matchesDisallow } from "@/lib/seo/disallow";
-import { HELP_URL, PLATFORM_URL, THEMES_URL, storeOrigin } from "@/lib/site";
+import {
+  HELP_URL,
+  PLATFORM_URL,
+  POS_URL,
+  THEMES_URL,
+  storeOrigin,
+} from "@/lib/site";
 import {
   SEARCH_INDEXABLE,
   isHelpHost,
+  isPosHost,
   isPlatformHost,
   isThemesHost,
 } from "@/lib/store/host";
@@ -65,12 +72,6 @@ function imageEntry(
 const PLATFORM_PATHS: { path: string; priority: number; freq: ChangeFreq }[] = [
   { path: "/", priority: 1, freq: "weekly" },
   { path: "/signup", priority: 0.8, freq: "monthly" },
-  // The Point of Sale product page. ⚠ Note /pos is ALSO in STOREFRONT_DISALLOW
-  // (lib/seo/disallow.ts) — on a store host that path is the register and must
-  // never be crawled. The two lists are per-host for exactly this reason: do
-  // NOT "tidy up" by adding /pos to PLATFORM_DISALLOW, or this page silently
-  // stops being indexed while still being linked from every nav.
-  { path: "/pos", priority: 0.9, freq: "monthly" },
   { path: "/legal", priority: 0.3, freq: "yearly" },
   // Derived from the legal registry rather than hardcoded, so publishing a new
   // required document can't leave its page unlisted. These are real, public,
@@ -164,6 +165,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       {
         url: THEMES_URL,
         changeFrequency: "weekly",
+        priority: 1,
+      },
+    ];
+  }
+
+  if (isPosHost(host)) {
+    return [
+      {
+        url: POS_URL,
+        changeFrequency: "monthly",
         priority: 1,
       },
     ];

@@ -17,7 +17,7 @@
 // Pure module: no DB, no server imports.
 // ---------------------------------------------------------------------------
 
-import { getEventDef } from "./events";
+import { getEventDef, type EventKey } from "./events";
 import { BASE_VARIABLES, variablesFor } from "./variables";
 import { HIDDEN_VARIABLES } from "./format";
 
@@ -84,40 +84,256 @@ const INTRO: Record<string, string> = {
   "ai.credits_purchased": "Your AI credits have been topped up.",
 };
 
+interface TemplateFact {
+  label: string;
+  token: string;
+}
+
+interface TemplateBlueprint {
+  subject: string;
+  intro: string;
+  facts?: TemplateFact[];
+  spotlight?: { label: string; token: string; hint?: string };
+  closing?: string;
+}
+
 /**
- * Shopper-facing opening lines. Written in the second person and about THEIR
- * order — a customer must never receive the operational phrasing meant for the
- * merchant's team.
+ * Customer transactional mail is hand-written. A generic event dump is fine
+ * for an internal audit alert; it is not fine for a shopper waiting to learn
+ * whether an order, return or refund is safe.
+ *
+ * The class names are progressively enhanced by lib/email/shell.ts. The
+ * underlying headings, paragraphs and lists stay readable when a mail client
+ * strips every style.
  */
-const CUSTOMER_INTRO: Record<string, string> = {
-  "order.placed":
-    "Thanks for your order — we've got it and we're getting it ready.",
-  "order.status_changed": "There's an update on your order.",
-  "order.cancelled":
-    "Your order has been cancelled. If you paid online, your refund is on its way back to your original payment method.",
-  "order.refund_issued":
-    "Your refund is on its way. Banks usually take 5–7 working days to show it.",
-  "order.ready_for_pickup":
-    "Your order is packed and waiting for you. Bring your order number when you come.",
-  "order.collected":
-    "You've picked up your order — thanks for shopping with us.",
-  "order.pickup_expiring":
-    "Your order is still waiting to be collected. Please come by before it's returned to the shelf.",
-  "order.pickup_expired":
-    "Nobody collected this order in time, so we've cancelled it and put the items back on sale.",
-  "blog.approved": "Your post has been approved and is now live.",
-  "blog.rejected":
-    "Thanks for your submission — it wasn't published this time.",
+const CUSTOMER_BLUEPRINTS: Partial<Record<EventKey, TemplateBlueprint>> = {
+  "order.placed": {
+    subject: "Order {{subject_label}} confirmed",
+    intro:
+      "Thank you for your order. We've received it and will keep you updated as it moves forward.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Payment", token: "payment_method" },
+      { label: "Fulfilment", token: "fulfilment" },
+      { label: "Placed", token: "date" },
+    ],
+    closing: "You can view the latest order status at any time.",
+  },
+  "order.status_changed": {
+    subject: "Order {{subject_label}} is now {{status}}",
+    intro: "Your order has moved to the next step.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Status", token: "status" },
+      { label: "Payment status", token: "payment_status" },
+      { label: "Updated", token: "date" },
+    ],
+    closing: "Open your order to see its complete timeline.",
+  },
+  "order.cancellation_declined": {
+    subject: "Update on cancellation request · {{subject_label}}",
+    intro:
+      "We couldn't cancel this order, so it remains active and will continue to be processed.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Reason", token: "reason" },
+      { label: "Decision made", token: "date" },
+    ],
+    closing:
+      "If you need more help, reply to this email and the store team can review it with you.",
+  },
+  "order.cancelled": {
+    subject: "Order {{subject_label}} was cancelled",
+    intro: "This order has been cancelled and will not be fulfilled.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Reason", token: "reason" },
+      { label: "Refund still due", token: "refund_due" },
+      { label: "Cancelled", token: "date" },
+    ],
+    closing:
+      "If money is still due back, the store will confirm the refund separately once it has been issued.",
+  },
+  "order.refund_issued": {
+    subject: "Refund issued for order {{subject_label}}",
+    intro: "Your refund has been sent to your original payment method.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Refund amount", token: "amount" },
+      { label: "Issued", token: "date" },
+    ],
+    closing:
+      "Most banks show refunds within 5–7 working days. Your bank may take a little longer.",
+  },
+  "order.ready_for_pickup": {
+    subject: "Order {{subject_label}} is ready for pickup",
+    intro:
+      "Your order is packed and waiting for you at the collection point below.",
+    spotlight: {
+      label: "Collection code",
+      token: "collection_code",
+      hint: "Show this code to the team when you arrive.",
+    },
+    facts: [
+      { label: "Pickup location", token: "pickup_location" },
+      { label: "Address", token: "pickup_address" },
+      { label: "Order", token: "subject_label" },
+    ],
+    closing: "Open your order for the collection QR and latest details.",
+  },
+  "order.collected": {
+    subject: "Order {{subject_label}} collected",
+    intro: "Your pickup is complete. Thank you for shopping with us.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Collected from", token: "pickup_location" },
+      { label: "Collected", token: "date" },
+    ],
+  },
+  "order.pickup_expiring": {
+    subject: "Reminder: collect order {{subject_label}} by {{expires_on}}",
+    intro:
+      "Your order is still waiting. Please collect it before the deadline so the items aren't returned to stock.",
+    facts: [
+      { label: "Pickup location", token: "pickup_location" },
+      { label: "Address", token: "pickup_address" },
+      { label: "Collect by", token: "expires_on" },
+      { label: "Order", token: "subject_label" },
+    ],
+    closing: "Open your order for the collection code and QR.",
+  },
+  "order.pickup_expired": {
+    subject: "Pickup order {{subject_label}} was cancelled",
+    intro:
+      "The collection window ended before this order was picked up, so it has been cancelled and the items were returned to stock.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Pickup location", token: "pickup_location" },
+      { label: "Refund still due", token: "refund_due" },
+      { label: "Cancelled", token: "date" },
+    ],
+    closing:
+      "If you paid online, the store will confirm any refund separately once it has been issued.",
+  },
+  "order.return_approved": {
+    subject: "Return approved · {{subject_label}}",
+    intro: "Your return has been approved.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Expected refund", token: "refund_amount" },
+      { label: "Deductions", token: "fees" },
+      { label: "Store instructions", token: "note" },
+    ],
+    closing:
+      "Open the return for its current status. A refund is confirmed separately after the returned items are received and checked.",
+  },
+  "order.return_rejected": {
+    subject: "Return decision · {{subject_label}}",
+    intro: "The store wasn't able to approve this return.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Reason", token: "note" },
+      { label: "Decision made", token: "date" },
+    ],
+    closing:
+      "Reply to this email if you need the store team to explain the decision.",
+  },
+  "order.exchange_ready": {
+    subject: "Your exchange is on its way · {{exchange_ref}}",
+    intro:
+      "Your return has been received and the replacement order is ready to move forward.",
+    facts: [
+      { label: "Original order", token: "subject_label" },
+      { label: "Replacement order", token: "exchange_ref" },
+      { label: "Replacement items", token: "items" },
+      { label: "Balance refunded", token: "refund_amount" },
+    ],
+    closing: "Open the replacement order to follow its progress.",
+  },
+  "blog.approved": {
+    subject: "Your post is live · {{subject_label}}",
+    intro: "Your post has been approved and published on the store.",
+    facts: [
+      { label: "Post", token: "subject_label" },
+      { label: "Published", token: "date" },
+    ],
+    closing: "Open it to see the published version.",
+  },
+  "blog.rejected": {
+    subject: "Update on your post · {{subject_label}}",
+    intro: "Thanks for your submission. It wasn't published this time.",
+    facts: [
+      { label: "Post", token: "subject_label" },
+      { label: "Reason", token: "reason" },
+      { label: "Reviewed", token: "date" },
+    ],
+    closing: "You can update your draft and submit it again.",
+  },
 };
 
-/** Subject-line prefixes a shopper would recognise in their inbox. */
-const CUSTOMER_SUBJECT: Record<string, string> = {
-  "order.placed": "Your order is confirmed",
-  "order.status_changed": "Update on your order",
-  "order.cancelled": "Your order was cancelled",
-  "order.refund_issued": "Your refund is on its way",
-  "blog.approved": "Your post is live",
-  "blog.rejected": "About your post",
+/** The team alerts that most often need an immediate, unambiguous action. */
+const TEAM_BLUEPRINTS: Partial<Record<EventKey, TemplateBlueprint>> = {
+  "order.placed": {
+    subject: "New order {{subject_label}} · {{total}}",
+    intro: "A new order is ready for review.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Customer", token: "actor_name" },
+      { label: "Payment", token: "payment_method" },
+      { label: "Fulfilment", token: "fulfilment" },
+      { label: "Received", token: "date" },
+    ],
+  },
+  "order.cancellation_requested": {
+    subject: "Cancellation request · {{subject_label}}",
+    intro:
+      "A customer is waiting for you to approve or decline a cancellation.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Customer", token: "actor_name" },
+      { label: "Reason", token: "reason" },
+      { label: "Requested", token: "date" },
+    ],
+  },
+  "order.payment_failed": {
+    subject: "Payment failed · {{subject_label}}",
+    intro: "An online payment didn't complete. The order remains unpaid.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Reason", token: "reason" },
+      { label: "Failed", token: "date" },
+    ],
+  },
+  "order.return_requested": {
+    subject: "Return request · {{subject_label}}",
+    intro: "A customer is waiting for you to review a return request.",
+    facts: [
+      { label: "Order", token: "subject_label" },
+      { label: "Customer", token: "actor_name" },
+      { label: "Items", token: "items" },
+      { label: "Reason", token: "reason" },
+      { label: "Potential refund", token: "refund_amount" },
+      { label: "Requested", token: "date" },
+    ],
+  },
+  "inventory.low_stock": {
+    subject: "Low stock: {{subject_label}} · {{stock}} left",
+    intro: "This item has reached its low-stock threshold.",
+    facts: [
+      { label: "Item", token: "subject_label" },
+      { label: "Available", token: "stock" },
+      { label: "Detected", token: "date" },
+    ],
+  },
+  "inventory.out_of_stock": {
+    subject: "Out of stock: {{subject_label}}",
+    intro: "This item has sold out and can no longer be purchased.",
+    facts: [
+      { label: "Item", token: "subject_label" },
+      { label: "Available", token: "stock" },
+      { label: "Detected", token: "date" },
+    ],
+  },
 };
 
 /**
@@ -189,13 +405,65 @@ export interface DefaultTemplate {
   body: string;
 }
 
+function hasValue(
+  token: string,
+  values: Record<string, string> | undefined,
+): boolean {
+  return !values || (values[token] ?? "").trim() !== "";
+}
+
+function renderFacts(
+  facts: TemplateFact[],
+  values: Record<string, string> | undefined,
+): string {
+  const rows = facts
+    .filter((fact) => hasValue(fact.token, values))
+    .map(
+      (fact) =>
+        `  <li class="email-detail"><strong class="email-label">${fact.label}</strong><br />{{${fact.token}}}</li>`,
+    )
+    .join("\n");
+  return rows ? `<ul class="email-details">\n${rows}\n</ul>` : "";
+}
+
+function renderBlueprint(
+  blueprint: TemplateBlueprint,
+  values: Record<string, string> | undefined,
+): DefaultTemplate {
+  const spotlight =
+    blueprint.spotlight && hasValue(blueprint.spotlight.token, values)
+      ? [
+          `<h2>${blueprint.spotlight.label}</h2>`,
+          `<p class="email-code">{{${blueprint.spotlight.token}}}</p>`,
+          blueprint.spotlight.hint
+            ? `<p class="email-note">${blueprint.spotlight.hint}</p>`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "";
+
+  return {
+    subject: blueprint.subject,
+    body: [
+      `<p class="email-lead">${blueprint.intro}</p>`,
+      spotlight,
+      renderFacts(blueprint.facts ?? [], values),
+      blueprint.closing ? `<p class="email-note">${blueprint.closing}</p>` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
 /**
  * The built-in email copy for an event, as editable HTML template text.
  *
- * Shape: an opening paragraph, then the event's own facts as a definition list
- * (which the email shell renders as hairline-separated rows), then a closing
- * line. Deliberately a small tag vocabulary — `<p>`, `<ul>/<li>`, `<strong>` —
- * so a merchant can edit it confidently without knowing email HTML.
+ * Customer transactions and the highest-action team alerts use a hand-written
+ * blueprint. Everything else falls back to an opening paragraph, the event's
+ * own facts as a detail card, and a closing line. Both deliberately use a small
+ * vocabulary — `<p>`, `<ul>/<li>`, `<strong>` — so a merchant can edit the copy
+ * confidently without knowing email HTML.
  *
  * The facts come from the event's declared variables, so a new event gets a
  * sensible email for free and no template can reference a value its emitter
@@ -222,12 +490,17 @@ export function defaultEmailTemplate(
   const label = def?.label ?? "Notification";
   const isCustomer = audience === "customer";
 
+  const blueprint = isCustomer
+    ? CUSTOMER_BLUEPRINTS[eventKey as EventKey]
+    : TEAM_BLUEPRINTS[eventKey as EventKey];
+  if (blueprint) return renderBlueprint(blueprint, values);
+
   // Hand-written copy wins over the generated fact list (see BESPOKE).
   const bespoke = !isCustomer ? BESPOKE[eventKey] : undefined;
   if (bespoke) return bespoke;
 
   const intro = isCustomer
-    ? (CUSTOMER_INTRO[eventKey] ?? "There's an update on your order.")
+    ? "There's an update from the store."
     : (INTRO[eventKey] ??
       def?.description ??
       "Something happened in your store.");
@@ -263,7 +536,10 @@ export function defaultEmailTemplate(
 
   const rows = facts
     .filter((f) => !values || (values[f.token] ?? "").trim() !== "")
-    .map((f) => `  <li><strong>${f.label}</strong><br />{{${f.token}}}</li>`)
+    .map(
+      (f) =>
+        `  <li class="email-detail"><strong class="email-label">${f.label}</strong><br />{{${f.token}}}</li>`,
+    )
     .join("\n");
 
   // No call-to-action here on purpose: renderNotificationEmail already appends
@@ -275,8 +551,14 @@ export function defaultEmailTemplate(
 
   return {
     subject: isCustomer
-      ? `${CUSTOMER_SUBJECT[eventKey] ?? label} · {{subject_label}}`
+      ? `${label} · {{subject_label}}`
       : `${label}: {{subject_label}}`,
-    body: [`<p>${intro}</p>`, "<ul>", rows, "</ul>", action].join("\n"),
+    body: [
+      `<p class="email-lead">${intro}</p>`,
+      '<ul class="email-details">',
+      rows,
+      "</ul>",
+      action.replace("<p>", '<p class="email-note">'),
+    ].join("\n"),
   };
 }

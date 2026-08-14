@@ -12,6 +12,25 @@ stories are here.**
 
 ---
 
+## 0.1 Public POS product site
+
+**PS-0.1 — The POS product site is not a merchant storefront**
+Open `pos.storemink.com` (or `pos.localhost:3000` in local development).
+**Expect:** the public Point of Sale product page renders. It canonicalises to
+`https://pos.storemink.com`, advertises that host's own robots and one-page
+sitemap, and never attempts store resolution or POS operator authentication.
+An unknown path such as `/not-a-page` stays inside the product route tree and
+404s; it must not expose an unrelated platform page.
+
+**PS-0.2 ★ — Marketing and register addresses stay distinct**
+Open `{slug}.storemink.com/pos` for a real merchant.
+**Expect:** the merchant's operational register and credential gate behave as
+before. Creating a store with the slug `pos` is refused as reserved. On the
+public product page, Features/FAQ remain on `pos.storemink.com`, while StoreMink
+home, pricing, login, and signup deliberately navigate to `storemink.com`.
+
+---
+
 ## 0. Before you can test anything
 
 | Prerequisite                                                                                             | Why                                                                                               |

@@ -11,6 +11,7 @@ import {
   DAILY_DIGEST_HOUR_UTC,
 } from "@/lib/notifications/digest";
 import type { StoreBrand } from "@/lib/store/brand";
+import { emailAccentColor } from "./shell";
 
 const brand: StoreBrand = {
   name: "Acme Juice",
@@ -138,6 +139,35 @@ describe("renderNotificationEmail", () => {
     // Styled by inlineEmailStyles rather than escaped.
     expect(html).toContain("<p style=");
     expect(html).toContain("<li style=");
+  });
+
+  it("uses the event-specific customer action and no staff preferences", () => {
+    const { html } = renderNotificationEmail({
+      item: item({
+        eventKey: "order.ready_for_pickup",
+        url: "/orders/o1",
+      }),
+      brand,
+      baseUrl: BASE,
+      isTeam: false,
+    });
+    expect(html).toContain("View collection details");
+    expect(html).not.toContain("settings/notifications");
+  });
+
+  it("uses a contrast-safe version of a light store accent", () => {
+    const brightBrand = { ...brand, primaryColor: "#ffea00" };
+    const accent = emailAccentColor(brightBrand);
+    expect(accent).not.toBe("#ffea00");
+
+    const { html } = renderNotificationEmail({
+      item: item({ eventKey: "order.placed", url: "/orders/o1" }),
+      brand: brightBrand,
+      baseUrl: BASE,
+      isTeam: false,
+    });
+    expect(html).toContain(`border-top:4px solid ${accent}`);
+    expect(html).toContain(`bgcolor="${accent}"`);
   });
 });
 

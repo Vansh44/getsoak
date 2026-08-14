@@ -35,6 +35,7 @@ sequence AND the spec for everything still to build.
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
+| **P1** | **Release verification and high-risk action hardening**        | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
@@ -55,6 +56,29 @@ e-mandate mandate at all (`docs/billing-architecture.md` §2). **Pickup is the
 outlier**: every piece exists — holds, routing, the collection queue, tender
 capture at hand-over, four email events — and _none of it has ever been run end
 to end in a browser_. Steps 1 and 3 finish it.
+
+**Release-hardening P1 is verification-first, not another feature track.** The
+ordered gate is: notification actions → shipment/shipping actions → pickup in
+a browser → Razorpay test-mode refunds/billing → autopay → remaining exposed
+actions. The notification action surface is covered by focused tests for
+recipient and host isolation, permission gates, input validation, persistence,
+email safety, personal preferences, audience routing and failed-delivery retry.
+Its default email layer now has hand-written customer transaction journeys,
+action-specific team alerts, contrast-safe store branding and mobile-verified
+order/pickup/refund layouts; preview and test sends preserve the selected
+audience rather than rendering customer copy with staff chrome.
+Shipment and shipping actions are also covered: server-side catalog pricing,
+stock and PIN validation; connection and location mapping gates; booking leases;
+resumable provider stages; pickup, tracking, NDR and cancellation; and the
+manual-courier fallback. The remaining exposed action pass now covers help
+centre public/operator boundaries, Shiprocket connection secrets and warehouse
+mapping, custom-domain state transitions and store-signup provisioning/rollback.
+The code-only action hardening is complete. The release gate remains open:
+browser pickup still needs an authorized disposable environment/data set, then
+Razorpay refunds and billing need test-mode credentials; autopay follows only
+after those real provider behaviours are observed. This gate does not change
+Step 4's place in the product roadmap; it decides when the already-built system
+is safe to expose to real transactions.
 
 ---
 

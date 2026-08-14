@@ -183,10 +183,14 @@ export function NotificationDetailView({
   useEffect(() => {
     if (activeChannel !== "email") return;
     const handle = setTimeout(async () => {
-      const result = await previewNotificationEmail(notification.key, {
-        subject: emailTemplate?.subject,
-        body: emailTemplate?.body,
-      });
+      const result = await previewNotificationEmail(
+        notification.key,
+        activeAudience,
+        {
+          subject: emailTemplate?.subject,
+          body: emailTemplate?.body,
+        },
+      );
       if (result.html) setPreview(result.html);
     }, 350);
     return () => clearTimeout(handle);

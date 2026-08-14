@@ -79,6 +79,7 @@ interface QueueRow {
   /** 'customer' | 'admin' | 'operator'. Decides whether this reads as team
    *  mail or as a shopper's receipt — see isTeamRow below. */
   recipient_type: string;
+  event_key: string;
   email: string;
   cc: string | null;
   bcc: string | null;
@@ -170,6 +171,7 @@ function isTeamRow(row: QueueRow): boolean {
 
 function toItem(row: QueueRow): NotificationEmailItem {
   return {
+    eventKey: row.event_key,
     title: row.title,
     body: row.body,
     url: row.url,

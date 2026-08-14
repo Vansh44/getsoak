@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { PLATFORM_URL, THEMES_URL } from "@/lib/site";
+import { PLATFORM_URL, POS_URL, THEMES_URL } from "@/lib/site";
 import { LEGAL_DOCS } from "@/lib/legal/documents";
 import {
   BRAND_SOCIAL_LINKS,
@@ -313,7 +313,7 @@ export default async function StoreminkLanding() {
           <div className="stq-nav-links">
             <a href="#features">Features</a>
             <a href={THEMES_URL}>Themes</a>
-            <Link href="/pos">Point of Sale</Link>
+            <Link href={POS_URL}>Point of Sale</Link>
             <a href="#compare">Compare</a>
             <a href="#pricing">Pricing</a>
             <a href="#faq">FAQ</a>
@@ -574,7 +574,7 @@ export default async function StoreminkLanding() {
               </ul>
               <span className="stq-show-tag">Pro · 2 locations included</span>
               <p className="stq-show-more">
-                <Link href="/pos">
+                <Link href={POS_URL}>
                   Everything in Point of Sale <ArrowRight size={15} />
                 </Link>
               </p>

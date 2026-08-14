@@ -160,6 +160,24 @@ describe("proxy — host routing (unchanged)", () => {
     expect(res.headers.get("x-middleware-rewrite")).toContain("/platform");
   });
 
+  it("rewrites the reserved POS host into only the public POS product tree", async () => {
+    const home = await proxy(
+      req("https://pos.storemink.com/", "pos.storemink.com"),
+    );
+    expect(home.headers.get("x-middleware-rewrite")).toContain("/platform/pos");
+    expect(verifySessionCookie).not.toHaveBeenCalled();
+
+    const unknown = await proxy(
+      req("https://pos.storemink.com/not-a-page", "pos.storemink.com"),
+    );
+    expect(unknown.headers.get("x-middleware-rewrite")).toContain(
+      "/platform/pos/not-a-page",
+    );
+    expect(unknown.headers.get("x-middleware-rewrite")).not.toMatch(
+      /\/platform\/not-a-page$/,
+    );
+  });
+
   it("rewrites the reserved themes host into the public catalog", async () => {
     const res = await proxy(
       req("https://themes.storemink.com/", "themes.storemink.com"),

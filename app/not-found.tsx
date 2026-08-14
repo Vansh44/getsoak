@@ -1,3 +1,4 @@
+import { BrandMark } from "@/app/platform/brand-mark";
 import "./not-found.css";
 
 // Root 404. Reached when the (storefront) layout can't resolve the request Host
@@ -21,34 +22,10 @@ export default function NotFound() {
   return (
     <main className="sm404">
       <a className="sm404-brand sm404-rise" href={PLATFORM}>
-        <svg
-          className="sm404-mark"
-          width="27"
-          height="27"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id="sm404-mark-g" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stopColor="#4f39f6" />
-              <stop offset="1" stopColor="#9333ea" />
-            </linearGradient>
-          </defs>
-          <rect width="24" height="24" rx="7" fill="url(#sm404-mark-g)" />
-          <path
-            d="M8.4 9.2V8.1a3.6 3.6 0 0 1 7.2 0v1.1"
-            stroke="#fff"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-          <path
-            d="M6.6 9.2h10.8l.7 7.3a1.9 1.9 0 0 1-1.9 2.1H7.8a1.9 1.9 0 0 1-1.9-2.1l.7-7.3Z"
-            fill="#fff"
-            fillOpacity="0.92"
-          />
-        </svg>
-        Store<span>Mink</span>
+        <BrandMark size={30} priority />
+        <span className="sm404-wordmark">
+          Store<span>Mink</span>
+        </span>
       </a>
 
       <div className="sm404-main">
