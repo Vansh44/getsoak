@@ -11,7 +11,7 @@ export interface LogType {
   label: string;
   href: string;
   /** lucide-react icon name, resolved in logs-rail.tsx. */
-  icon: "activity" | "mail" | "download" | "upload" | "alert";
+  icon: "activity" | "mail" | "message" | "download" | "upload" | "alert";
   /** One line under the heading, so a rail entry explains itself. */
   blurb: string;
 }
@@ -30,6 +30,13 @@ export const LOG_TYPES: LogType[] = [
     href: "/dashboard/logs/email-logs",
     icon: "mail",
     blurb: "Every message sent, and what was in it.",
+  },
+  {
+    key: "sms",
+    label: "SMS logs",
+    href: "/dashboard/logs/sms-logs",
+    icon: "message",
+    blurb: "Every text sent, and what it cost.",
   },
   {
     // Import and Export are ONE page filtered two ways — `data_jobs.kind`
@@ -69,6 +76,7 @@ export function activeLogKey(pathname: string, kind?: string): string {
     return kind === "export" ? "exports" : "imports";
   }
   if (pathname.startsWith("/dashboard/logs/email-logs")) return "email";
+  if (pathname.startsWith("/dashboard/logs/sms-logs")) return "sms";
   if (pathname.startsWith("/dashboard/logs/failures")) return "failures";
   return "activity";
 }

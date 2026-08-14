@@ -9,6 +9,7 @@
 
 export type FailureSourceKey =
   | "email"
+  | "sms"
   | "notification"
   | "refund"
   | "import"
@@ -54,6 +55,15 @@ export const FAILURE_SOURCE_META: FailureSourceMeta[] = [
     key: "email",
     label: "Email",
     blurb: "Messages the provider rejected or that bounced.",
+  },
+  {
+    // ★ SEPARATE FROM `email`, and not only for tidiness: an SMS failure has a
+    // cause email never has — a body that drifted from its DLT-registered
+    // template, or a header the merchant's registration doesn't cover. Folding
+    // it into Email would put two different remedies behind one chip.
+    key: "sms",
+    label: "SMS",
+    blurb: "Texts the provider rejected, or never confirmed.",
   },
   {
     key: "notification",
