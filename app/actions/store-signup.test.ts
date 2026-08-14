@@ -74,6 +74,7 @@ describe("checkStoreSlugAvailability", () => {
     ["AB", "ab", "At least 3 characters."],
     ["x".repeat(41), "x".repeat(41), "Too long (40 characters max)."],
     ["Dashboard", "dashboard", "This name is reserved."],
+    ["POS", "pos", "This name is reserved."],
     ["Demo", "demo", "This name is reserved."],
     ["demo-fashion", "demo-fashion", "This name is reserved."],
   ])("rejects invalid or reserved input %s", async (raw, slug, reason) => {

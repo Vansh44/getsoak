@@ -66,10 +66,13 @@ export function parseHost(host: string | null | undefined): HostKind {
   if (!hostname) return { type: "platform" };
 
   // Local dev + Vercel previews render the platform, except `{slug}.localhost`,
-  // which lets us test a store's storefront locally.
+  // which lets us test a store's storefront locally. `pos.localhost` is a
+  // reserved public product host, so it must be classified before that generic
+  // store escape hatch.
   if (hostname === "localhost" || hostname === "127.0.0.1") {
     return { type: "platform" };
   }
+  if (hostname === "pos.localhost") return { type: "platform" };
   if (hostname.endsWith(".localhost")) {
     const slug = hostname.slice(0, -".localhost".length);
     return slug ? { type: "store-subdomain", slug } : { type: "platform" };
@@ -81,6 +84,7 @@ export function parseHost(host: string | null | undefined): HostKind {
     hostname === ROOT_DOMAIN ||
     hostname === `www.${ROOT_DOMAIN}` ||
     hostname === `app.${ROOT_DOMAIN}` ||
+    hostname === `pos.${ROOT_DOMAIN}` ||
     hostname === `themes.${ROOT_DOMAIN}`
   ) {
     return { type: "platform" };
@@ -132,4 +136,12 @@ export function isThemesHost(host: string | null | undefined): boolean {
   return (
     hostname === `themes.${ROOT_DOMAIN}` || hostname === "themes.localhost"
   );
+}
+
+// The public Point of Sale product site. Merchant registers remain on
+// `{slug}.{root}/pos`; this reserved host is marketing/discovery only.
+export function isPosHost(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.split(":")[0].trim().toLowerCase();
+  return hostname === `pos.${ROOT_DOMAIN}` || hostname === "pos.localhost";
 }

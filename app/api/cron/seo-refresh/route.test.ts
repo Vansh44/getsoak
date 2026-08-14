@@ -49,13 +49,14 @@ afterAll(() => {
 });
 
 describe("/api/cron/seo-refresh root sitemap registration", () => {
-  it("registers the platform, help, and themes sitemaps", async () => {
+  it("registers the platform, help, POS, and themes sitemaps", async () => {
     const response = await GET(request());
 
     expect(response.status).toBe(200);
     expect(submitSitemapToGoogle.mock.calls.map(([url]) => url)).toEqual([
       "https://storemink.com/sitemap.xml",
       "https://help.storemink.com/sitemap.xml",
+      "https://pos.storemink.com/sitemap.xml",
       "https://themes.storemink.com/sitemap.xml",
     ]);
     expect((await response.json()).roots).toEqual([
@@ -70,6 +71,11 @@ describe("/api/cron/seo-refresh root sitemap registration", () => {
         ok: true,
       },
       {
+        site: "pos",
+        sitemap: "https://pos.storemink.com/sitemap.xml",
+        ok: true,
+      },
+      {
         site: "themes",
         sitemap: "https://themes.storemink.com/sitemap.xml",
         ok: true,
@@ -81,6 +87,7 @@ describe("/api/cron/seo-refresh root sitemap registration", () => {
     submitSitemapToGoogle
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: false, error: "permission denied" });
 
     const response = await GET(request());
@@ -88,7 +95,7 @@ describe("/api/cron/seo-refresh root sitemap registration", () => {
 
     expect(response.status).toBe(503);
     expect(body.ok).toBe(false);
-    expect(body.roots[2]).toEqual({
+    expect(body.roots[3]).toEqual({
       site: "themes",
       sitemap: "https://themes.storemink.com/sitemap.xml",
       ok: false,

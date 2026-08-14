@@ -41,6 +41,7 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | Host                                                         | Behavior                                                                                                          |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
+| `pos.storemink.com` / `pos.localhost`                        | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
 | `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
 | `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
 | `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
@@ -78,7 +79,7 @@ permission sections, which read the database. Pinned by `proxy.test.ts`.
 
 ### Tenant resolution — `lib/store/`
 
-- `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
+- `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `isPosHost`, `isThemesHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
 - `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome). **Call `revalidateTag(STORE_TAG)` after any store create/settings/domain change.**
 - `brand.ts` — per-store branding (colors/logo) consumed by `app/(storefront)/components/brand-provider.tsx`.
 
@@ -107,7 +108,8 @@ wholesip/
 │   ├── layout.tsx             # Root layout
 │   ├── globals.css
 │   ├── loading.tsx
-│   ├── robots.ts / sitemap.ts
+│   ├── robots.ts / sitemap.ts # Host-aware discovery for platform, help, POS,
+│   │                          # themes, and eligible merchant stores
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
 │   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
@@ -2032,6 +2034,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
 22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
     An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
     SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+    The public product site is separately served at **`pos.storemink.com`** by
+    rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
+    uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
+    submits that sitemap alongside the apex, help and themes hosts. The old
+    `storemink.com/pos` URL remains a canonicalized compatibility alias.
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
     Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered
     billing is BUILT (Phase 7, see below); the v1 hard gate at 2 is gone**.
@@ -5420,8 +5427,8 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   Verification APIs, and create the `storemink-seo-refresh` Cloud Scheduler job.
   `lib/seo/store-indexing.ts` is the single store discovery pipeline: publish
   paths call it after commit, and `/api/cron/seo-refresh` registers the platform,
-  help, and themes sitemaps before reconciling every active/launched/non-demo
-  store daily. StoreMink subdomains submit under the
+  help, POS, and themes sitemaps before reconciling every
+  active/launched/non-demo store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
   sitemap submission. Google's META verification response is a complete HTML

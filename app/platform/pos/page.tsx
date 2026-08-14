@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PLATFORM_URL } from "@/lib/site";
+import { PLATFORM_URL, POS_URL } from "@/lib/site";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import { BrandMark } from "../brand-mark";
 import { RegisterArt } from "../product-art";
@@ -22,11 +22,12 @@ import {
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
-// storemink.com/pos — the Point of Sale product page.
+// pos.storemink.com — the Point of Sale product page.
 //
-// Served on the PLATFORM host, where proxy.ts rewrites every path into
-// /platform/*. There is no clash with {slug}.storemink.com/pos (the actual
-// register): different hosts, different route trees.
+// Served from /platform/pos internally: pos.storemink.com rewrites into this
+// route tree, while storemink.com/pos remains a backwards-compatible alias.
+// There is no clash with {slug}.storemink.com/pos (the actual register):
+// different hosts, different route trees.
 //
 // EVERY claim below is checked against what ships (CODEBASE §22/§23). The one
 // thing deliberately NOT claimed anywhere is offline selling: the catalogue is
@@ -40,12 +41,12 @@ export const metadata: Metadata = {
     "Point of Sale — one till, one catalogue, one set of books | StoreMink",
   description:
     "Turn a tablet into a till. Barcode scanning, staff PINs, shifts and cash-up, stock across shops, GST receipts and buy-online-collect-in-store — included on StoreMink Pro, with two locations.",
-  alternates: { canonical: `${PLATFORM_URL}/pos` },
+  alternates: { canonical: POS_URL },
   openGraph: {
     title: "StoreMink Point of Sale",
     description:
       "A till for your counter that shares its catalogue, stock and customers with your website.",
-    url: `${PLATFORM_URL}/pos`,
+    url: POS_URL,
   },
 };
 
@@ -151,23 +152,29 @@ export default async function PosMarketingPage() {
       {/* ------------------------------- nav ------------------------------- */}
       <div className="stq-navbar">
         <nav className="stq-nav">
-          <Link href="/" className="stq-logo">
+          <Link href={PLATFORM_URL} className="stq-logo">
             <BrandMark size={26} priority />
             <em>
               Store<span>Mink</span>
             </em>
           </Link>
           <div className="stq-nav-links">
-            <Link href="/#features">Features</Link>
-            <Link href="/pos">Point of Sale</Link>
-            <Link href="/#pricing">Pricing</Link>
-            <Link href="/#faq">FAQ</Link>
+            <Link href={`${POS_URL}/#features`}>Features</Link>
+            <Link href={POS_URL}>Point of Sale</Link>
+            <Link href={`${PLATFORM_URL}/#pricing`}>Pricing</Link>
+            <Link href={`${POS_URL}/#faq`}>FAQ</Link>
           </div>
           <div className="stq-nav-actions">
-            <Link href="/login" className="stq-btn stq-btn-outline">
+            <Link
+              href={`${PLATFORM_URL}/login`}
+              className="stq-btn stq-btn-outline"
+            >
               Log in
             </Link>
-            <Link href="/signup" className="stq-btn stq-btn-primary">
+            <Link
+              href={`${PLATFORM_URL}/signup`}
+              className="stq-btn stq-btn-primary"
+            >
               Start free
             </Link>
           </div>
@@ -192,10 +199,16 @@ export default async function PosMarketingPage() {
               are one number, not two you reconcile on Sunday night.
             </p>
             <div className="stq-hero-cta stq-rise stq-rise-3">
-              <Link href="/signup" className="stq-btn stq-btn-primary">
+              <Link
+                href={`${PLATFORM_URL}/signup`}
+                className="stq-btn stq-btn-primary"
+              >
                 Start free <ArrowRight size={17} />
               </Link>
-              <Link href="/#pricing" className="stq-btn stq-btn-ghost">
+              <Link
+                href={`${PLATFORM_URL}/#pricing`}
+                className="stq-btn stq-btn-ghost"
+              >
                 See pricing
               </Link>
             </div>
@@ -342,7 +355,10 @@ export default async function PosMarketingPage() {
               Two shops, unlimited products and staff. Not an add-on, not per
               terminal.
             </p>
-            <Link href="/signup" className="stq-btn stq-btn-light">
+            <Link
+              href={`${PLATFORM_URL}/signup`}
+              className="stq-btn stq-btn-light"
+            >
               Start free <ArrowRight size={17} />
             </Link>
           </div>
@@ -374,10 +390,13 @@ export default async function PosMarketingPage() {
             and nothing to buy.
           </p>
           <div className="stq-hero-cta" style={{ justifyContent: "center" }}>
-            <Link href="/signup" className="stq-btn stq-btn-light">
+            <Link
+              href={`${PLATFORM_URL}/signup`}
+              className="stq-btn stq-btn-light"
+            >
               Create your store free <ArrowRight size={17} />
             </Link>
-            <Link href="/" className="stq-btn stq-btn-ghost">
+            <Link href={PLATFORM_URL} className="stq-btn stq-btn-ghost">
               Back to StoreMink
             </Link>
           </div>
@@ -387,7 +406,7 @@ export default async function PosMarketingPage() {
       {/* ------------------------------ footer ----------------------------- */}
       <footer className="stq-footer">
         <div className="stq-footer-simple">
-          <Link href="/" className="stq-logo">
+          <Link href={PLATFORM_URL} className="stq-logo">
             <BrandMark size={26} />
             <em>
               Store<span>Mink</span>
@@ -398,10 +417,10 @@ export default async function PosMarketingPage() {
             India-first store builder with everything included.
           </p>
           <p className="stq-footer-links">
-            <Link href="/">Home</Link>
-            <Link href="/#pricing">Pricing</Link>
-            <Link href="/#faq">FAQ</Link>
-            <Link href="/signup">Create your store</Link>
+            <Link href={PLATFORM_URL}>Home</Link>
+            <Link href={`${PLATFORM_URL}/#pricing`}>Pricing</Link>
+            <Link href={`${POS_URL}/#faq`}>FAQ</Link>
+            <Link href={`${PLATFORM_URL}/signup`}>Create your store</Link>
           </p>
         </div>
       </footer>

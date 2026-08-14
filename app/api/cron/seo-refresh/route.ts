@@ -4,7 +4,7 @@ import { withService } from "@/lib/db/client";
 import { logError } from "@/lib/observability/logger";
 import { submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { ensureGoogleCoverageForStore } from "@/lib/seo/store-indexing";
-import { HELP_URL, PLATFORM_URL, THEMES_URL } from "@/lib/site";
+import { HELP_URL, PLATFORM_URL, POS_URL, THEMES_URL } from "@/lib/site";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 import { isStoreLaunched } from "@/lib/store/launch";
 
@@ -17,6 +17,7 @@ const CONCURRENCY = 4;
 const ROOT_SITEMAPS = [
   { site: "platform", url: `${PLATFORM_URL}/sitemap.xml` },
   { site: "help", url: `${HELP_URL}/sitemap.xml` },
+  { site: "pos", url: `${POS_URL}/sitemap.xml` },
   { site: "themes", url: `${THEMES_URL}/sitemap.xml` },
 ] as const;
 

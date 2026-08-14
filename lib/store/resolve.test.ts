@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { PLAN_LIMITS, effectivePlan } from "@/lib/plans";
 import { parseHost } from "./resolve";
-import { isThemesHost } from "./host";
+import { isPosHost, isThemesHost } from "./host";
 
 // parseHost() is the pure core of tenant resolution: it maps a raw Host header
 // to "which store (or the platform) does this request belong to". Default
@@ -23,11 +23,12 @@ describe("parseHost", () => {
     });
   });
 
-  // The apex, www, and the reserved platform host are NOT stores.
-  it("treats apex / www / app as the platform", () => {
+  // The apex, www, and reserved public product hosts are NOT stores.
+  it("treats apex / www / app / pos / themes as the platform", () => {
     expect(parseHost("storemink.com").type).toBe("platform");
     expect(parseHost("www.storemink.com").type).toBe("platform");
     expect(parseHost("app.storemink.com").type).toBe("platform");
+    expect(parseHost("pos.storemink.com").type).toBe("platform");
     expect(parseHost("themes.storemink.com").type).toBe("platform");
   });
 
@@ -35,6 +36,13 @@ describe("parseHost", () => {
     expect(isThemesHost("themes.storemink.com")).toBe(true);
     expect(isThemesHost("themes.localhost:3000")).toBe(true);
     expect(isThemesHost("my-themes.storemink.com")).toBe(false);
+  });
+
+  it("recognises the reserved POS product host", () => {
+    expect(isPosHost("pos.storemink.com")).toBe(true);
+    expect(isPosHost("pos.localhost:3000")).toBe(true);
+    expect(isPosHost("my-pos.storemink.com")).toBe(false);
+    expect(parseHost("pos.localhost:3000").type).toBe("platform");
   });
 
   // A merchant's own domain doesn't end in the root domain → custom domain,
