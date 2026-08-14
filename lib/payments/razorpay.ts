@@ -284,6 +284,35 @@ export async function rzpChargeMandate(
   });
 }
 
+export interface RzpPaymentDetail {
+  id: string;
+  status?: string;
+  method?: string;
+  /** Present once an authorisation payment has registered a mandate. */
+  token_id?: string | null;
+  customer_id?: string | null;
+}
+
+/**
+ * One payment, by id — and the ONLY honest way to learn a mandate's token.
+ *
+ * ★★ THE TOKEN IS READ HERE, NEVER TAKEN FROM THE CLIENT. Razorpay Checkout's
+ * success handler hands the browser a payment id, an order id and a signature —
+ * not a token — so any client-supplied `token_id` would be a value the browser
+ * chose. Attaching a mandate the merchant did not authorise is a standing
+ * permission to debit them; reading it from the payment we have just verified
+ * removes the question entirely. Same rule as every price in this codebase.
+ */
+export async function rzpFetchPayment(
+  creds: RazorpayCreds,
+  paymentId: string,
+): Promise<RzpResult<RzpPaymentDetail>> {
+  return rzpFetch<RzpPaymentDetail>(
+    creds,
+    `/payments/${encodeURIComponent(paymentId)}`,
+  );
+}
+
 /** All payment attempts against a Razorpay order — the reconciliation source
  *  of truth (a `captured` payment here means the money was taken). */
 export async function rzpFetchOrderPayments(

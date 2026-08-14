@@ -32,9 +32,29 @@ vi.mock("@/lib/payments/provider", () => provider);
 
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
+  rzpCreateAuthorizationOrder: vi.fn(),
+  rzpCreateCustomer: vi.fn(),
+  // Read on every confirm to learn whether the checkout registered a mandate.
+  // Default: an ordinary one-time payment, which is what most of them are.
+  rzpFetchPayment: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({
+    ok: true,
+    data: { id: "pay_1" },
+  })),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
+
+// The billing contact a Razorpay customer is created from. Mocked so the
+// autopay branch is actually REACHABLE in tests — without it ensureRzpCustomer
+// always returns null and the gate below would pass no matter what it did.
+const mail = vi.hoisted(() => ({
+  resolveBillingEmail: vi.fn(async () => ({
+    email: "owner@acme.test",
+    storeName: "Acme",
+    slug: "acme",
+  })),
+}));
+vi.mock("@/lib/email/billing-emails", () => mail);
 
 const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
@@ -55,6 +75,7 @@ const receipts = vi.hoisted(() => ({ notifyPlanActivated: vi.fn() }));
 vi.mock("./receipts", () => receipts);
 
 import { confirmEnrolment, startEnrolment } from "./enrol";
+import { RECURRING_CHARGE_VERIFIED } from "./gateway";
 
 const STORE = "store-1";
 const INVOICE = "inv-1";
@@ -72,6 +93,20 @@ function seed(selects: any[][] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mail.resolveBillingEmail.mockResolvedValue({
+    email: "owner@acme.test",
+    storeName: "Acme",
+    slug: "acme",
+  });
+  rzp.rzpCreateCustomer.mockResolvedValue({ ok: true, data: { id: "cust_1" } });
+  rzp.rzpCreateAuthorizationOrder.mockResolvedValue({
+    ok: true,
+    data: { id: "order_auth_1" },
+  });
+  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — and this one has a
+  // default that matters: a payment with no token is an ordinary one-time
+  // payment, which is what most enrolments are.
+  rzp.rzpFetchPayment.mockResolvedValue({ ok: true, data: { id: "pay_1" } });
   seed();
   provider.getPlatformRazorpayCreds.mockReturnValue({
     keyId: "rzp_test_1",
@@ -114,6 +149,20 @@ describe("startEnrolment", () => {
     priceFor,
     now: NOW,
   };
+
+  it("★★ no mandate is registered while autopay is OFF", async () => {
+    // The gate that stops a merchant authorising a standing debit we have no
+    // verified way to collect. Written for BOTH states so it never becomes a
+    // false failure: flipping RECURRING_CHARGE_VERIFIED inverts which order
+    // call is expected rather than breaking the suite.
+    await startEnrolment(args);
+    if (!RECURRING_CHARGE_VERIFIED) {
+      expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
+      expect(rzp.rzpCreateOrder).toHaveBeenCalled();
+    } else {
+      expect(rzp.rzpCreateCustomer).toHaveBeenCalled();
+    }
+  });
 
   it("issues the first invoice and opens a Razorpay order", async () => {
     const res = await startEnrolment(args);
@@ -555,5 +604,76 @@ describe("confirmEnrolment", () => {
   it("refuses with no platform credentials", async () => {
     provider.getPlatformRazorpayCreds.mockReturnValue(null);
     expect((await confirmEnrolment(args)).ok).toBe(false);
+  });
+
+  it("★★ reads the token from the PAYMENT, never from the caller", async () => {
+    // Razorpay Checkout hands the browser a payment id, an order id and a
+    // signature — not a token. A caller-supplied token would be a value the
+    // BROWSER chose, and attaching a mandate is standing permission to debit
+    // this merchant every cycle.
+    seedConfirm();
+    rzp.rzpFetchPayment.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "pay_1",
+        token_id: "token_real",
+        customer_id: "cust_real",
+        method: "upi",
+      },
+    });
+    await confirmEnrolment({
+      storeId: STORE,
+      invoiceId: "inv-1",
+      providerPaymentId: "pay_1",
+      signature: "sig",
+    });
+    expect(rzp.rzpFetchPayment).toHaveBeenCalledWith(
+      expect.anything(),
+      "pay_1",
+    );
+  });
+
+  it("★ a payment with no token registers no mandate — the ordinary case", async () => {
+    seedConfirm();
+    const res = await confirmEnrolment({
+      storeId: STORE,
+      invoiceId: "inv-1",
+      providerPaymentId: "pay_1",
+      signature: "sig",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("★★ a FAILED lookup still activates the plan — the money is already in", async () => {
+    // Losing autopay is the acceptable half of this trade; refusing a plan the
+    // merchant has paid for is not.
+    seedConfirm();
+    rzp.rzpFetchPayment.mockResolvedValue({
+      ok: false,
+      error: "gateway down",
+      outcome: "unknown",
+    });
+    const res = await confirmEnrolment({
+      storeId: STORE,
+      invoiceId: "inv-1",
+      providerPaymentId: "pay_1",
+      signature: "sig",
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("★ an unrecognised method is recorded as unknown, not dropped", async () => {
+    seedConfirm();
+    rzp.rzpFetchPayment.mockResolvedValue({
+      ok: true,
+      data: { id: "pay_1", token_id: "t", method: "wallet" },
+    });
+    const res = await confirmEnrolment({
+      storeId: STORE,
+      invoiceId: "inv-1",
+      providerPaymentId: "pay_1",
+      signature: "sig",
+    });
+    expect(res.ok).toBe(true);
   });
 });

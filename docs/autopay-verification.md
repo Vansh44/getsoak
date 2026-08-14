@@ -20,7 +20,7 @@ real merchants.
 | Mandate recording                           | `activateMandate` in `lib/billing/enrol.ts` (already existed) |
 | Collection routing                          | `collectionRoute` — mandate ceiling AND the AFA limit         |
 | Unknown-outcome handling                    | `collect.ts` + `lib/billing/reconcile.ts`                     |
-| **Checkout token capture**                  | **NOT built — see "What is still missing"**                   |
+| Checkout token capture                      | `ensureRzpCustomer` + `readMandateFromPayment`                |
 
 The API shapes were taken from Razorpay's published reference on **2026-08-14**,
 not inferred:
@@ -54,21 +54,28 @@ is the "promise a charge that never comes" failure again.
 
 ---
 
-## What is still missing
+## How the mandate is captured
 
-**The checkout does not capture a token.** `/dashboard/plans` opens a normal
-one-time checkout, so no mandate is ever registered and `activateMandate` is
-dead code. Wiring it needs, in `startEnrolment`:
+`startEnrolment` creates a Razorpay customer and an AUTHORISATION order instead
+of a plain one, but only when all three of these hold — each is a way a merchant
+would otherwise be told autopay is on and then invoiced by hand forever:
 
-1. `rzpCreateCustomer` for the merchant's billing contact.
-2. `rzpCreateAuthorizationOrder` instead of `rzpCreateOrder`, sized by
-   `mandateSizePaise` and refused when `mandateFitsGateway` is false.
-3. The client passing `customer_id` and reading the token from the checkout
-   response, then handing it to `confirmEnrolment({mandate: {...}})` — which
-   already accepts exactly that shape.
+- `RECURRING_CHARGE_VERIFIED` is true (we can actually collect),
+- `mandateFitsGateway(size)` — above ₹99,999 the authorisation order itself is
+  rejected,
+- a billing contact exists, since a mandate belongs to a _customer_.
 
-Done deliberately in that order: the charge path is the dangerous half and is
-worth having reviewed and tested before anything starts collecting mandates.
+Fail any one and it stays an ordinary one-time checkout.
+
+**★★ `confirmEnrolment` then reads the token from the PAYMENT, not from the
+browser.** Razorpay Checkout's success handler returns a payment id, an order id
+and a signature — never a token — so a client-supplied `token_id` would be a
+value the browser chose, and attaching a mandate is standing permission to debit
+that merchant every cycle. `GET /payments/:id` returns `token_id` and
+`customer_id`, and we have just verified that payment's signature.
+
+A failed lookup returns null and the plan is still granted: the money is already
+captured, so losing autopay is the acceptable half of that trade.
 
 ---
 

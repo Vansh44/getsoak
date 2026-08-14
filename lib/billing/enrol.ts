@@ -38,12 +38,27 @@ import {
 import { logError, logWarn } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
+  rzpCreateAuthorizationOrder,
+  rzpCreateCustomer,
   rzpCreateOrder,
+  rzpFetchPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { billingMayApplyPlan } from "@/lib/payments/plan-change";
 import { PLAN_META, limitsFor, type Plan } from "@/lib/plans";
-import { cycleFrom, mandateSizePaise } from "./cycle";
+import { cycleFrom, mandateFitsGateway, mandateSizePaise } from "./cycle";
+
+/**
+ * How long a mandate stays authorised.
+ *
+ * ★ Deliberately longer than one cycle. Razorpay wants an absolute expiry, and
+ * a mandate that lapses with the cycle would need re-authorising every renewal
+ * — which is the friction autopay exists to remove. Five years is inside their
+ * accepted range and well past any plan we sell.
+ */
+const MANDATE_YEARS = 5;
+import { RECURRING_CHARGE_VERIFIED } from "./gateway";
+import { resolveBillingEmail } from "@/lib/email/billing-emails";
 import { buildSubscriptionInvoice } from "./invoice";
 import {
   amountDueForInvoice,
@@ -71,6 +86,11 @@ export interface EnrolmentStart {
   amountPaise: number;
   /** What the merchant will be asked to authorise for future cycles. */
   suggestedMandateMaxPaise: number;
+  /**
+   * The Razorpay customer to attach at checkout, or null for a plain one-time
+   * payment. Non-null means this checkout ALSO registers a mandate.
+   */
+  providerCustomerId: string | null;
 }
 
 export type EnrolmentResult<T> =
@@ -275,6 +295,10 @@ export async function startEnrolment(input: {
             planPaise: price.planPaise,
             taxInclusive: tax.inclusive,
           }),
+          // ★ A resumed order was created with whatever terms it had; the
+          // customer is already baked into it at the gateway. Re-attaching one
+          // here would be a second, different answer for the same order.
+          providerCustomerId: null,
         },
       };
     }
@@ -286,17 +310,59 @@ export async function startEnrolment(input: {
     };
   }
 
-  const order = await rzpCreateOrder(creds, {
-    amountPaise: amountDue,
-    receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
-    notes: {
-      store_id: input.storeId,
-      invoice_id: invoice.id,
-      // The idempotency key travels with the payment, so reconciliation can
-      // match it even if we never see the response.
-      sm_billing_key: attempt.idempotencyKey,
-    },
+  const mandateMax = mandateSizePaise({
+    planPaise: price.planPaise,
+    taxInclusive: tax.inclusive,
   });
+
+  // ★★ AUTOPAY IS OFFERED ONLY WHEN WE COULD ACTUALLY COLLECT.
+  //
+  // Three conditions, and every one of them is a way a merchant would otherwise
+  // be told autopay is set up and then invoiced by hand forever:
+  //   • the charge path is verified (RECURRING_CHARGE_VERIFIED),
+  //   • the mandate fits Razorpay's ₹99,999 ceiling — above it the
+  //     AUTHORISATION ORDER itself is rejected (mandateFitsGateway),
+  //   • we have a billing contact, because a mandate belongs to a CUSTOMER and
+  //     the customer needs an email or a phone.
+  // Fail any of them and this stays an ordinary one-time checkout, which is a
+  // complete billing path on its own.
+  const wantsMandate =
+    RECURRING_CHARGE_VERIFIED && mandateFitsGateway(mandateMax);
+  const customerId = wantsMandate
+    ? await ensureRzpCustomer(creds, input.storeId)
+    : null;
+
+  const notes = {
+    store_id: input.storeId,
+    invoice_id: invoice.id,
+    // The idempotency key travels with the payment, so reconciliation can
+    // match it even if we never see the response.
+    sm_billing_key: attempt.idempotencyKey,
+  };
+  const order = customerId
+    ? await rzpCreateAuthorizationOrder(creds, {
+        amountPaise: amountDue,
+        customerId,
+        terms: {
+          maxAmountPaise: mandateMax,
+          // The mandate outlives the cycle it was authorised in; Razorpay wants
+          // Unix SECONDS, not milliseconds.
+          expireAtUnix: Math.floor(
+            new Date(
+              now.getTime() + MANDATE_YEARS * 365 * 86_400_000,
+            ).getTime() / 1000,
+          ),
+          frequency: input.period === "yearly" ? "yearly" : "monthly",
+        },
+        receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
+        description: "StoreMink subscription",
+        notes,
+      })
+    : await rzpCreateOrder(creds, {
+        amountPaise: amountDue,
+        receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
+        notes,
+      });
   if (!order.ok) {
     // A rejected order means nothing was created at the gateway, so the attempt
     // is genuinely dead. An UNKNOWN is left in flight for reconciliation.
@@ -324,10 +390,8 @@ export async function startEnrolment(input: {
       providerOrderId: order.data.id,
       keyId: creds.keyId,
       amountPaise: amountDue,
-      suggestedMandateMaxPaise: mandateSizePaise({
-        planPaise: price.planPaise,
-        taxInclusive: tax.inclusive,
-      }),
+      suggestedMandateMaxPaise: mandateMax,
+      providerCustomerId: customerId,
     },
   };
 }
@@ -563,8 +627,22 @@ export async function confirmEnrolment(input: {
   // Returns the id, so activateSubscription does not have to look up the row it
   // just created — one fewer query, and no reliance on the one-active-mandate
   // index being the thing that makes a re-read correct.
-  const mandateId = input.mandate
-    ? await activateMandate({ storeId: input.storeId, ...input.mandate, now })
+  // ★★ THE MANDATE IS READ FROM THE PAYMENT, NEVER FROM THE CALLER.
+  //
+  // Razorpay Checkout hands the browser a payment id, an order id and a
+  // signature — not a token. So a caller-supplied `token_id` would be a value
+  // the BROWSER chose, and attaching a mandate is standing permission to debit
+  // this merchant every cycle. We have just verified this payment's signature,
+  // so asking the gateway what it registered removes the question entirely.
+  //
+  // `input.mandate` is still honoured when passed (it is what the tests drive,
+  // and it keeps the older call shape working), but nothing in the product
+  // supplies it any more.
+  const observed =
+    input.mandate ??
+    (await readMandateFromPayment(creds, input.providerPaymentId));
+  const mandateId = observed
+    ? await activateMandate({ storeId: input.storeId, ...observed, now })
     : null;
 
   const activated = await activateSubscription({
@@ -697,6 +775,69 @@ async function activateSubscription(input: {
  * landed — the merchant is on the plan they paid for either way, and the worst
  * case is that next cycle needs a manual payment.
  */
+/**
+ * The Razorpay customer a mandate hangs off.
+ *
+ * ★ Best-effort by design: a failure here returns null, which downgrades this
+ * checkout to an ordinary one-time payment rather than refusing the merchant's
+ * subscription. Losing autopay is a smaller harm than losing the sale, and the
+ * next renewal simply asks them to pay an invoice.
+ */
+async function ensureRzpCustomer(
+  creds: { keyId: string; keySecret: string },
+  storeId: string,
+): Promise<string | null> {
+  const to = await resolveBillingEmail(storeId).catch(() => null);
+  if (!to?.email) return null;
+  const res = await rzpCreateCustomer(creds, {
+    name: to.storeName,
+    email: to.email,
+  });
+  if (!res.ok) {
+    logError("billing.enrol.customer", new Error(res.error), { storeId });
+    return null;
+  }
+  return res.data.id ?? null;
+}
+
+/**
+ * What mandate, if any, did this payment register?
+ *
+ * ★ Returns null for an ordinary one-time payment — most of them — so the
+ * absence of a token is the normal case, not an error. A failed lookup is also
+ * null: the money is already captured by this point and the plan must be
+ * granted regardless, so losing autopay is the acceptable half of that trade.
+ */
+async function readMandateFromPayment(
+  creds: { keyId: string; keySecret: string },
+  paymentId: string,
+): Promise<{
+  providerTokenId: string;
+  providerCustomerId?: string | null;
+  method: "card" | "upi" | "emandate" | "nach" | "unknown";
+  maxAmountPaise?: number | null;
+} | null> {
+  const res = await rzpFetchPayment(creds, paymentId);
+  if (!res.ok) {
+    logError("billing.enrol.read_mandate", new Error(res.error), { paymentId });
+    return null;
+  }
+  const tokenId = res.data.token_id;
+  if (!tokenId) return null;
+  const method = res.data.method;
+  return {
+    providerTokenId: tokenId,
+    providerCustomerId: res.data.customer_id ?? null,
+    method:
+      method === "card" ||
+      method === "upi" ||
+      method === "emandate" ||
+      method === "nach"
+        ? method
+        : "unknown",
+  };
+}
+
 async function activateMandate(input: {
   storeId: string;
   providerTokenId: string;
