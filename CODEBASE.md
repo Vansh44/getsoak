@@ -2037,7 +2037,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
     The public product site is separately served at **`pos.storemink.com`** by
     rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
     uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
-    submits that sitemap alongside the apex, help and themes hosts. The old
+    submits that sitemap alongside the apex, help and themes hosts.
+    `app/platform/pos/structured-data.ts` emits a connected Organization +
+    WebSite + SoftwareApplication graph (visible feature list and the live Pro
+    price included), so the product host resolves to StoreMink's shared company
+    identity instead of presenting as an unrelated site. The old
     `storemink.com/pos` URL remains a canonicalized compatibility alias.
     Full technical design + phased plan: **`docs/pos-plan.md`** (authoritative).
     Pro-only; 2 locations included, extra locations ₹1,000/mo — **metered

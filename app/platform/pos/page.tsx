@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { brandOgImageUrl } from "@/lib/seo/og-card";
 import { PLATFORM_URL, POS_URL } from "@/lib/site";
 import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
 import { BrandMark } from "../brand-mark";
 import { RegisterArt } from "../product-art";
 import { getPlanPricing, inr } from "@/lib/plans/pricing";
+import { buildPosStructuredData } from "./structured-data";
 import {
   ArrowRight,
   Banknote,
@@ -36,17 +38,53 @@ import {
 // like that gets found out at a counter with a customer waiting.
 // ---------------------------------------------------------------------------
 
+const POS_OG_IMAGE = new URL(
+  brandOgImageUrl({
+    title: "StoreMink Point of Sale",
+    subtitle: "Your counter and your website, finally the same shop.",
+    color: "#17130f",
+    logo: "/brand/storemink-mark.png",
+    footer: "pos.storemink.com",
+  }),
+  PLATFORM_URL,
+).toString();
+
 export const metadata: Metadata = {
   title:
     "Point of Sale — one till, one catalogue, one set of books | StoreMink",
   description:
     "Turn a tablet into a till. Barcode scanning, staff PINs, shifts and cash-up, stock across shops, GST receipts and buy-online-collect-in-store — included on StoreMink Pro, with two locations.",
   alternates: { canonical: POS_URL },
+  keywords: [
+    "StoreMink POS",
+    "point of sale software India",
+    "retail POS software",
+    "multi location inventory",
+    "GST billing software",
+    "online and in-store inventory",
+  ],
   openGraph: {
     title: "StoreMink Point of Sale",
     description:
       "A till for your counter that shares its catalogue, stock and customers with your website.",
     url: POS_URL,
+    siteName: "StoreMink",
+    type: "website",
+    images: [
+      {
+        url: POS_OG_IMAGE,
+        width: 1200,
+        height: 630,
+        alt: "StoreMink Point of Sale",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "StoreMink Point of Sale",
+    description:
+      "A till for your counter that shares its catalogue, stock and customers with your website.",
+    images: [POS_OG_IMAGE],
   },
 };
 
@@ -146,9 +184,17 @@ const FAQS = [
 
 export default async function PosMarketingPage() {
   const pricing = await getPlanPricing();
+  const proMonthlyEquivalentInr = Math.round(pricing.pro.yearlyInr / 12);
+  const jsonLd = buildPosStructuredData({ proMonthlyEquivalentInr });
 
   return (
     <div className="stq">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+        }}
+      />
       {/* ------------------------------- nav ------------------------------- */}
       <div className="stq-navbar">
         <nav className="stq-nav">
@@ -350,10 +396,9 @@ export default async function PosMarketingPage() {
           </div>
           <div className="stq-showcase-foot">
             <p>
-              Part of {PLAN_META.pro.name}, at{" "}
-              {inr(Math.round(pricing.pro.yearlyInr / 12))}/month billed yearly.
-              Two shops, unlimited products and staff. Not an add-on, not per
-              terminal.
+              Part of {PLAN_META.pro.name}, at {inr(proMonthlyEquivalentInr)}
+              /month billed yearly. Two shops, unlimited products and staff. Not
+              an add-on, not per terminal.
             </p>
             <Link
               href={`${PLATFORM_URL}/signup`}
