@@ -35,8 +35,11 @@ const worker = vi.hoisted(() => ({ advanceAfterPayment: vi.fn() }));
 vi.mock("./renewal-worker", () => worker);
 
 import {
+  countOpenReconciliationItems,
   FAIL_AFTER_HOURS,
+  listReconciliationItems,
   reconcileStrandedAttempts,
+  resolveReconciliationItem,
   STALE_AFTER_MINUTES,
 } from "./reconcile";
 
@@ -267,5 +270,118 @@ describe("★★ never guessing", () => {
     });
     expect(STALE_AFTER_MINUTES).toBeGreaterThan(0);
     expect(dbHolder.current.calls.where.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The operator queue.
+// ---------------------------------------------------------------------------
+
+describe("★★ closing an item", () => {
+  const base = {
+    id: "item-1",
+    note: "Refunded the ₹100 difference",
+    actor: "op@storemink.com",
+  };
+
+  it("records the outcome, who, when and why", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "item-1" }] });
+    const res = await resolveReconciliationItem({
+      ...base,
+      status: "resolved",
+      now: NOW,
+    });
+    expect(res.ok).toBe(true);
+    expect(dbHolder.current.calls.set[0]).toMatchObject({
+      status: "resolved",
+      resolvedBy: "op@storemink.com",
+      resolutionNote: "Refunded the ₹100 difference",
+    });
+  });
+
+  it("★★ MOVES NO MONEY — only the item row is touched", async () => {
+    // Closing records a judgement. Refunding a difference or issuing a credit
+    // happens elsewhere, deliberately, by someone who chose it.
+    dbHolder.current = makeDbMock({ returning: [{ id: "item-1" }] });
+    await resolveReconciliationItem({ ...base, status: "resolved", now: NOW });
+    expect(dbHolder.current.calls.update).toHaveLength(1);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★★ REQUIRES a note — this is the audit trail for a money discrepancy", async () => {
+    // "Resolved" with no reason is indistinguishable from someone clearing a
+    // queue they never read.
+    dbHolder.current = makeDbMock({ returning: [{ id: "item-1" }] });
+    const res = await resolveReconciliationItem({
+      ...base,
+      note: "   ",
+      status: "resolved",
+      now: NOW,
+    });
+    expect(res.ok).toBe(false);
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("★ refuses when someone else already closed it", async () => {
+    // The claim is on `open`, so two operators working the queue cannot
+    // overwrite each other's note.
+    dbHolder.current = makeDbMock({ returning: [] });
+    const res = await resolveReconciliationItem({
+      ...base,
+      status: "resolved",
+      now: NOW,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/already closed/i);
+  });
+
+  it.each(["resolved", "manual_review", "ignored"] as const)(
+    "accepts the %s outcome",
+    async (status) => {
+      dbHolder.current = makeDbMock({ returning: [{ id: "item-1" }] });
+      expect(
+        (await resolveReconciliationItem({ ...base, status, now: NOW })).ok,
+      ).toBe(true);
+    },
+  );
+
+  it("★ reports a write failure rather than claiming success", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "item-1" }] });
+    dbHolder.current.db.update = () => {
+      throw new Error("db down");
+    };
+    expect(
+      (
+        await resolveReconciliationItem({
+          ...base,
+          status: "resolved",
+          now: NOW,
+        })
+      ).ok,
+    ).toBe(false);
+  });
+});
+
+describe("the queue readers", () => {
+  it("lists open items by default", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[{ id: "item-1" }]] });
+    expect(await listReconciliationItems()).toHaveLength(1);
+  });
+
+  it("★ returns [] on a read failure rather than throwing", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [] });
+    dbHolder.current.db.select = () => {
+      throw new Error("db down");
+    };
+    expect(await listReconciliationItems()).toEqual([]);
+  });
+
+  it("★★ the count fails to ZERO — a badge must not cost the page", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [] });
+    dbHolder.current.db.select = () => {
+      throw new Error("db down");
+    };
+    expect(await countOpenReconciliationItems()).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   productVariants,
@@ -11,7 +12,7 @@ import {
 import { withService } from "@/lib/db/client";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getCurrentStoreId } from "@/lib/store/resolve";
-import { rateLimit } from "@/lib/rate-limit";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { emitEvent } from "@/lib/notifications/record";
 import {
   getActingStoreId,
@@ -39,6 +40,15 @@ export interface ShippingSettingsState {
   settings: ShippingSettings;
   shiprocketConnected: boolean;
   shiprocketEnabled: boolean;
+}
+
+export interface ProductDeliveryEstimate {
+  available: boolean;
+  postalCode: string;
+  kind: "physical" | "digital";
+  option?: CheckoutShippingOption;
+  alternativeCount?: number;
+  error?: string;
 }
 
 export async function getShippingSettings(): Promise<ShippingSettingsState> {
@@ -296,4 +306,224 @@ export async function getCheckoutShippingOptions(input: {
     parcel: packageForShippingLines(lines),
     settings: shippingSettings,
   });
+}
+
+/**
+ * Public PDP delivery check. The client supplies identifiers, quantity and a
+ * PIN only; catalog price, inventory, parcel measurements, warehouse routing
+ * and merchant shipping policy are all re-read here. This keeps a product-page
+ * promise aligned with the authoritative checkout quote.
+ */
+export async function getProductDeliveryEstimate(input: {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  postalCode: string;
+}): Promise<ProductDeliveryEstimate> {
+  const postalCode = String(input.postalCode ?? "")
+    .replace(/\D/g, "")
+    .slice(0, 6);
+  if (!/^\d{6}$/.test(postalCode)) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error: "Enter a valid 6-digit delivery PIN code.",
+    };
+  }
+  if (
+    typeof input.productId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(input.productId) ||
+    (input.variantId !== null &&
+      (typeof input.variantId !== "string" ||
+        !/^[0-9a-f-]{36}$/i.test(input.variantId))) ||
+    !Number.isInteger(input.quantity) ||
+    input.quantity < 1 ||
+    input.quantity > 99
+  ) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error: "This product selection is invalid. Refresh and try again.",
+    };
+  }
+
+  const ip = clientIp(await headers());
+  const allowed = await rateLimit(`product-delivery:${ip}`, {
+    max: 30,
+    windowSeconds: 60,
+  });
+  if (!allowed.allowed) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error: "Too many delivery checks. Wait a moment and try again.",
+    };
+  }
+
+  const storeId = await getCurrentStoreId();
+  const [productRows, variantRows, shippingSettings] = await Promise.all([
+    withService((db) =>
+      db
+        .select({
+          id: products.id,
+          status: products.status,
+          price: products.sellingPrice,
+          basePrice: products.basePrice,
+          trackInventory: products.trackInventory,
+          allowBackorder: products.allowBackorder,
+          onlineStock: products.onlineStock,
+          requiresShipping: products.requiresShipping,
+          weightGrams: products.weightGrams,
+          lengthCm: products.lengthCm,
+          widthCm: products.widthCm,
+          heightCm: products.heightCm,
+        })
+        .from(products)
+        .where(
+          and(
+            eq(products.storeId, storeId),
+            eq(products.id, input.productId),
+            eq(products.status, "published"),
+          ),
+        )
+        .limit(1),
+    ),
+    input.variantId
+      ? withService((db) =>
+          db
+            .select({
+              id: productVariants.id,
+              productId: productVariants.productId,
+              price: productVariants.sellingPrice,
+              basePrice: productVariants.basePrice,
+              specialPrice: productVariants.specialPrice,
+              trackInventory: productVariants.trackInventory,
+              allowBackorder: productVariants.allowBackorder,
+              onlineStock: productVariants.onlineStock,
+              requiresShipping: productVariants.requiresShipping,
+              weightGrams: productVariants.weightGrams,
+              lengthCm: productVariants.lengthCm,
+              widthCm: productVariants.widthCm,
+              heightCm: productVariants.heightCm,
+            })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.storeId, storeId),
+                eq(productVariants.id, input.variantId!),
+                eq(productVariants.productId, input.productId),
+              ),
+            )
+            .limit(1),
+        )
+      : Promise.resolve([]),
+    readShippingSettings(storeId),
+  ]);
+  const product = productRows[0];
+  const variant = variantRows[0];
+  if (!product || (input.variantId && !variant)) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error: "This product is no longer available.",
+    };
+  }
+
+  const trackInventory = variant?.trackInventory ?? product.trackInventory;
+  const allowBackorder = variant?.allowBackorder ?? product.allowBackorder;
+  const onlineStock = variant?.onlineStock ?? product.onlineStock;
+  if (trackInventory && !allowBackorder && onlineStock < input.quantity) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error:
+        onlineStock <= 0
+          ? "This item is currently out of stock for online delivery."
+          : `Only ${onlineStock} available for online delivery.`,
+    };
+  }
+
+  const requiresShipping =
+    variant?.requiresShipping ?? product.requiresShipping;
+  if (!requiresShipping) {
+    return {
+      available: true,
+      postalCode,
+      kind: "digital",
+      option: {
+        id: "digital:none",
+        label: "Available immediately",
+        description: "No physical delivery required",
+        amount: 0,
+        carrierCost: null,
+        courierId: null,
+        courierName: null,
+        estimatedDeliveryMinDays: null,
+        estimatedDeliveryMaxDays: null,
+        estimatedDeliveryAt: null,
+        freeShippingApplied: true,
+      },
+    };
+  }
+
+  const unitPrice = variant
+    ? variant.specialPrice != null && variant.specialPrice > 0
+      ? variant.specialPrice
+      : variant.price > 0
+        ? variant.price
+        : variant.basePrice
+    : product.price > 0
+      ? product.price
+      : product.basePrice;
+  const line = {
+    productId: product.id,
+    variantId: variant?.id ?? null,
+    quantity: input.quantity,
+    needsStock: trackInventory && !allowBackorder,
+    requiresShipping: true,
+    weightGrams: variant?.weightGrams ?? product.weightGrams,
+    lengthCm: variant?.lengthCm ?? product.lengthCm,
+    widthCm: variant?.widthCm ?? product.widthCm,
+    heightCm: variant?.heightCm ?? product.heightCm,
+  };
+  const merchandiseSubtotal = unitPrice * input.quantity;
+  const quote =
+    shippingSettings.mode === "shiprocket"
+      ? await quoteShippingForOrder({
+          storeId,
+          fulfilmentLocationId: await resolveFulfilmentLocation(storeId, [
+            line,
+          ]),
+          deliveryPostcode: postalCode,
+          cod: false,
+          merchandiseSubtotal,
+          parcel: packageForShippingLines([line]),
+          settings: shippingSettings,
+        })
+      : {
+          options: [
+            manualShippingOption(shippingSettings, merchandiseSubtotal),
+          ],
+        };
+  const option = quote.options[0];
+  if (!option) {
+    return {
+      available: false,
+      postalCode,
+      kind: "physical",
+      error: quote.error ?? "Delivery is not available for this PIN code.",
+    };
+  }
+  return {
+    available: true,
+    postalCode,
+    kind: "physical",
+    option,
+    alternativeCount: Math.max(0, quote.options.length - 1),
+  };
 }

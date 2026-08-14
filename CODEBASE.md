@@ -110,7 +110,8 @@ wholesip/
 │   ├── robots.ts / sitemap.ts
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
-│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart providers
+│   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
+│   │   │                      # delivery-location providers
 │   │   ├── page.tsx           # Store homepage = store_pages row with slug "" (the
 │   │   │                      # "homepage sentinel"); reads published/preview sections
 │   │   │                      # just like [pageSlug]. Edited in /dashboard/builder (§11)
@@ -125,7 +126,11 @@ wholesip/
 │   │   │   ├── enquiries/     #   enquiry form (tested)
 │   │   │   ├── orders/        #   ★ the SHOPPER's order history (§22): list +
 │   │   │   │                  #   [id] detail (status timeline, items, totals,
-│   │   │   │                  #   invoice link). Double-locked: withUser (RLS
+│   │   │   │                  #   invoice link) + capability-aware Online /
+│   │   │   │                  #   In store tabs. `order-history.tsx` groups
+│   │   │   │                  #   StoreMink POS sales and pickup journeys; the
+│   │   │   │                  #   split stays hidden for delivery-only stores.
+│   │   │   │                  #   Double-locked: withUser (RLS
 │   │   │   │                  #   customer_id = auth.uid()) AND host store id
 │   │   │   ├── notifications/ #   ★ the SHOPPER's notification centre (§22) —
 │   │   │   │                  #   the customer rows the fan-out has always
@@ -170,6 +175,8 @@ wholesip/
 │   │       │                  # immediately while anonymous visitors dynamically
 │   │       │                  # import the Web SDK only when account UI opens.
 │   │       ├── cart/          # CartProvider, CartDrawer, CouponField
+│   │       ├── delivery/      # ★ remembered/default/current delivery location UI +
+│   │       │                  # server-priced PDP PIN availability/charge/ETA (§35)
 │   │       ├── header/ footer/  # nav from store_menus via MenuProvider (§11 menu builder)
 │   │       ├── homepage/      # Shared per-section renderer (featured products,
 │   │       │                  # blog carousel, promo banner, shop-by-category…)
@@ -378,8 +385,8 @@ wholesip/
 │   │   │                      # store's BYO Razorpay creds (verified, encrypted, plan-gated). Tested.
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
-│   │   ├── shipping-actions.ts # ★ §35 Shipping & delivery settings + storefront
-│   │   │                      # server-priced courier options (origin/cart/COD aware)
+│   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
+│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware)
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
 │   │   │                      # staged idempotency plus a provider-independent manual fallback
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
@@ -399,7 +406,8 @@ wholesip/
 │   │   │                      # re-parses every chunk server-side, row-atomic. Gated on
 │   │   │                      # the RESOURCE's own section, never a key of its own. Tested.
 │   │   ├── customer-order-actions.ts # ★ A shopper's OWN orders (§22):
-│   │   │                      # getMyOrders/getMyOrder. withUser + host store —
+│   │   │                      # getMyOrders/getMyOrder + physical-store channel
+│   │   │                      # capability resolution. withUser + host store —
 │   │   │                      # RLS alone would show an order placed on a
 │   │   │                      # DIFFERENT store while browsing this one.
 │   │   │                      # ★ cancelMyOrder (§26): ONE button, TWO outcomes —
@@ -554,6 +562,9 @@ wholesip/
 │   │                          # Takes a `runner` so the dashboard keeps its
 │   │                          # withUser(admin) scope while the customer path uses
 │   │                          # withService after proving ownership itself.
+│   │                          # history-channels.ts: pure Online/In-store grouping
+│   │                          # and tab-visibility rules (current POS/pickup OR
+│   │                          # historical receipt; never hide owned history).
 │   ├── notifications/         # ★ Event spine (§22): events.ts (the pure registry —
 │   │                          # every event, its audiences + default channels),
 │   │                          # render.ts (audience-aware copy, pure), record.ts
@@ -4930,9 +4941,42 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         from whether the invoice is paid; running it after would downgrade a
         merchant whose payment that very request discovers. Pinned by a test.
       - ⚠ It only sees attempts that reached the gateway (`provider_order_id` set)
-        — one that died before that has nothing to ask about. And the OPEN items
-        have no operator UI yet: `listOpenReconciliationItems` exists and nothing
-        renders it.
+        — one that died before that has nothing to ask about.
+      - **★★ THE QUEUE IS A SCREEN NOW**
+        (`/dashboard/billing/reconciliation` on the platform host, filtered by
+        `?status=`; `listReconciliationItems` / `countOpenReconciliationItems` /
+        `resolveReconciliationItem`). Every item is a discrepancy the sweep
+        deliberately refused to decide, so leaving them readable only by SQL
+        meant the one queue in the system that EXISTS to summon a human summoned
+        nobody. The Billing & tax page carries the open count, amber when it is
+        not zero.
+        - **★★ CLOSING AN ITEM MOVES NO MONEY, and the screen says so at the
+          point of action** rather than in a header nobody re-reads. Refunding a
+          difference or issuing a credit happens on the store's own billing
+          screens, chosen by a person. A button here that "fixed" a discrepancy
+          would be a money movement nobody reviewed — and worse, it would leave
+          the queue looking clean. Pinned by a test, because that sentence is the
+          only thing standing between the two readings.
+        - **★ THREE OUTCOMES**, since "resolved" alone is a lie in two common
+          cases: genuinely settled, needs chasing (`manual_review`), and turned
+          out not to matter (`ignored`). Collapsing them loses the difference
+          between "dealt with" and "decided not to".
+        - **★ A NOTE IS REQUIRED**, in the UI and again in the action. The row
+          records that a human looked; without what they FOUND it is an
+          audit trail that proves only that somebody clicked.
+        - **★ THE CLOSE IS A CONDITIONAL CLAIM** on `status = 'open'`, so two
+          operators working the queue at once cannot overwrite each other's
+          verdict — the loser is told it was already closed.
+        - **★ ANY OPERATOR MAY CLOSE, not just a superadmin.** This records a
+          judgement rather than moving money, and a queue only the owner can
+          clear is a queue nobody clears. Who did it is stored either way.
+        - **★ A NULL STORE IS ITSELF THE PROBLEM** — an orphan payment nobody
+          can attribute — so the row says "needs attributing" rather than
+          rendering a blank that reads as a bug.
+        - ⚠ **TEST GAP**: the db mock does not evaluate WHERE clauses, so the
+          `status = 'open'` predicate is argued rather than pinned; the
+          behaviour that depends on it (a zero-row claim reported as
+          already-closed) IS covered.
     - **★★ AI CREDIT PURCHASES NOW PRODUCE AN INVOICE**
       (`lib/billing/credit-invoice.ts`, `supabase/billing_08_ai_credit_invoice.sql`).
       `kind = 'ai_credits'` has existed since billing_03 and
@@ -4968,6 +5012,37 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         despite being a money path. It now has ten, covering the invoicing half
         only; the plan gate, the `add_ai_credits` RPC and reconcile-on-read are
         still uncovered.
+    - **★★ `lib/billing/receipts.ts` — THE ACKNOWLEDGEMENTS, AND ALL THREE WERE
+      REGRESSIONS.** The old path sent them (`planActivatedTemplate` from
+      `confirmSubscription`, `paymentReceiptTemplate` and
+      `subscriptionCancelledTemplate` from the webhook) and deleting it took them
+      with it — so for a few days a merchant could subscribe, pay ₹50,000 and hear
+      nothing at all, which is worse than the system it replaced. Kept SEPARATE
+      from `dunning.ts`: dunning means debt collection, and a module holding both
+      the chasing and the thank-yous ends up called "billing-emails-2".
+      - **★★ THE RECEIPT COMES FROM `settleAttempt`**, the ONE place an invoice
+        transitions to paid — so enrolment, manual payment, a plan change, a
+        location purchase AND reconciliation each send exactly one, and none of
+        them has to remember to. `syncInvoiceStatus` now CLAIMS that transition
+        (its WHERE excludes `paid` when moving to paid) and reports it, which is
+        what makes "exactly one" true. ⚠ That claim also fixed a quieter bug:
+        `paid_at` used to be rewritten on every later sync, so a second attempt
+        settling days afterwards moved the timestamp on an already-paid invoice.
+      - **★ A CREDIT PURCHASE GETS NO SUBSCRIPTION RECEIPT.** A mail reading
+        "your Pro plan is active" for a ₹59 credit pack is wrong; credits have
+        their own confirmation (`ai.credits_purchased`).
+      - **★ THE ACTIVATION MAIL WITHHOLDS THE RENEWAL DATE WITH NO MANDATE.** The
+        template's copy says autopay is set up, so naming a date beside it
+        promises a charge that never comes — and the merchant waits, and is
+        downgraded. Same rule as the invoice-issued notice.
+    - **★ SUBSCRIPTION FAILURES REACH THE FAILURES FEED** (§33). `FAILURE_SOURCES`
+      gained a `subscription` entry reading `billing_payment_attempts` where
+      `state = 'failed'`. Deliberately NOT folded into the existing `payment`
+      source: that one is a SHOPPER's checkout failing (the merchant's revenue),
+      this is the MERCHANT's plan payment failing (they are heading for a
+      downgrade). Different audience, different consequence. It sorts on
+      `resolved_at`, not `created_at` — an attempt can sit in flight for days, so
+      the creation time would bury a fresh failure down a time-ordered feed.
     - **★★ THE OLD PATH IS GONE** (2026-08-13). Deleted: `subscription-actions.ts`,
       `lib/payments/subscription.ts` (the `razorpay_plans` cache,
       `resolveRazorpayPlanId`, `amountForRzpPlan`, `planForRzpPlan`,
@@ -5083,6 +5158,19 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       stores the exact selected promise in `orders.shipping_option`; shipment
       booking uses that courier and carries the quoted provider cost/ETA.
       Digital-only and pickup orders remain ₹0 without a carrier call.
+    - **Delivery discovery starts before checkout.** The storefront shell owns a
+      host-local remembered delivery location. A signed-in shopper's default
+      address fills it automatically unless they deliberately chose another PIN
+      on this browser; “Use my current location” requests browser permission and
+      reverse-geocodes only after a click. The header displays that destination.
+      Every classic/grocery PDP can check a six-digit PIN. Its public,
+      IP-rate-limited server action re-reads the published product/variant,
+      online stock, physical measurements, fulfilment location and shipping
+      policy, then returns the cheapest current option/ETA (or an unavailable
+      reason). The product quantity participates in free-above pricing. Checkout
+      still re-quotes authoritatively, especially because payment method can
+      change COD serviceability. PDPs no longer claim “delivered tomorrow” or a
+      hardcoded free-above amount.
     - **Deliberate v1 limits.** StoreMink does not yet expose postal zones,
       price/weight rate tables, product-specific shipping profiles, split one
       order across multiple warehouses/parcels, purchase return labels, or

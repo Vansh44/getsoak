@@ -33,6 +33,7 @@ import {
   orderRefunds,
   orders,
   stores,
+  billingPaymentAttempts,
 } from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
 import {
@@ -248,6 +249,45 @@ export const FAILURE_SOURCES: FailureSource[] = [
           occurredAt: r.createdAt,
           storeId: r.storeId,
           href: `/dashboard/orders?id=${r.id}`,
+        }));
+      }),
+  },
+  {
+    ...meta("subscription"),
+    fetch: (scope, limit) =>
+      withService(async (db) => {
+        const rows = await db
+          .select({
+            id: billingPaymentAttempts.id,
+            storeId: billingPaymentAttempts.storeId,
+            amountPaise: billingPaymentAttempts.amountPaise,
+            failureReason: billingPaymentAttempts.failureReason,
+            failureCode: billingPaymentAttempts.failureCode,
+            resolvedAt: billingPaymentAttempts.resolvedAt,
+            createdAt: billingPaymentAttempts.createdAt,
+          })
+          .from(billingPaymentAttempts)
+          .where(
+            and(
+              eq(billingPaymentAttempts.state, "failed"),
+              storeFilter(scope, billingPaymentAttempts.storeId),
+            ),
+          )
+          .orderBy(desc(billingPaymentAttempts.createdAt))
+          .limit(limit);
+        return rows.map((r) => ({
+          id: `subscription:${r.id}`,
+          source: "subscription" as const,
+          title: `Subscription payment failed — ₹${(r.amountPaise / 100).toLocaleString("en-IN")}`,
+          // The code is ours and the reason is the gateway's; either alone is
+          // often not enough to act on.
+          detail: r.failureReason ?? r.failureCode,
+          // ★ WHEN IT FAILED, not when it started. An attempt can sit in flight
+          // for days (reconciliation waits 72h), so `created_at` would put a
+          // fresh failure days down a feed sorted by time.
+          occurredAt: r.resolvedAt ?? r.createdAt,
+          storeId: r.storeId,
+          href: "/dashboard/plans",
         }));
       }),
   },

@@ -53,6 +53,7 @@ import {
   loadTaxContext,
 } from "./invoice-store";
 import { beginAttempt, settleAttempt } from "./collect";
+import { notifyPlanActivated } from "./receipts";
 
 type BillingPeriod = "monthly" | "yearly";
 
@@ -581,6 +582,16 @@ export async function confirmEnrolment(input: {
         "Your payment went through but we couldn't switch your plan over. Contact support — don't pay again.",
     };
   }
+
+  // ★ AFTER the plan has actually moved, and best-effort: a merchant who has
+  // paid must not have their activation fail over an email. The old path sent
+  // this from `confirmSubscription`; deleting that took it with it, so for a few
+  // days subscribing was met with silence.
+  await notifyPlanActivated({
+    storeId: input.storeId,
+    invoiceId: input.invoiceId,
+    autopay: mandateId !== null,
+  });
 
   return {
     ok: true,

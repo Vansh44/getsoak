@@ -16,6 +16,7 @@ import {
   StatusPill,
   formatDate,
   isPickup,
+  isPosSale,
   money,
   orderProgress,
   pickupNote,
@@ -83,10 +84,12 @@ export default async function MyOrderDetailPage({
   // delivery track could not advance past step two for the rest of its life.
   const progress = orderProgress(order);
   const pickup = isPickup(order);
+  const posSale = isPosSale(order);
   // Nothing left to stop once the goods are physically with them.
   const handedOver =
     order.status === "delivered" ||
     order.status === "completed" ||
+    posSale ||
     order.pickup_status === "collected";
 
   return (
@@ -121,8 +124,24 @@ export default async function MyOrderDetailPage({
             {/* A cancelled order gets its own line rather than a half-filled
                 track implying it's still on its way. */}
             <div className={styles.card}>
-              <div className={styles.sectionTitle}>Progress</div>
-              {cancelled ? (
+              <div className={styles.sectionTitle}>
+                {posSale ? "Purchase" : "Progress"}
+              </div>
+              {posSale ? (
+                <p className={styles.summary}>
+                  {cancelled ? (
+                    "This in-store purchase was cancelled."
+                  ) : (
+                    <>
+                      Purchased in store
+                      {order.sale_location_name
+                        ? ` at ${order.sale_location_name}`
+                        : ""}
+                      . Your receipt and items are available below.
+                    </>
+                  )}
+                </p>
+              ) : cancelled ? (
                 <p className={styles.summary}>
                   {order.pickup_status === "expired"
                     ? "This order wasn't collected in time, so it was cancelled and the items went back on the shelf."
@@ -155,7 +174,7 @@ export default async function MyOrderDetailPage({
               )}
             </div>
 
-            {!pickup && order.shipments.length > 0 && (
+            {!pickup && !posSale && order.shipments.length > 0 && (
               <div className={styles.card}>
                 <div className={styles.sectionTitle}>Shipment tracking</div>
                 {order.shipments.map((shipment) => (
@@ -312,23 +331,41 @@ export default async function MyOrderDetailPage({
               </div>
             )}
 
-            <div className={styles.card}>
-              <div className={styles.sectionTitle}>
-                {order.fulfilment_type === "pickup"
-                  ? "Contact details"
-                  : "Delivery address"}
+            {posSale && order.sale_location_name && (
+              <div className={styles.card}>
+                <div className={styles.sectionTitle}>Purchased at</div>
+                <div className={styles.address}>
+                  <div>
+                    <strong>{order.sale_location_name}</strong>
+                  </div>
+                  {locationAddressLines(order.sale_location_address).map(
+                    (line, i) => (
+                      <div key={i}>{line}</div>
+                    ),
+                  )}
+                </div>
               </div>
-              <div className={styles.address}>
-                {addressLines(order.shipping_address).map((line, i) => (
-                  <div key={i}>{line}</div>
-                ))}
+            )}
+
+            {!posSale && (
+              <div className={styles.card}>
+                <div className={styles.sectionTitle}>
+                  {order.fulfilment_type === "pickup"
+                    ? "Contact details"
+                    : "Delivery address"}
+                </div>
+                <div className={styles.address}>
+                  {addressLines(order.shipping_address).map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                </div>
+                {order.notes && (
+                  <p className={styles.summary} style={{ marginTop: 14 }}>
+                    <strong>Note:</strong> {order.notes}
+                  </p>
+                )}
               </div>
-              {order.notes && (
-                <p className={styles.summary} style={{ marginTop: 14 }}>
-                  <strong>Note:</strong> {order.notes}
-                </p>
-              )}
-            </div>
+            )}
           </aside>
         </div>
       </div>

@@ -53,10 +53,15 @@ export interface OrderStatusView {
   status: string;
   fulfilment_type?: string | null;
   pickup_status?: string | null;
+  sales_channel?: string | null;
 }
 
 export function isPickup(order: OrderStatusView): boolean {
   return order.fulfilment_type === "pickup";
+}
+
+export function isPosSale(order: OrderStatusView): boolean {
+  return order.sales_channel === "pos";
 }
 
 /**
@@ -139,11 +144,11 @@ export function StatusPill({ order }: { order: OrderStatusView }) {
  * exactly the thing they need to remember a week later.
  */
 export function FulfilmentBadge({ order }: { order: OrderStatusView }) {
-  if (!isPickup(order)) return null;
+  if (!isPickup(order) && !isPosSale(order)) return null;
   return (
     <span className={styles.fulfilBadge}>
       <Store size={12} aria-hidden />
-      Pickup
+      {isPosSale(order) ? "In store" : "Pickup"}
     </span>
   );
 }

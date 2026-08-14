@@ -56,6 +56,26 @@
   }
 }
 
+/* Product pages begin directly below the fixed storefront header. The shop
+   listing keeps its roomier hero spacing; only the PDP had the large empty
+   band visible above the breadcrumb/product image. */
+.shop-main.pdp-page {
+  padding-top: 92px;
+}
+
+@media (min-width: 768px) {
+  .shop-main.pdp-page {
+    padding-top: 100px;
+  }
+}
+
+/* Market storefronts already reserve the fixed header once on
+   .storefront-root (storefront-theme.css). Do not add a second header-sized
+   offset here; keep only a compact breathing space above the breadcrumb. */
+.storefront-root.sm-header-market .shop-main.pdp-page {
+  padding-top: 24px;
+}
+
 /* ── Hero ─────────────────────────────────────────── */
 .shop-hero {
   text-align: center;
@@ -952,6 +972,132 @@
   max-width: 420px;
 }
 
+/* Server-priced PIN-code delivery estimate, shared by classic and grocery
+   product pages. Theme tokens keep it native to every merchant storefront. */
+.pdp-delivery {
+  max-width: 520px;
+  margin: 2px 0 22px;
+  padding: 16px;
+  border: 1px solid var(--shop-border);
+  border-radius: var(--sm-radius-control);
+  background: color-mix(
+    in srgb,
+    var(--shop-surface) 92%,
+    var(--shop-accent-soft)
+  );
+}
+
+.pdp-delivery-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 11px;
+  color: var(--shop-text);
+  font-size: 0.96rem;
+}
+
+.pdp-delivery-heading svg {
+  color: var(--shop-accent);
+}
+
+.pdp-delivery-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 0 11px;
+  border: 1px solid var(--shop-border);
+  border-radius: var(--sm-radius-sm);
+  background: var(--shop-surface);
+}
+
+.pdp-delivery-form > svg {
+  flex: 0 0 auto;
+  color: var(--shop-text-muted);
+}
+
+.pdp-delivery-form input {
+  min-width: 0;
+  height: 43px;
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--shop-text);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.pdp-delivery-form button {
+  align-self: stretch;
+  padding: 0 15px;
+  border: none;
+  border-left: 1px solid var(--shop-border);
+  background: transparent;
+  color: var(--shop-accent);
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.pdp-delivery-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.pdp-delivery-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  font-size: 0.86rem;
+  line-height: 1.35;
+}
+
+.pdp-delivery-result > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.pdp-delivery-result div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pdp-delivery-result span,
+.pdp-delivery-hint {
+  color: var(--shop-text-muted);
+}
+
+.pdp-delivery-result.is-available > svg {
+  color: #15803d;
+}
+
+.pdp-delivery-result.is-unavailable,
+.pdp-delivery-result.is-unavailable > svg {
+  color: #b42318;
+}
+
+.pdp-delivery-result.is-loading {
+  align-items: center;
+  color: var(--shop-text-muted);
+}
+
+.pdp-delivery-spinner {
+  animation: pdp-delivery-spin 0.8s linear infinite;
+}
+
+@keyframes pdp-delivery-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pdp-delivery-hint {
+  margin: 9px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .pdp-btn {
   flex: 1 1 160px;
   border-radius: var(--sm-radius-control);
@@ -1446,6 +1592,13 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.sm-storefront-grocery .gpdp-buybox .pdp-delivery {
+  max-width: none;
+  margin: 0;
+  background: color-mix(in srgb, var(--sm-surface) 76%, transparent);
+  border-color: rgba(var(--sm-shadow-rgb), 0.1);
 }
 .sm-storefront-grocery .gpdp-price {
   display: flex;

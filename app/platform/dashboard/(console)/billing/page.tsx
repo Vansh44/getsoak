@@ -1,5 +1,10 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getPlatformViewer, getTaxSettings } from "@/app/actions/platform";
+import {
+  getOpenReconciliationCount,
+  getPlatformViewer,
+  getTaxSettings,
+} from "@/app/actions/platform";
 import { DEFAULT_TAX_SETTINGS } from "@/lib/billing/platform-settings";
 import { TaxSettingsForm } from "./tax-settings-form";
 
@@ -21,7 +26,10 @@ export default async function PlatformBillingPage() {
   const viewer = await getPlatformViewer();
   if (!viewer) redirect("/dashboard/login");
 
-  const settings = (await getTaxSettings()) ?? DEFAULT_TAX_SETTINGS;
+  const [settings, openItems] = await Promise.all([
+    getTaxSettings().then((s) => s ?? DEFAULT_TAX_SETTINGS),
+    getOpenReconciliationCount(),
+  ]);
 
   return (
     <div className="dash-page-enter">
@@ -32,6 +40,38 @@ export default async function PlatformBillingPage() {
         merchant&apos;s. A merchant&apos;s own tax settings live in their
         dashboard.
       </p>
+
+      {/* ★ ABOVE the form, and only when there is something to see. A queue
+          nobody looks at is the same as no queue — and these are money
+          discrepancies, which do not become less true for being unread. */}
+      {openItems > 0 && (
+        <Link
+          href="/dashboard/billing/reconciliation"
+          className="mb-6 flex max-w-3xl items-center justify-between gap-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 transition hover:bg-amber-100"
+        >
+          <span className="text-sm text-amber-900">
+            <strong>
+              {openItems} payment{" "}
+              {openItems === 1 ? "discrepancy" : "discrepancies"}
+            </strong>{" "}
+            need{openItems === 1 ? "s" : ""} a look.
+          </span>
+          <span className="shrink-0 text-sm font-medium text-amber-900">
+            Review →
+          </span>
+        </Link>
+      )}
+
+      {/* Always reachable, even at zero — someone looking for the audit trail of
+          a closed item should not have to wait for a new one to appear. */}
+      {openItems === 0 && (
+        <Link
+          href="/dashboard/billing/reconciliation"
+          className="mb-6 inline-block text-sm text-[#5b6472] hover:text-[#111827] hover:underline"
+        >
+          Reconciliation queue →
+        </Link>
+      )}
 
       <TaxSettingsForm
         initial={settings}

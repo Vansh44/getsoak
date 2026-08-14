@@ -513,6 +513,48 @@ Enter a business buyer's GSTIN.
 **Expect:** format-validated, uppercased, printed. It works with no customer
 attached.
 
+### Customer Online / In-store history
+
+**PS-7.17a — Delivery-only stores stay simple**
+On a store with pickup off and no active shop that can use StoreMink POS, sign
+in as a shopper and open `/orders`.
+**Expect:** no Online/In store tabs. The ordinary combined order list/empty
+state remains. An external till does not count because StoreMink cannot attach
+or read its receipts.
+
+**PS-7.17b — A working physical journey reveals the split**
+Enable StoreMink POS at an active `pos`-capable shop, or enable checkout pickup
+with an active `pickup`-capable shop, then open `/orders`.
+**Expect:** equal-width **Online** and **In store** tabs. Home-delivery website
+orders are Online; StoreMink till sales and pickup orders are In store.
+
+**PS-7.17c ★ — A setting cannot advertise a journey by itself**
+Leave POS/pickup settings on but deactivate the only eligible shop, remove its
+capability, use only a warehouse, or let the Pro plan expire.
+**Expect:** the In store tab is not offered to a customer with no physical-store
+history. Settings, location capability, active state and effective plan must all
+agree.
+
+**PS-7.17d ★ — Disabling a feature never hides a receipt**
+Attach a customer to a POS sale and place a pickup order, then disable POS and
+pickup (or deactivate the location). Sign in as that customer.
+**Expect:** In store remains visible and both historical orders remain there.
+Feature gates stop future journeys; they never erase or conceal customer-owned
+history.
+
+**PS-7.17e — Each tab has useful empty guidance**
+Open a tab with no matching orders.
+**Expect:** a centred channel-specific icon, title and explanation. Online links
+to Shop; pickup-capable In store links to Shop for pickup; POS-only In store
+explains that the cashier must attach the customer's account.
+
+**PS-7.17f ★ — A POS receipt is not presented as delivery**
+Open a customer-linked POS order from In store.
+**Expect:** an **In store** badge, “Purchased in store”, the sale location,
+items, totals and invoice. No shipment timeline and no empty delivery-address
+card. An anonymous walk-in remains invisible until roadmap Step 4 adds safe
+claim/merge identity.
+
 **PS-7.18 — Offline-ish speed**
 Throttle the network to slow-3G and search the catalogue.
 **Expect:** search still instant — it's served from the local IndexedDB cache.
@@ -1848,6 +1890,35 @@ Choose store pickup, then separately check out a digital-only basket.
 **Expect:** both are ₹0 and make no Shiprocket serviceability request. A physical
 delivery with an invalid/unserviceable PIN cannot be ordered while live rates
 are selected.
+
+**PS-SH.26 — The header remembers where delivery is going**
+As a signed-in customer with a default saved address, open the storefront on a
+fresh browser profile. Then enter a different valid PIN in the header and
+refresh. **Expect:** the default city/state appears automatically first; the
+deliberately entered PIN wins after refresh. A signed-out shopper's entered PIN
+also survives refresh on that store origin.
+
+**PS-SH.27 — Current location is permissioned and recoverable**
+Open the header location panel. Confirm no browser location prompt appeared
+before clicking “Use my current location”; click it once with permission and
+once with permission denied. **Expect:** success fills the reverse-geocoded PIN
+and location label. Denial explains that a PIN can still be entered; browsing
+and purchasing remain usable.
+
+**PS-SH.28 ★ — A PDP promise uses the checkout engine**
+On classic and grocery product pages, enter a serviceable PIN under free, fixed
+₹50/free-above-₹500 and live Shiprocket modes. Change variant and quantity.
+**Expect:** the page shows online-stock availability, customer charge and ETA
+from the selected variant/quantity. Free-above follows merchandise subtotal;
+live mode shows the cheapest current courier and says when more choices will be
+available at checkout. Invalid/unserviceable PINs show a useful refusal.
+
+**PS-SH.29 ★ — A PDP cannot invent price, stock or parcel data**
+Tamper with product/variant/quantity in a delivery-check request, including a
+variant from another product/store and an unpublished product. Burst more than
+30 requests in one minute from one IP. **Expect:** the server re-reads all
+catalog/logistics values under the request host, rejects invalid references and
+rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 
 ## 12. Known gaps
 
