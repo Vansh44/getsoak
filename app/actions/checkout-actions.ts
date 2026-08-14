@@ -10,7 +10,6 @@ import {
   productVariants,
   products,
   storeBillingSettings,
-  storeLocations,
   stores,
   taxClasses,
 } from "@/drizzle/schema";

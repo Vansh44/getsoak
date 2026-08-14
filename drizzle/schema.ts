@@ -3690,6 +3690,10 @@ export const storePaymentProviders = pgTable(
     provider: text().default("razorpay").notNull(),
     keyId: text("key_id").notNull(),
     keySecretEnc: text("key_secret_enc").notNull(),
+    // Razorpay HMACs the request body, so this must be reversible (encrypted)
+    // rather than hashed like the logistics webhook token. See
+    // supabase/payments_02_store_webhook.sql.
+    webhookSecretEnc: text("webhook_secret_enc"),
     enabled: boolean().default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()

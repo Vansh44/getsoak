@@ -140,6 +140,9 @@ describe("getChannelState", () => {
       keyId: KEY_ID,
       enabled: true,
       planAllowsOnlinePayments: true,
+      // Whether a webhook EXISTS, never its signing secret.
+      webhookConfigured: false,
+      webhookUrl: null,
     });
     // The provider-row projection never asks for the encrypted secret column.
     const projectionKeys = Object.keys(dbHolder.current.calls.select[0] ?? {});

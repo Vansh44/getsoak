@@ -1879,7 +1879,39 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     claim pending→failed, restock via the reserved→released conditional
     claim (exactly-once, order-actions pattern), release the coupon use,
     cancel the order. Refunds are out of scope v1 (merchant refunds from
-    their own Razorpay dashboard).
+    their own Razorpay dashboard). - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
+    `lib/payments/store-webhook.ts`, `supabase/payments_02_store_webhook.sql`).
+    Reconcile-on-read left a real hole: close the tab on the Razorpay screen
+    and the money is captured while the order sits `pending` until the hourly
+    reaper — the merchant sees nothing and the shopper is thanked for nothing.
+    Four rules: - **It adds NO new way to mark an order paid.** The route resolves the
+    order and calls `markOrderPaid` (`lib/orders/mark-paid.ts`), the same
+    conditional pending → paid claim the callback, reconcile-on-read and the
+    reaper use. So it is a fourth TRIGGER for one implementation, and a
+    replayed delivery (Razorpay retries) claims zero rows and announces
+    nothing. - **★ THE SIGNATURE IS THE AUTHORISATION; THE URL IS NOT.** `storeId` in
+    the path only selects which secret to verify against — anyone may POST
+    there. And the order lookup is scoped `store_id = storeId`: without it a
+    merchant holding their OWN valid secret could name another store's
+    `razorpay_order_id` and settle a stranger's order. The signature proves
+    who is calling, never what they may touch. - **★ THE SECRET IS ENCRYPTED, NOT HASHED**, unlike the logistics webhook
+    token. Shiprocket presents its token so a hash suffices to compare;
+    Razorpay HMACs the request BODY, so verification needs the plaintext.
+    It therefore gets `key_secret_enc`'s treatment — AES-256-GCM under
+    `PAYMENT_CRED_KEY`, in the service-role-only `store_payment_providers`
+    (never `stores.settings`, which is anon-readable, §9). Shown to the
+    merchant ONCE on generation; `getChannelState` reports only whether one
+    exists. - **★ STATUS CODES ARE INSTRUCTIONS TO RAZORPAY**: 200 handled or
+    deliberately ignored, 401 signature failed (never retry), **503 when we
+    could not CHECK it** — no secret loaded, gateway paused, DB down. That
+    last one is the load-bearing distinction: answering 401 for a delivery
+    we never actually verified makes Razorpay give up on a real payment.
+    A paused gateway deliberately stops honouring the webhook, since an
+    order marked paid through a channel the merchant switched off is a
+    surprise.
+    ⚠ `payments_02_store_webhook.sql` needs the `postgres` role and is NOT yet
+    applied; until it is, `loadPaymentWebhookSecret` fails closed and the route
+    answers 503.
 
 19. **Signup wizard (Shopify-style, `app/platform/signup/page.tsx`).** One
     client wizard, one focused screen per step, with a progress stepper. Step

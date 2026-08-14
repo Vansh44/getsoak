@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   disconnectRazorpay,
+  generateWebhookSecret,
   saveRazorpayCredentials,
   setRazorpayEnabled,
   type ChannelState,
@@ -468,11 +469,6 @@ function ShiprocketModal({
     onClose();
   }
 
-  async function copy(value: string, label: string) {
-    await navigator.clipboard.writeText(value);
-    toast.success(`${label} copied.`);
-  }
-
   return (
     <div
       className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8"
@@ -767,6 +763,12 @@ function ChannelCard({
 }
 
 // ---------------------------------------------------------------------------
+/** Shared by both channel modals — no component state, so it lives out here. */
+async function copy(value: string, label: string) {
+  await navigator.clipboard.writeText(value);
+  toast.success(`${label} copied.`);
+}
+
 // Razorpay connect / manage modal (the previous page body, now in a dialog).
 // ---------------------------------------------------------------------------
 function RazorpayModal({
@@ -783,6 +785,15 @@ function RazorpayModal({
   onRefresh: () => void;
 }) {
   const [keyId, setKeyId] = useState("");
+  const [payWebhookSecret, setPayWebhookSecret] = useState<string | null>(null);
+
+  async function handleGenerateWebhook() {
+    const res = await generateWebhookSecret();
+    if ("error" in res) return toast.error(res.error);
+    setPayWebhookSecret(res.secret);
+    onState((s) => ({ ...s, webhookConfigured: true }));
+    toast.success("Webhook secret generated. Add it in Razorpay now.");
+  }
   const [keySecret, setKeySecret] = useState("");
   const [showForm, setShowForm] = useState(!state.connected);
   const [saving, setSaving] = useState(false);
@@ -911,6 +922,64 @@ function RazorpayModal({
                   </div>
                 </div>
                 <ShieldCheck className="h-5 w-5 text-green-600" />
+              </div>
+
+              {/* ★ Without this, a payment is only noticed when the shopper's
+                  success page loads or the hourly reaper sweeps — so a closed
+                  tab leaves a paid order sitting `pending`. */}
+              <div className="rounded-lg border border-violet-100 bg-violet-50/50 p-4">
+                <p className="text-sm font-semibold text-[#111827]">
+                  Payment webhook{" "}
+                  {state.webhookConfigured && (
+                    <span className="ml-1 text-xs font-normal text-green-700">
+                      · active
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-[#5b6472]">
+                  In Razorpay, open Settings → Webhooks → Add New Webhook. Paste
+                  this URL, set the same secret, and tick{" "}
+                  <code>payment.captured</code>. Orders are then confirmed the
+                  moment payment clears, even if the shopper closes the tab.
+                </p>
+                {state.webhookUrl && (
+                  <button
+                    type="button"
+                    onClick={() => copy(state.webhookUrl!, "Webhook URL")}
+                    className="mt-3 flex w-full items-center justify-between gap-2 rounded-md border bg-white px-3 py-2 text-left font-mono text-xs text-[#344054]"
+                  >
+                    <span className="truncate">{state.webhookUrl}</span>
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                  </button>
+                )}
+                {payWebhookSecret ? (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() => copy(payWebhookSecret, "Webhook secret")}
+                      className="flex w-full items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left font-mono text-xs text-amber-900"
+                    >
+                      <span className="truncate">{payWebhookSecret}</span>
+                      <Copy className="h-3.5 w-3.5 shrink-0" />
+                    </button>
+                    <p className="mt-1 text-[11px] text-amber-700">
+                      Copy now. This secret will not be shown again.
+                    </p>
+                  </div>
+                ) : (
+                  canManage && (
+                    <button
+                      type="button"
+                      onClick={handleGenerateWebhook}
+                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      {state.webhookConfigured
+                        ? "Generate a new secret"
+                        : "Generate a webhook secret"}
+                    </button>
+                  )
+                )}
               </div>
 
               {canManage && (

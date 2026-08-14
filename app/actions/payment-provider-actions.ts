@@ -18,6 +18,12 @@ import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { effectivePlan, limitsFor } from "@/lib/plans";
 import { encryptSecret } from "@/lib/payments/crypto";
 import { validateCredentials } from "@/lib/payments/razorpay";
+import {
+  hasPaymentWebhook,
+  paymentWebhookUrl,
+  rotatePaymentWebhookSecret,
+} from "@/lib/payments/store-webhook";
+import { getCurrentStore } from "@/lib/store/resolve";
 
 export interface ChannelState {
   connected: boolean;
@@ -26,6 +32,10 @@ export interface ChannelState {
   enabled: boolean;
   /** Whether the store's plan includes online payments at all. */
   planAllowsOnlinePayments: boolean;
+  /** Whether a webhook signing secret has been generated. NEVER the secret. */
+  webhookConfigured: boolean;
+  /** The address the merchant registers with Razorpay. Not a secret. */
+  webhookUrl: string | null;
 }
 
 async function planAllowsPayments(storeId: string): Promise<boolean> {
@@ -71,11 +81,53 @@ export async function getChannelState(): Promise<ChannelState> {
     ),
     planAllowsPayments(storeId),
   ]);
+  // Only meaningful once a gateway is connected — there is nothing to attach a
+  // webhook to otherwise, and showing a URL for it would invite the merchant to
+  // register one that can never verify.
+  const [webhookConfigured, store] = row
+    ? await Promise.all([
+        hasPaymentWebhook(storeId).catch(() => false),
+        getCurrentStore().catch(() => null),
+      ])
+    : [false, null];
   return {
     connected: !!row,
     keyId: row?.key_id ?? null,
     enabled: !!row?.enabled,
     planAllowsOnlinePayments: planOk,
+    webhookConfigured,
+    webhookUrl: store ? paymentWebhookUrl(store as never) : null,
+  };
+}
+
+/**
+ * Mint a webhook signing secret and return it ONCE.
+ *
+ * ★★ THE ONLY TIME THE SECRET IS EVER READABLE. It is stored encrypted and
+ * `getChannelState` reports only whether one exists, the same write-only
+ * treatment the API key secret gets. A merchant who loses it generates another
+ * — which is also the rotation path, so there is only one flow to get right.
+ *
+ * ★ Gated on `channels` like every other action here: this value lets whoever
+ * holds it forge "payment captured" for this store, so it belongs with the
+ * people trusted to connect the gateway in the first place.
+ */
+export async function generateWebhookSecret(): Promise<
+  { success: true; secret: string; url: string } | { error: string }
+> {
+  const userId = await getManagerUserId("channels");
+  if (!userId) return { error: "You don't have permission to do this." };
+  const storeId = await getActingStoreId();
+
+  const secret = await rotatePaymentWebhookSecret(storeId);
+  if (!secret) {
+    return { error: "Connect your Razorpay account before adding a webhook." };
+  }
+  const store = await getCurrentStore().catch(() => null);
+  return {
+    success: true,
+    secret,
+    url: store ? paymentWebhookUrl(store as never) : "",
   };
 }
 
