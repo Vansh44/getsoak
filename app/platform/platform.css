@@ -2190,34 +2190,54 @@
 
 /* A lighter footer for the sub-pages — the landing page's four-column one is
    more than a product page needs. */
+.stq-footer-compact {
+  margin-top: 0;
+  padding: 0;
+  text-align: left;
+}
 .stq-footer-simple {
   max-width: 1120px;
   margin: 0 auto;
-  padding: 40px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: flex-start;
+  padding: 30px 24px 34px;
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
+  gap: 24px 40px;
+  align-items: center;
+}
+.stq-footer-simple .stq-logo {
+  color: var(--stq-ink);
+  text-decoration: none;
 }
 .stq-footer-simple p {
   margin: 0;
-  color: rgba(255, 255, 255, 0.58);
+  color: var(--stq-muted);
   font-size: 14.5px;
+  line-height: 1.5;
 }
 .stq-footer-links {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 18px;
-  margin-top: 4px !important;
 }
 .stq-footer-links a {
-  color: rgba(255, 255, 255, 0.78);
+  color: var(--stq-muted);
   text-decoration: none;
   font-size: 14.5px;
 }
 .stq-footer-links a:hover {
-  color: #fff;
+  color: var(--stq-ink);
   text-decoration: underline;
+}
+@media (max-width: 860px) {
+  .stq-footer-simple {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+  .stq-footer-links {
+    justify-content: flex-start;
+  }
 }
 
 /* ===========================================================================

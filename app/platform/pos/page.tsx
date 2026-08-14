@@ -396,7 +396,7 @@ export default async function PosMarketingPage() {
             >
               Create your store free <ArrowRight size={17} />
             </Link>
-            <Link href={PLATFORM_URL} className="stq-btn stq-btn-ghost">
+            <Link href={PLATFORM_URL} className="stq-btn stq-btn-outline">
               Back to StoreMink
             </Link>
           </div>
@@ -404,7 +404,7 @@ export default async function PosMarketingPage() {
       </section>
 
       {/* ------------------------------ footer ----------------------------- */}
-      <footer className="stq-footer">
+      <footer className="stq-footer stq-footer-compact">
         <div className="stq-footer-simple">
           <Link href={PLATFORM_URL} className="stq-logo">
             <BrandMark size={26} />

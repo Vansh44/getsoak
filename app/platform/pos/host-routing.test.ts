@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const headerState = vi.hoisted(() => ({ host: "pos.storemink.com" }));
 vi.mock("next/headers", () => ({
@@ -39,5 +41,27 @@ describe("POS product host discovery metadata", () => {
     expect(metadata.openGraph).toMatchObject({
       url: "https://pos.storemink.com",
     });
+  });
+
+  it("keeps the closing CTA legible and the light footer compact", () => {
+    const page = readFileSync(
+      join(process.cwd(), "app/platform/pos/page.tsx"),
+      "utf8",
+    );
+    const css = readFileSync(
+      join(process.cwd(), "app/platform/platform.css"),
+      "utf8",
+    );
+
+    expect(page).toMatch(
+      /href=\{PLATFORM_URL\}\s+className="stq-btn stq-btn-outline"[\s\S]*?Back to StoreMink/,
+    );
+    expect(page).toContain('className="stq-footer stq-footer-compact"');
+    expect(css).toMatch(
+      /\.stq-footer-simple \.stq-logo\s*\{[\s\S]*?color: var\(--stq-ink\)/,
+    );
+    expect(css).toMatch(
+      /\.stq-footer-simple p\s*\{[\s\S]*?color: var\(--stq-muted\)/,
+    );
   });
 });
