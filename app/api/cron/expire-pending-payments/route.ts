@@ -14,6 +14,7 @@ import {
   rzpFetchOrderPayments,
 } from "@/lib/payments/razorpay";
 import { sweepPendingRefunds } from "@/lib/payments/refund-reconcile";
+import { markOrderPaid } from "@/lib/orders/mark-paid";
 
 // Reaper for online-payment orders stuck in `payment_status: 'pending'` —
 // v1 has no merchant webhooks (reconcile-on-read instead), so this scheduled
@@ -158,20 +159,14 @@ async function handle(request: Request) {
         const captured = capturedPayment(res.data);
         if (captured) {
           try {
-            await withService((db) =>
-              db
-                .update(orders)
-                .set({
-                  paymentStatus: "paid",
-                  razorpayPaymentId: captured.id,
-                })
-                .where(
-                  and(
-                    eq(orders.id, order.id),
-                    eq(orders.paymentStatus, "pending"),
-                  ),
-                ),
-            );
+            // ★★ THROUGH `markOrderPaid`, NOT A LOCAL UPDATE. This branch used
+            // to write pending → paid itself, so a payment the reaper RESCUED
+            // notified nobody at all: no confirmation to the shopper, no "New
+            // order" to the merchant, no `order.payment_received`. The order
+            // simply appeared in the dashboard list one day, already paid.
+            // Sharing the choke point also means the claim, the confirmation
+            // and the ledger line stay in one place for all three paths.
+            await markOrderPaid(order.id, captured.id);
             paid++;
           } catch (err) {
             console.error(

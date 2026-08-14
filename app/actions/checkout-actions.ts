@@ -10,6 +10,7 @@ import {
   productVariants,
   products,
   storeBillingSettings,
+  storeLocations,
   stores,
   taxClasses,
 } from "@/drizzle/schema";
@@ -58,6 +59,8 @@ import {
   getCheckoutPolicies,
 } from "@/lib/legal/store-consent";
 import { summariseItems } from "@/lib/notifications/format";
+import { markOrderPaid } from "@/lib/orders/mark-paid";
+import type { OrderPlacedEvent } from "@/lib/orders/mark-paid";
 import { formatIndianMobile } from "@/lib/phone";
 import {
   rowToBillingSettings,
@@ -1636,13 +1639,40 @@ export async function placeOrder(
     policies: await getCheckoutPolicies(storeId),
   });
 
-  // The order exists and its items are saved — from here it is a real order, so
-  // record it. Emitted for BOTH payment methods (an unpaid razorpay order is
-  // still a placed order, exactly as the dashboard list shows it); the separate
-  // order.payment_received fires when the money actually lands. emitEvent
-  // defers via after(), so nothing below waits on it and a bookkeeping failure
-  // can never fail a checkout that already succeeded.
-  emitEvent({
+  // True when money still has to come through the gateway before this order is
+  // real. Credit covering the whole total is NOT waiting on anything — the
+  // balance already paid it, and the razorpay branch below skips the gateway
+  // entirely for exactly that case.
+  const awaitsGatewayPayment =
+    paymentMethod === "razorpay" &&
+    !(creditApplied > 0 && total - creditApplied <= 0);
+
+  // ★★ AN UNPAID GATEWAY ORDER IS NOT A PLACED ORDER — DO NOT ANNOUNCE IT.
+  //
+  // This used to emit for BOTH payment methods, on the reasoning that an unpaid
+  // razorpay order is still a placed order "exactly as the dashboard list shows
+  // it". A list is not a notification. What actually happened: the shopper
+  // reached the Razorpay modal and, while it was still open and unpaid, BOTH
+  // they and the merchant received "New order ORD… ₹39.00 · Paid online".
+  //
+  // Three things were wrong at once, and the customer email was the worst:
+  //   • it thanks somebody for an order they have not paid for;
+  //   • if they close the modal, the reaper cancels and restocks that order 45
+  //     minutes later, so the confirmation describes something that no longer
+  //     exists;
+  //   • the merchant is told to expect ₹39 that may never arrive, which is how
+  //     a "New order" alert stops being worth reading.
+  //
+  // So for a gateway order the emit MOVES to `markOrderPaid` — the single
+  // conditional pending → paid claim that every payment path funnels through
+  // (client callback, reconcile-on-read, cron reaper). Nothing is lost for COD,
+  // pay-at-store, or an order that store credit covered in full: those ARE
+  // complete at this point, and they still emit here.
+  //
+  // `order.payment_received` is unaffected and does not double up — it is
+  // in-app only and team only (events.ts), so it stays the ledger line while
+  // `order.placed` remains the confirmation.
+  const orderPlacedEvent: OrderPlacedEvent = {
     type: "order.placed",
     storeId,
     // The shop this will ship from. Null when routing had no better answer —
@@ -1711,7 +1741,11 @@ export async function placeOrder(
       shipping,
       total,
     },
-  });
+  };
+
+  // Paid, or payable without a gateway round trip ⇒ this is a real order now.
+  // Otherwise it is a checkout attempt, and markOrderPaid will announce it.
+  if (!awaitsGatewayPayment) emitEvent(orderPlacedEvent);
 
   // Tell the merchant if this sale just emptied a shelf. Deferred, and keyed on
   // the threshold CROSSING, so a slow-moving SKU alerts once rather than on
@@ -1860,48 +1894,6 @@ async function loadOwnRazorpayOrder(
 // Mark a razorpay order paid exactly once (conditional UPDATE — the
 // pending→paid transition is claimed atomically, so the client callback and
 // the reconcile paths can race safely).
-async function markOrderPaid(
-  orderId: string,
-  rzpPaymentId: string,
-): Promise<void> {
-  // The single choke point for "this order is now paid" — reached from the
-  // client callback, reconcile-on-read, and the cron reaper alike. The UPDATE
-  // is a conditional pending → paid CLAIM, so `claimed` is non-empty for
-  // exactly one caller and the notification can't fire twice for one payment.
-  const claimed = await withService((db) =>
-    db
-      .update(orders)
-      .set({ paymentStatus: "paid", razorpayPaymentId: rzpPaymentId })
-      .where(and(eq(orders.id, orderId), eq(orders.paymentStatus, "pending")))
-      .returning({
-        storeId: orders.storeId,
-        orderRef: orders.orderRef,
-        customerId: orders.customerId,
-        total: orders.total,
-        currency: orders.currency,
-      }),
-  ).catch((err) => {
-    console.error("markOrderPaid:", errMsg(err));
-    return [] as {
-      storeId: string;
-      orderRef: string;
-      customerId: string;
-      total: number;
-      currency: string;
-    }[];
-  });
-
-  const row = claimed[0];
-  if (!row) return;
-
-  emitEvent({
-    type: "order.payment_received",
-    storeId: row.storeId,
-    actor: { type: "customer", id: row.customerId },
-    subject: { type: "order", id: orderId, label: row.orderRef },
-    payload: { total: row.total, currency: row.currency },
-  });
-}
 
 /**
  * Called by the checkout client after Razorpay Standard Checkout succeeds.

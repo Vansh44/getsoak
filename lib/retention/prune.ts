@@ -33,7 +33,15 @@
 
 import { inArray, lt } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import { activityEvents, emailLogs, notifications } from "@/drizzle/schema";
+import {
+  activityEvents,
+  billingWebhookEvents,
+  dataJobIssues,
+  dataJobs,
+  emailLogs,
+  notifications,
+} from "@/drizzle/schema";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 
 /** Rows deleted per statement. Bounds both the IN list and the lock window. */
@@ -161,20 +169,36 @@ export async function sweepPolicy(
  * transaction. Two statements rather than a DELETE ... IN (subquery) so the
  * intent stays legible; they are atomic together inside `withService`.
  */
+/**
+ * Select a page of rows older than the floor, then delete exactly those.
+ *
+ * ★ The key and the timestamp are PARAMETERS rather than assumed to be
+ * `id`/`created_at`: `billing_webhook_events` is keyed on the provider's own
+ * `event_id` and dates its rows `received_at`. Special-casing it in the loop
+ * instead would put a second delete implementation next to this one.
+ */
 function batchDeleter(
-  table: typeof notifications | typeof activityEvents | typeof emailLogs,
+  table:
+    | typeof notifications
+    | typeof activityEvents
+    | typeof emailLogs
+    | typeof dataJobs
+    | typeof dataJobIssues
+    | typeof billingWebhookEvents,
+  key: AnyPgColumn,
+  ts: AnyPgColumn,
 ): (floorIso: string, limit: number) => Promise<number> {
   return (floorIso, limit) =>
     withService(async (db) => {
       const doomed = await db
-        .select({ id: table.id })
+        .select({ id: key })
         .from(table)
-        .where(lt(table.createdAt, floorIso))
+        .where(lt(ts, floorIso))
         .limit(limit);
       if (doomed.length === 0) return 0;
       await db.delete(table).where(
         inArray(
-          table.id,
+          key,
           doomed.map((row) => row.id),
         ),
       );
@@ -192,9 +216,8 @@ function batchDeleter(
  * cosmetic — an event old enough to be pruned at 365 days carries only
  * notifications that were themselves already pruned at 90.
  *
- * ⚠ To add a table, add an entry. `data_jobs` / `data_job_issues` belong here
- * and are NOT yet included — they live on the unmerged import/export work and
- * do not exist in this branch's schema. See docs/cron-jobs.md.
+ * ⚠ To add a table, add an entry — and mind the ORDER when one cascades into
+ * another. See docs/cron-jobs.md.
  */
 export const RETENTION_POLICIES: RetentionPolicy[] = [
   {
@@ -202,7 +225,11 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
     days: 90,
     reason:
       "A read inbox row is history. 90 days outlives any 'what did I miss?' question.",
-    deleteBatch: batchDeleter(notifications),
+    deleteBatch: batchDeleter(
+      notifications,
+      notifications.id,
+      notifications.createdAt,
+    ),
   },
   {
     table: "activity_events",
@@ -211,7 +238,11 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
       "The audit trail, so it gets the longest life — a year covers 'who changed this?' " +
       "long after the fact. Financial records (orders, refunds, credit notes) live in " +
       "their own tables and are NOT touched by this.",
-    deleteBatch: batchDeleter(activityEvents),
+    deleteBatch: batchDeleter(
+      activityEvents,
+      activityEvents.id,
+      activityEvents.createdAt,
+    ),
   },
   {
     table: "email_logs",
@@ -219,7 +250,50 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
     reason:
       "Holds rendered BODIES, so it is the heaviest of the three and gets the shortest " +
       "life. 90 days still answers 'did last quarter's order confirmation go out?'.",
-    deleteBatch: batchDeleter(emailLogs),
+    deleteBatch: batchDeleter(emailLogs, emailLogs.id, emailLogs.createdAt),
+  },
+  // ── CSV import/export history ──────────────────────────────────────────
+  // ★ ISSUES BEFORE JOBS. `data_job_issues.job_id` is ON DELETE CASCADE from
+  // `data_jobs`, the same shape as notifications → activity_events, so pruning
+  // jobs first would destroy issues uncounted and leave this entry reporting
+  // zero forever.
+  {
+    table: "data_job_issues",
+    days: 90,
+    reason:
+      "The per-ROW error log for an import. It quotes raw cells — for an orders " +
+      "export that means customer addresses — so it gets the same short life as " +
+      "email bodies. 90 days outlasts any 'why did row 40 fail?' question.",
+    deleteBatch: batchDeleter(
+      dataJobIssues,
+      dataJobIssues.id,
+      dataJobIssues.createdAt,
+    ),
+  },
+  {
+    table: "data_jobs",
+    days: 90,
+    reason:
+      "One row per CSV import or export. ISSUE_CAP bounds issues per job, but " +
+      "nothing bounded the number of jobs. The uploaded file is already dropped " +
+      "when a job finishes, so what is left is a history line.",
+    deleteBatch: batchDeleter(dataJobs, dataJobs.id, dataJobs.createdAt),
+  },
+  // ── Gateway webhook receipts ───────────────────────────────────────────
+  {
+    table: "billing_webhook_events",
+    days: 90,
+    reason:
+      "One row per delivery, forever, and nothing read them. They are exactly-once " +
+      "markers, so the only risk in deleting one is a REPLAY of that same event " +
+      "being processed twice — and no gateway retries for anything like 90 days " +
+      "(Razorpay gives up in hours). Keyed on the provider's event_id and dated " +
+      "received_at, not id/created_at.",
+    deleteBatch: batchDeleter(
+      billingWebhookEvents,
+      billingWebhookEvents.eventId,
+      billingWebhookEvents.receivedAt,
+    ),
   },
 ];
 

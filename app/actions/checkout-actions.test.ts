@@ -22,6 +22,13 @@ vi.mock("@/lib/credit/store-credit", () => ({
   reinstateCreditForOrder: vi.fn(async () => 0),
 }));
 vi.mock("./coupon-actions", () => ({ validateCoupon: vi.fn() }));
+// The fan-out is fire-and-forget, so stubbing it changes nothing about the
+// order write — but it is the only way to assert WHO gets told WHAT, which is
+// the whole point of the "unpaid gateway order" tests below.
+vi.mock("@/lib/notifications/record", () => ({
+  emitEvent: vi.fn(),
+  recordEvent: vi.fn(),
+}));
 // Online payments: the gateway loader (credential decrypt) and the Razorpay
 // HTTP calls are mocked at the module boundary; the pure helpers
 // (capturedPayment) keep their real implementations — they're unit-tested in
@@ -82,6 +89,7 @@ import {
 } from "@/lib/payments/razorpay";
 import { makeDbMock, sqlText, sqlParamValues } from "./_test-helpers";
 import { orders, orderItems } from "@/drizzle/schema";
+import { emitEvent } from "@/lib/notifications/record";
 import type { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { quoteShippingForOrder } from "@/lib/shipping/quote";
 
@@ -146,6 +154,17 @@ describe("placeOrder", () => {
       options: [],
       error: "No courier available",
     });
+  });
+
+  it("★ a COD order IS announced at checkout — nothing is waiting on a gateway", async () => {
+    // The other half of the rule. COD, pay-at-store and a credit-covered order
+    // are complete the moment they are written, so deferring their confirmation
+    // would mean it never arrived at all.
+    await placeOrder(validForm, [oneItem()]);
+    const placed = vi
+      .mocked(emitEvent)
+      .mock.calls.filter((c: any[]) => c[0]?.type === "order.placed");
+    expect(placed).toHaveLength(1);
   });
 
   it("rejects an anonymous caller", async () => {
@@ -639,6 +658,23 @@ describe("placeOrder — razorpay", () => {
         status: "created",
       },
     } as any);
+  });
+
+  it("★★ does NOT announce an unpaid gateway order — to anyone", async () => {
+    // The bug this exists for: a shopper reached the Razorpay modal, paid
+    // nothing, and both they and the merchant were emailed "New order ORD…
+    // ₹39.00 · Paid online". If they close the modal the reaper cancels and
+    // restocks that order 45 minutes later, so the confirmation described
+    // something that no longer existed. The order row is still written — it has
+    // to be, the gateway needs something to attach the payment to — but nothing
+    // is ANNOUNCED until markOrderPaid claims the pending → paid transition.
+    const res = await placeOrder(validForm, [oneItem()], null, "razorpay");
+    expect("error" in res && res.error).toBeFalsy();
+
+    const placed = vi
+      .mocked(emitEvent)
+      .mock.calls.filter((c: any[]) => c[0]?.type === "order.placed");
+    expect(placed).toHaveLength(0);
   });
 
   it("rejects an unknown payment method", async () => {

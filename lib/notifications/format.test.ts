@@ -40,8 +40,21 @@ describe("formatVariable", () => {
 
   it("turns payment enums into something a shopper would say", () => {
     expect(formatVariable("payment_method", "cod")).toBe("Cash on delivery");
-    expect(formatVariable("payment_method", "razorpay")).toBe("Paid online");
+    expect(formatVariable("payment_method", "razorpay")).toBe("Online payment");
     expect(formatVariable("payment_method", "upi")).toBe("UPI");
+  });
+
+  it("★★ a METHOD label never claims the money arrived", () => {
+    // `razorpay` read "Paid online" and `pos` read "Paid in store". This maps
+    // payment_METHOD — how an order is to be settled, not whether it has been —
+    // so a shopper who reached the gateway and paid nothing was emailed a
+    // confirmation whose payment line read "Paid online". Whether money arrived
+    // is payment_STATUS, which has its own vocabulary.
+    for (const method of ["razorpay", "pos", "cod", "pay_at_store"]) {
+      expect(formatVariable("payment_method", method)).not.toMatch(/paid/i);
+    }
+    // ...and the status map is where "paid" is allowed to appear.
+    expect(formatVariable("payment_status", "paid")).toMatch(/paid/i);
   });
 
   it("humanises an unknown enum instead of printing it raw", () => {

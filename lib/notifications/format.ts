@@ -40,12 +40,24 @@ const MONEY = new Set([
 ]);
 
 /** Values that are a database enum but read as jargon. */
+// ★★ A METHOD LABEL MUST NOT ASSERT A STATE.
+//
+// `razorpay` read "Paid online" and `pos` read "Paid in store" — but this maps
+// `payment_method`, which says HOW an order is to be settled, not whether it
+// has been. A shopper who reached the Razorpay modal and paid nothing got a
+// confirmation whose payment line said "Paid online", because the method was
+// razorpay from the moment the order row was written.
+//
+// Whether money arrived is `payment_status`, which has its own map below and
+// its own words. Keep the two vocabularies apart: "Cash on delivery" is safe
+// because it describes an arrangement, and "Paid online" was not because it
+// describes an event.
 const PAYMENT_METHODS: Record<string, string> = {
   cod: "Cash on delivery",
   cash_on_delivery: "Cash on delivery",
   pay_at_store: "Pay at store",
-  razorpay: "Paid online",
-  pos: "Paid in store",
+  razorpay: "Online payment",
+  pos: "In store",
   cash: "Cash",
   card: "Card",
   upi: "UPI",
