@@ -89,11 +89,13 @@ and RTO propagate to the order/customer timeline; the dashboard can ask for a
 re-attempt or return-to-origin. Credentials, raw events and carrier internals
 are service-only, while the shopper sees courier, AWB, tracking link and scans.
 
-**Deployment prerequisite:** run `supabase/logistics_01_shiprocket.sql`, set the
-existing `PAYMENT_CRED_KEY`, connect the merchant account, sync warehouses, and
-copy the generated provider-neutral URL/token into Shiprocket's webhook
-settings. The callback path deliberately omits Shiprocket's reserved provider
-keywords so its dashboard accepts the address.
+**Deployment state:** `supabase/logistics_01_shiprocket.sql` is enrolled in the
+checksummed migration ledger and applied to staging **and production**
+(2026-08-14). The remaining merchant setup is to set `PAYMENT_CRED_KEY`, connect
+the merchant account, sync warehouses, and copy the generated provider-neutral
+URL/token into Shiprocket's webhook settings. The callback path deliberately
+omits Shiprocket's reserved provider keywords so its dashboard accepts the
+address.
 
 **Added checkout layer:** `shipping_01_checkout_rates.sql` and Settings →
 Shipping & delivery let each merchant choose always-free, one fixed order rate,

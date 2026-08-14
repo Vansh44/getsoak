@@ -10,6 +10,31 @@ Push-to-deploy for both environments, driven by [`cloudbuild.yaml`](../cloudbuil
 Flow going forward: `f1` → merge to `staging` (auto-deploys staging, verify) →
 merge `staging` to `main` (auto-deploys prod).
 
+## Release gate: schema before application
+
+Cloud Build deploys application images; it does **not** own database DDL. A
+`staging` → `main` promotion is allowed only after the checksummed runner in
+[`drizzle/manual/README.md`](../drizzle/manual/README.md) is green.
+
+For a release containing migrations:
+
+1. On staging, run `baseline` once, then `apply` and `verify`. Exercise the
+   changed path against the deployed staging revision.
+2. Record the staging `schema_sha256` and the exact staging commit.
+3. Confirm an automated Cloud SQL backup and PITR are healthy. Run `status`
+   against production before taking the migration lock.
+4. Apply the same manifest to production **before** merging to `main`; the
+   runner requires `--environment production --confirm-production storemink`.
+5. Run production `verify`; its schema hash must equal staging's. Only then
+   merge the already-tested staging commit to `main`.
+6. Watch the `storemink-web-prod` Cloud Build to success, confirm the Cloud Run
+   revision carries that commit, and smoke-test the apex plus one tenant host.
+
+Application rollback is a Cloud Run revision rollback. Database migrations are
+forward-only by default: never drop the newly-added objects during an app
+rollback. A destructive migration needs its own reviewed restore/forward-fix
+runbook and a fresh backup immediately before execution.
+
 ---
 
 ## Why the first CI build failed

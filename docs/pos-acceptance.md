@@ -14,13 +14,13 @@ stories are here.**
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                                             | Why                                                                                        |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                            |
-| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                            |
-| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing |
-| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                   |
-| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Shiprocket credentials, fulfilment work and tracking events cannot exist otherwise         |
+| Prerequisite                                                                                             | Why                                                                                               |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                                   |
+| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                                   |
+| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
+| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                          |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
 are applied. `locations_10` is pending a `postgres` migration run; the three

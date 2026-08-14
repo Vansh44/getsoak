@@ -1,0 +1,365 @@
+#!/usr/bin/env node
+
+import { performance } from "node:perf_hooks";
+import nextEnv from "@next/env";
+import pg from "pg";
+import {
+  loadManifest,
+  migrationPlan,
+  parseCli,
+  sha256,
+  validateEnvironment,
+} from "./db-migrations-core.mjs";
+
+const { loadEnvConfig } = nextEnv;
+loadEnvConfig(process.cwd());
+
+const { Client } = pg;
+const LEDGER = "public.schema_migrations";
+const LOCK_NAME = "storemink:schema-migrations:v1";
+
+function connectionConfig() {
+  const host = process.env.DB_HOST;
+  const isSocket = host?.startsWith("/");
+  return {
+    host,
+    port: isSocket ? undefined : Number(process.env.DB_PORT ?? 5432),
+    user: process.env.DB_ADMIN_USER ?? process.env.DB_USER,
+    password: process.env.DB_ADMIN_PASSWORD ?? process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    ssl: false,
+    application_name: "storemink-db-migrate",
+  };
+}
+
+async function ledgerExists(client) {
+  const result = await client.query(
+    "select to_regclass('public.schema_migrations') is not null as exists",
+  );
+  return result.rows[0].exists;
+}
+
+async function createLedger(client) {
+  await client.query(`
+    create table if not exists ${LEDGER} (
+      id             text primary key,
+      checksum       text not null check (checksum ~ '^[0-9a-f]{64}$'),
+      source          text not null,
+      environment     text not null check (environment in ('local', 'staging', 'production')),
+      app_commit      text,
+      applied_by      text not null default current_user,
+      execution_ms    integer not null default 0 check (execution_ms >= 0),
+      applied_at      timestamptz not null default clock_timestamp()
+    )
+  `);
+  await client.query(`revoke all on ${LEDGER} from public`);
+}
+
+async function appliedRows(client) {
+  if (!(await ledgerExists(client))) return [];
+  const result = await client.query(
+    `select id, checksum, source, environment, app_commit, applied_by,
+            execution_ms, applied_at
+       from ${LEDGER}
+      order by applied_at, id`,
+  );
+  return result.rows;
+}
+
+async function verifyContract(client, verify, context) {
+  const missing = [];
+  for (const table of verify.tables ?? []) {
+    const result = await client.query("select to_regclass($1) as object", [
+      `public.${table}`,
+    ]);
+    if (!result.rows[0].object) missing.push(`table public.${table}`);
+  }
+  for (const value of verify.columns ?? []) {
+    const [table, column] = value.split(".");
+    const result = await client.query(
+      `select 1
+         from information_schema.columns
+        where table_schema = 'public' and table_name = $1 and column_name = $2`,
+      [table, column],
+    );
+    if (result.rowCount === 0) missing.push(`column public.${value}`);
+  }
+  for (const constraint of verify.constraints ?? []) {
+    const result = await client.query(
+      `select 1
+         from pg_constraint c
+         join pg_namespace n on n.oid = c.connamespace
+        where n.nspname = 'public' and c.conname = $1`,
+      [constraint],
+    );
+    if (result.rowCount === 0) missing.push(`constraint ${constraint}`);
+  }
+  for (const table of verify.rlsTables ?? []) {
+    const result = await client.query(
+      `select c.relrowsecurity
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relname = $1`,
+      [table],
+    );
+    if (!result.rows[0]?.relrowsecurity) missing.push(`RLS on public.${table}`);
+  }
+  for (const fn of verify.functions ?? []) {
+    const result = await client.query("select to_regprocedure($1) as object", [
+      `public.${fn}`,
+    ]);
+    if (!result.rows[0].object) missing.push(`function public.${fn}`);
+  }
+  for (const check of verify.queries ?? []) {
+    const result = await client.query(check.sql);
+    const actual = result.rows[0]?.[Object.keys(result.rows[0] ?? {})[0]];
+    if (actual !== check.equals) {
+      missing.push(
+        `check ${check.name} (expected ${JSON.stringify(check.equals)}, got ${JSON.stringify(actual)})`,
+      );
+    }
+  }
+  if (missing.length) {
+    throw new Error(
+      `${context} verification failed:\n- ${missing.join("\n- ")}`,
+    );
+  }
+}
+
+async function schemaFingerprint(client) {
+  const result = await client.query(`
+    with objects as (
+      select 'relation' as kind, c.relname as name,
+             concat_ws('|', c.relkind, c.relrowsecurity, c.relforcerowsecurity) as definition
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relkind in ('r', 'p', 'v', 'm', 'S')
+         and c.relname <> 'schema_migrations'
+      union all
+      select 'column', c.relname || '.' || a.attname,
+             concat_ws('|', pg_catalog.format_type(a.atttypid, a.atttypmod),
+                       a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), ''),
+                       a.attidentity, a.attgenerated)
+        from pg_attribute a
+        join pg_class c on c.oid = a.attrelid
+        join pg_namespace n on n.oid = c.relnamespace
+        left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+       where n.nspname = 'public' and a.attnum > 0 and not a.attisdropped
+         and c.relname <> 'schema_migrations'
+      union all
+      select 'constraint', c.conname,
+             rel.relname || '|' || pg_get_constraintdef(c.oid, true)
+        from pg_constraint c
+        join pg_namespace n on n.oid = c.connamespace
+        left join pg_class rel on rel.oid = c.conrelid
+       where n.nspname = 'public' and coalesce(rel.relname, '') <> 'schema_migrations'
+      union all
+      select 'index', indexname, tablename || '|' || indexdef
+        from pg_indexes
+       where schemaname = 'public' and tablename <> 'schema_migrations'
+      union all
+      select 'policy', tablename || '.' || policyname,
+             concat_ws('|', permissive, roles::text, cmd, coalesce(qual, ''), coalesce(with_check, ''))
+        from pg_policies where schemaname = 'public'
+      union all
+      select 'trigger', event_object_table || '.' || trigger_name,
+             concat_ws('|', event_manipulation, action_timing, action_orientation, action_statement)
+        from information_schema.triggers where trigger_schema = 'public'
+      union all
+      select 'function', p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+             pg_get_functiondef(p.oid)
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+    )
+    select kind, name, definition from objects order by kind, name, definition
+  `);
+  return sha256(JSON.stringify(result.rows));
+}
+
+function assertHealthyPlan(plan, allowPending = false) {
+  if (plan.unknown.length) {
+    throw new Error(
+      `Ledger contains unknown migrations: ${plan.unknown.map((row) => row.id).join(", ")}`,
+    );
+  }
+  if (plan.drifted.length) {
+    throw new Error(
+      `Applied migration checksum drift: ${plan.drifted.map((row) => row.id).join(", ")}`,
+    );
+  }
+  if (!allowPending && plan.pending.length) {
+    throw new Error(
+      `Pending migrations: ${plan.pending.map((migration) => migration.id).join(", ")}`,
+    );
+  }
+}
+
+function printStatus(database, environment, manifest, rows, plan, fingerprint) {
+  console.log(`database=${database}`);
+  console.log(`environment=${environment}`);
+  console.log(`baseline=${plan.baselineApplied ? "applied" : "missing"}`);
+  console.log(`applied=${rows.length}`);
+  console.log(`pending=${plan.pending.length}`);
+  for (const migration of plan.pending)
+    console.log(`  pending ${migration.id}`);
+  console.log(`checksum_drift=${plan.drifted.length}`);
+  for (const drift of plan.drifted) console.log(`  drift ${drift.id}`);
+  console.log(`unknown=${plan.unknown.length}`);
+  for (const row of plan.unknown) console.log(`  unknown ${row.id}`);
+  console.log(`schema_sha256=${fingerprint}`);
+  console.log(`manifest=${manifest.path}`);
+}
+
+async function main() {
+  const options = parseCli(process.argv.slice(2));
+  const manifest = await loadManifest(options.manifest);
+  const mutating =
+    options.command === "baseline" || options.command === "apply";
+  const client = new Client(connectionConfig());
+  await client.connect();
+  try {
+    const identity = await client.query(
+      "select current_database() as database, current_user as user",
+    );
+    const { database, user } = identity.rows[0];
+    const guard = validateEnvironment(options.environment, database, mutating);
+    if (
+      guard.needsProductionConfirmation &&
+      options["confirm-production"] !== database
+    ) {
+      throw new Error(
+        `Production mutation requires --confirm-production ${database}`,
+      );
+    }
+
+    if (mutating) {
+      await client.query("select pg_advisory_lock(hashtext($1))", [LOCK_NAME]);
+      await createLedger(client);
+    }
+
+    if (options.command === "baseline") {
+      await verifyContract(client, manifest.baseline.verify, "baseline");
+      const existing = await appliedRows(client);
+      const plan = migrationPlan(manifest, existing);
+      if (plan.baselineApplied) {
+        assertHealthyPlan(plan, true);
+        console.log(`Baseline already recorded on ${database}.`);
+      } else {
+        await client.query("begin");
+        try {
+          await client.query(
+            `insert into ${LEDGER}
+               (id, checksum, source, environment, app_commit, applied_by)
+             values ($1, $2, $3, $4, $5, $6)`,
+            [
+              manifest.baseline.id,
+              manifest.baseline.checksum,
+              "manifest:baseline",
+              options.environment,
+              options.commit ?? process.env.GIT_COMMIT ?? null,
+              user,
+            ],
+          );
+          await client.query("commit");
+        } catch (error) {
+          await client.query("rollback");
+          throw error;
+        }
+        console.log(`Recorded verified baseline on ${database}.`);
+      }
+    }
+
+    if (options.command === "apply") {
+      let rows = await appliedRows(client);
+      let plan = migrationPlan(manifest, rows);
+      assertHealthyPlan(plan, true);
+      if (!plan.baselineApplied) {
+        throw new Error("Baseline is missing; run the baseline command first");
+      }
+      for (const migration of plan.pending) {
+        for (const required of migration.requires) {
+          if (!rows.some((row) => row.id === required)) {
+            throw new Error(`${migration.id} requires ${required}`);
+          }
+        }
+        const started = performance.now();
+        await client.query("begin");
+        try {
+          await client.query(migration.sql);
+          await verifyContract(
+            client,
+            migration.verify,
+            `migration ${migration.id}`,
+          );
+          await client.query(
+            `insert into ${LEDGER}
+               (id, checksum, source, environment, app_commit, applied_by, execution_ms)
+             values ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              migration.id,
+              migration.checksum,
+              migration.file,
+              options.environment,
+              options.commit ?? process.env.GIT_COMMIT ?? null,
+              user,
+              Math.max(0, Math.round(performance.now() - started)),
+            ],
+          );
+          await client.query("commit");
+          console.log(`Applied ${migration.id}.`);
+        } catch (error) {
+          await client.query("rollback");
+          throw error;
+        }
+        rows = await appliedRows(client);
+        plan = migrationPlan(manifest, rows);
+        assertHealthyPlan(plan, true);
+      }
+    }
+
+    const rows = await appliedRows(client);
+    const plan = migrationPlan(manifest, rows);
+    if (plan.baselineApplied) {
+      await verifyContract(client, manifest.baseline.verify, "baseline");
+    }
+    for (const migration of manifest.migrations) {
+      if (rows.some((row) => row.id === migration.id)) {
+        await verifyContract(
+          client,
+          migration.verify,
+          `migration ${migration.id}`,
+        );
+      }
+    }
+    const fingerprint = await schemaFingerprint(client);
+    printStatus(
+      database,
+      options.environment,
+      manifest,
+      rows,
+      plan,
+      fingerprint,
+    );
+    if (options.command === "verify") {
+      if (!plan.baselineApplied) throw new Error("Baseline is missing");
+      assertHealthyPlan(plan);
+      console.log("Migration verification passed.");
+    } else if (options.command === "status") {
+      assertHealthyPlan(plan, true);
+    }
+  } finally {
+    if (mutating) {
+      await client
+        .query("select pg_advisory_unlock(hashtext($1))", [LOCK_NAME])
+        .catch(() => {});
+    }
+    await client.end();
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

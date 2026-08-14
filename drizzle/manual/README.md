@@ -33,3 +33,48 @@ So the drizzle-kit baseline is kept ONLY as drizzle-kit's snapshot for generatin
 Schema changes that drizzle-kit can't express (functions, triggers, policies) are
 added as new hand-written `drizzle/manual/NNNN_*.sql` files and folded into
 `0001`/an addendum.
+
+## Existing databases: the checksummed migration ledger
+
+The three files above are only the legacy **fresh-database baseline**. Existing
+staging and production databases must never be advanced with ad-hoc `psql -f`
+commands again. They use [`../migrations/manifest.json`](../migrations/manifest.json)
+and `npm run db:migrate` instead.
+
+The runner:
+
+- refuses a staging/production name that does not match the physical database;
+- verifies the legacy schema before recording its baseline;
+- takes a database advisory lock, then applies each migration in one transaction;
+- stores the SHA-256 of the SQL **and its postcondition contract** in
+  `public.schema_migrations`;
+- refuses edited, unknown, partially-applied, or out-of-order migrations; and
+- prints a hash of the complete public schema (tables, columns, constraints,
+  indexes, policies, triggers, and functions) for staging/prod drift comparison.
+
+Run through the Cloud SQL Auth Proxy as `postgres`. Put the admin password in
+`DB_ADMIN_PASSWORD` using a silent prompt; never put it in shell history:
+
+```bash
+export DB_ADMIN_USER=postgres
+read -s DB_ADMIN_PASSWORD && export DB_ADMIN_PASSWORD
+
+# DB_NAME is the final guard: storemink_staging for staging, storemink for prod.
+npm run db:migrate -- status --environment staging
+npm run db:migrate -- baseline --environment staging --commit "$(git rev-parse HEAD)"
+npm run db:migrate -- apply --environment staging --commit "$(git rev-parse HEAD)"
+npm run db:migrate -- verify --environment staging
+```
+
+Production mutations require a second explicit guard:
+
+```bash
+DB_NAME=storemink npm run db:migrate -- apply --environment production \
+  --confirm-production storemink --commit "$(git rev-parse HEAD)"
+```
+
+The first enrolled migration is `supabase/logistics_01_shiprocket.sql`. Although
+it retains its historical location, it is immutable now: editing it will make
+verification fail anywhere it has been applied. Every new schema change gets a
+new SQL file plus a manifest entry and postconditions; never edit an enrolled
+file.
