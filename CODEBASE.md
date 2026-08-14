@@ -1938,6 +1938,23 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     redacted; RFC-reserved example domains and `.test`/`.invalid`/`.localhost`
     dummy domains skip Resend and put the code in that operator-gated log under
     the separate `signup_test_otp` mailer.
+    **★ WITH NO `RESEND_API_KEY` THE STEP WAS AN UNPASSABLE DEAD END.**
+    `sendEmail` skips when the key is absent, so the delivery reported
+    `sent: false` and the action refused — and the code cookie is only set on a
+    delivery that landed, so even a known code could not be verified. That is
+    every local dev environment (`.env` carries no Resend key; staging and prod
+    take it from Secret Manager), i.e. signup was untestable locally on its
+    FIRST stage. `sendSignupOtpEmail` now prints the code to the server console
+    and returns `devConsoleOnly`, which the action treats as "it reached
+    somewhere readable" and issues the cookie for; the wizard says so in an
+    amber banner rather than reusing the reserved-address one, which names the
+    operator log and would be a lie. Mirrors `lib/pos/staff-email.ts`, whose
+    invite links have always had this fallback — **but gated to
+    NON-production**, which that one is not: staging and prod both run
+    `NODE_ENV=production` with the key wired, so this can only fire locally, and
+    a deployed environment that ever lost the key must fail loudly rather than
+    mint live codes into Cloud Logging while telling the merchant it emailed
+    them. Both directions are tested.
     The Terms/Privacy/AUP checkbox still gates Google and password signup, but
     the buttons stay interactive so a click explains the requirement instead of
     looking like a broken OAuth control. - **Google**:

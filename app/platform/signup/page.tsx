@@ -198,6 +198,7 @@ export default function SignupPage() {
   const [emailCode, setEmailCode] = useState("");
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [operatorLogOnly, setOperatorLogOnly] = useState(false);
+  const [devConsoleOnly, setDevConsoleOnly] = useState(false);
 
   // Phone
   const [phone, setPhone] = useState<string | undefined>("");
@@ -402,6 +403,7 @@ export default function SignupPage() {
     }
     setEmailCodeSent(otp.ok);
     setOperatorLogOnly(otp.operatorLogOnly === true);
+    setDevConsoleOnly(otp.devConsoleOnly === true);
     setStep("email-code");
     if (otp.error) setError(otp.error);
   }
@@ -421,6 +423,7 @@ export default function SignupPage() {
     }
     setEmailCodeSent(true);
     setOperatorLogOnly(result.operatorLogOnly === true);
+    setDevConsoleOnly(result.devConsoleOnly === true);
   }
 
   async function handleVerifyEmailOtp() {
@@ -879,6 +882,13 @@ export default function SignupPage() {
                 <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800">
                   This is a reserved test address, so no email was sent. The
                   code is available in Operator dashboard → Email logs.
+                </div>
+              )}
+
+              {devConsoleOnly && (
+                <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Email isn&apos;t configured in this environment, so nothing
+                  was sent. The code is printed in your dev server terminal.
                 </div>
               )}
 

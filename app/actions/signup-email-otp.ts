@@ -91,6 +91,7 @@ export async function requestSignupEmailOtp(): Promise<{
   ok: boolean;
   alreadyVerified?: boolean;
   operatorLogOnly?: boolean;
+  devConsoleOnly?: boolean;
   error?: string;
 }> {
   const user = await getServerUser();
@@ -115,7 +116,15 @@ export async function requestSignupEmailOtp(): Promise<{
   try {
     code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const delivery = await sendSignupOtpEmail(email, code);
-    if (!delivery.sent && !delivery.operatorLogOnly) {
+    // The code has to have reached SOMEWHERE the person can read it: an inbox,
+    // the operator log (dummy address), or the dev console (no mail provider).
+    // Anything else and issuing the cookie would strand them on a step they
+    // could never pass.
+    if (
+      !delivery.sent &&
+      !delivery.operatorLogOnly &&
+      !delivery.devConsoleOnly
+    ) {
       return {
         ok: false,
         error: "We couldn't send the verification email. Please try again.",
@@ -137,6 +146,7 @@ export async function requestSignupEmailOtp(): Promise<{
     return {
       ok: true,
       operatorLogOnly: delivery.operatorLogOnly,
+      ...(delivery.devConsoleOnly ? { devConsoleOnly: true } : {}),
     };
   } catch (error) {
     console.error("requestSignupEmailOtp:", error);

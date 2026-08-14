@@ -88,6 +88,37 @@ describe("requestSignupEmailOtp", () => {
     expect(jar.get("sm_signup_email_otp")).toBeTruthy();
   });
 
+  it("issues the cookie when the code only reached the dev console", async () => {
+    sendSignupOtpEmail.mockImplementation(async (_e: string, code: string) => {
+      sentCode = code;
+      return { sent: false, operatorLogOnly: false, devConsoleOnly: true };
+    });
+
+    const result = await requestSignupEmailOtp();
+
+    expect(result).toEqual({
+      ok: true,
+      operatorLogOnly: false,
+      devConsoleOnly: true,
+    });
+    // The whole point: without the cookie the verify step is unpassable.
+    expect(jar.get("sm_signup_email_otp")).toBeTruthy();
+    expect(await verifySignupEmailOtp(sentCode)).toEqual({ ok: true });
+  });
+
+  it("refuses when the code reached nowhere the person can read it", async () => {
+    sendSignupOtpEmail.mockImplementation(async () => ({
+      sent: false,
+      operatorLogOnly: false,
+      devConsoleOnly: false,
+    }));
+
+    const result = await requestSignupEmailOtp();
+
+    expect(result.ok).toBe(false);
+    expect(jar.get("sm_signup_email_otp")).toBeUndefined();
+  });
+
   it("does not issue a second code for an already verified email", async () => {
     getServerUser.mockResolvedValue({ ...USER, emailConfirmed: true });
 
