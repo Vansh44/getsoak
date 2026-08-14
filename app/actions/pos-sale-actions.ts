@@ -29,6 +29,12 @@ import {
   sql,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import {
+  sendPosReceipt,
+  shouldSendDirectReceipt,
+} from "@/lib/email/pos-receipt";
+import { TENDER_LABEL } from "@/lib/pos/receipt";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
@@ -756,6 +762,9 @@ export async function placePosSale(
   tenders: PosTender[],
   opts: {
     customerId?: string | null;
+    /** Where to email a copy of the receipt. Optional — a walk-in who wants
+     *  nothing is the normal case, and asking must never gate a sale. */
+    receiptEmail?: string | null;
     customerGstin?: string | null;
     orderDiscount?: number;
     /** A manager's approval, as minted by `verifyManagerPin` for THIS cart.
@@ -815,12 +824,17 @@ export async function placePosSale(
   // store's customer — who would then see a foreign order in their history
   // (customers hold RLS SELECT on their own orders).
   let customerId: string | null = null;
+  // Read in the SAME query as the ownership check, because the receipt decision
+  // below needs it: an attached customer WITH an address already gets an order
+  // confirmation from the fan-out, and sending a second copy directly is the
+  // two-emails-for-one-action pattern (§24).
+  let customerEmail: string | null = null;
   if (typeof opts.customerId === "string" && opts.customerId.trim()) {
     const wanted = opts.customerId.trim();
     try {
       const owned = await withService((db) =>
         db
-          .select({ id: users.id })
+          .select({ id: users.id, email: users.email })
           .from(users)
           .where(and(eq(users.id, wanted), eq(users.storeId, op.storeId)))
           .limit(1),
@@ -828,6 +842,7 @@ export async function placePosSale(
       if (owned.length === 0)
         return { error: "That customer isn't in this store." };
       customerId = owned[0].id;
+      customerEmail = owned[0].email ?? null;
     } catch (err) {
       return { error: dbErrorMessage(err, "Couldn't verify the customer.") };
     }
@@ -1332,6 +1347,48 @@ export async function placePosSale(
     })),
   );
 
+  // ★ A COPY IN THEIR INBOX, WHEN NOTHING ELSE WILL SEND ONE.
+  // Deferred like emitEvent: a Resend round-trip has no business sitting on the
+  // path between a customer paying and the till showing the change due. It
+  // never throws, so a mail failure cannot cost a sale that has already taken
+  // money and moved stock.
+  const receiptTo = normalizeReceiptEmail(opts.receiptEmail);
+  if (
+    shouldSendDirectReceipt({
+      receiptEmail: receiptTo,
+      customerId,
+      customerEmail,
+    })
+  ) {
+    after(() =>
+      sendPosReceipt({
+        storeId: op.storeId,
+        to: receiptTo as string,
+        orderRef,
+        // The shop is deliberately absent: `op` carries a locationId, not a
+        // name, and a query for one line of copy is not worth a round trip on
+        // the sale path.
+        summary: {
+          currency: "INR",
+          items: priced.map((l) => ({
+            name: l.name,
+            variant: l.variant_name,
+            quantity: l.quantity,
+            total: l.amount,
+          })),
+          subtotal: totals.subtotal,
+          discount: totals.discount,
+          tax: totals.tax,
+          total: totals.total,
+        },
+        // The SAME map the thermal receipt prints from, so the paper in their
+        // hand and the copy in their inbox use identical words.
+        tenderLabels: tenders.map((t) => TENDER_LABEL[t.method] ?? t.method),
+        changeDue,
+      }),
+    );
+  }
+
   revalidatePath("/dashboard/orders");
   return {
     success: true,
@@ -1606,4 +1663,18 @@ export async function listPosSales(
   } catch (err) {
     return { sales: [], error: dbErrorMessage(err, "Couldn't load sales.") };
   }
+}
+
+/**
+ * A receipt address, or null.
+ *
+ * ★ A BAD ADDRESS IS DROPPED, NOT REFUSED. This runs AFTER the money is taken
+ * and the stock is moved; failing the sale over a typo in an OPTIONAL field
+ * would be the worst possible trade (roadmap invariant 6). The till validates
+ * before submitting, so a rejection here would be a second opinion nobody sees.
+ */
+function normalizeReceiptEmail(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim().toLowerCase().slice(0, 160);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : null;
 }

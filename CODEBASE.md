@@ -5368,8 +5368,34 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       emits `order.placed`, and the fan-out resolves a customer's address from
       their `users` row — so recording a walk-in WITH an email gets them an
       in-store order confirmation through the existing machinery, with no new
-      code. Contact captured at the TENDER panel for someone with no record at
-      all (Shopify's receipt options) is the piece still missing.
+      code.
+    - **★★ AND ONE WITH NO RECORD AT ALL GETS ONE TOO** (`lib/email/pos-receipt.ts`,
+      Shopify's receipt options). An optional email box on the tender panel.
+      **It does NOT go through the notification spine**, deliberately: the spine
+      routes an EVENT to IDENTIFIED recipients honouring preferences and
+      digests, and a walk-in has no identity — no `users` row, so no inbox for
+      an in-app row, no preferences, no digest. Forcing it through would mean
+      inventing a recipient id for someone who can never read the notification
+      it creates. It is still a `sendEmail` call, so it lands in `email_logs`
+      like everything else and `send-coverage.test.ts` stays satisfied.
+      - **★ ONE RECEIPT, NEVER TWO.** `shouldSendDirectReceipt` (pure) fires
+        only where the fan-out will not — no attached customer, or an attached
+        customer with no address on file. `placePosSale` reads that address in
+        the SAME query as the ownership check, so it costs no extra round trip.
+      - **★ NEVER GATED ON, AND NEVER GATING.** A bad address is dropped, not
+        refused: this runs after the money is taken and the stock has moved, so
+        failing a sale over a typo in an optional field is the worst available
+        trade (invariant 6). Deferred with `after()` and never throws.
+      - **★ FROM THE STORE'S OWN SENDING DOMAIN** (`fromAddress`), not a
+        hardcoded one — a merchant on a custom domain would otherwise send from
+        an address Resend has no permission for and every receipt would bounce.
+      - **★ THE FIELD IS OPT-IN VIA ITS HANDLER**, so the collection counter —
+        which shares `TenderPanel` — is untouched: that order was placed online
+        and already carries an address.
+      - ⚠ **Not stored on the order.** `email_logs` is the record of what was
+        sent and to whom, and the subject carries the order ref. A future
+        "resend receipt" button would want `orders.receipt_email`; nothing needs
+        it yet.
     - **★ THE PHONE COMES FROM THE VERIFIED AUTH IDENTITY, NEVER A FORM.** That
       is the entire security boundary: a form-supplied phone would let anyone
       type a stranger's number and inherit their in-store order history.

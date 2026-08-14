@@ -573,24 +573,38 @@ history; a thrown one would cost the shopper their signup.
 file. The typed query seeds whichever field it looks like. `sell`, not a manager
 grant: recording who bought something is part of ringing up a sale.
 
-**⚠ STILL TO DO — receipt contact.** The tender panel needs an optional email
-field feeding the existing notification machinery, so a walk-in gets an emailed
-receipt with no account. SMS waits for Step 5.
+**SHIPPED — receipt contact.** An optional email box on the tender panel
+(`lib/email/pos-receipt.ts`). It deliberately does NOT feed the notification
+spine: that routes an EVENT to IDENTIFIED recipients honouring preferences and
+digests, and a walk-in has no identity — no `users` row, so no inbox, no
+preferences, no digest. It is still a `sendEmail` call, so it lands in
+`email_logs` and the CI send-coverage guard stays satisfied.
+`shouldSendDirectReceipt` (pure) keeps it to exactly ONE receipt: it fires only
+where the fan-out will not — no attached customer, or one with no address on
+file, read in the same query as the ownership check. A bad address is dropped
+rather than refused, because this runs after the money is taken. SMS waits for
+Step 5.
 
-**Acceptance:** PS-C.25–C.34 — **written, not yet exercised in a browser.**
-96 unit tests cover the pure rules, the claim statement, the action and the
-signup ordering; nobody has yet rung up a walk-in on a real till.
+**Acceptance:** PS-C.25–C.43 — **written, not yet exercised in a browser.**
+117 unit tests cover the pure rules, the claim statement, the actions, the
+signup ordering and the receipt; nobody has yet rung up a walk-in on a real
+till.
 
 ---
 
 ## Step 5 — Receipts
 
-Email receipts for POS sales (Step 4 captures the address), then WhatsApp/SMS via
-Twilio behind the existing channel abstraction — `sms` and `whatsapp` are already
-declared and `available: false` in `lib/notifications/channels.ts`. Unlocking
-them is the work; the fan-out, the queue and the templates exist.
+**Email is DONE** — it shipped with Step 4, because capturing an address that
+nothing sends to would be a field promising a receipt that never arrives.
 
-**Effort: 3–4 days** for email, **~1 week** for Twilio.
+What is left is WhatsApp/SMS via Twilio behind the existing channel abstraction —
+`sms` and `whatsapp` are already declared and `available: false` in
+`lib/notifications/channels.ts`. Unlocking them is the work; the fan-out, the
+queue and the templates exist. ⚠ Unlike email, these DO belong in the spine: a
+phone number identifies a customer row the till has already created (§36), so
+there is a recipient to route to.
+
+**Effort: ~1 week** for Twilio.
 
 ---
 
