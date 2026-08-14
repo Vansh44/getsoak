@@ -424,7 +424,9 @@ wholesip/
 │   │   │                      # internal); customer wording derives from `kind`
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
-│   │   │                      # activity feed, preference get/save, pruneNotifications.
+│   │   │                      # activity feed, preference get/save and delivery retry.
+│   │   │                      # Tested across recipient/host scoping, permissions,
+│   │   │                      # validation, writes, email safety and dead-letter recovery.
 │   │   │                      # Scope = HOST-derived (store, or platform when
 │   │   │                      # storemink.com) — never getCurrentStoreId()'s fallback.
 │   │   ├── address-actions.ts # ★ Customer saved-address book (own-row RLS, tested):
