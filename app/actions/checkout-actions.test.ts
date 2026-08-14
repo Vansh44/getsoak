@@ -962,4 +962,26 @@ describe("placeOrder — store credit", () => {
     expect(spendCredit).not.toHaveBeenCalled();
     expect(reinstateCreditForOrder).not.toHaveBeenCalled();
   });
+
+  it("★★ a failed stamp GIVES THE CREDIT BACK rather than leaving the order lying", async () => {
+    // `store_credit_used` is not bookkeeping — `refundableAmount` subtracts it
+    // to work out how much MONEY the order actually took. Spending the balance
+    // while the column stays 0 makes the order read as fully paid in money, so
+    // a later cash or manual refund hands back credit the store never received.
+    // There is no gateway backstop on those methods.
+    seedWithCredit(50);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+      failUpdateFor: [orders],
+    });
+
+    const res = await placeOrder(validForm, [oneItem()]);
+
+    // The sale still completes — never refuse a sale over an optional feature.
+    expect("error" in res && res.error).toBeFalsy();
+    // And the balance goes straight back, so ledger and order agree.
+    expect(reinstateCreditForOrder).toHaveBeenCalledWith(STORE, "order-1");
+  });
 });

@@ -105,7 +105,35 @@ export function settleTenders(
       error: `The payment doesn't cover the total of ₹${total.toLocaleString("en-IN")}.`,
     };
   }
+
+  // ★★ A NON-CASH TENDER MAY NEVER EXCEED THE TOTAL. Cash is the only
+  // instrument that can be over-handed, because it is the only one the customer
+  // physically hands over in fixed denominations — a card or a UPI transfer is
+  // charged for an amount somebody TYPED, so an amount above the total is
+  // either a slip or a way to take money out of the drawer.
+  //
+  // ⚠ This used to be guarded only by "change requires a cash tender", which
+  // reads as the same rule and is not: adding a ₹1 cash tender satisfied it, so
+  // `card ₹100,000 + cash ₹50` on a ₹100 sale was ACCEPTED and returned ₹99,950
+  // of change. That is the card-cash-out fraud in one screen — the drawer really
+  // is down ₹99,950, the books say a ₹100,000 card payment arrived, and shift
+  // reconciliation BALANCES, because expected cash was computed from the same
+  // bad tender. Nothing downstream would ever have flagged it.
+  const nonCash = tenders
+    .filter((t) => t.method !== "cash")
+    .reduce((s, t) => s + (t.amount || 0), 0);
+  if (nonCash > 0 && changeDue(nonCash, total) > 0) {
+    return {
+      error: `A card or UPI payment can't be more than the ₹${total.toLocaleString("en-IN")} owed.`,
+    };
+  }
+
   const change = changeDue(paid, total);
+  // ⚠ UNREACHABLE BY CONSTRUCTION while the rule above holds — with no cash
+  // tender, `paid` IS `nonCash`, which has just been bounded by `total`, so
+  // there is no change to give. Kept as a backstop for the day somebody relaxes
+  // the rule above, and pinned by a test that asserts the message a cashier now
+  // gets instead. Do not read its presence as evidence the case can happen.
   if (change > 0 && !tenders.some((t) => t.method === "cash")) {
     return { error: "Only a cash payment can produce change." };
   }

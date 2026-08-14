@@ -258,9 +258,28 @@ describe("placePosSale — pricing is server-authoritative", () => {
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
-  it("refuses change on a non-cash overpayment", async () => {
+  it("refuses a non-cash overpayment", async () => {
+    // ★ The message changed when the overpayment rule landed: this used to be
+    // caught by "only a cash payment can produce change", which is true and
+    // tells a cashier nothing about the figure they mistyped. The refusal is
+    // what matters, so that is what is asserted.
     const r = await placePosSale([line], [{ method: "card", amount: 500 }]);
-    expect(r.error).toMatch(/only a cash payment/i);
+    expect(r.error).toMatch(/can't be more than/i);
+  });
+
+  it("★★ refuses a card overpayment PROPPED UP by a token cash tender", async () => {
+    // The hole this rule closes: a ₹1 cash tender satisfied the old
+    // change-needs-cash check, so an arbitrary card amount was accepted and the
+    // difference left the drawer as change.
+    const r = await placePosSale(
+      [line],
+      [
+        { method: "cash", amount: 1, tendered: 1 },
+        { method: "card", amount: 100_000 },
+      ],
+    );
+    expect(r.error).toMatch(/can't be more than/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("records split tenders as separate rows", async () => {

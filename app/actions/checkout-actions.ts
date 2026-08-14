@@ -33,6 +33,7 @@ import {
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { emitEvent } from "@/lib/notifications/record";
+import { logError } from "@/lib/observability/logger";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { resolveFulfilmentLocation } from "@/lib/fulfilment/resolve";
 import { isPaymentMethodAllowed } from "@/lib/fulfilment/payment-policy";
@@ -1449,13 +1450,46 @@ export async function placeOrder(
         note: `Order ${order.id}`,
       });
       if (spent) {
-        creditApplied = split.applied;
-        await withService((db) =>
+        // ★★ THE STAMP IS NOT BOOKKEEPING — IT IS THE REFUND CAP.
+        // `refundableAmount` subtracts `store_credit_used` to work out how much
+        // MONEY an order actually took, because a ₹500 order settled with ₹200
+        // of credit only ever charged ₹300 (§29 — credit is a payment, not a
+        // discount). If the balance moves and this column does not, the order
+        // reads as having been paid ₹500 in money, and a later refund can hand
+        // back ₹200 the store never received. Cash and manual refunds have no
+        // gateway backstop to catch that.
+        //
+        // So a failed stamp FAILS CLOSED: the credit goes straight back and the
+        // sale proceeds at the full amount. The customer keeps their balance and
+        // pays normally, which is the same outcome as `spendCredit` returning
+        // false a moment earlier — never a refused sale (invariant 6), and never
+        // an order whose record disagrees with the ledger.
+        const stamped = await withService((db) =>
           db
             .update(orders)
-            .set({ storeCreditUsed: creditApplied })
+            .set({ storeCreditUsed: split.applied })
             .where(eq(orders.id, order.id)),
-        ).catch((err) => console.error("credit stamp:", errMsg(err)));
+        )
+          .then(() => true)
+          .catch((err) => {
+            console.error("credit stamp:", errMsg(err));
+            return false;
+          });
+
+        if (stamped) {
+          creditApplied = split.applied;
+        } else {
+          await reinstateCreditForOrder(storeId, order.id).catch((err) =>
+            // Both writes failed. `creditApplied` stays 0, so the customer is
+            // charged in full and is not double-charged; the balance is
+            // recoverable from the ledger, which is why this is logged loudly
+            // rather than retried in a loop at a checkout.
+            logError("checkout.credit_reinstate_failed", err, {
+              storeId,
+              orderId: order.id,
+            }),
+          );
+        }
       }
     }
   }
@@ -1799,6 +1833,9 @@ async function loadOwnRazorpayOrder(
         payment_method: orders.paymentMethod,
         payment_status: orders.paymentStatus,
         razorpay_order_id: orders.razorpayOrderId,
+        total: orders.total,
+        // What credit settled — the gateway was only ever asked for the rest.
+        store_credit_used: orders.storeCreditUsed,
       })
       .from(orders)
       .where(
@@ -1815,6 +1852,8 @@ async function loadOwnRazorpayOrder(
     payment_method: string;
     payment_status: string;
     razorpay_order_id: string | null;
+    total: number | string | null;
+    store_credit_used: number | string | null;
   } | null;
 }
 
@@ -1973,6 +2012,38 @@ export async function reconcileMyOrderPayment(
 
   const captured = capturedPayment(payments.data);
   if (!captured) return { success: true, paid: false };
+
+  // ★ The order is marked paid EITHER WAY — money arrived, and refusing to
+  // record it is the one outcome with no recovery. But an amount that differs
+  // from what we asked for is worth knowing about: `rzpCreateOrder` never sets
+  // `partial_payment`, so with the current gateway configuration this cannot
+  // happen, and that is exactly why it must be noisy if it ever does rather
+  // than silently underwriting an order. `lib/billing/reconcile.ts` makes the
+  // same check against its own attempts and raises a reconciliation item; there
+  // is no equivalent queue for shopper orders, so this logs.
+  // ★ What the GATEWAY was asked for, which is the total LESS anything store
+  // credit settled (§29) — comparing against `orders.total` would report a
+  // mismatch on every credit-assisted order.
+  const expectedPaise = Math.round(
+    (Number(order.total ?? 0) - Number(order.store_credit_used ?? 0)) * 100,
+  );
+  if (
+    typeof captured.amount === "number" &&
+    expectedPaise > 0 &&
+    captured.amount !== expectedPaise
+  ) {
+    logError(
+      "checkout.payment_amount_mismatch",
+      new Error("captured amount differs from the order total"),
+      {
+        orderId,
+        storeId,
+        expectedPaise,
+        capturedPaise: captured.amount,
+        paymentId: captured.id,
+      },
+    );
+  }
 
   await markOrderPaid(orderId, captured.id);
   return { success: true, paid: true };
