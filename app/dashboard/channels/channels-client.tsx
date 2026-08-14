@@ -12,6 +12,7 @@ import {
   X,
   Search,
   Truck,
+  MessageSquare,
   Copy,
   RefreshCw,
   type LucideIcon,
@@ -23,6 +24,12 @@ import {
   setRazorpayEnabled,
   type ChannelState,
 } from "@/app/actions/payment-provider-actions";
+import {
+  disconnectSms,
+  saveSmsCredentials,
+  setSmsEnabled,
+  type SmsChannelState,
+} from "@/app/actions/sms-provider-actions";
 import {
   disconnectShiprocket,
   rotateShiprocketWebhookSecret,
@@ -73,6 +80,15 @@ const SHIPROCKET_CHANNEL: ChannelDef = {
   logoAspect: 854.34 / 189.9,
 };
 
+const TWILIO_CHANNEL: ChannelDef = {
+  id: "twilio",
+  name: "Twilio SMS",
+  category: "sms",
+  tagline: "Order updates by SMS, on your own DLT registration",
+  accent: "#f22f46",
+  icon: MessageSquare,
+};
+
 const CHANNELS: ChannelDef[] = [
   {
     id: "razorpay",
@@ -85,6 +101,7 @@ const CHANNELS: ChannelDef[] = [
     logoAspect: 132 / 38, // Razorpay wordmark
   },
   SHIPROCKET_CHANNEL,
+  TWILIO_CHANNEL,
 ];
 
 // Brand logo when the channel ships one, else a tinted icon tile. `height`
@@ -172,10 +189,12 @@ function Toggle({
 export function ChannelsClient({
   initialState,
   initialShiprocketState,
+  initialSmsState,
   canManage,
 }: {
   initialState: ChannelState;
   initialShiprocketState: ShiprocketChannelState;
+  initialSmsState: SmsChannelState;
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -184,6 +203,7 @@ export function ChannelsClient({
   const [shiprocketState, setShiprocketState] = useState(
     initialShiprocketState,
   );
+  const [smsState, setSmsState] = useState(initialSmsState);
   const [tab, setTab] = useState<"all" | Category>("all");
   const [query, setQuery] = useState("");
   // Which channel's connect/manage modal is open.
@@ -196,13 +216,17 @@ export function ChannelsClient({
       ? state.connected
       : id === "shiprocket"
         ? shiprocketState.connected
-        : false;
+        : id === "twilio"
+          ? smsState.connected
+          : false;
   const isEnabled = (id: string) =>
     id === "razorpay"
       ? state.enabled
       : id === "shiprocket"
         ? shiprocketState.enabled
-        : false;
+        : id === "twilio"
+          ? smsState.enabled
+          : false;
 
   const categories = useMemo(() => {
     const present = new Set(CHANNELS.map((c) => c.category));
@@ -358,6 +382,15 @@ export function ChannelsClient({
           canManage={canManage}
           onClose={() => setOpenId(null)}
           onState={setShiprocketState}
+          onRefresh={refresh}
+        />
+      )}
+      {openId === "twilio" && (
+        <TwilioModal
+          state={smsState}
+          canManage={canManage}
+          onClose={() => setOpenId(null)}
+          onState={setSmsState}
           onRefresh={refresh}
         />
       )}
@@ -1080,5 +1113,319 @@ function RazorpayModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ★★ SMS IS BYO BECAUSE THE LAW MAKES IT SO, and this modal has to say that.
+//
+// TRAI requires the MERCHANT to register a Principal Entity, a 6-character
+// sender header and every message template on an operator DLT portal. The
+// header IS their registered identity, so StoreMink cannot send under it from a
+// shared account — and a message that does not match an approved template is
+// dropped by the carrier with no bounce and no error anywhere.
+//
+// That last property is why the copy here is unusually explicit. Every other
+// channel fails loudly; this one fails silently, and a merchant who does not
+// know about DLT will read the silence as our bug.
+// ---------------------------------------------------------------------------
+function TwilioModal({
+  state,
+  canManage,
+  onClose,
+  onState,
+  onRefresh,
+}: {
+  state: SmsChannelState;
+  canManage: boolean;
+  onClose: () => void;
+  onState: React.Dispatch<React.SetStateAction<SmsChannelState>>;
+  onRefresh: () => void;
+}) {
+  const [accountSid, setAccountSid] = useState("");
+  const [authToken, setAuthToken] = useState("");
+  const [senderHeader, setSenderHeader] = useState(state.senderHeader ?? "");
+  const [dltEntityId, setDltEntityId] = useState(state.dltEntityId ?? "");
+  const [showForm, setShowForm] = useState(!state.connected);
+  const [busy, setBusy] = useState(false);
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    const result = await saveSmsCredentials({
+      accountSid,
+      authToken,
+      senderHeader,
+      dltEntityId,
+    });
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    // Cleared immediately — there is no reason for a live auth token to sit in
+    // a React state tree after it has been stored.
+    setAuthToken("");
+    setShowForm(false);
+    onState((s) => ({
+      ...s,
+      connected: true,
+      enabled: true,
+      accountSid: accountSid.trim(),
+      senderHeader: senderHeader.trim().toUpperCase(),
+      dltEntityId: dltEntityId.trim(),
+    }));
+    toast.success("SMS connected. Add your DLT templates to start sending.");
+    onRefresh();
+  }
+
+  async function handleToggle() {
+    setBusy(true);
+    const next = !state.enabled;
+    const result = await setSmsEnabled(next);
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    onState((s) => ({ ...s, enabled: next }));
+    toast.success(next ? "SMS enabled." : "SMS paused.");
+    onRefresh();
+  }
+
+  async function handleDisconnect() {
+    // ⚠ Names what is actually lost. The header and entity id live on the DLT
+    // portal and cannot be retyped from memory.
+    if (
+      !window.confirm(
+        "Disconnect SMS? Your DLT sender header and Entity ID are removed too — you'll need them from your DLT portal to reconnect.",
+      )
+    )
+      return;
+    setBusy(true);
+    const result = await disconnectSms();
+    setBusy(false);
+    if (result.error) return toast.error(result.error);
+    onState({
+      connected: false,
+      enabled: false,
+      accountSid: null,
+      senderHeader: null,
+      dltEntityId: null,
+      verifiedAt: null,
+    });
+    toast.success("SMS disconnected.");
+    onRefresh();
+    onClose();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl rounded-xl bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[rgba(17,24,39,0.08)] p-5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#f22f46]/10">
+              <MessageSquare className="h-5 w-5 text-[#f22f46]" />
+            </span>
+            <div>
+              <h2 className="text-base font-semibold text-[#111827]">
+                Twilio SMS
+              </h2>
+              <p className="text-xs text-[#5b6472]">
+                Your own Twilio account and DLT registration
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4 p-5">
+          {state.connected && !showForm ? (
+            <>
+              <div className="rounded-lg border border-[rgba(17,24,39,0.08)] bg-[#f9fafb] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm text-[#111827]">
+                      {state.accountSid}
+                    </p>
+                    <p className="mt-1 text-xs text-[#5b6472]">
+                      The auth token is encrypted and never displayed.
+                    </p>
+                  </div>
+                  <ShieldCheck className="h-5 w-5 shrink-0 text-green-600" />
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <dt className="text-[#5b6472]">Sender header</dt>
+                    <dd className="font-mono text-[#111827]">
+                      {state.senderHeader}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#5b6472]">DLT Entity ID</dt>
+                    <dd className="truncate font-mono text-[#111827]">
+                      {state.dltEntityId}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                <p className="text-sm font-semibold text-[#111827]">
+                  Messages still need approved templates
+                </p>
+                <p className="mt-1 text-xs text-[#5b6472]">
+                  Carriers in India drop any message whose text doesn&apos;t
+                  match a template you registered on your DLT portal — with no
+                  bounce and no error. Add each one under Settings →
+                  Notifications before switching a message on.
+                </p>
+              </div>
+            </>
+          ) : (
+            <form onSubmit={handleSave} className="space-y-3">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-[#5b6472]">
+                <p className="text-sm font-semibold text-[#111827]">
+                  You need a DLT registration first
+                </p>
+                <p className="mt-1">
+                  India&apos;s TRAI rules require every business to register its
+                  own entity, sender header and message templates with an
+                  operator DLT portal. It takes 7–21 days, and SMS to Indian
+                  numbers is blocked at the carrier until it is done. StoreMink
+                  can&apos;t send under a shared header on your behalf.
+                </p>
+              </div>
+
+              <Field
+                label="Twilio Account SID"
+                value={accountSid}
+                onChange={setAccountSid}
+                placeholder="AC…"
+                mono
+              />
+              <Field
+                label="Twilio Auth Token"
+                value={authToken}
+                onChange={setAuthToken}
+                type="password"
+                placeholder="Your auth token"
+                mono
+              />
+              <Field
+                label="DLT sender header"
+                value={senderHeader}
+                onChange={(v) => setSenderHeader(v.toUpperCase().slice(0, 6))}
+                placeholder="CORNRS"
+                hint="Exactly six letters — the transactional form. A numeric header is promotional and will be rejected."
+                mono
+              />
+              <Field
+                label="DLT Principal Entity ID"
+                value={dltEntityId}
+                onChange={setDltEntityId}
+                placeholder="1701234567890123456"
+                hint="From your DLT portal. Sent with every message; without it carriers drop the message silently."
+                mono
+              />
+
+              <button
+                type="submit"
+                disabled={busy || !canManage}
+                className="w-full rounded-md bg-[#111827] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Verifying…" : "Verify & save"}
+              </button>
+              {state.connected && (
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="w-full rounded-md px-4 py-2 text-sm text-[#5b6472] hover:bg-[#f3f4f6]"
+                >
+                  Cancel
+                </button>
+              )}
+            </form>
+          )}
+
+          {state.connected && !showForm && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleToggle}
+                disabled={busy || !canManage}
+                className="rounded-md border px-3 py-2 text-sm text-[#344054] disabled:opacity-50"
+              >
+                {state.enabled ? "Pause SMS" : "Resume SMS"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowForm(true)}
+                disabled={!canManage}
+                className="rounded-md border px-3 py-2 text-sm text-[#344054] disabled:opacity-50"
+              >
+                Update credentials
+              </button>
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={busy || !canManage}
+                className="ml-auto flex items-center gap-1.5 rounded-md px-3 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                <Unplug className="h-4 w-4" />
+                Disconnect
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  hint,
+  type = "text",
+  mono,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  hint?: string;
+  type?: string;
+  mono?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-[#344054]">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        className={`w-full rounded-md border border-[rgba(17,24,39,0.16)] px-3 py-2 text-sm outline-none focus:border-[#111827] ${
+          mono ? "font-mono" : ""
+        }`}
+      />
+      {hint && (
+        <span className="mt-1 block text-[11px] text-[#5b6472]">{hint}</span>
+      )}
+    </label>
   );
 }
