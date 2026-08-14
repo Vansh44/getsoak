@@ -33,6 +33,12 @@ import { emitEvent } from "@/lib/notifications/record";
 import { getThemeDefinition } from "@/lib/themes";
 import { applyTheme } from "@/lib/themes/apply";
 import {
+  countOpenReconciliationItems,
+  listReconciliationItems,
+  resolveReconciliationItem,
+  type ReconciliationItem,
+} from "@/lib/billing/reconcile";
+import {
   getPlatformTaxSettings,
   savePlatformTaxSettings,
   type PlatformTaxSettings,
@@ -1042,5 +1048,67 @@ export async function saveTaxSettings(
   // so there is no tag to bust. Revalidating the console page keeps the form in
   // step with what was stored (the GSTIN is upper-cased, the rate rounded).
   revalidatePath("/dashboard/billing");
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// The reconciliation queue (§34).
+//
+// ★ Money discrepancies the sweep found and could not decide: an amount that
+// differs from what we asked for, a payment that maps to no store. Recorded by
+// `lib/billing/reconcile.ts`; closed here, by a human.
+// ---------------------------------------------------------------------------
+
+export async function getReconciliationQueue(
+  status?: unknown,
+): Promise<ReconciliationItem[]> {
+  const viewer = await getPlatformViewer();
+  if (!viewer) return [];
+  const s =
+    status === "resolved" || status === "ignored" || status === "manual_review"
+      ? status
+      : "open";
+  return listReconciliationItems({ status: s });
+}
+
+export async function getOpenReconciliationCount(): Promise<number> {
+  const viewer = await getPlatformViewer();
+  if (!viewer) return 0;
+  return countOpenReconciliationItems();
+}
+
+/**
+ * Close one item.
+ *
+ * ★★ THIS MOVES NO MONEY. It records that an operator looked and what they
+ * decided — refunding a difference, issuing a credit, or deciding it does not
+ * matter all happen elsewhere, deliberately. Any operator may do it (it is a
+ * note, not a payment) and WHO is recorded.
+ */
+export async function closeReconciliationItem(
+  id: unknown,
+  status: unknown,
+  note: unknown,
+): Promise<ActionResult> {
+  const viewer = await getPlatformViewer();
+  if (!viewer) return { error: "You don't have permission to do this." };
+  if (typeof id !== "string" || !id) return { error: "Unknown item." };
+  if (
+    status !== "resolved" &&
+    status !== "ignored" &&
+    status !== "manual_review"
+  ) {
+    return { error: "Pick an outcome." };
+  }
+
+  const done = await resolveReconciliationItem({
+    id,
+    status,
+    note: typeof note === "string" ? note : "",
+    actor: viewer.email ?? null,
+  });
+  if (!done.ok) return { error: done.error };
+
+  revalidatePath("/dashboard/billing/reconciliation");
   return { success: true };
 }

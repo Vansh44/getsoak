@@ -4941,9 +4941,42 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         from whether the invoice is paid; running it after would downgrade a
         merchant whose payment that very request discovers. Pinned by a test.
       - ⚠ It only sees attempts that reached the gateway (`provider_order_id` set)
-        — one that died before that has nothing to ask about. And the OPEN items
-        have no operator UI yet: `listOpenReconciliationItems` exists and nothing
-        renders it.
+        — one that died before that has nothing to ask about.
+      - **★★ THE QUEUE IS A SCREEN NOW**
+        (`/dashboard/billing/reconciliation` on the platform host, filtered by
+        `?status=`; `listReconciliationItems` / `countOpenReconciliationItems` /
+        `resolveReconciliationItem`). Every item is a discrepancy the sweep
+        deliberately refused to decide, so leaving them readable only by SQL
+        meant the one queue in the system that EXISTS to summon a human summoned
+        nobody. The Billing & tax page carries the open count, amber when it is
+        not zero.
+        - **★★ CLOSING AN ITEM MOVES NO MONEY, and the screen says so at the
+          point of action** rather than in a header nobody re-reads. Refunding a
+          difference or issuing a credit happens on the store's own billing
+          screens, chosen by a person. A button here that "fixed" a discrepancy
+          would be a money movement nobody reviewed — and worse, it would leave
+          the queue looking clean. Pinned by a test, because that sentence is the
+          only thing standing between the two readings.
+        - **★ THREE OUTCOMES**, since "resolved" alone is a lie in two common
+          cases: genuinely settled, needs chasing (`manual_review`), and turned
+          out not to matter (`ignored`). Collapsing them loses the difference
+          between "dealt with" and "decided not to".
+        - **★ A NOTE IS REQUIRED**, in the UI and again in the action. The row
+          records that a human looked; without what they FOUND it is an
+          audit trail that proves only that somebody clicked.
+        - **★ THE CLOSE IS A CONDITIONAL CLAIM** on `status = 'open'`, so two
+          operators working the queue at once cannot overwrite each other's
+          verdict — the loser is told it was already closed.
+        - **★ ANY OPERATOR MAY CLOSE, not just a superadmin.** This records a
+          judgement rather than moving money, and a queue only the owner can
+          clear is a queue nobody clears. Who did it is stored either way.
+        - **★ A NULL STORE IS ITSELF THE PROBLEM** — an orphan payment nobody
+          can attribute — so the row says "needs attributing" rather than
+          rendering a blank that reads as a bug.
+        - ⚠ **TEST GAP**: the db mock does not evaluate WHERE clauses, so the
+          `status = 'open'` predicate is argued rather than pinned; the
+          behaviour that depends on it (a zero-row claim reported as
+          already-closed) IS covered.
     - **★★ AI CREDIT PURCHASES NOW PRODUCE AN INVOICE**
       (`lib/billing/credit-invoice.ts`, `supabase/billing_08_ai_credit_invoice.sql`).
       `kind = 'ai_credits'` has existed since billing_03 and

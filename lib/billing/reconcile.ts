@@ -27,11 +27,12 @@ import "server-only";
  * waits far longer, and only when the gateway shows no captured payment at all.
  */
 
-import { and, desc, eq, inArray, isNotNull, lt } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, lt } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   billingPaymentAttempts,
   billingReconciliationItems,
+  stores,
 } from "@/drizzle/schema";
 import { logError, logInfo } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
@@ -39,8 +40,11 @@ import {
   capturedPayment,
   rzpFetchOrderPayments,
 } from "@/lib/payments/razorpay";
+import type { ReconciliationItem } from "./invoice-types";
 import { settleAttempt } from "./collect";
 import { advanceAfterPayment } from "./renewal-worker";
+
+export type { ReconciliationItem };
 
 /**
  * How long an attempt may sit before we ask the gateway about it.
@@ -299,19 +303,139 @@ async function flag(input: {
   }
 }
 
-/** Open items, for an operator queue. */
-export async function listOpenReconciliationItems(limit = 100) {
+/**
+ * The operator queue.
+ *
+ * ★ Joins the store's name, because an item is useless without knowing WHOSE
+ * money it is and a uuid is not that. A null `store_id` is legitimate — an
+ * orphan gateway payment that maps to no store yet is exactly the kind of thing
+ * that needs a human.
+ */
+export async function listReconciliationItems(
+  input: {
+    status?: "open" | "resolved" | "manual_review" | "ignored";
+    limit?: number;
+  } = {},
+): Promise<ReconciliationItem[]> {
+  const status = input.status ?? "open";
   try {
     return await withService(async (db) =>
       db
-        .select()
+        .select({
+          id: billingReconciliationItems.id,
+          storeId: billingReconciliationItems.storeId,
+          storeName: stores.name,
+          storeSlug: stores.slug,
+          kind: billingReconciliationItems.kind,
+          status: billingReconciliationItems.status,
+          invoiceId: billingReconciliationItems.invoiceId,
+          attemptId: billingReconciliationItems.attemptId,
+          providerPaymentId: billingReconciliationItems.providerPaymentId,
+          providerOrderId: billingReconciliationItems.providerOrderId,
+          expectedPaise: billingReconciliationItems.expectedPaise,
+          observedPaise: billingReconciliationItems.observedPaise,
+          detail: billingReconciliationItems.detail,
+          resolvedBy: billingReconciliationItems.resolvedBy,
+          resolvedAt: billingReconciliationItems.resolvedAt,
+          resolutionNote: billingReconciliationItems.resolutionNote,
+          createdAt: billingReconciliationItems.createdAt,
+        })
         .from(billingReconciliationItems)
-        .where(eq(billingReconciliationItems.status, "open"))
+        .leftJoin(stores, eq(stores.id, billingReconciliationItems.storeId))
+        .where(eq(billingReconciliationItems.status, status))
         .orderBy(desc(billingReconciliationItems.createdAt))
-        .limit(limit),
+        .limit(input.limit ?? 100),
     );
   } catch (err) {
     logError("billing.reconcile.list", err);
     return [];
+  }
+}
+
+/** How many need a human right now — for a nav badge. */
+export async function countOpenReconciliationItems(): Promise<number> {
+  try {
+    return await withService(async (db) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(billingReconciliationItems)
+        .where(eq(billingReconciliationItems.status, "open"));
+      return row?.n ?? 0;
+    });
+  } catch (err) {
+    // ★ Fails to ZERO. A badge is a courtesy; a blip must cost the number, not
+    // the page it sits on (the §22 pickup-count rule).
+    logError("billing.reconcile.count", err);
+    return 0;
+  }
+}
+
+/**
+ * Close an item.
+ *
+ * ★★ THIS MOVES NO MONEY, AND THAT IS THE WHOLE POINT. It records that a human
+ * looked and what they decided — nothing else. An amount mismatch is closed by
+ * refunding the difference, or issuing a credit, or deciding it does not matter;
+ * all of those happen elsewhere, deliberately, by someone who chose them. A
+ * button here that "fixed" a discrepancy would be a money movement nobody
+ * reviewed.
+ *
+ * ★ A CONDITIONAL CLAIM on `open`, so two operators working the queue cannot
+ * both close the same item and overwrite each other's note.
+ */
+export async function resolveReconciliationItem(input: {
+  id: string;
+  status: "resolved" | "manual_review" | "ignored";
+  note: string;
+  actor: string | null;
+  now?: Date;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const now = input.now ?? new Date();
+  const note = input.note.trim().slice(0, 1000);
+  // ★ A reason is REQUIRED. "Resolved" with no note is indistinguishable from
+  // someone clearing a queue they did not read, and this is the audit trail for
+  // a money discrepancy.
+  if (!note) {
+    return {
+      ok: false,
+      error: "Say what you found — this is the audit trail.",
+    };
+  }
+  try {
+    const claimed = await withService(async (db) =>
+      db
+        .update(billingReconciliationItems)
+        .set({
+          status: input.status,
+          resolvedBy: input.actor,
+          resolvedAt: now.toISOString(),
+          resolutionNote: note,
+          updatedAt: now.toISOString(),
+        })
+        .where(
+          and(
+            eq(billingReconciliationItems.id, input.id),
+            // ⚠ TEST GAP: the db mock does not evaluate WHERE clauses, so
+            // removing this predicate fails no test. What IS covered is the
+            // behaviour that depends on it — a claim returning zero rows is
+            // reported as "someone else already closed that one" rather than as
+            // success.
+            eq(billingReconciliationItems.status, "open"),
+          ),
+        )
+        .returning({ id: billingReconciliationItems.id }),
+    );
+    if (claimed.length === 0) {
+      return { ok: false, error: "Someone else already closed that one." };
+    }
+    logInfo("billing.reconcile.resolved", {
+      id: input.id,
+      status: input.status,
+      by: input.actor,
+    });
+    return { ok: true };
+  } catch (err) {
+    logError("billing.reconcile.resolve", err, { id: input.id });
+    return { ok: false, error: "Couldn't save that. Please try again." };
   }
 }

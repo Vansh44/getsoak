@@ -181,3 +181,30 @@ export interface InvoiceDocument {
     billingEmail: string | null;
   };
 }
+
+/**
+ * One row of the operator reconciliation queue (§34).
+ *
+ * Here rather than in `lib/billing/reconcile.ts` for the usual reason: that
+ * module is `server-only` and the queue is rendered by a client component.
+ */
+export interface ReconciliationItem {
+  id: string;
+  storeId: string | null;
+  /** Null when the item maps to no store — an orphan gateway payment. */
+  storeName: string | null;
+  storeSlug: string | null;
+  kind: string;
+  status: string;
+  invoiceId: string | null;
+  attemptId: string | null;
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
+  expectedPaise: number | null;
+  observedPaise: number | null;
+  detail: unknown;
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  createdAt: string;
+}
