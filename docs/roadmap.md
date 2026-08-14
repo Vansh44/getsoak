@@ -63,6 +63,10 @@ a browser → Razorpay test-mode refunds/billing → autopay → remaining expos
 actions. The notification action surface is covered by focused tests for
 recipient and host isolation, permission gates, input validation, persistence,
 email safety, personal preferences, audience routing and failed-delivery retry.
+Its default email layer now has hand-written customer transaction journeys,
+action-specific team alerts, contrast-safe store branding and mobile-verified
+order/pickup/refund layouts; preview and test sends preserve the selected
+audience rather than rendering customer copy with staff chrome.
 Shipment and shipping actions are also covered: server-side catalog pricing,
 stock and PIN validation; connection and location mapping gates; booking leases;
 resumable provider stages; pickup, tracking, NDR and cancellation; and the

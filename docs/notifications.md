@@ -1,7 +1,7 @@
 # Notifications — how the whole thing works
 
 A map of the notification system: the mental model, where each decision lives,
-and what to touch when you want to change something. `CODEBASE.md` §22 is the
+and what to touch when you want to change something. `CODEBASE.md` §24 is the
 short version; this is the one to read when something is confusing.
 
 ---
@@ -53,6 +53,30 @@ Two things that follow from this, and explain most of the design:
 off team email for "New order" must not stop shoppers receiving their
 confirmation. That was a real bug once; there is now a regression test for it
 (`record.test.ts` → "silences the team without touching the customer").
+
+### The email quality contract
+
+- **Customer transactional emails are journeys, not event dumps.** Order,
+  pickup, cancellation, refund, return and exchange events use hand-written
+  blueprints in `default-templates.ts`. The message leads with what was decided,
+  groups the relevant facts, and gives one action. A cancellation with money
+  still due never says the refund is on its way; only `order.refund_issued` can.
+- **Pickup mail works without images.** The collection code is large text in the
+  email; the CTA opens the order's QR. Blocking remote images must not stop a
+  shopper collecting an order.
+- **Team mail is operational.** The highest-action alerts have specific copy and
+  CTA labels such as “Review cancellation” and “Manage inventory”; the generic
+  fallback remains a compact fact report for lower-risk events.
+- **Branding cannot break contrast.** The logo/name supplies identity and the
+  store accent is darkened when necessary before it is used for a white-text
+  CTA, card edge or link. Invalid colours fall back to neutral ink.
+- **The same renderer powers the queue, preview and test send.** The active
+  audience must be passed through: customer previews use storefront links and
+  the transactional footer; team previews use dashboard links and preferences.
+- **Mobile is a release condition.** The 600 px table shell collapses without
+  horizontal overflow at 390 px; detail cards, totals and the collection code
+  remain readable. Keep layout in tables/inline styles and preserve the small
+  responsive `<style>` block in `lib/email/shell.ts`.
 
 ---
 

@@ -954,6 +954,7 @@ export async function saveNotificationConfig(
  */
 export async function previewNotificationEmail(
   key: string,
+  audience: string,
   template: { subject?: string; body?: string },
 ): Promise<{ html?: string; subject?: string; error?: string }> {
   const access = await getViewerAccess();
@@ -963,15 +964,19 @@ export async function previewNotificationEmail(
   }
   const def = getEventDef(key);
   if (!def) return { error: "Unknown notification." };
+  const audienceKey = (AUDIENCE_KEYS as readonly string[]).includes(audience)
+    ? (audience as AudienceKey)
+    : "team";
 
   const { storeId } = await currentScope();
-  const fallback = defaultEmailTemplate(def.key);
+  const fallback = defaultEmailTemplate(def.key, audienceKey);
   const values = sampleValuesFor(def.key);
 
   try {
     const brand = storeId ? await getStoreBrandById(storeId) : platformBrand();
     const rendered = renderNotificationEmail({
       item: {
+        eventKey: def.key,
         title: renderTemplate(
           (template.subject || "").trim() || fallback.subject,
           values,
@@ -980,13 +985,14 @@ export async function previewNotificationEmail(
         body: renderTemplate(
           (template.body || "").trim() || fallback.body,
           values,
-          "text",
+          "html",
         ),
-        url: "/dashboard",
+        url: audienceKey === "customer" ? "/orders/sample-order" : "/dashboard",
         severity: def.severity,
       },
       brand,
       baseUrl: storeId ? "https://example.storemink.com" : PLATFORM_URL,
+      isTeam: audienceKey !== "customer",
     });
     return { html: rendered.html, subject: rendered.subject };
   } catch (error) {
@@ -1040,6 +1046,7 @@ export async function sendTestNotificationEmail(
     const brand = storeId ? await getStoreBrandById(storeId) : platformBrand();
     const rendered = renderNotificationEmail({
       item: {
+        eventKey: def.key,
         title: renderTemplate(
           (template.subject || "").trim() || fallback.subject,
           values,
@@ -1048,13 +1055,14 @@ export async function sendTestNotificationEmail(
         body: renderTemplate(
           (template.body || "").trim() || fallback.body,
           values,
-          "text",
+          "html",
         ),
-        url: "/dashboard",
+        url: audienceKey === "customer" ? "/orders/sample-order" : "/dashboard",
         severity: def.severity,
       },
       brand,
       baseUrl: storeId ? `https://${brand.domain}` : PLATFORM_URL,
+      isTeam: audienceKey !== "customer",
     });
 
     const result = await sendEmail({

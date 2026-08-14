@@ -643,7 +643,7 @@ describe("saving notification configuration", () => {
 
 describe("email preview and test delivery", () => {
   it("renders a store-branded preview from sample values", async () => {
-    const result = await previewNotificationEmail("order.placed", {
+    const result = await previewNotificationEmail("order.placed", "team", {
       subject: "New order {{subject_label}}",
       body: "Total {{total}}",
     });
@@ -658,7 +658,7 @@ describe("email preview and test delivery", () => {
 
   it("uses platform branding on the platform host", async () => {
     headerHolder.host = "storemink.com";
-    await previewNotificationEmail("order.placed", {});
+    await previewNotificationEmail("order.placed", "team", {});
     expect(platformBrand).toHaveBeenCalled();
     expect(getStoreBrandById).not.toHaveBeenCalled();
   });
@@ -670,6 +670,15 @@ describe("email preview and test delivery", () => {
     });
 
     expect(result).toEqual({ success: true, sentTo: "owner@acme.test" });
+    expect(renderNotificationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isTeam: false,
+        item: expect.objectContaining({
+          eventKey: "order.placed",
+          url: "/orders/sample-order",
+        }),
+      }),
+    );
     expect(rateLimit).toHaveBeenCalledWith("notif-test:admin-1", {
       max: 10,
       windowSeconds: 600,

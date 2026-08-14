@@ -96,6 +96,7 @@ function row(overrides: Record<string, unknown> = {}) {
     store_id: "store-1",
     recipient_id: "uid-owner",
     recipient_type: "admin",
+    event_key: "order.placed",
     email: "owner@acme.com",
     cc: null,
     bcc: null,

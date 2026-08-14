@@ -573,11 +573,11 @@ describe("recordEvent", () => {
     // The shopper gets the CUSTOMER default, written in their voice — never
     // the team's wording, and never the team's template.
     expect(customer.title).not.toContain("STAFF:");
-    expect(customer.title).toContain("Your order is confirmed");
-    expect(customer.body).toContain("Thanks for your order");
-    // "Who" is operational detail the shopper doesn't need — they know.
-    expect(customer.body).not.toContain("<strong>Who</strong>");
-    expect(admin.body).toContain("<strong>Who</strong>");
+    expect(customer.title).toContain("Order ORD10010004 confirmed");
+    expect(customer.body).toContain("Thank you for your order");
+    // The shopper already knows who they are; only team mail names them.
+    expect(customer.body).not.toContain(">Customer</strong>");
+    expect(admin.body).toContain(">Customer</strong>");
   });
 
   // ★ A LABEL WITH NOTHING UNDER IT IS WORSE THAN NO ROW. The fact list is
@@ -601,10 +601,10 @@ describe("recordEvent", () => {
     const mail = queuedEmails(mock).find(
       (r: any) => r.recipientType === "customer",
     );
-    expect(mail.body).toContain("<strong>Pickup location</strong>");
+    expect(mail.body).toContain(">Pickup location</strong>");
     expect(mail.body).toContain("Connaught Place");
     // Declared for this event, but not supplied here.
-    expect(mail.body).not.toContain("<strong>Pickup address</strong>");
+    expect(mail.body).not.toContain(">Address</strong>");
   });
 
   it("falls back to built-in copy for a field the merchant left blank", async () => {
@@ -629,7 +629,7 @@ describe("recordEvent", () => {
     // which lays the facts out as "Label: value" lines.
     expect(row.body).toContain("Priya S.");
     // The default body is HTML with the facts as list rows.
-    expect(row.body).toContain("<strong>Reference</strong>");
+    expect(row.body).toContain(">Order</strong>");
     expect(row.body).toContain("ORD10010004");
   });
 
@@ -647,14 +647,14 @@ describe("recordEvent", () => {
 
     const mail = queuedEmails(mock)[0];
     expect(mail.title).toContain("ORD10010004");
-    expect(mail.body).toContain("You've received a new order.");
+    expect(mail.body).toContain("A new order is ready for review.");
     expect(mail.body).toContain("Priya S.");
     // Money and items are NOT in the fact list for an order: the rendered
     // order summary (lib/email/line-items.ts) shows them in full, and printing
     // "Total ₹1,240.00" directly above a table ending in the same total is the
     // duplication that makes an email look auto-generated.
-    expect(mail.body).not.toContain("<strong>Total</strong>");
-    expect(mail.body).not.toContain("<strong>Items</strong>");
+    expect(mail.body).not.toContain(">Total</strong>");
+    expect(mail.body).not.toContain(">Items</strong>");
     // The bell stays short — one line, no markup.
     expect(fannedOut(mock)[0].body).not.toContain("<ul>");
   });
@@ -674,7 +674,7 @@ describe("recordEvent", () => {
     });
 
     const mail = queuedEmails(mock)[0];
-    expect(mail.body).toContain("<strong>Reason</strong>");
+    expect(mail.body).toContain(">Reason</strong>");
     expect(mail.body).toContain("Card declined");
   });
 

@@ -715,7 +715,9 @@ wholesip/
 │   ├── email/                 # sender, layout, campaign-worker, coupon-campaign,
 │   │                          # trigger-worker, blog/enquiry notifications.
 │   │                          # ★ notification-emails.ts (§22: single + digest
-│   │                          # templates, pure/escaped) + notification-worker.ts
+│   │                          # templates, event-specific CTAs, pure/escaped) +
+│   │                          # shell.ts (mobile table shell, contrast-safe accent)
+│   │                          # + notification-worker.ts
 │   │                          # (claims notification_email_queue, GROUPS by
 │   │                          # recipient into one digest, retries with backoff).
 │   │                          # ★ send-batch.ts (per-message outcomes so one bad
@@ -3148,12 +3150,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
       (store-scoped, `store-admins`, BOTH channels, `configurable: false` —
       nobody can have turned it off before they had an account). The two are
       the same moment for different audiences, which is the §23 rule working as
-      intended, not duplication. - **SOME COPY IS HAND-WRITTEN** (`BESPOKE` in default-templates.ts). The
-      generated shape — intro, then a Reference/Who/When fact list — is right
-      for a report and wrong for anything a person should feel something about;
-      a welcome rendered as a fact list reads like a receipt for existing. Keep
-      the map small: an event that only needs a better opening line belongs in
-      `INTRO`. - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
+      intended, not duplication.
+    - **CUSTOMER TRANSACTIONAL COPY IS HAND-WRITTEN.**
+      `CUSTOMER_BLUEPRINTS` in `default-templates.ts` covers the complete
+      customer order, pickup, cancellation, return, exchange, refund and blog
+      journey. It leads with the decision, shows only the facts that matter and
+      never claims money moved before `order.refund_issued` says it did. Pickup
+      mail makes the collection code the focal point. The action-heavy team
+      paths (new order, cancellation, failed payment, return and stock alerts)
+      have their own `TEAM_BLUEPRINTS`; lower-risk team events keep the compact
+      generated report. Store/domain milestones remain bespoke prose.
+    - **ONE SENDER PER MESSAGE.** Where a dedicated sender exists the registry
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
@@ -3281,8 +3288,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
       receipt back into staff mail. `groupRows` keys on recipient_type too:
       one person can be BOTH (an owner ordering from their own store), and
       grouped without it their staff and customer rows shared one digest
-      rendered with whichever sorted first. Regression-tested in both
-      directions. - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
+      rendered with whichever sorted first. The settings preview and test-send
+      carry the active audience through the same renderer too; customer previews
+      previously showed a staff CTA/footer even though the real queued message
+      did not. Regression-tested in both directions.
+    - **THE ORDER SUMMARY IS RENDERER CHROME** (`lib/email/line-items.ts`,
       pure + tested). It cannot come through the merchant template system:
       template values are ESCAPED strings — that escaping is the XSS boundary —
       so a table would arrive as visible markup. It renders between the body and
@@ -3309,12 +3319,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
       summary — printing "Total ₹343.00" directly above a table ending in
       ₹343.00 is what makes an email look auto-generated. The fact list keeps
       what the table doesn't: reference, payment method, when. The tokens stay
-      declared, so a merchant who wants them can still use them. - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): the same neutral
-      palette for every store — white card, near-black text, one dark button.
-      The storefront accent is deliberately unused: pushed into an email it must
-      survive colour-managed clients and forced dark mode, and the failure mode
-      is a customer receiving something that looks broken. Identity comes from
-      the logo. Every email type routes through it.
+      declared, so a merchant who wants them can still use them.
+    - **ONE GLOBAL EMAIL DESIGN** (`lib/email/shell.ts`): a neutral, table-safe
+      shell, the store logo/name and one restrained brand accent. Notification
+      CTAs use `emailAccentColor`, which preserves a valid merchant hue but
+      darkens it until white text reaches WCAG AA contrast; malformed values
+      fall back to ink. The same safe colour edges the notification card and
+      links, while the content stays near-black on white. Mobile media rules
+      tighten the card at 620 px, and the rendered order/pickup/refund/team-alert
+      samples have no horizontal overflow at 390 px. Semantic template classes
+      (`email-lead/details/detail/label/code/note`) are inlined for clients that
+      strip styles and remain readable as ordinary HTML without them.
     - **Email is a QUEUE, never an inline send** (`notification_email_queue`):
       the fan-out enqueues, `lib/email/notification-worker.ts` drains it from
       `/api/cron/send-emails`. A Resend round-trip must never sit on a

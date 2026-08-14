@@ -209,6 +209,13 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "Ordered by mistake",
     },
   ],
+  "order.cancellation_declined": [
+    {
+      name: "reason",
+      description: "Why the store couldn't cancel the order.",
+      sample: "The parcel has already left the warehouse.",
+    },
+  ],
   "order.return_requested": [
     {
       name: "items",

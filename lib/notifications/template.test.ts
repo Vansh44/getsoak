@@ -225,38 +225,64 @@ describe("default email templates", () => {
 
   it("opens with a readable sentence, not a bare label", () => {
     const t = defaultEmailTemplate("order.placed");
-    expect(t.body.split("\n")[0]).toBe("<p>You've received a new order.</p>");
+    expect(t.body.split("\n")[0]).toBe(
+      '<p class="email-lead">A new order is ready for review.</p>',
+    );
   });
 });
 
 describe("default template HTML", () => {
   it("is HTML, not plain text", () => {
     const t = defaultEmailTemplate("order.placed");
-    expect(t.body).toContain("<p>");
-    expect(t.body).toContain("<ul>");
-    expect(t.body).toContain("<li>");
+    expect(t.body).toContain('<p class="email-lead">');
+    expect(t.body).toContain('<ul class="email-details">');
+    expect(t.body).toContain('<li class="email-detail">');
   });
 
   it("leads the facts with the thing itself", () => {
     const t = defaultEmailTemplate("order.placed");
-    expect(t.body).toContain("<strong>Reference</strong>");
+    expect(t.body).toContain(">Order</strong>");
     expect(t.body).toContain("{{subject_label}}");
   });
 
-  it("omits 'Who' from customer copy — a shopper knows who they are", () => {
-    expect(defaultEmailTemplate("order.placed", "team").body).toContain("Who");
+  it("omits the customer identity from shopper copy", () => {
+    expect(defaultEmailTemplate("order.placed", "team").body).toContain(
+      ">Customer</strong>",
+    );
     expect(defaultEmailTemplate("order.placed", "customer").body).not.toContain(
-      "Who",
+      ">Customer</strong>",
     );
   });
 
-  it("closes differently for each audience", () => {
+  it("uses a different voice for each audience", () => {
     expect(defaultEmailTemplate("order.placed", "customer").body).toContain(
-      "reply to this email",
+      "Thank you for your order",
     );
     expect(defaultEmailTemplate("order.placed", "team").body).toContain(
-      "dashboard",
+      "ready for review",
     );
+  });
+
+  it("makes the pickup code the focal point of ready-to-collect mail", () => {
+    const body = defaultEmailTemplate(
+      "order.ready_for_pickup",
+      "customer",
+    ).body;
+    expect(body).toContain("Collection code");
+    expect(body).toContain('class="email-code"');
+    expect(body).toContain("{{collection_code}}");
+  });
+
+  it("does not promise a refund before money has actually moved", () => {
+    const cancelled = defaultEmailTemplate("order.cancelled", "customer").body;
+    const expired = defaultEmailTemplate(
+      "order.pickup_expired",
+      "customer",
+    ).body;
+    expect(cancelled).toContain("once it has been issued");
+    expect(expired).toContain("once it has been issued");
+    expect(cancelled).not.toContain("refund is on its way");
+    expect(expired).not.toContain("refund is on its way");
   });
 
   it("only uses tags the email shell knows how to style", () => {
@@ -314,6 +340,15 @@ describe("inlineEmailStyles", () => {
   it("styles every occurrence, not just the first", () => {
     const out = inlineEmailStyles("<p>a</p><p>b</p>");
     expect(out.match(/<p style=/g)).toHaveLength(2);
+  });
+
+  it("progressively enhances notification template classes", () => {
+    const out = inlineEmailStyles(
+      '<p class="email-code">PK0M-3T9V</p><ul class="email-details"><li class="email-detail">Order</li></ul>',
+    );
+    expect(out).toContain("font-family:'Courier New'");
+    expect(out).toContain("letter-spacing:3px");
+    expect(out).toContain("background-color:#fafbfb");
   });
 });
 
