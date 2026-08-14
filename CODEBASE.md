@@ -5345,6 +5345,31 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       lock, no window. **`claimed_at IS NULL` alone is not enough** — a real
       signup row has it NULL too (nothing backfills it), so without the id check
       one account could take over another's history.
+    - **★★ THE CASCADE ONLY REACHES TABLES WITH A FOREIGN KEY, AND THREE THAT
+      HOLD A CUSTOMER ID HAVE NONE.** `customer_credit_balances`,
+      `customer_credit_ledger` and `notifications`/`notification_email_queue`
+      (plus `orders.collected_by`) carry a customer id with no FK, so the rewrite
+      sails straight past them. **The credit tables are the serious one: they
+      hold MONEY.** A walk-in refunded to store credit at the till (§29) and then
+      signing up would have their balance orphaned BY THEIR OWN SIGNUP — the
+      store's books still say it is owed and their profile shows zero, silently,
+      discovered by a complaint. `repointUnreferencedTables` moves them in the
+      SAME transaction, so a failed repoint rolls the whole claim back: no claim
+      at all beats one that moved the person and left their balance behind.
+      ⚠ That is a hand-written list, which is what `pos_13` exists to avoid —
+      keep it honest. A new table holding a customer id belongs behind a real FK,
+      or in that function; `claim-customer.test.ts` pins every table named there.
+      The risk is narrower than the one the migration replaced (these are
+      UPDATEs, so forgetting one orphans data rather than cascade-DELETING
+      somebody's orders) but orphaned money is still money.
+      `notification_preferences` is deliberately absent — the customer audience
+      has no preference layer (§24), so a `pos_` customer can never have a row.
+    - **★ A RECORDED WALK-IN ALREADY GETS AN EMAILED RECEIPT.** `placePosSale`
+      emits `order.placed`, and the fan-out resolves a customer's address from
+      their `users` row — so recording a walk-in WITH an email gets them an
+      in-store order confirmation through the existing machinery, with no new
+      code. Contact captured at the TENDER panel for someone with no record at
+      all (Shopify's receipt options) is the piece still missing.
     - **★ THE PHONE COMES FROM THE VERIFIED AUTH IDENTITY, NEVER A FORM.** That
       is the entire security boundary: a form-supplied phone would let anyone
       type a stranger's number and inherit their in-store order history.

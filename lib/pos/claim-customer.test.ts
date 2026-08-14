@@ -15,16 +15,17 @@ import { claimPosCustomer } from "./claim-customer";
 
 /** The SQL the last call actually sent, flattened for assertion. */
 function lastSql(): string {
-  const arg = execute.mock.calls.at(-1)?.[0] as
-    | { queryChunks?: unknown[] }
-    | undefined;
-  return JSON.stringify(arg ?? {});
+  // Every statement the claim sent — the guards are split across the lookup and
+  // the claim itself, and both must carry them.
+  return JSON.stringify(execute.mock.calls);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — restore both explicitly
   // every time (AGENTS.md convention #8), or a rejection set in one test leaks.
+  // The claim runs: SELECT (find the pos_ row) → UPDATE (claim it) → repoints.
+  // Default = nothing to claim.
   execute.mockResolvedValue({ rowCount: 0, rows: [] });
   withService.mockImplementation((fn: (db: unknown) => unknown) =>
     fn({ execute }),
@@ -39,11 +40,62 @@ const INPUT = {
 
 describe("claimPosCustomer", () => {
   it("claims when the statement matched a row", async () => {
-    execute.mockResolvedValue({ rowCount: 1, rows: [{ id: INPUT.uid }] });
+    execute.mockResolvedValue({ rowCount: 1, rows: [{ id: "pos_abc" }] });
     await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: true });
   });
 
+  it("does nothing when no unclaimed till row exists for that phone", async () => {
+    execute.mockResolvedValue({ rowCount: 0, rows: [] });
+    await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: false });
+    // Found nothing, so it must not have attempted the rewrite.
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  // ★★ The cascade only reaches tables with a foreign key, and these have none.
+  // The credit ones hold MONEY: a walk-in refunded to store credit at the till
+  // would otherwise have their balance orphaned by their own signup.
+  describe("repoints the tables the FK cascade cannot reach", () => {
+    let sent: string;
+    beforeEach(async () => {
+      execute.mockResolvedValue({ rowCount: 1, rows: [{ id: "pos_abc" }] });
+      await claimPosCustomer(INPUT);
+      sent = JSON.stringify(execute.mock.calls);
+    });
+
+    it.each([
+      ["customer_credit_balances", "the balance is money owed"],
+      ["customer_credit_ledger", "and its history explains the balance"],
+      ["notifications", "their bell should not be empty"],
+      ["notification_email_queue", "mail already queued is still theirs"],
+      ["orders", "collected_by is their name on a pickup"],
+    ])("repoints %s — %s", (table) => {
+      expect(sent).toContain(table);
+    });
+
+    it("moves them to the new uid, keyed off the OLD pos_ id", () => {
+      expect(sent).toContain("pos_abc");
+      expect(sent).toContain(INPUT.uid);
+    });
+
+    // Only the customer's own rows — a store admin shares these tables.
+    it("scopes the notification repoints to recipient_type customer", () => {
+      expect(sent).toContain("recipient_type = 'customer'");
+    });
+  });
+
+  // ★ Atomic: no claim at all beats a claim that moved the person and left
+  // their store-credit balance behind.
+  it("rolls the whole claim back when a repoint fails", async () => {
+    execute
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "pos_abc" }] }) // select
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: INPUT.uid }] }) // claim
+      .mockRejectedValueOnce(new Error("credit table unavailable"));
+    await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: false });
+  });
+
   it("reports no claim when nothing matched", async () => {
+    // The claim runs: SELECT (find the pos_ row) → UPDATE (claim it) → repoints.
+    // Default = nothing to claim.
     execute.mockResolvedValue({ rowCount: 0, rows: [] });
     await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: false });
   });
@@ -51,7 +103,7 @@ describe("claimPosCustomer", () => {
   // The driver returns a Result; several mocks return a bare array. The
   // exactly-once guarantee is read from this number, so both must agree.
   it("reads a row count from a bare array too", async () => {
-    execute.mockResolvedValue([{ id: INPUT.uid }]);
+    execute.mockResolvedValue([{ id: "pos_abc" }]);
     await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: true });
     execute.mockResolvedValue([]);
     await expect(claimPosCustomer(INPUT)).resolves.toEqual({ claimed: false });
@@ -93,6 +145,7 @@ describe("claimPosCustomer", () => {
 
   describe("the four guards are all in the statement", () => {
     beforeEach(async () => {
+      execute.mockResolvedValue({ rowCount: 1, rows: [{ id: "pos_abc" }] });
       await claimPosCustomer(INPUT);
     });
 

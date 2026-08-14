@@ -888,6 +888,29 @@ Watch `/dashboard/logs` while PS-C.31 runs.
 **Expect:** no `customer.signed_up` event. Correct: the store already knows this
 person from the shop. What is new is the ACCOUNT, not the customer.
 
+**PS-C.37 ★★ — Store credit survives the claim**
+At the till, refund a walk-in customer's sale to **store credit** (§29). Then
+have that person sign up with the same mobile.
+**Expect:** their balance is on the new account — `/profile` shows it.
+**Why it needs its own story:** `customer_credit_balances` and
+`customer_credit_ledger` have **no foreign key to `users`**, so `pos_13`'s
+`ON UPDATE CASCADE` never reaches them. Without the explicit repoint their
+balance is orphaned by their own signup: the store's books still say it is owed
+and the customer sees zero. Silent, and found by a complaint.
+
+**PS-C.38 ★ — A half-claim is impossible**
+Make a repoint fail (drop a privilege on `customer_credit_ledger` mid-signup).
+**Expect:** the claim reports nothing claimed and the `pos_` row is UNCHANGED —
+same id, `claimed_at` still NULL. One transaction, so no claim at all beats a
+claim that moved the person and left their balance behind.
+⚠ The shopper's signup then fails on the unique phone, which is the one place
+this trade bites. It is still the right way round.
+
+**PS-C.39 — A recorded walk-in gets an emailed receipt today**
+Record a walk-in WITH an email, attach them, ring up a sale.
+**Expect:** an order confirmation arrives. No new code — `placePosSale` emits
+`order.placed` and the fan-out resolves the address from their `users` row.
+
 **PS-C.36 ⚠ NOT BUILT — receipt contact**
 At the tender panel, look for an email field for a walk-in with no account.
 **Expect:** it is absent. Capturing contact at receipt time is the remaining
@@ -2045,8 +2068,8 @@ Real and deliberate, so nobody files them as bugs:
 | **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
 | ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
 | **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
-| **A walk-in can't get an emailed receipt**                         | PS-C.36. The till can now RECORD a customer (PS-C.25–C.35), but contact captured at the tender panel — Shopify's receipt options — is not built. Step 4's remaining piece                                                                            |
-| **The customer claim has never been run in a browser**             | PS-C.25–C.35. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                           |
+| **A walk-in with NO record can't get an emailed receipt**          | PS-C.36. One recorded WITH an email already gets one (PS-C.39) through the existing fan-out. What's missing is contact captured at the tender panel for someone with no record at all — Shopify's receipt options. Step 4's remaining piece          |
+| **The customer claim has never been run in a browser**             | PS-C.25–C.39. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                           |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |

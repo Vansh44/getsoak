@@ -73,23 +73,44 @@ export async function claimPosCustomer(
   if (!phone || !input.uid || !input.storeId) return { claimed: false };
 
   try {
-    const rows = await withService((db) =>
-      db.execute(sql`
-        update public.users
-           set id = ${input.uid},
-               claimed_at = now()
+    const claimed = await withService(async (db) => {
+      // `withService` wraps the callback in ONE transaction, which is what makes
+      // the id rewrite and the repoints below atomic. A half-claimed customer —
+      // a new id with their store credit still on the old one — is the outcome
+      // this must never produce.
+      //
+      // The lookup is separate from the claim ONLY because the repoints need the
+      // OLD id and `RETURNING` yields the new one. It is not a check-then-act:
+      // the UPDATE still carries every guard, so two racing signups serialise on
+      // the row lock and the second re-reads `claimed_at IS NULL` as false and
+      // matches nothing.
+      const found = (await db.execute(sql`
+        select id from public.users
          where store_id = ${input.storeId}::uuid
            and phone = ${phone}
            and id like 'pos\\_%'
+           and claimed_at is null
+         limit 1
+      `)) as unknown;
+      const posId = firstId(found);
+      if (!posId) return false;
+
+      const rows = await db.execute(sql`
+        update public.users
+           set id = ${input.uid},
+               claimed_at = now()
+         where id = ${posId}
            and claimed_at is null
            and not exists (
              select 1 from public.users u2 where u2.id = ${input.uid}
            )
         returning id
-      `),
-    );
+      `);
+      if (rowCount(rows) === 0) return false;
 
-    const claimed = rowCount(rows) > 0;
+      await repointUnreferencedTables(db, posId, input.uid);
+      return true;
+    });
     if (claimed) {
       // Worth a log line: it is a primary-key rewrite across six tables, and
       // "why does this account suddenly have in-store orders?" is a question
@@ -107,6 +128,74 @@ export async function claimPosCustomer(
     });
     return { claimed: false };
   }
+}
+
+/**
+ * ★★ THE CASCADE ONLY REACHES TABLES WITH A FOREIGN KEY, AND THREE THAT HOLD A
+ * CUSTOMER ID HAVE NONE.
+ *
+ * `pos_13` put `ON UPDATE CASCADE` on all six FKs to `users.id`, which is what
+ * makes adoption one statement — but `customer_credit_balances`,
+ * `customer_credit_ledger` and `notifications`/`notification_email_queue` have
+ * no FK at all, so the rewrite sails past them and leaves their rows pointing at
+ * an id nobody can reach.
+ *
+ * ★ THE CREDIT TABLES ARE THE SERIOUS ONE: THEY HOLD MONEY. A walk-in refunded
+ * to store credit at the till (§29) and then signing up would have their balance
+ * orphaned BY THEIR OWN SIGNUP — the store's books still say it is owed, and the
+ * customer's profile shows zero. Silent, and discovered by a complaint.
+ *
+ * ⚠ A HAND-WRITTEN LIST IS EXACTLY WHAT `pos_13` EXISTS TO AVOID, so keep this
+ * one honest: `claim-customer.test.ts` pins every table named here, and a new
+ * table holding a customer id belongs in this function OR behind a real FK.
+ * Prefer the FK. The risk here is narrower than the one the migration replaced —
+ * these are UPDATEs, so forgetting one orphans data rather than
+ * cascade-DELETING somebody's orders — but orphaned money is still money.
+ *
+ * ★ `notification_preferences` IS DELIBERATELY ABSENT. The customer audience has
+ * no preference layer (§24 — transactional mail is not switchable), so a
+ * `pos_` customer can never have a row there.
+ */
+async function repointUnreferencedTables(
+  db: Pick<Parameters<Parameters<typeof withService>[0]>[0], "execute">,
+  posId: string,
+  uid: string,
+): Promise<void> {
+  // Money first. If any of these fails the whole transaction rolls back and the
+  // claim reports false — which is the right way round: no claim at all beats a
+  // claim that moved the person and left their balance behind.
+  await db.execute(sql`
+    update public.customer_credit_balances set customer_id = ${uid}
+     where customer_id = ${posId}
+  `);
+  await db.execute(sql`
+    update public.customer_credit_ledger set customer_id = ${uid}
+     where customer_id = ${posId}
+  `);
+  // Their notification history, so the bell isn't empty for someone who has been
+  // buying here for months.
+  await db.execute(sql`
+    update public.notifications set recipient_id = ${uid}
+     where recipient_id = ${posId} and recipient_type = 'customer'
+  `);
+  await db.execute(sql`
+    update public.notification_email_queue set recipient_id = ${uid}
+     where recipient_id = ${posId} and recipient_type = 'customer'
+  `);
+  // Who physically collected a pickup. Cosmetic, but it is their name on it.
+  await db.execute(sql`
+    update public.orders set collected_by = ${uid}
+     where collected_by = ${posId}
+  `);
+}
+
+/** The `id` of the first row, across the driver's Result and a mock's array. */
+function firstId(result: unknown): string | null {
+  const rows = Array.isArray(result)
+    ? result
+    : ((result as { rows?: unknown[] })?.rows ?? []);
+  const row = rows[0] as { id?: unknown } | undefined;
+  return typeof row?.id === "string" ? row.id : null;
 }
 
 /**
