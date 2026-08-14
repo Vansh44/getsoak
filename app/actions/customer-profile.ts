@@ -8,6 +8,7 @@ import { emitEvent } from "@/lib/notifications/record";
 import { users } from "@/drizzle/schema";
 import { getCurrentStoreId } from "@/lib/store/resolve";
 import { recordStorePolicyConsent } from "@/lib/legal/store-consent";
+import { claimPosCustomer } from "@/lib/pos/claim-customer";
 
 export interface MyCustomer {
   id: string;
@@ -132,9 +133,37 @@ export async function updateCustomerProfile(formData: FormData) {
     ...(user.phone ? { phone: user.phone } : {}),
   };
 
+  // ★ THE CLAIM RUNS BEFORE THE UPSERT, AND IT HAS TO.
+  // `(store_id, phone)` is UNIQUE, so if the till already recorded this person
+  // as a walk-in, the insert below is a duplicate-key error — signup would fail
+  // for exactly the customers who have shopped here before. Adopting the row
+  // first turns that collision into the feature: their in-store history is
+  // theirs from the moment they create an account, and the upsert that follows
+  // then UPDATES the row it just claimed.
+  //
+  // The phone comes from the VERIFIED auth identity (`user.phone`), never the
+  // form — see lib/pos/claim-customer.ts for why that is the whole security
+  // boundary. Best-effort by design: a failure means a fresh row and a lost
+  // link, never a blocked signup.
+  //
+  // ⚠ The `.catch` is belt AND braces: `claimPosCustomer` catches its own
+  // errors by contract, so this can only fire if that contract is ever broken.
+  // It is one line, and what it protects against is a shopper being unable to
+  // create an account at all.
+  await claimPosCustomer({
+    uid: user.id,
+    storeId,
+    verifiedPhone: user.phone,
+  }).catch(() => undefined);
+
   // This is an UPSERT — it runs on every profile edit too. `xmax = 0` is the
   // Postgres trick for "this row was INSERTed, not updated", so the signup
   // notification fires exactly once, on the row's first write.
+  //
+  // ⚠ A CLAIMED row is an UPDATE, so `isNewCustomer` is false and the signup
+  // event does not fire. That is correct: the store already knows this person —
+  // they have been buying in the shop. What is new is the ACCOUNT, not the
+  // customer.
   let isNewCustomer = false;
   try {
     // Own-row upsert under the customer's identity (RLS-scoped to user_id).

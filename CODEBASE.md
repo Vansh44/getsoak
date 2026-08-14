@@ -885,6 +885,11 @@ wholesip/
 │   │                          # dashboard admins (NO ROWS = unrestricted)
 │   ├── locations_01_capabilities.sql  # ★ store_locations.capabilities (jsonb) —
 │   │                          # what a location may DO; registry in lib/locations/
+│   ├── pos_13_customer_claim.sql  # ★ §36 users.claimed_at + ON UPDATE CASCADE on
+│   │                          # all SIX FKs to users.id, so adopting a till-
+│   │                          # created customer is ONE statement. ⚠ Three of
+│   │                          # those constraints are NAMED …_customer_id_fkey
+│   │                          # but sit on `user_id` — read pg_constraint.conkey
 │   ├── pos_11_transfer_stock.sql  # ★ transfer_stock(): move stock between two of
 │   │                          # a store's locations, atomically (one plpgsql txn)
 │   ├── pos_10_shifts.sql      # ★ pos_shifts + pos_cash_movements + orders.shift_id
@@ -2467,11 +2472,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
         re-syncs, and the header chip shows the cached count + a manual refresh.
       - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
         finds an EXISTING customer of the store (phone/name/email, 2-char
-        floor, store-scoped) to attach to a sale; the register cannot CREATE
-        one, because `users.id` IS the Firebase uid and `(phone, store_id)` is
-        unique — a till-invented row would collide with, and break, that same
-        person's later online signup. Walk-in capture needs a claim/merge
-        story and belongs with the CRM phase. `placePosSale` **verifies the
+        floor, store-scoped) to attach to a sale, and **`createPosCustomer`
+        records a walk-in who isn't on file** (§22b — that was blocked until
+        `pos_13` gave it a claim story). `placePosSale` **verifies the
         customer belongs to this store** before writing (without it a sale
         could be filed against another store's customer, who holds RLS SELECT
         on their own orders and would see a foreign order in their history)
@@ -5302,6 +5305,71 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       reconcile weight disputes/COD remittances. The schema and adapter boundary
       are ready for these, but claiming full Shopify parity before those workflows
       exist would be false.
+
+36. **Till-created customers, and the claim that adopts them** (roadmap Step 4).
+    `lib/pos/customer-claim.ts` (pure) + `lib/pos/claim-customer.ts`
+    (server-only) + `supabase/pos_13_customer_claim.sql`.
+    - **★ THE PROBLEM WAS THE PRIMARY KEY.** `users.id` IS the Firebase uid and
+      uniqueness is `(store_id, phone)`, so a row the till invents for a walk-in
+      has no natural key — and that person's later online signup COLLIDES with
+      it. The register was therefore search-only: it could attach an existing
+      customer and never record a new one, so every walk-in was anonymous.
+    - **★ A `pos_<uuid>` ID IS THE WHOLE MECHANISM, AND IT DOES TWO JOBS.** It is
+      an id a signup can ADOPT — and because customer RLS is
+      `auth.uid() = users.id`, a `pos_…` id matches no Firebase uid, so the row
+      is invisible to every session with **no policy written for it**. Don't add
+      one; the id shape already does it.
+    - **★★ SIX FOREIGN KEYS, AND THAT IS WHY THERE IS A MIGRATION AT ALL.**
+      `orders`, `customer_addresses`, `product_reviews`, `blog_comments`,
+      `blogs.submitted_by` and `user_group_members` all reference `users.id`, all
+      NOT DEFERRABLE with ON UPDATE NO ACTION — so updating the parent first
+      orphans the children and updating the children first references an id that
+      does not exist yet. **Neither ordering works.** And the schema-free
+      alternative is worse: "insert the new row, repoint the children, delete the
+      `pos_` row" runs into **five of those six being ON DELETE CASCADE**, so
+      missing one table doesn't fail — it silently CASCADE-DELETES that
+      customer's ORDERS. `ON UPDATE CASCADE` makes adoption ONE statement and
+      makes a seventh FK added next year either cascade correctly or fail LOUDLY.
+      The migration ends with a guard that FAILS if any FK to `users.id` still
+      lacks it.
+    - **⚠ THREE CONSTRAINTS ARE NAMED AFTER A COLUMN THEY DO NOT USE.**
+      `product_reviews_customer_id_fkey`, `blog_comments_customer_id_fkey` and
+      `user_group_members_customer_id_fkey` all sit on **`user_id`** — leftovers
+      from the customers→users rename. Reading the column off the constraint NAME
+      is how the first version of this migration failed. Query
+      `pg_constraint.conkey`; never infer it from the name.
+    - **★★ THE CLAIM IS ONE STATEMENT WITH EVERY GUARD IN THE `WHERE`** —
+      store scope, the VERIFIED phone, `id LIKE 'pos\_%'`, `claimed_at IS NULL`,
+      and `NOT EXISTS` a row for this uid. Two signups racing on one walk-in row:
+      the loser matches zero rows and falls through to an ordinary insert. No
+      lock, no window. **`claimed_at IS NULL` alone is not enough** — a real
+      signup row has it NULL too (nothing backfills it), so without the id check
+      one account could take over another's history.
+    - **★ THE PHONE COMES FROM THE VERIFIED AUTH IDENTITY, NEVER A FORM.** That
+      is the entire security boundary: a form-supplied phone would let anyone
+      type a stranger's number and inherit their in-store order history.
+      `normalizePhone` is shared by both ends, because if the till stores
+      "+91 98765 43210" and signup stores "9876543210" the claim never fires and
+      the customer silently gets two rows.
+    - **★ IT RUNS BEFORE THE UPSERT IN `updateCustomerProfile`, AND HAS TO.**
+      `(store_id, phone)` is UNIQUE, so without the claim first, signup fails
+      with a duplicate key for exactly the customers who have shopped here
+      before. Claiming turns that collision into the feature. A claimed row is
+      then an UPDATE, so `customer.signed_up` does NOT fire — correct: the store
+      already knows this person; what is new is the ACCOUNT.
+    - **★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
+      history; a thrown one would cost the shopper their signup.
+    - **★ A DUPLICATE PHONE ATTACHES, IT DOES NOT FAIL.** The commonest route to
+      `createPosCustomer` is a cashier who searched, mistyped, and typed the
+      number by hand — answering "that customer already exists" leaves them
+      re-searching with a queue behind them. It leaks nothing: it is the same row
+      the search would have returned.
+    - **★ `sell`, NOT A MANAGER GRANT**, and the form opens from the empty search
+      result rather than a second button — "Add customer" beside the search box
+      invites a duplicate of someone already on file.
+    - **Backfill: none.** Every existing row came from a real signup and is
+      claimed by definition, but `claimed_at` stays NULL rather than being
+      invented — nothing reads it to decide who may log in; the id shape does.
 
 ## 6. Commands
 

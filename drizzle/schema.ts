@@ -4362,6 +4362,11 @@ export const users = pgTable(
       .defaultNow()
       .notNull(),
     storeId: uuid("store_id").notNull(),
+    // When a till-created (pos_*) row was adopted by a real signup (pos_13).
+    // NULL = never had an account behind it — and such a row cannot log in,
+    // because customer RLS matches auth.uid() against users.id and a pos_ id
+    // matches no Firebase uid. See lib/pos/customer-claim.ts.
+    claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
   },
   (table) => [
     index("idx_users_email_trgm").using(

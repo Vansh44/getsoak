@@ -47,6 +47,7 @@ import {
   getCatalogSnapshot,
   placePosSale,
   searchPosCustomers,
+  createPosCustomer,
   listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
@@ -967,6 +968,95 @@ describe("placePosSale — line discounts", () => {
     );
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].discount).toBe(0);
+  });
+});
+
+describe("createPosCustomer", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+  });
+
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    expect(
+      (await createPosCustomer({ name: "A", phone: "9876543210" })).error,
+    ).toMatch(/signed in/i);
+  });
+
+  // ★ `sell`, not a manager grant: recording who bought something is part of
+  // ringing up a sale, and gating it above the counter means it never happens.
+  it("is open to a cashier", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    const r = await createPosCustomer({ name: "Asha", phone: "9876543210" });
+    expect(r.error).toBeUndefined();
+    expect(r.customer?.id).toBe("pos_abc");
+  });
+
+  it("validates before it writes", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    const r = await createPosCustomer({ name: "Asha", phone: "12345" });
+    expect(r.error).toMatch(/mobile/i);
+    expect(dbHolder.current.calls.values).toHaveLength(0);
+  });
+
+  // ★ The id shape IS the claim mechanism and IS what keeps the row unreadable
+  // by every session (customer RLS matches auth.uid() against users.id).
+  it("writes a pos_ id, scoped to the operator's store", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    await createPosCustomer({ name: "Asha Rao", phone: "+91 98765 43210" });
+    const row = dbHolder.current.calls.values[0];
+    expect(row.id).toMatch(/^pos_/);
+    expect(row.storeId).toBe(CASHIER.storeId);
+    // Normalised, so a later signup typing "9876543210" still matches.
+    expect(row.phone).toBe("9876543210");
+    expect(row.firstName).toBe("Asha");
+    expect(row.lastName).toBe("Rao");
+  });
+
+  it("never lets the caller choose the store", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    await createPosCustomer({
+      name: "Asha",
+      phone: "9876543210",
+      // @ts-expect-error — not in the input type; the point is it is ignored.
+      storeId: "00000000-0000-4000-8000-000000000009",
+    });
+    expect(dbHolder.current.calls.values[0].storeId).toBe(CASHIER.storeId);
+  });
+
+  // ★ A cashier who mistyped a search and typed the number by hand meant
+  // "this person" — answering "already exists" leaves them re-searching with a
+  // queue behind them. It leaks nothing: the search would have found this row.
+  it("attaches the existing customer when the phone is already on file", async () => {
+    dbHolder.current = makeDbMock({
+      returning: [],
+      selectQueue: [
+        [
+          {
+            id: "existing-uid",
+            phone: "9876543210",
+            email: "a@x.com",
+            first_name: "Asha",
+            last_name: "Rao",
+          },
+        ],
+      ],
+    });
+    const r = await createPosCustomer({ name: "Asha", phone: "9876543210" });
+    expect(r.error).toBeUndefined();
+    expect(r.customer).toEqual({
+      id: "existing-uid",
+      name: "Asha Rao",
+      phone: "9876543210",
+      email: "a@x.com",
+    });
+  });
+
+  it("reports an error when the conflict lookup finds nothing", async () => {
+    dbHolder.current = makeDbMock({ returning: [], selectQueue: [[]] });
+    expect(
+      (await createPosCustomer({ name: "A", phone: "9876543210" })).error,
+    ).toBeTruthy();
   });
 });
 

@@ -32,6 +32,12 @@ import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
+  newPosCustomerId,
+  splitName,
+  validatePosCustomer,
+  type PosCustomerInput,
+} from "@/lib/pos/customer-claim";
+import {
   inventoryLevels,
   orderItems,
   orderPayments,
@@ -497,11 +503,10 @@ export interface PosCustomer {
  * or email. Store-scoped, so one store's register can never surface another
  * store's customer list.
  *
- * Only customers who already exist are searchable. The register deliberately
- * cannot CREATE one: `users.id` is the Firebase uid and `(phone, store_id)` is
- * unique, so a till-invented row would collide with — and break — that same
- * person's later online signup. Walk-in capture needs a claim/merge story and
- * belongs with the CRM phase (docs/pos-plan.md Phase 5+).
+ * The register CAN also create one — see `createPosCustomer` below. That was
+ * blocked until pos_13 gave the claim story it needed: a till-invented row now
+ * carries a `pos_…` id and is ADOPTED by that person's later online signup
+ * rather than colliding with it.
  */
 export async function searchPosCustomers(
   query: string,
@@ -556,6 +561,101 @@ export async function searchPosCustomers(
       customers: [],
       error: dbErrorMessage(err, "Couldn't search customers."),
     };
+  }
+}
+
+/**
+ * Record a walk-in the till has never seen before.
+ *
+ * ── ★ THE ID IS `pos_<uuid>`, AND THAT IS THE WHOLE MECHANISM ──────────────
+ * `users.id` IS the Firebase uid, so a row invented here has no natural key. A
+ * synthetic `pos_` id is one the shopper's later signup can ADOPT (see
+ * lib/pos/claim-customer.ts), and — because customer RLS matches `auth.uid()`
+ * against `users.id` — it is also a row no session can ever read. Invisible and
+ * claimable, with no policy written for either.
+ *
+ * ── ★ A DUPLICATE PHONE ATTACHES, IT DOES NOT FAIL ────────────────────────
+ * `(store_id, phone)` is UNIQUE, and the commonest way to reach this action is
+ * a cashier who searched, mistyped, and typed the number in by hand. Answering
+ * "that customer already exists" and stopping would leave them re-searching
+ * with a queue behind them; returning the existing customer is what they meant.
+ * It leaks nothing — it is the same row `searchPosCustomers` would have found
+ * for the number they just typed.
+ *
+ * ★ MANAGER-ONLY? NO — `sell`. Recording who bought something is part of
+ * ringing up a sale, and gating it above the person at the counter means it
+ * never gets done.
+ */
+export async function createPosCustomer(
+  input: PosCustomerInput,
+): Promise<{ customer?: PosCustomer; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+
+  const valid = validatePosCustomer(input);
+  if (!valid.ok) return { error: valid.error };
+
+  const { first, last } = splitName(valid.name);
+  const id = newPosCustomerId(() => crypto.randomUUID());
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .insert(users)
+        .values({
+          id,
+          storeId: op.storeId,
+          phone: valid.phone,
+          email: valid.email,
+          firstName: first,
+          lastName: last,
+        } as typeof users.$inferInsert)
+        // The phone is the identity here, so a conflict on it is "this person
+        // is already on file" — not an error to report.
+        .onConflictDoNothing()
+        .returning({ id: users.id }),
+    );
+
+    if (rows[0]) {
+      return {
+        customer: {
+          id: rows[0].id,
+          name: valid.name,
+          phone: valid.phone,
+          email: valid.email,
+        },
+      };
+    }
+
+    // Conflict: hand back whoever already holds that number for this store.
+    const existing = await withService((db) =>
+      db
+        .select({
+          id: users.id,
+          phone: users.phone,
+          email: users.email,
+          first_name: users.firstName,
+          last_name: users.lastName,
+        })
+        .from(users)
+        .where(and(eq(users.storeId, op.storeId), eq(users.phone, valid.phone)))
+        .limit(1),
+    );
+    const row = existing[0];
+    if (!row) return { error: "Couldn't save that customer." };
+    return {
+      customer: {
+        id: row.id,
+        name:
+          [row.first_name, row.last_name].filter(Boolean).join(" ").trim() ||
+          row.phone,
+        phone: row.phone,
+        email: row.email,
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save that customer.") };
   }
 }
 

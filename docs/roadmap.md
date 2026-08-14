@@ -483,9 +483,8 @@ not render a courier timeline or an empty delivery address. A pickup stays an
 online checkout source internally but is grouped under In store because it is
 a shop-visit journey for the customer.
 
-The remaining gap is still the identity work below: only POS sales explicitly
-attached to an existing customer can appear today. Anonymous walk-ins cannot be
-claimed later until Step 4 ships the unclaimed-customer adoption transaction.
+That gap is now closed by the identity work below: the till can record a walk-in,
+and their later signup adopts the row.
 
 ### What Shopify does
 
@@ -496,8 +495,8 @@ claimed later until Step 4 ships the unclaimed-customer adoption transaction.
 3. At payment → **receipt options**: print, email, text, none. Contact entered
    _there_ attaches to the sale even with no customer record.
 
-**We have (1) search and (2) optional.** We cannot create, and capture no
-contact at receipt time.
+**(1) and (2) SHIPPED.** Search, inline create, and a sale that completes with or
+without a customer. **(3) receipt contact is the remaining piece** — see below.
 
 ### Why creating is hard here
 
@@ -506,9 +505,10 @@ contact at receipt time.
 has no natural primary key — and if that person later signs up online with the
 same phone, **their signup collides with the row we invented for them**.
 
-### Ships — an unclaimed customer, and a claim on signup
+### SHIPPED — an unclaimed customer, and a claim on signup
 
-**Migration.** `supabase/pos_13_customer_claim.sql` (⚠ **not applied**).
+**Migration.** `supabase/pos_13_customer_claim.sql` — ✅ **applied to
+`storemink_staging` 2026-08-14** (all six FKs cascading; the guard passed).
 `users.claimed_at timestamptz` (NULL = never had an account); till-created rows
 get an id of `pos_<uuid>`, which the `text` PK already permits.
 
@@ -538,29 +538,48 @@ that FAILS if any FK to `users.id` still lacks the cascade.
 `auth.uid() = users.id`; a `pos_…` id matches no Firebase uid, so these rows are
 invisible to every session without a single new policy. Do not add one.
 
-**★ THE CLAIM IS THE WHOLE FEATURE.** When someone signs up with a phone
-matching an unclaimed row for that store, `upsertCustomerProfile` must **adopt**
-it rather than fail the unique constraint: rewrite that row's `id` to the
-Firebase uid and stamp `claimed_at`, in ONE transaction. Their in-store purchase
+**★ THE CLAIM IS THE WHOLE FEATURE**, and it is ONE statement with every guard
+in the `WHERE` (`lib/pos/claim-customer.ts`): store scope, the VERIFIED phone,
+`id LIKE 'pos\\_%'`, `claimed_at IS NULL`, and `NOT EXISTS` a row for this uid.
+Two signups racing on one walk-in row: the loser matches zero rows and falls
+through to an ordinary insert. No lock, no window. Their in-store purchase
 history becomes theirs the moment they create an account — the actual CRM payoff,
 not a side effect.
 
-**★ `orders.customer_id` REFERENCES THAT ID.** Rewriting a PK under a live FK
-needs `ON UPDATE CASCADE`, or an explicit update of both tables in the same
-transaction. Either way it must be ONE transaction: a half-claimed customer has
-orders pointing at an id that no longer exists.
+**★ IT RUNS BEFORE THE UPSERT, AND HAS TO.** `(store_id, phone)` is UNIQUE, so
+without the claim first, signup fails with a duplicate key for exactly the
+customers who have shopped here before. Claiming turns that collision into the
+feature. A claimed row is then an UPDATE, so `customer.signed_up` does not fire —
+correct: the store already knows this person; what is new is the ACCOUNT.
+
+**★ THE PHONE IS THE SECURITY BOUNDARY**, and it comes from the verified auth
+identity, never a form. A form-supplied phone would let anyone type a stranger's
+number and inherit their in-store order history. `normalizePhone` is shared by
+both ends: if the till stores "+91 98765 43210" and signup stores "9876543210",
+the claim never fires and the customer silently gets two rows.
 
 **★ A COLLISION WITH A _CLAIMED_ ROW IS NOT A CLAIM.** If the matching row
-already has `claimed_at`, that phone belongs to a real account — the till must
-attach to it, not adopt it. Adopting would hand one customer's order history to
-whoever typed their number.
+already has `claimed_at`, that phone belongs to a real account — the till
+attaches to it rather than adopting. Adopting would hand one customer's order
+history to whoever typed their number. **`claimed_at IS NULL` alone is not
+enough**: a real signup row has it NULL too, so the `pos_` id check is what stops
+one account taking over another's.
 
-**Receipt contact.** The tender panel gains an optional email field feeding the
-existing notification machinery, so a walk-in gets an emailed receipt with no
-account. SMS waits for Step 5.
+**★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
+history; a thrown one would cost the shopper their signup.
 
-**Acceptance:** PS-C.25–C.34. **Effort: 1–1.5 weeks**, and the riskiest work
-here — it touches identity. Land it behind tests before anything else in Step 4.
+**UI.** The create form opens from the EMPTY search result, not a second button —
+"Add customer" beside the search box invites a duplicate of someone already on
+file. The typed query seeds whichever field it looks like. `sell`, not a manager
+grant: recording who bought something is part of ringing up a sale.
+
+**⚠ STILL TO DO — receipt contact.** The tender panel needs an optional email
+field feeding the existing notification machinery, so a walk-in gets an emailed
+receipt with no account. SMS waits for Step 5.
+
+**Acceptance:** PS-C.25–C.34 — **written, not yet exercised in a browser.**
+96 unit tests cover the pure rules, the claim statement, the action and the
+signup ordering; nobody has yet rung up a walk-in on a real till.
 
 ---
 

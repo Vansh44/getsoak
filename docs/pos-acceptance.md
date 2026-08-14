@@ -809,6 +809,92 @@ orders must still reach everyone — `order.placed` is deliberately not narrowed
 
 ---
 
+## 7e. Till-created customers & the signup claim (roadmap Step 4)
+
+⚠ Needs `supabase/pos_13_customer_claim.sql` applied (staging: ✅ 2026-08-14).
+**None of these has been exercised in a browser yet** — 96 unit tests cover the
+rules, the claim statement, the action and the signup ordering, but nobody has
+rung up a walk-in on a real till.
+
+**PS-C.25 — A cashier can record a walk-in**
+Register → Customer → search "Asha". Nothing found.
+**Expect:** an **Add as a new customer** button under "No customer found", and
+below it "Or leave it — the sale can go through without one."
+**Not** a button beside the search box: reaching it only after an empty search
+means the search has happened by construction, so a cashier can't create a
+duplicate of someone already on file.
+
+**PS-C.26 — The typed query seeds the form**
+Search "Asha" → Add. Then separately search "9876543210" → Add.
+**Expect:** the first prefills **Name**, the second prefills **Mobile number**.
+Nothing is retyped.
+
+**PS-C.27 — A mobile is required, a name is required, email is not**
+Try to save with a name and no number.
+**Expect:** "A mobile number is needed so they can be found again later." The
+form also explains why: "The mobile links this to their account if they ever
+sign up online." Saving with no email must succeed.
+
+**PS-C.28 ★ — It attaches immediately**
+Save a new customer.
+**Expect:** the panel switches to the attached-customer card. Nobody adds a
+customer in order to then search for them.
+
+**PS-C.29 ★ — A duplicate phone attaches, it does not fail**
+Add a customer using the phone of someone already on file (the commonest route
+here is a cashier who mistyped a search and typed the number by hand).
+**Expect:** the EXISTING customer attaches, with their real name — not "that
+customer already exists". It leaks nothing: it is the same row the search would
+have returned for the number they just typed.
+
+**PS-C.30 ★ — The sale is attributed**
+Ring up a sale with the new customer attached. Then Dashboard → Orders.
+**Expect:** the order shows that customer. `orders.customer_id` is the
+`pos_<uuid>` id.
+
+**PS-C.31 ★★ — THE CLAIM. Their signup adopts the row**
+As that same person, sign up on the storefront with the SAME mobile number.
+**Expect:** signup succeeds, and `/orders` shows the in-store purchase from
+PS-C.30 under **In store**.
+**Was:** impossible — `(store_id, phone)` is UNIQUE, so the signup would have
+failed with a duplicate key for exactly the customers who have shopped here
+before.
+Check in SQL: that row's `id` is now the Firebase uid, `claimed_at` is stamped,
+and `orders.customer_id` followed it (ON UPDATE CASCADE across all six FKs).
+
+**PS-C.32 ★★ — An unclaimed row can never log in**
+Try to reach any customer page as a `pos_` customer.
+**Expect:** impossible by construction — customer RLS is
+`auth.uid() = users.id` and a `pos_…` id matches no Firebase uid. There is no
+policy for this and none should be added; the id shape IS the mechanism.
+
+**PS-C.33 ★★ — A claimed row is never re-adopted**
+Sign up a SECOND account using a phone that already belongs to a claimed
+customer of that store.
+**Expect:** the signup attaches or fails on the unique constraint — it must NOT
+adopt. Adopting would hand one customer's entire order history to whoever typed
+their number, which is the worst thing this feature could do.
+Same for a phone belonging to a normal signup row: those also have
+`claimed_at IS NULL`, so `claimed_at` alone is not the test — the `pos_` id is.
+
+**PS-C.34 ★ — A failed claim never blocks a signup**
+Break the claim (stop the DB mid-signup, or point it at a bad store id).
+**Expect:** the shopper still gets an account. They lose the link to their
+in-store history — a disappointment, not an outage. The claim never throws, at
+either layer.
+
+**PS-C.35 — A claimed customer is not announced as new**
+Watch `/dashboard/logs` while PS-C.31 runs.
+**Expect:** no `customer.signed_up` event. Correct: the store already knows this
+person from the shop. What is new is the ACCOUNT, not the customer.
+
+**PS-C.36 ⚠ NOT BUILT — receipt contact**
+At the tender panel, look for an email field for a walk-in with no account.
+**Expect:** it is absent. Capturing contact at receipt time is the remaining
+piece of Step 4.
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**
@@ -1959,6 +2045,8 @@ Real and deliberate, so nobody files them as bugs:
 | **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
 | ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
 | **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
+| **A walk-in can't get an emailed receipt**                         | PS-C.36. The till can now RECORD a customer (PS-C.25–C.35), but contact captured at the tender panel — Shopify's receipt options — is not built. Step 4's remaining piece                                                                            |
+| **The customer claim has never been run in a browser**             | PS-C.25–C.35. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                           |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |
