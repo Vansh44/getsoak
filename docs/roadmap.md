@@ -60,12 +60,15 @@ to end in a browser_. Steps 1 and 3 finish it.
 **Release-hardening P1 is verification-first, not another feature track.** The
 ordered gate is: notification actions → shipment/shipping actions → pickup in
 a browser → Razorpay test-mode refunds/billing → autopay → remaining exposed
-actions. The notification action surface is now covered by focused tests for
+actions. The notification action surface is covered by focused tests for
 recipient and host isolation, permission gates, input validation, persistence,
 email safety, personal preferences, audience routing and failed-delivery retry.
-Shipment and shipping actions are next. This gate does not change Step 4's
-place in the product roadmap; it decides when the already-built system is safe
-to expose to real transactions.
+Shipment and shipping actions are also covered: server-side catalog pricing,
+stock and PIN validation; connection and location mapping gates; booking leases;
+resumable provider stages; pickup, tracking, NDR and cancellation; and the
+manual-courier fallback. Browser pickup verification is next. This gate does
+not change Step 4's place in the product roadmap; it decides when the
+already-built system is safe to expose to real transactions.
 
 ---
 

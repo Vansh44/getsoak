@@ -386,9 +386,10 @@ wholesip/
 │   │   ├── logistics-provider-actions.ts # ★ Channels (§35): verify/encrypt BYO Shiprocket
 │   │   │                      # credentials, rotate webhook tokens, sync warehouses
 │   │   ├── shipping-actions.ts # ★ §35 Shipping settings + authoritative checkout and
-│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware)
+│   │   │                      # public PDP PIN quotes (stock/origin/parcel/COD aware). Tested.
 │   │   ├── shipment-actions.ts # ★ §35 pack/book/AWB/label/pickup/manifest/tracking/NDR;
-│   │   │                      # staged idempotency plus a provider-independent manual fallback
+│   │   │                      # staged idempotency plus a provider-independent manual fallback.
+│   │   │                      # Tested across leases, resumable stages and terminal-state gates.
 │   │   ├── ai-credit-actions.ts # ★ AI credits (§16): usage-page data + reconcile,
 │   │   │                      # startCreditPurchase/confirmCreditPurchase (platform Razorpay).
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
