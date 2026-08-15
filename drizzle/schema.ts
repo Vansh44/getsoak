@@ -5531,3 +5531,13 @@ export const notificationSmsQueue = pgTable("notification_sms_queue", {
     .notNull(),
   sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
 });
+
+export const smsSuppressions = pgTable("sms_suppressions", {
+  storeId: uuid("store_id").notNull(),
+  // Ten-digit national form, so a match survives +91 / 0 / bare.
+  phone: text().notNull(),
+  reason: text().default("stop").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});

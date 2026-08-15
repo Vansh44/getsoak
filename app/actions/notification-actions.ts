@@ -102,6 +102,7 @@ import {
 } from "@/lib/notifications/variables";
 import { validateTemplate } from "@/lib/notifications/template";
 import { sanitizeBlogContent } from "@/lib/sanitize";
+import { storeCanSendSms } from "@/lib/sms/channel";
 import { notificationSettings } from "@/drizzle/schema";
 
 export interface NotificationRow {
@@ -800,6 +801,18 @@ export async function saveNotificationConfig(
       for (const [channelKey, on] of Object.entries(audienceInput.channels)) {
         const channel = getChannel(channelKey);
         if (!channel) continue;
+        // ★ SMS IS AVAILABLE PLATFORM-WIDE BUT PER-STORE BY CONNECTION, so
+        // "available" is not the whole answer for it. Refused at SAVE rather
+        // than stored and quietly ignored at send — the same call
+        // `canRequirePrepaid` makes for the prepaid pickup policy (§23): a
+        // setting that does nothing is worse than one you cannot set, because
+        // the merchant believes they turned it on.
+        if (channelKey === "sms" && on && !(await storeCanSendSms(storeId))) {
+          return {
+            error:
+              "Connect Twilio in Channels first — SMS also needs your DLT sender header and Entity ID.",
+          };
+        }
         if (!channel.available && on) {
           return { error: `${channel.label} isn't connected yet.` };
         }

@@ -180,3 +180,34 @@ COMMIT;
 -- DROP TABLE IF EXISTS public.store_sms_templates;
 -- DROP TABLE IF EXISTS public.store_sms_providers;
 -- COMMIT;
+
+-- ── Opt-out (STOP) ──────────────────────────────────────────────────────────
+-- Added after the tables above; safe to re-run.
+--
+-- ★★ PER STORE, NOT GLOBAL — the opposite of email_suppressions (§24). That one
+-- is global on purpose: a hard bounce bounces for everyone and the sending
+-- domain's reputation is the PLATFORM's. An SMS opt-out is the reverse on both
+-- counts. It is consent withdrawn from ONE business, it says nothing about
+-- whether the number works, and the sender header is the MERCHANT's registered
+-- identity rather than a shared one. Global would let one shopper's STOP to one
+-- shop silence every other shop they buy from.
+--
+-- ★ Honouring STOP is a carrier and regulatory requirement, not a courtesy.
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.sms_suppressions (
+  store_id   uuid NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
+  -- The ten-digit national form, so a match is not defeated by +91 vs 0 vs bare.
+  phone      text NOT NULL,
+  reason     text NOT NULL DEFAULT 'stop',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (store_id, phone)
+);
+
+ALTER TABLE public.sms_suppressions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.sms_suppressions FROM anon, authenticated;
+
+COMMENT ON TABLE public.sms_suppressions IS
+  'Numbers that texted STOP to one store (§37). PER STORE, unlike email_suppressions: an SMS opt-out withdraws consent from one business and says nothing about whether the number works.';
+
+COMMIT;
