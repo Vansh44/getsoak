@@ -2207,6 +2207,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         screen). PIN → `posLoginWithPin` (server-side scrypt verify → signed
         `pos_operator` cookie); password → Firebase `signInWithEmailAndPassword`
         - `establishSession` (the standard `sm_session`).
+      - **★★ REGISTRATION IS RESUMABLE, and it was not.** Step 1 creates the
+        Firebase account but the invite is only consumed at step 3, so anyone
+        who closed the tab in between — or whose phone OTP failed — hit
+        `auth/email-already-in-use` on their next try and got "ask your manager
+        to invite a different email". A dead end: a fresh invite to the same
+        address hit the identical wall, and their own invitation had locked
+        them out. Found in PRODUCTION (a `pos_staff` row still `invited`, a
+        live Firebase account, nothing in the database pointing at it). Step 1
+        now falls back to `signInWithEmailAndPassword`, which grants nothing
+        new — it needs the real password, and `completeStaffRegistration` still
+        checks the session's email against the INVITED email and requires an
+        unconsumed token. A resumed attempt that already verified its phone
+        skips straight to the PIN step, because re-verifying one Firebase has
+        already linked is how a resumable flow dead-ends twice. ⚠ The password
+        is deliberately NOT reset for them: an invite token proves inbox
+        control, but silently overwriting the credential of what may be their
+        SHOPPER account elsewhere on the platform is more than this flow is
+        entitled to.
+      - **★★ AND A DASHBOARD ADMIN MAY NOT COMPLETE IT.** Finishing sets a
+        `cashier`/`manager` claim, and `proxy.ts` sends those from `/dashboard`
+        to `/pos` — so an owner who invited themselves "to try the till" would
+        lose the dashboard for EVERY store they administer, recoverable only by
+        editing claims by hand. Firebase claims are per-USER, not per-store, so
+        the check spans all stores; the model genuinely cannot express "admin
+        here, cashier there", and refusing with a reason beats a silent
+        lockout. The owner needs none of this anyway —
+        `resolvePosOperator` resolves an owner with no `pos_staff` row and no
+        device restriction. Fails CLOSED, and uses try/catch rather than
+        `.catch()` because a synchronous throw inside the callback escapes
+        `withService` before it becomes a promise (a test caught that).
       - **Self-service reset** ("Forgot PIN or password?" on the login screen):
         `requestPosCredentialReset` mails a single-use, 1-hour link to
         `/pos/reset?token=…` (`reset_token`/`reset_expires_at`, added by

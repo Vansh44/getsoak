@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
-import { posStaff, posStaffLocations } from "@/drizzle/schema";
+import { admins, posStaff, posStaffLocations } from "@/drizzle/schema";
 import {
   getActingStoreId,
   getManagerIdentity,
@@ -478,6 +478,47 @@ export async function completeStaffRegistration(
   // The account they created must match the invited email.
   if ((user.email ?? "").toLowerCase() !== staff.email.toLowerCase()) {
     return { error: "Use the email address your invitation was sent to." };
+  }
+
+  // ★★ A DASHBOARD ADMIN MUST NOT COMPLETE THIS, or they lock themselves out.
+  // Finishing sets a `cashier`/`manager` role claim, and proxy.ts sends those
+  // straight from /dashboard to /pos — so an owner who invites themselves "to
+  // try the till" would lose the dashboard for every store they administer,
+  // recoverable only by editing claims by hand.
+  //
+  // Firebase custom claims are per-USER, not per-store, which is why this looks
+  // across ALL stores rather than just this one: a claim earned at shop B
+  // bounces them out of shop A's dashboard just the same. The current claim
+  // model genuinely cannot represent "admin here, cashier there", so refusing
+  // and saying why beats a silent lockout.
+  //
+  // ⚠ The owner does not need this anyway — resolvePosOperator resolves an
+  // owner with no pos_staff row and no device restriction (§22).
+  // try/catch rather than `.catch()`: a synchronous throw from inside the
+  // callback escapes withService before it becomes a promise, so a trailing
+  // .catch() would miss it and the whole action would reject instead of
+  // failing closed. A test caught exactly that.
+  let adminRows: { id: string }[] | null = null;
+  try {
+    adminRows = await withService((db) =>
+      db
+        .select({ id: admins.id })
+        .from(admins)
+        .where(eq(admins.id, user.id))
+        .limit(1),
+    );
+  } catch {
+    adminRows = null;
+  }
+  // A read failure fails CLOSED: wrongly refusing costs a retry, wrongly
+  // allowing costs a dashboard.
+  if (adminRows === null || adminRows.length > 0) {
+    return {
+      error:
+        adminRows === null
+          ? "Couldn't verify this account. Please try again."
+          : "This email is already a dashboard admin, and staff accounts can't sign in to the dashboard. Ask for the invitation to be sent to a different address — as an owner or admin you can already use the register without one.",
+    };
   }
 
   try {

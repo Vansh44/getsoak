@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
   PhoneAuthProvider,
   RecaptchaVerifier,
   updatePhoneNumber,
@@ -61,7 +62,23 @@ export function RegisterClient({
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
 
-  // Step 1 — password → create the Firebase account.
+  // Step 1 — password → create the Firebase account, or SIGN IN to one that
+  // already exists.
+  //
+  // ── ★★ WHY THIS FALLS BACK TO SIGN-IN RATHER THAN REFUSING ────────────────
+  // This step used to dead-end on `auth/email-already-in-use` with "ask your
+  // manager to invite a different email", which made the whole flow
+  // UNRESUMABLE: the account is created here, but the invite is only consumed
+  // at step 3, so anyone who closed the tab after step 1 — or whose phone OTP
+  // failed — could never get back in. Their own invitation locked them out, and
+  // a fresh invite to the same address hit the identical wall. Observed in
+  // production: a `pos_staff` row still `invited`, a live Firebase account, and
+  // nothing in the database pointing at it.
+  //
+  // Signing in grants nothing new: it needs the account's real password, and
+  // `completeStaffRegistration` still checks that the session's email equals
+  // the INVITED email and that the token is valid and unconsumed. All this
+  // changes is that a half-finished attempt can be picked up where it stopped.
   async function handlePassword() {
     if (password.length < 8)
       return setError("Password must be at least 8 characters.");
@@ -71,18 +88,36 @@ export function RegisterClient({
     try {
       await createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
     } catch (err) {
-      setBusy(false);
-      if ((err as { code?: string })?.code === "auth/email-already-in-use") {
+      if ((err as { code?: string })?.code !== "auth/email-already-in-use") {
+        setBusy(false);
+        return setError(firebaseAuthErrorMessage(err));
+      }
+      // The account exists — almost always their own abandoned attempt, but
+      // possibly a shopper account on this platform under the same address.
+      try {
+        await signInWithEmailAndPassword(getFirebaseAuth(), email, password);
+      } catch {
+        setBusy(false);
+        // ★ The password is NOT reset for them. An invite token proves inbox
+        // control, but silently overwriting the credential of an account that
+        // may be their shopper login elsewhere on the platform is a bigger act
+        // than this flow is entitled to. Say what to type instead.
         return setError(
-          "This email already has an account. Ask your manager to invite a different email.",
+          "This email already has a StoreMink account. Enter that account's existing password to continue, or reset it from the sign-in page.",
         );
       }
-      return setError(firebaseAuthErrorMessage(err));
     }
     const sessErr = await establishSession();
+    if (sessErr) {
+      setBusy(false);
+      return setError(sessErr);
+    }
+    // ★ SKIP A STEP ALREADY DONE. A resumed attempt may already have a verified
+    // phone, and asking them to re-verify one Firebase would then reject as
+    // already linked is how a resumable flow dead-ends a second time.
+    const verified = Boolean(getFirebaseAuth().currentUser?.phoneNumber);
     setBusy(false);
-    if (sessErr) return setError(sessErr);
-    setStep("phone");
+    setStep(verified ? "pin" : "phone");
   }
 
   // Step 2 — phone OTP → link to the account.
