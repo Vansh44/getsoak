@@ -483,9 +483,8 @@ not render a courier timeline or an empty delivery address. A pickup stays an
 online checkout source internally but is grouped under In store because it is
 a shop-visit journey for the customer.
 
-The remaining gap is still the identity work below: only POS sales explicitly
-attached to an existing customer can appear today. Anonymous walk-ins cannot be
-claimed later until Step 4 ships the unclaimed-customer adoption transaction.
+That gap is now closed by the identity work below: the till can record a walk-in,
+and their later signup adopts the row.
 
 ### What Shopify does
 
@@ -496,8 +495,8 @@ claimed later until Step 4 ships the unclaimed-customer adoption transaction.
 3. At payment → **receipt options**: print, email, text, none. Contact entered
    _there_ attaches to the sale even with no customer record.
 
-**We have (1) search and (2) optional.** We cannot create, and capture no
-contact at receipt time.
+**(1) and (2) SHIPPED.** Search, inline create, and a sale that completes with or
+without a customer. **(3) receipt contact is the remaining piece** — see below.
 
 ### Why creating is hard here
 
@@ -506,49 +505,182 @@ contact at receipt time.
 has no natural primary key — and if that person later signs up online with the
 same phone, **their signup collides with the row we invented for them**.
 
-### Ships — an unclaimed customer, and a claim on signup
+### SHIPPED — an unclaimed customer, and a claim on signup
 
-**Migration.** `users.claimed_at timestamptz` (NULL = never had an account).
-Till-created rows get an id of `pos_<uuid>`, which the `text` PK already permits.
+**Migration.** `supabase/pos_13_customer_claim.sql` — ✅ **applied to
+`storemink_staging` 2026-08-14** (all six FKs cascading; the guard passed).
+`users.claimed_at timestamptz` (NULL = never had an account); till-created rows
+get an id of `pos_<uuid>`, which the `text` PK already permits.
+
+**★★ CORRECTED 2026-08-09, AFTER CHECKING THE LIVE SCHEMA. The note below said
+"rewrite the id, or update both tables in the same transaction". Neither works.**
+**SIX** tables reference `users.id` — `orders`, `customer_addresses`,
+`product_reviews`, `blog_comments`, `blogs.submitted_by`, `user_group_members` —
+and every one is **NOT DEFERRABLE** with `ON UPDATE NO ACTION`. The FK is checked
+at the end of each STATEMENT, so both orderings fail: update the parent and the
+children reference an id that is gone; update the children and they reference one
+that does not exist yet.
+
+**★ AND THE SCHEMA-FREE ALTERNATIVE IS WORSE.** "Insert the new row, repoint the
+children, delete the `pos_` row" needs no migration — but **five of those six FKs
+are `ON DELETE CASCADE`**. Miss one table in the repoint and the DELETE does not
+fail; it silently cascade-deletes that customer's ORDERS. A seventh FK added next
+year reintroduces it, and nothing tells whoever adds it that a hand-written list
+exists.
+
+So the migration puts `ON UPDATE CASCADE` on all six and lets the DATABASE keep
+the list: adoption becomes one statement, and a future FK either cascades
+correctly or fails loudly. `ON DELETE` is left exactly as it was — a different
+question this migration has no business answering. The file ends with a guard
+that FAILS if any FK to `users.id` still lacks the cascade.
 
 **★ AN UNCLAIMED ROW CAN NEVER LOG IN, AND THAT IS AUTOMATIC.** Customer RLS is
 `auth.uid() = users.id`; a `pos_…` id matches no Firebase uid, so these rows are
 invisible to every session without a single new policy. Do not add one.
 
-**★ THE CLAIM IS THE WHOLE FEATURE.** When someone signs up with a phone
-matching an unclaimed row for that store, `upsertCustomerProfile` must **adopt**
-it rather than fail the unique constraint: rewrite that row's `id` to the
-Firebase uid and stamp `claimed_at`, in ONE transaction. Their in-store purchase
+**★ THE CLAIM IS THE WHOLE FEATURE**, and it is ONE statement with every guard
+in the `WHERE` (`lib/pos/claim-customer.ts`): store scope, the VERIFIED phone,
+`id LIKE 'pos\\_%'`, `claimed_at IS NULL`, and `NOT EXISTS` a row for this uid.
+Two signups racing on one walk-in row: the loser matches zero rows and falls
+through to an ordinary insert. No lock, no window. Their in-store purchase
 history becomes theirs the moment they create an account — the actual CRM payoff,
 not a side effect.
 
-**★ `orders.customer_id` REFERENCES THAT ID.** Rewriting a PK under a live FK
-needs `ON UPDATE CASCADE`, or an explicit update of both tables in the same
-transaction. Either way it must be ONE transaction: a half-claimed customer has
-orders pointing at an id that no longer exists.
+**★ IT RUNS BEFORE THE UPSERT, AND HAS TO.** `(store_id, phone)` is UNIQUE, so
+without the claim first, signup fails with a duplicate key for exactly the
+customers who have shopped here before. Claiming turns that collision into the
+feature. A claimed row is then an UPDATE, so `customer.signed_up` does not fire —
+correct: the store already knows this person; what is new is the ACCOUNT.
+
+**★ THE PHONE IS THE SECURITY BOUNDARY**, and it comes from the verified auth
+identity, never a form. A form-supplied phone would let anyone type a stranger's
+number and inherit their in-store order history. `normalizePhone` is shared by
+both ends: if the till stores "+91 98765 43210" and signup stores "9876543210",
+the claim never fires and the customer silently gets two rows.
 
 **★ A COLLISION WITH A _CLAIMED_ ROW IS NOT A CLAIM.** If the matching row
-already has `claimed_at`, that phone belongs to a real account — the till must
-attach to it, not adopt it. Adopting would hand one customer's order history to
-whoever typed their number.
+already has `claimed_at`, that phone belongs to a real account — the till
+attaches to it rather than adopting. Adopting would hand one customer's order
+history to whoever typed their number. **`claimed_at IS NULL` alone is not
+enough**: a real signup row has it NULL too, so the `pos_` id check is what stops
+one account taking over another's.
 
-**Receipt contact.** The tender panel gains an optional email field feeding the
-existing notification machinery, so a walk-in gets an emailed receipt with no
-account. SMS waits for Step 5.
+**★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
+history; a thrown one would cost the shopper their signup.
 
-**Acceptance:** PS-C.25–C.34. **Effort: 1–1.5 weeks**, and the riskiest work
-here — it touches identity. Land it behind tests before anything else in Step 4.
+**UI.** The create form opens from the EMPTY search result, not a second button —
+"Add customer" beside the search box invites a duplicate of someone already on
+file. The typed query seeds whichever field it looks like. `sell`, not a manager
+grant: recording who bought something is part of ringing up a sale.
+
+**SHIPPED — receipt contact.** An optional email box on the tender panel
+(`lib/email/pos-receipt.ts`). It deliberately does NOT feed the notification
+spine: that routes an EVENT to IDENTIFIED recipients honouring preferences and
+digests, and a walk-in has no identity — no `users` row, so no inbox, no
+preferences, no digest. It is still a `sendEmail` call, so it lands in
+`email_logs` and the CI send-coverage guard stays satisfied.
+`shouldSendDirectReceipt` (pure) keeps it to exactly ONE receipt: it fires only
+where the fan-out will not — no attached customer, or one with no address on
+file, read in the same query as the ownership check. A bad address is dropped
+rather than refused, because this runs after the money is taken. SMS waits for
+Step 5.
+
+**Acceptance:** PS-C.25–C.43 — **written, not yet exercised in a browser.**
+117 unit tests cover the pure rules, the claim statement, the actions, the
+signup ordering and the receipt; nobody has yet rung up a walk-in on a real
+till.
 
 ---
 
 ## Step 5 — Receipts
 
-Email receipts for POS sales (Step 4 captures the address), then WhatsApp/SMS via
-Twilio behind the existing channel abstraction — `sms` and `whatsapp` are already
-declared and `available: false` in `lib/notifications/channels.ts`. Unlocking
-them is the work; the fan-out, the queue and the templates exist.
+**Email is DONE** — it shipped with Step 4, because capturing an address that
+nothing sends to would be a field promising a receipt that never arrives.
 
-**Effort: 3–4 days** for email, **~1 week** for Twilio.
+### ★★ CORRECTED 2026-08-15, AFTER CHECKING TRAI'S RULES
+
+**This step said "unlocking them is the work; the fan-out, the queue and the
+templates exist." That is wrong, and wrong in a way that changes the design.**
+
+TRAI's TCCCPR requires every business sending commercial SMS to an Indian number
+to register on an operator-run **DLT** portal. Three things are registered, and
+all three are per-BUSINESS, not per-platform:
+
+1. the **Principal Entity** (a PE-ID),
+2. the **sender header** — 6 characters, alphabetic for transactional,
+3. **every message template**, with its variables marked.
+
+A message whose body does not match an approved template, or whose header is not
+registered to that entity, is **blocked at the carrier**. It does not bounce and
+it does not error usefully — it simply never arrives. Registration takes
+**7–21 business days**.
+
+Three consequences, none of them optional:
+
+**★ SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE EMAIL.**
+StoreMink cannot send from a generic header, because the header IS the
+merchant's registered identity. There is no "turn on SMS" switch that could ever
+work on its own — which is why `available: false` must not simply be flipped.
+
+**★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates are free
+text with `{{token}}` substitution, validated only for unknown tokens. DLT is the
+opposite: the body is FIXED at registration and only marked variables may vary.
+An SMS body therefore cannot be authored in the notification console the way an
+email body is — it is authored on the DLT portal, approved there, and MIRRORED
+here with its template id.
+
+**★ A SEGMENT IS A UNIT OF COST, AND ONE CHARACTER RE-PRICES A WHOLE MESSAGE.**
+GSM-7 fits 160 characters; a single character outside that set — an emoji, curly
+quotes, or **₹** — forces the entire message to UCS-2 at 70. A 150-character
+template costs one segment until someone types a rupee sign, then three.
+
+### Shipped — the pure rules
+
+`lib/sms/dlt.ts` (+ 30 tests), which is all of the above that can be settled
+without a provider account, a merchant registration or a phone:
+`checkDltTemplate`, `renderDltBody` (positional, because `{#var#}` carries no
+name), `bodyMatchesTemplate` (the carrier asks this, so we ask it first),
+`normalizeSenderHeader`, and `smsSegments`.
+
+⚠ Deliberately NOT encoded: the maximum variables per template, and whether a
+variable may open a message. Operator documentation asserts these
+inconsistently, and a rule invented here would reject templates the merchant's
+own portal approved — leaving them unable to tell whose rule they broke.
+
+### Decided 2026-08-15 — BYO per store
+
+Merchants connect their own Twilio account in **Channels → Twilio SMS**.
+StoreMink never fronts the carrier bill and never carries their spam risk.
+
+**Shipped since:** the schema (`supabase/sms_01_schema.sql`, ⚠ **not applied**),
+the Twilio client and the `lib/sms/send.ts` choke point with its coverage guard,
+the Channels connection card, the SMS log as a sixth log plus a Failures source,
+and the DLT template mirror actions. See CODEBASE §37.
+
+### ✅ IT SENDS
+
+All five remaining pieces shipped: the queue worker on the existing email
+heartbeat, per-store channel resolution, phone resolution for both audiences,
+the SMS tab in the notification console, and STOP enforcement. `available` is
+now `true` — safe because it is a PLATFORM statement, while delivery is three
+per-store conditions resolved at fan-out. See CODEBASE §37.
+
+### ⚠ What is genuinely left
+
+1. **An inbound webhook to RECEIVE STOP.** `classifyInbound` and `suppressPhone`
+   are built and tested; nothing calls them. A merchant's Twilio number needs a
+   messaging webhook pointed at us. Until then opt-out is ENFORCED on send but
+   can only be RECORDED by hand — the wrong way round for the one part of this a
+   regulator cares about.
+2. **The `sms_suppressions` migration** — appended to `supabase/sms_01_schema.sql`
+   after the rest of that file was applied, so it needs running on its own.
+3. **Nobody has sent a real message.** Every path is unit-tested against mocks;
+   none has touched Twilio, and no merchant has a DLT registration to test with.
+   The first real send is the first real test.
+
+WhatsApp remains out of scope (owner, 2026-08-15). It needs no DLT but does need
+Meta Business verification and Meta-approved templates, so it is a separate track
+rather than a cheaper substitute.
 
 ---
 

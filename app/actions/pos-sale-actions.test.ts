@@ -17,6 +17,13 @@ vi.mock("@/lib/notifications/record", () => ({
   recordEvent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
+vi.mock("@/lib/email/pos-receipt", async (orig) => ({
+  // Keep the REAL rule — the point of these tests is that placePosSale asks it
+  // correctly — and stub only the send.
+  ...(await orig<Record<string, unknown>>()),
+  sendPosReceipt: vi.fn(),
+}));
+vi.mock("next/server", () => ({ after: (fn: () => unknown) => fn() }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
   clientIp: vi.fn(() => "1.2.3.4"),
@@ -43,10 +50,12 @@ import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { sendPosReceipt } from "@/lib/email/pos-receipt";
 import {
   getCatalogSnapshot,
   placePosSale,
   searchPosCustomers,
+  createPosCustomer,
   listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
@@ -967,6 +976,179 @@ describe("placePosSale — line discounts", () => {
     );
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].discount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Emailing a receipt to a walk-in (roadmap Step 4).
+// ---------------------------------------------------------------------------
+describe("placePosSale — receipt email", () => {
+  it("sends one to a walk-in who asked for it", async () => {
+    const r = await placePosSale([line], cash, {
+      receiptEmail: "asha@example.com",
+    });
+    expect(r.success).toBe(true);
+    expect(sendPosReceipt).toHaveBeenCalledTimes(1);
+    const sent = vi.mocked(sendPosReceipt).mock.calls[0][0];
+    expect(sent.to).toBe("asha@example.com");
+    expect(sent.storeId).toBe("store-1");
+    // The SAME figures the thermal receipt prints, so paper and inbox agree.
+    expect(sent.summary.total).toBe(118);
+    expect(sent.summary.items?.[0]?.name).toBeTruthy();
+  });
+
+  it("sends nothing when nobody asked", async () => {
+    await placePosSale([line], cash);
+    expect(sendPosReceipt).not.toHaveBeenCalled();
+  });
+
+  // ★ A typo in an OPTIONAL field must never fail a sale that has already taken
+  // money and moved stock (invariant 6).
+  it("drops an unusable address instead of refusing the sale", async () => {
+    const r = await placePosSale([line], cash, {
+      receiptEmail: "not-an-email",
+    });
+    expect(r.success).toBe(true);
+    expect(sendPosReceipt).not.toHaveBeenCalled();
+  });
+
+  it("normalises the address it sends to", async () => {
+    await placePosSale([line], cash, {
+      receiptEmail: "  ASHA@Example.COM  ",
+    });
+    expect(vi.mocked(sendPosReceipt).mock.calls[0][0].to).toBe(
+      "asha@example.com",
+    );
+  });
+
+  // The ownership check reads the customer FIRST, so its row goes at the head
+  // of the happy-path queue. ⚠ Getting this wrong makes the sale fail, and a
+  // failed sale sends no receipt — so a "does not send" assertion would pass
+  // for entirely the wrong reason. Both cases assert success as well.
+  function seedWithCustomer(email: string | null) {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [{ id: "cust-1", email }], // 0 customer ownership + address
+        [PRODUCT], // 1 products
+        [BILLING], // 2 billing
+        [TAX_CLASS], // 3 tax classes
+        [{ state_code: "07" }], // 4 location state
+        [{ prefix: "DEL" }], // 5 receipt prefix
+      ],
+      executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
+      returning: [{ id: "o1", order_ref: "ORD100110006" }],
+    });
+  }
+
+  // ★ ONE RECEIPT, NEVER TWO. An attached customer with an address already gets
+  // the order.placed fan-out's confirmation.
+  it("does NOT send when the attached customer will get the fan-out's copy", async () => {
+    seedWithCustomer("cust@example.com");
+    const r = await placePosSale([line], cash, {
+      customerId: "cust-1",
+      receiptEmail: "asha@example.com",
+    });
+    expect(r.success).toBe(true); // or the assertion below is vacuous
+    expect(sendPosReceipt).not.toHaveBeenCalled();
+  });
+
+  it("DOES send for an attached customer with no address on file", async () => {
+    seedWithCustomer(null);
+    const r = await placePosSale([line], cash, {
+      customerId: "cust-1",
+      receiptEmail: "asha@example.com",
+    });
+    expect(r.success).toBe(true);
+    expect(sendPosReceipt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createPosCustomer", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+  });
+
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    expect(
+      (await createPosCustomer({ name: "A", phone: "9876543210" })).error,
+    ).toMatch(/signed in/i);
+  });
+
+  // ★ `sell`, not a manager grant: recording who bought something is part of
+  // ringing up a sale, and gating it above the counter means it never happens.
+  it("is open to a cashier", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    const r = await createPosCustomer({ name: "Asha", phone: "9876543210" });
+    expect(r.error).toBeUndefined();
+    expect(r.customer?.id).toBe("pos_abc");
+  });
+
+  it("validates before it writes", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    const r = await createPosCustomer({ name: "Asha", phone: "12345" });
+    expect(r.error).toMatch(/mobile/i);
+    expect(dbHolder.current.calls.values).toHaveLength(0);
+  });
+
+  // ★ The id shape IS the claim mechanism and IS what keeps the row unreadable
+  // by every session (customer RLS matches auth.uid() against users.id).
+  it("writes a pos_ id, scoped to the operator's store", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    await createPosCustomer({ name: "Asha Rao", phone: "+91 98765 43210" });
+    const row = dbHolder.current.calls.values[0];
+    expect(row.id).toMatch(/^pos_/);
+    expect(row.storeId).toBe(CASHIER.storeId);
+    // Normalised, so a later signup typing "9876543210" still matches.
+    expect(row.phone).toBe("9876543210");
+    expect(row.firstName).toBe("Asha");
+    expect(row.lastName).toBe("Rao");
+  });
+
+  it("never lets the caller choose the store", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ id: "pos_abc" }] });
+    await createPosCustomer({
+      name: "Asha",
+      phone: "9876543210",
+      // @ts-expect-error — not in the input type; the point is it is ignored.
+      storeId: "00000000-0000-4000-8000-000000000009",
+    });
+    expect(dbHolder.current.calls.values[0].storeId).toBe(CASHIER.storeId);
+  });
+
+  // ★ A cashier who mistyped a search and typed the number by hand meant
+  // "this person" — answering "already exists" leaves them re-searching with a
+  // queue behind them. It leaks nothing: the search would have found this row.
+  it("attaches the existing customer when the phone is already on file", async () => {
+    dbHolder.current = makeDbMock({
+      returning: [],
+      selectQueue: [
+        [
+          {
+            id: "existing-uid",
+            phone: "9876543210",
+            email: "a@x.com",
+            first_name: "Asha",
+            last_name: "Rao",
+          },
+        ],
+      ],
+    });
+    const r = await createPosCustomer({ name: "Asha", phone: "9876543210" });
+    expect(r.error).toBeUndefined();
+    expect(r.customer).toEqual({
+      id: "existing-uid",
+      name: "Asha Rao",
+      phone: "9876543210",
+      email: "a@x.com",
+    });
+  });
+
+  it("reports an error when the conflict lookup finds nothing", async () => {
+    dbHolder.current = makeDbMock({ returning: [], selectQueue: [[]] });
+    expect(
+      (await createPosCustomer({ name: "A", phone: "9876543210" })).error,
+    ).toBeTruthy();
   });
 });
 

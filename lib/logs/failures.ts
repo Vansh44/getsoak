@@ -34,6 +34,7 @@ import {
   orders,
   stores,
   billingPaymentAttempts,
+  smsLogs,
 } from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
 import {
@@ -111,6 +112,39 @@ export const FAILURE_SOURCES: FailureSource[] = [
           occurredAt: r.createdAt,
           storeId: r.storeId,
           href: "/dashboard/logs/email-logs?status=failed",
+        }));
+      }),
+  },
+  {
+    ...meta("sms"),
+    fetch: (scope, limit) =>
+      withService(async (db) => {
+        const rows = await db
+          .select({
+            id: smsLogs.id,
+            storeId: smsLogs.storeId,
+            to: smsLogs.toPhone,
+            eventKey: smsLogs.eventKey,
+            error: smsLogs.error,
+            createdAt: smsLogs.createdAt,
+          })
+          .from(smsLogs)
+          .where(
+            and(
+              eq(smsLogs.status, "failed"),
+              storeFilter(scope, smsLogs.storeId),
+            ),
+          )
+          .orderBy(desc(smsLogs.createdAt))
+          .limit(limit);
+        return rows.map((r) => ({
+          id: `sms:${r.id}`,
+          source: "sms" as const,
+          title: `${r.eventKey ?? "SMS"} to ${r.to} failed`,
+          detail: r.error,
+          occurredAt: r.createdAt,
+          storeId: r.storeId,
+          href: "/dashboard/logs/sms-logs?status=failed",
         }));
       }),
   },

@@ -18,12 +18,20 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Activity, AlertTriangle, Download, Mail, Upload } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  Download,
+  Mail,
+  MessageSquare,
+  Upload,
+} from "lucide-react";
 import { LOG_TYPES, activeLogKey, type LogType } from "./log-types";
 
 const ICONS = {
   activity: Activity,
   mail: Mail,
+  message: MessageSquare,
   download: Download,
   upload: Upload,
   alert: AlertTriangle,

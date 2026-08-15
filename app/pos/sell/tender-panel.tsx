@@ -38,6 +38,8 @@ export function TenderPanel({
   onCancel,
   onComplete,
   onVerifyManager,
+  receiptEmail,
+  onReceiptEmail,
 }: {
   total: number;
   /** The collection counter is settling an order bought weeks ago, not ringing
@@ -58,6 +60,15 @@ export function TenderPanel({
   onVerifyManager?: (
     pin: string,
   ) => Promise<{ approved?: boolean; token?: string; error?: string }>;
+  /**
+   * Where to email a copy of the receipt (Shopify's receipt options).
+   *
+   * ★ OPT-IN VIA THE HANDLER, so the collection counter — which shares this
+   * panel — is untouched: that order was placed online and already has an
+   * address on it, so asking again at hand-over would be a field with no job.
+   */
+  receiptEmail?: string;
+  onReceiptEmail?: (value: string) => void;
 }) {
   const [method, setMethod] = useState<PosTenderMethod>("cash");
   const [amount, setAmount] = useState<string>("");
@@ -298,8 +309,30 @@ export function TenderPanel({
               </>
             )}
 
+            {onReceiptEmail && (
+              <label className="mb-2 block">
+                <span className="mb-1 block text-xs text-white/50">
+                  Email a receipt (optional)
+                </span>
+                <input
+                  value={receiptEmail ?? ""}
+                  inputMode="email"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder="name@example.com"
+                  onChange={(e) => onReceiptEmail(e.target.value.slice(0, 160))}
+                  className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/25 focus:border-white/40"
+                />
+              </label>
+            )}
+
             {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
 
+            {/* ★ NEVER GATED ON THE EMAIL. A typo or an empty box must not stop
+                someone paying — the paper receipt is the real one, and a till
+                that refuses a sale over an optional field is unusable
+                (roadmap invariant 6). */}
             <button
               type="button"
               disabled={busy || taken.length === 0 || !covered}

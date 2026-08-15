@@ -20,6 +20,7 @@ export const MAILER_KEYS = [
   "notification_test",
   "pos_staff_invite",
   "pos_credential_reset",
+  "pos_receipt",
   // Billing (platform → merchant)
   "billing",
   // Platform security
@@ -86,6 +87,14 @@ export const MAILERS: MailerDef[] = [
     key: "notification_test",
     label: "Test send",
     description: 'A "send test to me" from the notification editor.',
+  },
+  {
+    key: "pos_receipt",
+    label: "POS receipt",
+    description: "A copy of an in-store receipt, emailed to the shopper.",
+    // NOT sensitive: it carries what someone bought and what they paid, which
+    // is exactly what an order row already shows any member of staff. There is
+    // no credential in it.
   },
   {
     key: "pos_staff_invite",
