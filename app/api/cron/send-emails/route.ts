@@ -3,11 +3,14 @@ import { NextResponse } from "next/server";
 import { processEmailQueue } from "@/lib/email/campaign-worker";
 import { processNotificationEmails } from "@/lib/email/notification-worker";
 import { runSmsWorker } from "@/lib/sms/worker";
+import { processAnnouncements } from "@/lib/announcements/worker";
 import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 
-// Drains BOTH outbound email queues:
-//   • coupon campaigns      (email_campaign_recipients)
-//   • notification emails   (notification_email_queue — CODEBASE.md §22)
+// Drains every outbound queue:
+//   • coupon campaigns          (email_campaign_recipients)
+//   • notification emails       (notification_email_queue — CODEBASE.md §22)
+//   • platform announcements    (platform_announcement_recipients — §38)
+//   • notification SMS          (notification_sms_queue — §37)
 //
 // One route, because they share a trigger, a secret, and a self-chaining
 // pattern — and because the cron plan allows few schedules (Vercel Hobby caps
@@ -56,17 +59,30 @@ async function handle(request: Request) {
   // another in the response.
   const sms = await runSmsWorker().catch(() => null);
 
+  // ★ ANNOUNCEMENTS RIDE THE SAME HEARTBEAT, for the reason above: a separate
+  // schedule is one more thing to create and one more thing to forget.
+  // Sequential with the two Resend queues on purpose — it shares their account
+  // and therefore their rate limit.
+  const announcements = await processAnnouncements().catch(() => null);
+
   // More to do in ANY queue? Chain another run after this response is sent.
   // A full SMS batch means there is probably more behind it.
   if (
     campaigns.remaining > 0 ||
     notifications.remaining > 0 ||
+    (announcements?.remaining ?? 0) > 0 ||
     (sms?.claimed ?? 0) >= 50
   ) {
     after(() => triggerEmailWorker());
   }
 
-  return NextResponse.json({ ok: true, campaigns, notifications, sms });
+  return NextResponse.json({
+    ok: true,
+    campaigns,
+    notifications,
+    sms,
+    announcements,
+  });
 }
 
 export const GET = handle;

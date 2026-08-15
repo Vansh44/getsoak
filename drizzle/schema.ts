@@ -5541,3 +5541,74 @@ export const smsSuppressions = pgTable("sms_suppressions", {
     .defaultNow()
     .notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// Platform announcements (§38) — StoreMink telling its MERCHANTS something.
+// Schema + rationale: supabase/announcements_01_schema.sql. Service-role only.
+// ---------------------------------------------------------------------------
+
+export const platformAnnouncements = pgTable("platform_announcements", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  title: text().notNull(),
+  /** 'feature' honours marketing_opt_in; 'operational' does not. */
+  category: text().default("feature").notNull(),
+  subject: text().default("").notNull(),
+  body: text().default("").notNull(),
+  ctaLabel: text("cta_label"),
+  ctaUrl: text("cta_url"),
+  /** A DLT-registered string, NOT a truncation of `body` (§37). */
+  smsBody: text("sms_body"),
+  dltTemplateId: text("dlt_template_id"),
+  channels: jsonb().default({ email: true, sms: false }).notNull(),
+  audience: jsonb().default({}).notNull(),
+  status: text().default("draft").notNull(),
+  total: integer().default(0).notNull(),
+  sent: integer().default(0).notNull(),
+  failed: integer().default(0).notNull(),
+  skipped: integer().default(0).notNull(),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
+});
+
+export const platformAnnouncementRecipients = pgTable(
+  "platform_announcement_recipients",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    announcementId: uuid("announcement_id").notNull(),
+    /** One row per person PER CHANNEL — they succeed and fail separately. */
+    channel: text().notNull(),
+    email: text(),
+    phone: text(),
+    name: text(),
+    storeId: uuid("store_id"),
+    personKind: text("person_kind"),
+    role: text(),
+    /** `skipped` is a decision we made; `failed` is one the provider made. */
+    status: text().default("pending").notNull(),
+    error: text(),
+    attempts: integer().default(0).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true, mode: "string" }),
+    sentAt: timestamp("sent_at", { withTimezone: true, mode: "string" }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.announcementId],
+      foreignColumns: [platformAnnouncements.id],
+      name: "platform_announcement_recipients_announcement_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "platform_announcement_recipients_store_id_fkey",
+    }).onDelete("set null"),
+  ],
+);

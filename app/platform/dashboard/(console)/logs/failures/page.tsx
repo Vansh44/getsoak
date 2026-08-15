@@ -1,6 +1,3 @@
-import { redirect } from "next/navigation";
-import { getServerUser } from "@/lib/auth/server-user";
-import { getPlatformViewer } from "@/app/actions/platform";
 import {
   FAILURE_SOURCES,
   collectFailures,
@@ -8,6 +5,7 @@ import {
   type FailureSourceKey,
 } from "@/lib/logs/failures";
 import { FailuresView } from "@/app/dashboard/logs/failures/failures-view";
+import { requireOperator } from "../../require-operator";
 
 export const metadata = { title: "Failures — StoreMink Admin" };
 
@@ -15,8 +13,9 @@ export const metadata = { title: "Failures — StoreMink Admin" };
 //
 // ★ THIS IS THE ONLY PLACE `{ kind: "platform" }` IS CONSTRUCTED. It drops the
 // store filter, so the gate below is the whole of the access control — hence
-// the same getServerUser + getPlatformViewer pair every console page uses, and
-// hence its living under app/platform/, which only ever renders on
+// `requireOperator()` on the page itself (the layout's redirect does not abort
+// a concurrently-rendering page), and hence its living under app/platform/,
+// which only ever renders on
 // storemink.com (proxy.ts). A merchant host can't reach this route.
 //
 // ⚠ It still shows only MERCHANT-READABLE failures — the same five sources the
@@ -28,11 +27,7 @@ export default async function PlatformFailuresPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const user = await getServerUser();
-  if (!user) redirect("/dashboard/login");
-
-  const viewer = await getPlatformViewer();
-  if (!viewer) redirect("/dashboard");
+  await requireOperator();
 
   const sp = await searchParams;
   const raw = Array.isArray(sp.source) ? sp.source[0] : sp.source;

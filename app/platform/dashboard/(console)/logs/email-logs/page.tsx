@@ -35,7 +35,7 @@ export default async function PlatformEmailLogsPage({
       q={q}
       days={days}
       error={error}
-      basePath="/dashboard/email-logs"
+      basePath="/dashboard/logs/email-logs"
       platform
     />
   );

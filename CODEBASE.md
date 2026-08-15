@@ -320,11 +320,25 @@ wholesip/
 │   │   │                      # route), phone via signInWithPhoneNumber; password
 │   │   │                      # email ownership via signup-email-otp action.
 │   │   ├── login/             # Platform-operator login — six-digit email OTP
-│   │   └── dashboard/         # Platform-admin control centre: live health metrics,
-│   │                          # stores-console, operators-console, email-logs/
-│   │                          # (platform mail incl. signup/operator OTPs)
-│   │                          # + ★ failures/ = the SAME feed as a store's, scoped
-│   │                          # { kind: "platform" } across every store (§33)
+│   │   └── dashboard/         # ★ THE OPERATOR CONSOLE (§38 — docs/operator-console.md).
+│   │                          # Every panel used to live on the HOME page: the store
+│   │                          # table, the pricing editor and the theme seeder on one
+│   │                          # scroll, so "reprice Pro for every merchant" sat one
+│   │                          # mis-click from "look at a store", and a store had no
+│   │                          # page of its own. Now grouped by JOB (permissions.ts's
+│   │                          # rule): OPERATIONS = page.tsx (a real overview —
+│   │                          # 12-week signup chart, plan mix, six attention queues,
+│   │                          # latest signups), stores/ (the list) + stores/[storeId]
+│   │                          # (ONE merchant, fully described), email-logs/,
+│   │                          # failures/ (the SAME feed as a store's, scoped
+│   │                          # { kind: "platform" } across every store, §33);
+│   │                          # ADMINISTRATION = help/, themes/, pricing/,
+│   │                          # operators/, billing/. require-operator.ts is the
+│   │                          # per-PAGE gate — the layout's redirect does not abort a
+│   │                          # concurrently-rendering page, and these reads run under
+│   │                          # withService (RLS bypassed), so the gate belongs where
+│   │                          # the read is. ⚠ page.tsx deliberately does NOT use it:
+│   │                          # it redirects to /dashboard, which IS page.tsx.
 │   │                          # (guarded by supabase/multitenant_07_platform_admins.sql)
 │   │                          # (the OAuth callback route was removed in Phase 6 —
 │   │                          # Google now uses signInWithPopup)
@@ -497,6 +511,36 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── announcements/         # ★ §38 platform → merchant broadcast:
+│   │                          # audience.ts (PURE: the consent rule, the skip
+│   │                          # vocabulary, the allowlisting normaliser —
+│   │                          # shared by the composer's preview and the real
+│   │                          # send so they cannot disagree), resolve.ts
+│   │                          # (candidate SQL + materialise; the status flip
+│   │                          # to 'sending' is LAST and in the same txn, so a
+│   │                          # crash mid-resolve leaves a draft rather than a
+│   │                          # half-sent broadcast), worker.ts (drains the
+│   │                          # queue on the send-emails heartbeat; `partial`
+│   │                          # is a real outcome), sms-availability.ts (the
+│   │                          # honest refusal — no platform Twilio, no DLT
+│   │                          # registration, and promotional SMS is a heavier
+│   │                          # regime than §37's transactional templates)
+│   ├── platform/              # ★ §38 operator-console READS: store-detail.ts
+│   │                          # (loadStoreDetail = one store in ONE round trip of
+│   │                          # scalar subqueries — 15 separate counts would be
+│   │                          # 15 × the ~46ms Mumbai RTT; loadStorePeople = admins
+│   │                          # UNION pos_staff, `kind` kept so the two are tellable
+│   │                          # apart, and NEVER pin_hash/invite_token/reset_token)
+│   │                          # + overview.ts (getPlatformInsights: totals, plan mix
+│   │                          # by EFFECTIVE plan, 12-week signup series via
+│   │                          # generate_series so an empty week is a zero not a gap,
+│   │                          # and six attention queues). Both are `lib/` not
+│   │                          # `app/actions/` for §32's reason — an export of a
+│   │                          # "use server" file is a public endpoint, and these
+│   │                          # return cross-tenant data. Both fail to an empty
+│   │                          # snapshot; getPlatformInsights returns `ok: false` so
+│   │                          # the page can say the figures are stale rather than
+│   │                          # present zeroes as good news
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
@@ -5567,6 +5611,150 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       and `suppressPhone` exist and are tested, but nothing calls them yet — a
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
+
+38. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
+    - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.
+    - **★ IT USED TO BE ONE PAGE.** The store table, the pricing editor and the
+      theme seeder all rendered on `page.tsx`, under a metric row, so the home
+      page grew a panel every time the platform did and answered no question in
+      particular. Worse, "reprice Pro for every merchant" sat one mis-click from
+      "look at a store", and **a store had no page of its own** — everything an
+      operator knew came from one table row plus a history drawer, so "why is
+      this merchant complaining?" meant opening their dashboard as them or
+      writing SQL against production. Grouped by JOB now, the rule
+      `app/dashboard/lib/permissions.ts` already applies: **OPERATIONS** is what
+      an operator watches daily (overview, stores, logs), **ADMINISTRATION** is
+      configured once and left alone (help, themes, pricing, operators, billing).
+      Logs is deliberately in Operations — it is where you look when something
+      is wrong, not a setting.
+    - **★★ `requireOperator()` IS PER-PAGE, AND THE LAYOUT GATING IS NOT
+      ENOUGH.** A Next layout and its pages render CONCURRENTLY: a layout
+      `redirect()` does not abort a page already fetching — the same property
+      that forces every storefront page to call `requireStorefrontStore()` for
+      itself (§3). These pages read every store on the platform under
+      `withService`, which BYPASSES RLS, so the gate IS the access control.
+      **⚠ `page.tsx` deliberately does NOT use it**: the helper redirects a
+      non-operator to `/dashboard`, which is that page, so a signed-in
+      non-operator would loop forever. Home keeps its own explanation and a way
+      out.
+    - **★ THE READS LIVE IN `lib/platform/`, NOT `app/actions/`** — §32's rule.
+      Every export of a `"use server"` file is a publicly reachable endpoint,
+      and these return CROSS-TENANT data; as server-component reads behind a
+      resolved viewer they gain nothing from being actions and would add three
+      public endpoints over every store on the platform.
+    - **★ EFFECTIVE PLAN, NEVER THE STORED ONE.** The gates read
+      `effectivePlan`, so the console must too — a lapsed timed grant is stored
+      `pro` and IS free today. The detail page shows both when they disagree,
+      and the overview's plan-mix SQL mirrors `effectivePlan`'s predicate
+      exactly. Counting stored plans while the gates read effective ones would
+      have the console report revenue the product is not delivering.
+    - **★ STATE, NEVER A SECRET.** Channel cards say connected/paused/none and
+      nothing more (§18/§35/§37 keep those credentials encrypted and
+      write-only); `loadStorePeople` never returns `pin_hash`, `invite_token` or
+      `reset_token`. It DOES keep `kind` (`admin` vs `pos`) — a dashboard login
+      and a till PIN are not the same access, and collapsing them makes
+      revoking the wrong one look identical to revoking the right one.
+    - **★ ZERO IS RENDERED, NEVER HIDDEN.** The overview's six attention queues
+      stay on screen at zero, greyed out; only a non-zero one takes colour and
+      becomes a link. A row that vanishes when clear teaches nobody what is
+      being watched — §22's badge rule, where a hardcoded "12" on Orders taught
+      people to ignore the badges that moved.
+    - **★ A READ FAILURE SAYS SO.** `getPlatformInsights` never throws (this is
+      the screen you open when something is broken) but returns `ok: false`, and
+      the page renders a banner — presenting zeroes as the answer is the second
+      worst thing it could do after a 500.
+    - **The list's History drawer was REMOVED**, not left beside the detail
+      page. Two paths to the same data is the mess this was undoing.
+    - **★ PEOPLE UNIONS TWO TABLES FOR ONE QUESTION** (`lib/platform/people.ts`,
+      `/dashboard/people`). `admins` and `pos_staff` were each reachable only
+      from inside the store that owned them, so "which stores is this person
+      on?" was a hand-written query against production. Three rules: **`kind`
+      is never collapsed** (a dashboard login and a till PIN are different
+      access with different reach — flattening them makes revoking the wrong
+      one look like revoking the right one); **the same person may appear
+      TWICE** and that is correct (an owner who also rings the till holds two
+      credentials, revoked separately — deduplicating by email hides one); and
+      **the filter chips are counted WITHOUT the kind filter**, so selecting
+      "Till" still reports how many dashboard admins the same search returns,
+      instead of every unselected chip reading zero. `peopleHref`
+      (`people-links.ts`, pure + tested) is the ONE link builder, because a
+      "next page" that drops `?q=` turns a filtered list into an unfiltered one
+      that still looks filtered.
+    - **★★ `LogsRail` TAKES ITS REGISTRY AS A PROP, AND THAT IS LOAD-BEARING.**
+      Both consoles share `DashboardSidebar`, and their logs are NOT the same
+      set: an operator has no import/export jobs and no per-store activity feed
+      (`activity_events` is store-scoped, and a cross-store feed of every event
+      on the platform is noise, not a log), while a merchant must never have the
+      `{ kind: "platform" }` failure view. Hardcoding `LOG_TYPES` put three rail
+      entries in front of routes the platform does not have. It DEFAULTS to the
+      merchant registry so every existing call site is unchanged;
+      `PLATFORM_LOG_TYPES` lives beside the operator hub. `log-types.test.ts`
+      guards it in BOTH directions (`fs.readdir`: every entry has a page, every
+      page has an entry) and fails if the platform registry ever acquires the
+      merchant-only keys — the guard against "tidying up" into one list.
+      `/dashboard/logs` is a LANDING, not a redirect to the first log: the
+      merchant hub can default to Activity, the platform has no equivalent, so
+      "Logs" would silently mean "Email logs".
+    - **★ `getSmsLogs` NOW DERIVES SCOPE FROM THE HOST** like `getEmailLogs`.
+      It used `getActingStoreId()`, whose never-null fallback resolves the
+      WholeSip store — so on the operator console it would have served ONE
+      MERCHANT'S SMS log as though it were the platform's. Platform scope
+      (`store_id IS NULL`) re-checks `isPlatformAdmin` INSIDE the action; a
+      server action is an independently reachable POST endpoint, so the page
+      gate is not enough. ⚠ That log is EMPTY today and honestly so — nothing
+      writes a platform row, because there is no platform Twilio account.
+    - **★★ ANNOUNCEMENTS — StoreMink telling its MERCHANTS something**
+      (`/dashboard/announcements`, `lib/announcements/`,
+      `supabase/announcements_01_schema.sql` — ⚠ **not applied**; run as
+      `postgres` before deploying). Distinct from every other messaging table
+      here: `notification_email_queue` is an EVENT fanned out to identified
+      recipients, `email_campaigns` is a MERCHANT mailing THEIR shoppers, this
+      is the PLATFORM mailing its merchants.
+      - **★ RECIPIENTS ARE MATERIALISED AT SEND, NOT RESOLVED AT DELIVERY.**
+        The audience is a query over a moving target — stores sign up, staff
+        leave, plans lapse. A row per person makes the send idempotent (a
+        retried worker claims rows instead of re-running a query that now
+        returns different people), resumable across the 60s ceiling, and
+        AUDITABLE: "who was told, and when?" months later, which for a pricing
+        or policy notice is the whole point. Unique indexes make a
+        double-submitted resolve a no-op rather than a second copy to everyone.
+      - **★★ `category` DECIDES WHETHER CONSENT APPLIES, so it is a COLUMN and
+        not a checkbox.** `feature` is marketing and honours
+        `admins.marketing_opt_in` (§25); `operational` is service
+        correspondence about an account somebody already holds and does not.
+        Recording it is what lets an opt-out complaint be answered.
+      - **★ TILL STAFF ARE NEVER MARKETED TO** — `pos_staff` has no
+        `marketing_opt_in` column, nobody ever asked them, and an absent
+        preference is not consent. They still get operational notices.
+      - **★ EVERY SKIP CARRIES A REASON** (no_consent / suppressed / duplicate
+        / no_email / no_phone). "38 skipped" says nothing about whether the
+        audience is wrong or the list is dirty. Consent, suppression and
+        de-duplication live in the PURE `audience.ts`, so the composer's
+        preview and the real send cannot disagree — and the preview runs the
+        SAME resolver, with the send button gated on having run it.
+      - **★ THE TEST-SEND TAKES NO RECIPIENT** — it mails the session's own
+        address. A recipient parameter would be an open relay from StoreMink's
+        verified sending domain.
+      - **★ A SENT ANNOUNCEMENT IS IMMUTABLE**, as a predicate on the UPDATE
+        rather than a read-then-write; `partial` is a real outcome, not a
+        failure (calling it failed invites a re-send to everyone it reached).
+      - Everything leaves through `sendEmail` (mailer `announcement`), and the
+        worker rides `/api/cron/send-emails` rather than taking a new Cloud
+        Scheduler entry.
+      - **⚠ SMS IS BUILT AND GATED, and two of the three blockers are not
+        code** (`sms-availability.ts`): StoreMink has no Twilio account of its
+        own (SMS is BYO-per-store, §37); DLT registration needs a Principal
+        Entity, a 6-char header and an APPROVED TEMPLATE PER BODY (7–21 business
+        days); and a feature announcement is PROMOTIONAL, not transactional —
+        numeric headers, DND/NDNC scrubbing, time-of-day limits. So it refuses
+        with its reason and writes NO recipient rows: a body that does not match
+        its template is dropped at the carrier silently, so accepting the send
+        would produce a queue of rows pending forever. §23's rule — a control
+        that always fails is worse than no control. ⚠ **Announcement SMS cannot send** — no
+        platform Twilio account, no DLT registration, and a feature announcement
+        is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
+        is heavier than the transactional templates §37 models. It is built gated
+        and refuses with a reason rather than queueing what carriers drop.
 
 ## 6. Commands
 

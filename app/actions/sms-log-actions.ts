@@ -7,8 +7,11 @@
 // ---------------------------------------------------------------------------
 
 import { sql } from "drizzle-orm";
+import { headers } from "next/headers";
 import { withService } from "@/lib/db/client";
-import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
+import { getViewerAccess } from "@/app/dashboard/lib/access";
+import { getCurrentStoreId } from "@/lib/store/resolve";
+import { isPlatformHost } from "@/lib/store/host";
 import { logError } from "@/lib/observability/logger";
 
 export interface SmsLogRow {
@@ -43,16 +46,47 @@ const EMPTY: SmsLogPage = {
   segments: 0,
 };
 
+/**
+ * Scope is HOST-derived, exactly as `getEmailLogs` does it: the store for a
+ * store host, PLATFORM (`store_id IS NULL`) for storemink.com.
+ *
+ * ★ DELIBERATELY NOT `getActingStoreId()` ALONE. Its never-null fallback
+ * resolves the WholeSip store, so on the operator console this read would have
+ * quietly served one merchant's SMS log as though it were the platform's.
+ */
+async function currentScope(): Promise<{
+  storeId: string | null;
+  platform: boolean;
+}> {
+  const headersList = await headers();
+  const host =
+    headersList.get("x-forwarded-host") || headersList.get("host") || "";
+  if (isPlatformHost(host)) return { storeId: null, platform: true };
+  return { storeId: await getCurrentStoreId(), platform: false };
+}
+
 export async function getSmsLogs(input: {
   page?: number;
   status?: string;
   q?: string;
   days?: number;
 }): Promise<SmsLogPage> {
-  const userId = await getManagerUserId("activity");
-  if (!userId) return { ...EMPTY, error: "You don't have access to logs." };
+  const access = await getViewerAccess();
+  if (!access) return { ...EMPTY, error: "Not signed in." };
+  if (!access.can("activity", "view")) {
+    return { ...EMPTY, error: "You don't have access to logs." };
+  }
 
-  const storeId = await getActingStoreId();
+  const { storeId, platform } = await currentScope();
+  // A server action is an independently reachable POST endpoint, so the page
+  // gate is not enough — the platform scope re-checks operator membership.
+  if (platform && !access.isPlatformAdmin) {
+    return {
+      ...EMPTY,
+      error: "Only StoreMink operators can view platform SMS logs.",
+    };
+  }
+
   const page = Math.max(1, Math.floor(input.page ?? 1));
   const offset = (page - 1) * PAGE_SIZE;
 
@@ -70,7 +104,9 @@ export async function getSmsLogs(input: {
   // Kept as two lists rather than one with the status spliced out by index:
   // the counts query needs everything EXCEPT status, and an index-based removal
   // silently drops the wrong predicate the moment a filter is added above it.
-  const base = [sql`store_id = ${storeId}::uuid`];
+  const base = [
+    storeId ? sql`store_id = ${storeId}::uuid` : sql`store_id is null`,
+  ];
   if (days > 0)
     base.push(sql`created_at > now() - (${days} || ' days')::interval`);
   if (q) {

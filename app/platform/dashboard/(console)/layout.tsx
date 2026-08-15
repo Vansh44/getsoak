@@ -6,6 +6,7 @@ import { DashboardTopbar } from "@/app/dashboard/dashboard-topbar";
 import { DashboardSidebar } from "@/app/dashboard/dashboard-sidebar";
 import { MobileNavProvider } from "@/app/dashboard/dashboard-mobile-nav";
 import type { SectionGroup } from "@/app/dashboard/lib/permissions";
+import { PLATFORM_LOG_TYPES } from "./logs/log-types";
 import "@/app/dashboard/dashboard.css";
 
 const dashFont = Inter({
@@ -38,21 +39,47 @@ export default async function PlatformDashboardLayout({
     redirect("/dashboard/login");
   }
 
+  // ── ★ THE CONSOLE'S IA, AND WHY IT IS GROUPED THIS WAY ───────────────────
+  //
+  // It used to be three entries, with the stores table, the pricing editor and
+  // the theme seeder all stacked on the HOME page — so "look at one store" and
+  // "reprice the Pro plan" were the same screen, and the home page grew a new
+  // panel every time the platform did. Each of those is now a destination.
+  //
+  // The split is by JOB, the same rule `app/dashboard/lib/permissions.ts`
+  // applies to the merchant nav: OPERATIONS is what an operator watches and
+  // acts on daily (the merchant estate, the people in it, what broke, what we
+  // announced); ADMINISTRATION is what gets configured once and then left
+  // alone. Logs is deliberately in Operations rather than filed under
+  // Administration — it is the first place anyone looks when something is
+  // wrong, not a setting.
   const navGroups = [
     {
-      group: "WORKSPACE" as SectionGroup,
+      group: "OPERATIONS" as SectionGroup,
       items: [
-        { href: "/dashboard", label: "Stores", icon: "dashboard" as const },
+        { href: "/dashboard", label: "Overview", icon: "home" as const },
+        { href: "/dashboard/stores", label: "Stores", icon: "pos" as const },
         {
-          href: "/dashboard/email-logs",
-          label: "Email logs",
-          icon: "mail" as const,
+          // Store owners, delegated dashboard staff and till staff, across
+          // every store. The operator's question is "who has access?", and
+          // until now it had no answer short of SQL against production.
+          href: "/dashboard/people",
+          label: "People",
+          icon: "users" as const,
         },
         {
-          // Cross-store failures. Workspace rather than Administration: it is
-          // something an operator watches, not something they configure.
-          href: "/dashboard/failures",
-          label: "Failures",
+          href: "/dashboard/announcements",
+          label: "Announcements",
+          icon: "marketing" as const,
+        },
+        {
+          // Email, SMS and the cross-store failure feed, behind one entry.
+          // They used to be two top-level items with no relationship shown, so
+          // "where do I look?" had two answers and no list of the rest.
+          // Operations rather than Administration: this is where you look when
+          // something is wrong, not a setting.
+          href: "/dashboard/logs",
+          label: "Logs",
           icon: "activity" as const,
         },
       ],
@@ -66,13 +93,23 @@ export default async function PlatformDashboardLayout({
           icon: "faq" as const,
         },
         {
+          href: "/dashboard/themes",
+          label: "Themes",
+          icon: "homepage" as const,
+        },
+        {
+          href: "/dashboard/pricing",
+          label: "Pricing",
+          icon: "plans" as const,
+        },
+        {
           href: "/dashboard/operators",
           label: "Operators",
-          icon: "users" as const,
+          icon: "roles" as const,
         },
         {
           // StoreMink's OWN tax identity — what its subscription invoices say
-          // and whether they charge GST. Administration rather than Workspace:
+          // and whether they charge GST. Administration rather than Operations:
           // it is configured once and then left alone.
           href: "/dashboard/billing",
           label: "Billing & tax",
@@ -96,7 +133,10 @@ export default async function PlatformDashboardLayout({
           lastName=""
         />
         <div className="flex flex-1 overflow-hidden">
-          <DashboardSidebar groups={navGroups} />
+          {/* The operator log registry, not the merchant one: this console has
+              no import/export jobs and no per-store activity feed, and its
+              failure feed spans every store. */}
+          <DashboardSidebar groups={navGroups} logTypes={PLATFORM_LOG_TYPES} />
 
           <div className="dash-main">
             <div className="dash-content">{children}</div>
