@@ -320,11 +320,25 @@ wholesip/
 │   │   │                      # route), phone via signInWithPhoneNumber; password
 │   │   │                      # email ownership via signup-email-otp action.
 │   │   ├── login/             # Platform-operator login — six-digit email OTP
-│   │   └── dashboard/         # Platform-admin control centre: live health metrics,
-│   │                          # stores-console, operators-console, email-logs/
-│   │                          # (platform mail incl. signup/operator OTPs)
-│   │                          # + ★ failures/ = the SAME feed as a store's, scoped
-│   │                          # { kind: "platform" } across every store (§33)
+│   │   └── dashboard/         # ★ THE OPERATOR CONSOLE (§38 — docs/operator-console.md).
+│   │                          # Every panel used to live on the HOME page: the store
+│   │                          # table, the pricing editor and the theme seeder on one
+│   │                          # scroll, so "reprice Pro for every merchant" sat one
+│   │                          # mis-click from "look at a store", and a store had no
+│   │                          # page of its own. Now grouped by JOB (permissions.ts's
+│   │                          # rule): OPERATIONS = page.tsx (a real overview —
+│   │                          # 12-week signup chart, plan mix, six attention queues,
+│   │                          # latest signups), stores/ (the list) + stores/[storeId]
+│   │                          # (ONE merchant, fully described), email-logs/,
+│   │                          # failures/ (the SAME feed as a store's, scoped
+│   │                          # { kind: "platform" } across every store, §33);
+│   │                          # ADMINISTRATION = help/, themes/, pricing/,
+│   │                          # operators/, billing/. require-operator.ts is the
+│   │                          # per-PAGE gate — the layout's redirect does not abort a
+│   │                          # concurrently-rendering page, and these reads run under
+│   │                          # withService (RLS bypassed), so the gate belongs where
+│   │                          # the read is. ⚠ page.tsx deliberately does NOT use it:
+│   │                          # it redirects to /dashboard, which IS page.tsx.
 │   │                          # (guarded by supabase/multitenant_07_platform_admins.sql)
 │   │                          # (the OAuth callback route was removed in Phase 6 —
 │   │                          # Google now uses signInWithPopup)
@@ -497,6 +511,22 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── platform/              # ★ §38 operator-console READS: store-detail.ts
+│   │                          # (loadStoreDetail = one store in ONE round trip of
+│   │                          # scalar subqueries — 15 separate counts would be
+│   │                          # 15 × the ~46ms Mumbai RTT; loadStorePeople = admins
+│   │                          # UNION pos_staff, `kind` kept so the two are tellable
+│   │                          # apart, and NEVER pin_hash/invite_token/reset_token)
+│   │                          # + overview.ts (getPlatformInsights: totals, plan mix
+│   │                          # by EFFECTIVE plan, 12-week signup series via
+│   │                          # generate_series so an empty week is a zero not a gap,
+│   │                          # and six attention queues). Both are `lib/` not
+│   │                          # `app/actions/` for §32's reason — an export of a
+│   │                          # "use server" file is a public endpoint, and these
+│   │                          # return cross-tenant data. Both fail to an empty
+│   │                          # snapshot; getPlatformInsights returns `ok: false` so
+│   │                          # the page can say the figures are stale rather than
+│   │                          # present zeroes as good news
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
@@ -5567,6 +5597,66 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       and `suppressPhone` exist and are tested, but nothing calls them yet — a
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
+
+38. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
+    - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.
+    - **★ IT USED TO BE ONE PAGE.** The store table, the pricing editor and the
+      theme seeder all rendered on `page.tsx`, under a metric row, so the home
+      page grew a panel every time the platform did and answered no question in
+      particular. Worse, "reprice Pro for every merchant" sat one mis-click from
+      "look at a store", and **a store had no page of its own** — everything an
+      operator knew came from one table row plus a history drawer, so "why is
+      this merchant complaining?" meant opening their dashboard as them or
+      writing SQL against production. Grouped by JOB now, the rule
+      `app/dashboard/lib/permissions.ts` already applies: **OPERATIONS** is what
+      an operator watches daily (overview, stores, logs), **ADMINISTRATION** is
+      configured once and left alone (help, themes, pricing, operators, billing).
+      Logs is deliberately in Operations — it is where you look when something
+      is wrong, not a setting.
+    - **★★ `requireOperator()` IS PER-PAGE, AND THE LAYOUT GATING IS NOT
+      ENOUGH.** A Next layout and its pages render CONCURRENTLY: a layout
+      `redirect()` does not abort a page already fetching — the same property
+      that forces every storefront page to call `requireStorefrontStore()` for
+      itself (§3). These pages read every store on the platform under
+      `withService`, which BYPASSES RLS, so the gate IS the access control.
+      **⚠ `page.tsx` deliberately does NOT use it**: the helper redirects a
+      non-operator to `/dashboard`, which is that page, so a signed-in
+      non-operator would loop forever. Home keeps its own explanation and a way
+      out.
+    - **★ THE READS LIVE IN `lib/platform/`, NOT `app/actions/`** — §32's rule.
+      Every export of a `"use server"` file is a publicly reachable endpoint,
+      and these return CROSS-TENANT data; as server-component reads behind a
+      resolved viewer they gain nothing from being actions and would add three
+      public endpoints over every store on the platform.
+    - **★ EFFECTIVE PLAN, NEVER THE STORED ONE.** The gates read
+      `effectivePlan`, so the console must too — a lapsed timed grant is stored
+      `pro` and IS free today. The detail page shows both when they disagree,
+      and the overview's plan-mix SQL mirrors `effectivePlan`'s predicate
+      exactly. Counting stored plans while the gates read effective ones would
+      have the console report revenue the product is not delivering.
+    - **★ STATE, NEVER A SECRET.** Channel cards say connected/paused/none and
+      nothing more (§18/§35/§37 keep those credentials encrypted and
+      write-only); `loadStorePeople` never returns `pin_hash`, `invite_token` or
+      `reset_token`. It DOES keep `kind` (`admin` vs `pos`) — a dashboard login
+      and a till PIN are not the same access, and collapsing them makes
+      revoking the wrong one look identical to revoking the right one.
+    - **★ ZERO IS RENDERED, NEVER HIDDEN.** The overview's six attention queues
+      stay on screen at zero, greyed out; only a non-zero one takes colour and
+      becomes a link. A row that vanishes when clear teaches nobody what is
+      being watched — §22's badge rule, where a hardcoded "12" on Orders taught
+      people to ignore the badges that moved.
+    - **★ A READ FAILURE SAYS SO.** `getPlatformInsights` never throws (this is
+      the screen you open when something is broken) but returns `ok: false`, and
+      the page renders a banner — presenting zeroes as the answer is the second
+      worst thing it could do after a 500.
+    - **The list's History drawer was REMOVED**, not left beside the detail
+      page. Two paths to the same data is the mess this was undoing.
+    - **⚠ Phases 2–4 are not built**: People (cross-store admins + POS staff),
+      the Logs hub, and Announcements. ⚠ **Announcement SMS cannot send** — no
+      platform Twilio account, no DLT registration, and a feature announcement
+      is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
+      is heavier than the transactional templates §37 models. It is built gated
+      and refuses with a reason rather than queueing what carriers drop.
 
 ## 6. Commands
 

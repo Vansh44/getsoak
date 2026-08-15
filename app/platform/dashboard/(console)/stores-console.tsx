@@ -1,15 +1,14 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   setStoreStatus,
   setStorePlan,
   deleteStore,
   grantAiCredits,
-  getStoreAudit,
   type PlatformStoreRow,
-  type StoreAuditData,
 } from "@/app/actions/platform";
 import {
   PLAN_IDS,
@@ -190,26 +189,12 @@ export function StoresConsole({
     startTransition(() => router.refresh());
   }
 
-  // Audit drawer: plan changes + credit ledger for one store, loaded on open.
-  const [auditStore, setAuditStore] = useState<PlatformStoreRow | null>(null);
-  const [audit, setAudit] = useState<StoreAuditData | null>(null);
-  const [auditLoading, setAuditLoading] = useState(false);
-
-  async function openAudit(store: PlatformStoreRow) {
-    setAuditStore(store);
-    setAudit(null);
-    setAuditLoading(true);
-    const data = await getStoreAudit(store.id);
-    setAudit(data);
-    setAuditLoading(false);
-  }
-
   function submitSearch(e: React.FormEvent) {
     e.preventDefault();
     const params = search.trim()
       ? `?q=${encodeURIComponent(search.trim())}`
       : "";
-    router.push(`/dashboard${params}`);
+    router.push(`/dashboard/stores${params}`);
   }
 
   async function toggleStatus(store: PlatformStoreRow) {
@@ -245,17 +230,14 @@ export function StoresConsole({
   }
 
   return (
-    <div className="w-full max-w-6xl space-y-6">
+    <div className="w-full space-y-4">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-            Store directory
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Every store on the platform. Open a store to manage it, or suspend
-            one to take it offline.
-          </p>
-        </div>
+        {/* The page owns the <h1>; this component owns the search and the
+            table. It used to carry its own heading too, which read as a second
+            title once it stopped being the whole of the home page. */}
+        <p className="text-sm text-gray-500">
+          Open a store for its full record, or act on it from here.
+        </p>
 
         <form className="relative w-full sm:max-w-sm" onSubmit={submitSearch}>
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -302,9 +284,12 @@ export function StoresConsole({
                 return (
                   <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-gray-900">
+                      <Link
+                        href={`/dashboard/stores/${s.id}`}
+                        className="font-semibold text-gray-900 hover:text-indigo-700 hover:underline"
+                      >
                         {s.name}
-                      </div>
+                      </Link>
                       <div className="text-gray-500 mt-0.5">{addr}</div>
                     </td>
                     <td className="px-6 py-4 text-gray-600">
@@ -407,13 +392,13 @@ export function StoresConsole({
                             Credits
                           </button>
                         )}
-                        <button
+                        <Link
+                          href={`/dashboard/stores/${s.id}`}
                           className="px-3 py-1.5 rounded-md text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors inline-flex items-center gap-1"
-                          onClick={() => openAudit(s)}
                         >
                           <History className="h-3.5 w-3.5" />
-                          History
-                        </button>
+                          Details
+                        </Link>
                         {canManage && (
                           <button
                             className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -733,120 +718,6 @@ export function StoresConsole({
               >
                 {granting ? "Granting…" : "Grant credits"}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {auditStore && (
-        <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/40"
-          onClick={() => setAuditStore(null)}
-        >
-          <div
-            className="h-full w-full max-w-md overflow-y-auto bg-white shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="sticky top-0 flex items-center justify-between border-b border-gray-200 bg-white px-6 py-4">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">
-                  {auditStore.name}
-                </h2>
-                <p className="text-sm text-gray-500">
-                  Plan changes &amp; credit ledger
-                </p>
-              </div>
-              <button
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100"
-                onClick={() => setAuditStore(null)}
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-6 p-6">
-              {auditLoading ? (
-                <p className="text-sm text-gray-500">Loading history…</p>
-              ) : !audit ? (
-                <p className="text-sm text-gray-500">
-                  History is only visible to platform superadmins.
-                </p>
-              ) : (
-                <>
-                  <section>
-                    <h3 className="text-sm font-semibold text-gray-900">
-                      Plan changes
-                    </h3>
-                    {audit.planEvents.length === 0 ? (
-                      <p className="mt-2 text-sm text-gray-500">
-                        No plan changes recorded.
-                      </p>
-                    ) : (
-                      <ul className="mt-2 divide-y divide-gray-100">
-                        {audit.planEvents.map((e) => (
-                          <li key={e.id} className="py-2.5">
-                            <div className="text-sm text-gray-800">
-                              {e.from_plan ? `${e.from_plan} → ` : ""}
-                              <span className="font-semibold">{e.to_plan}</span>
-                              {e.note ? (
-                                <span className="ml-2 text-xs text-gray-500">
-                                  {e.note}
-                                </span>
-                              ) : null}
-                            </div>
-                            <div className="mt-0.5 text-xs text-gray-500">
-                              {formatDate(e.created_at)} · {e.source}
-                              {e.actor ? ` · ${e.actor}` : ""}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-
-                  <section>
-                    <h3 className="text-sm font-semibold text-gray-900">
-                      Credit ledger
-                    </h3>
-                    {audit.creditLedger.length === 0 ? (
-                      <p className="mt-2 text-sm text-gray-500">
-                        No credit activity.
-                      </p>
-                    ) : (
-                      <ul className="mt-2 divide-y divide-gray-100">
-                        {audit.creditLedger.map((l) => (
-                          <li
-                            key={l.id}
-                            className="flex items-center justify-between py-2.5"
-                          >
-                            <div>
-                              <div className="text-sm capitalize text-gray-800">
-                                {l.kind}
-                                {l.note ? (
-                                  <span className="ml-2 text-xs normal-case text-gray-500">
-                                    {l.note}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="mt-0.5 text-xs text-gray-500">
-                                {formatDate(l.created_at)}
-                                {l.ref ? ` · ${l.ref}` : ""}
-                              </div>
-                            </div>
-                            <span
-                              className={`text-sm font-semibold ${
-                                l.delta > 0 ? "text-green-600" : "text-gray-500"
-                              }`}
-                            >
-                              {l.delta > 0 ? `+${l.delta}` : l.delta}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </section>
-                </>
-              )}
             </div>
           </div>
         </div>
