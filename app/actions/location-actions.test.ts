@@ -12,6 +12,11 @@ vi.mock("next/cache", () => ({
 vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(),
   getActingStoreId: vi.fn(async () => "store-1"),
+  isStoreSuperadmin: vi.fn(),
+}));
+// Unrestricted by default — the state every existing test was written under.
+vi.mock("@/lib/locations/scope", () => ({
+  getViewerLocations: vi.fn(async () => null),
 }));
 
 // getStoreLocations is only used by createLocation for its return value.
@@ -30,7 +35,11 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { revalidateTag } from "next/cache";
-import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import {
+  getManagerIdentity,
+  isStoreSuperadmin,
+} from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import { getStoreLocations } from "@/lib/pos/locations";
 import {
   enablePos,
@@ -39,6 +48,7 @@ import {
   updateLocation,
   deleteLocation,
   saveLocationCapabilities,
+  listLocations,
 } from "./location-actions";
 
 const IDENTITY = { uid: "u1", email: "a@b.c" };
@@ -58,6 +68,11 @@ function useSelects(queue: any[][], executeQueue: any[][] = []) {
 describe("location-actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — but setting one
+    // BEFORE it is worse than not setting it, because clearAllMocks then wipes
+    // it. Every restoration goes after.
+    vi.mocked(isStoreSuperadmin).mockResolvedValue(true);
+    vi.mocked(getViewerLocations).mockResolvedValue(null);
     vi.mocked(getManagerIdentity).mockResolvedValue(IDENTITY as any);
     vi.mocked(getStoreLocations).mockResolvedValue([]);
     useSelects([]);
@@ -337,6 +352,56 @@ describe("location-actions", () => {
       const saved = dbHolder.current.calls.set[0].capabilities;
       expect("teleport" in saved).toBe(false);
       expect(saved.pos).toBe(true); // unchanged by the non-boolean
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Location scope on the dashboard (§23).
+  // ---------------------------------------------------------------------------
+  describe("location scope", () => {
+    // ★★ A capability decides whether a shop sells, fulfils online orders or
+    // takes returns — it reshapes the BUSINESS, not one shop's day. The
+    // `locations` grant is what a branch manager needs to READ their own shop;
+    // letting it also switch online fulfilment off would let one manager stop
+    // the website taking orders.
+    it("refuses a capability change from a non-owner", async () => {
+      vi.mocked(isStoreSuperadmin).mockResolvedValue(false);
+      const r = await saveLocationCapabilities("loc-1", { pos: true });
+      expect(r.error).toMatch(/only the store owner/i);
+    });
+
+    // ★ A restricted admin has no reason to read another branch's address,
+    // capabilities or stock — listing them would put back exactly what scoping
+    // the orders and inventory pages took away.
+    it("lists only the shops a restricted admin is assigned to", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+      vi.mocked(getStoreLocations).mockResolvedValue([
+        { id: "loc-1", name: "Delhi" },
+        { id: "loc-2", name: "Jaipur" },
+      ] as never);
+      const r = await listLocations();
+      expect(r.locations.map((l) => l.id)).toEqual(["loc-1"]);
+    });
+
+    it("lists every shop for an unrestricted viewer", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue(null);
+      vi.mocked(getStoreLocations).mockResolvedValue([
+        { id: "loc-1", name: "Delhi" },
+        { id: "loc-2", name: "Jaipur" },
+      ] as never);
+      const r = await listLocations();
+      expect(r.locations.map((l) => l.id)).toEqual(["loc-1", "loc-2"]);
+    });
+
+    // ⚠ EMPTY is "assigned to nothing that still exists" — a real state, and NOT
+    // unrestricted. It must show nothing rather than everything.
+    it("shows nothing for an admin assigned to nothing that exists", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue([]);
+      vi.mocked(getStoreLocations).mockResolvedValue([
+        { id: "loc-1", name: "Delhi" },
+      ] as never);
+      const r = await listLocations();
+      expect(r.locations).toEqual([]);
     });
   });
 });

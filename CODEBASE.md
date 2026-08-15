@@ -2901,6 +2901,38 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `getViewerLocations`: that one answers a SECURITY question on every
         scoped query and stays a bare id list, so joining names onto it would
         make every order page pay for a label only the header uses.
+      - **★★ AND THE EXPORT WAS A WAY OUT OF IT.** The orders exporter filtered
+        on `store_id` alone while the orders LIST filtered by location, so a
+        restricted admin saw their own shop on screen, pressed Export, and got
+        every location's rows — names, addresses, phones. The narrower path was
+        the visible one, which is the worst way round: nothing on screen
+        suggested the button escaped the scope. `ExportContext.locationScope` is
+        resolved ONCE by the route (the gate) and applied by orders and
+        inventory; `export-scope.test.ts` fails when a location-bearing exporter
+        is added without it, because what goes wrong is the THIRD one, written
+        by someone who never read this. ⚠ It BOUNDS `filters.location` rather
+        than replacing it — a picked location outside the scope must still
+        return nothing.
+      - **★ ANALYTICS IS SCOPED ONLY FOR A RESTRICTED VIEWER.** `null` keeps the
+        whole-business figures, which is the reason to run several shops at all;
+        a restricted admin sees only their own, or the first screen they land on
+        would hand them every branch's revenue while the orders list refuses
+        them a single order from it. ORDER-shaped figures only — product and
+        customer counts stay whole, because both are store-wide by decision, so
+        what a branch manager reads is "my sales, the store's catalogue".
+      - **★ THE LOCATIONS LIST SHOWS ONLY THEIR OWN SHOPS**, or it would put
+        back exactly what scoping orders and inventory took away. And
+        `saveLocationCapabilities` is now SUPERADMIN-ONLY: a capability decides
+        whether a shop sells, fulfils online orders or takes returns — it
+        reshapes the business, not one shop's day, and the `locations` grant a
+        branch manager needs to READ their shop must not also let them switch
+        online fulfilment off for the whole store (§22's owner-only rule).
+      - **⚠ ALREADY SCOPED, verified rather than assumed:** POS shifts and cash
+        (every read sits behind `resolvePosOperator`, which binds to the
+        operator's own location; there is no dashboard shift view). **Nothing to
+        scope:** the customers section shows no order data at all — reviews and
+        blogs only — so if order history is added there later it must be scoped
+        then.
       - ⚠ **It shows scope; it does not switch it.** A multi-location admin sees
         all their shops' data at once. An ACTIVE-location switcher (pick one,
         the whole dashboard narrows) is the natural follow-up and is a bigger

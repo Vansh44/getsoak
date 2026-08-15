@@ -12,6 +12,7 @@ import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import { getAnalyticsData } from "./data";
 import { DashboardCanvas } from "./dashboard-canvas";
 import type { WidgetId } from "./widgets";
+import { getViewerLocations } from "@/lib/locations/scope";
 
 // The store's performance dashboard — metrics, revenue, recent activity, all
 // from live store data (scoped by store_id). This used to be the /dashboard
@@ -29,7 +30,9 @@ export default async function AnalyticsPage() {
   const showEnquiries = access.can("enquiries", "view");
 
   const storeId = await getActingStoreId();
-  const data = await getAnalyticsData(storeId);
+  // ★ null for an unrestricted viewer, so the owner's numbers are unchanged.
+  const locationScope = await getViewerLocations();
+  const data = await getAnalyticsData(storeId, locationScope);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (

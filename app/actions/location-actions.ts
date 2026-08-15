@@ -19,6 +19,7 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
+import { getViewerLocations } from "@/lib/locations/scope";
 import {
   adminLocations,
   inventoryLevels,
@@ -30,6 +31,7 @@ import {
 import {
   getActingStoreId,
   getManagerIdentity,
+  isStoreSuperadmin,
 } from "@/app/dashboard/lib/access";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { FEATURES_KEY } from "@/lib/settings/registry";
@@ -437,7 +439,19 @@ export async function listLocations(): Promise<LocationsView> {
       readStoreRow(storeId),
     ]);
     const byId = new Map(rows.map((r) => [r.id, r]));
-    const locations = await getStoreLocations(storeId);
+    const all = await getStoreLocations(storeId);
+
+    // ★★ A RESTRICTED ADMIN SEES ONLY THEIR OWN SHOPS. Delhi's manager has no
+    // reason to read Jaipur's address, capabilities or stock, and listing them
+    // here would put back exactly what scoping the orders and inventory pages
+    // took away.
+    //
+    // `null` — owner, superadmin, anyone unassigned — is unrestricted and sees
+    // every shop, which is the whole point of running several.
+    const scope = await getViewerLocations();
+    const locations =
+      scope === null ? all : all.filter((l) => scope.includes(l.id));
+
     return {
       plan: effectivePlan(store ?? {}),
       locations: locations.map((l) => ({
@@ -475,6 +489,19 @@ export async function saveLocationCapabilities(
 ): Promise<ActionResult> {
   const admin = await getManagerIdentity("locations");
   if (!admin) return { error: "You don't have permission to do this." };
+
+  // ★★ OWNER ONLY. A capability decides whether a shop sells, fulfils online
+  // orders, or takes returns — it reshapes the business, not one shop's day.
+  // The `locations` grant is what a branch manager needs to READ their own
+  // shop; letting it also switch online fulfilment off would let one manager
+  // stop the website taking orders. Same reasoning as owner-only discounts
+  // (§22): the acts with store-wide consequences sit with whoever owns it.
+  if (!(await isStoreSuperadmin())) {
+    return {
+      error:
+        "Only the store owner can change what a location does. Ask them to update it.",
+    };
+  }
   const storeId = await getActingStoreId();
   if (typeof id !== "string" || !id) return { error: "Invalid location." };
 

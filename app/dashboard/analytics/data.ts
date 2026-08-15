@@ -1,5 +1,6 @@
 import "server-only";
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import type { LocationScope } from "@/lib/locations/scope";
 import { withService } from "@/lib/db/client";
 import {
   blogs,
@@ -124,7 +125,27 @@ function spark12(agg: Map<string, number>): number[] {
 
 export async function getAnalyticsData(
   storeId: string,
+  /**
+   * ★★ SCOPED ONLY FOR A RESTRICTED VIEWER. `null` — an owner, a superadmin, an
+   * admin nobody has assigned anywhere — keeps the whole-business figures, which
+   * is the entire point of running several shops. A restricted admin sees only
+   * their own, because otherwise the one screen they land on first would hand
+   * them every other branch's revenue while the orders list refuses them a
+   * single order from it.
+   *
+   * ⚠ ORDER-SHAPED FIGURES ONLY. Products and customers are store-wide by
+   * decision (a product is not IN a shop; a customer belongs to the business),
+   * so their counts stay whole even for a scoped viewer — the numbers a Delhi
+   * manager sees are "Delhi's sales, the store's catalogue".
+   */
+  locationScope: LocationScope = null,
 ): Promise<AnalyticsData> {
+  // Built once: `inArray(col, [])` is how "assigned to nothing that still
+  // exists" is expressed, so an EMPTY scope must match nothing rather than be
+  // skipped.
+  const scoped =
+    locationScope === null ? null : inArray(orders.locationId, locationScope);
+
   return withService(async (db) => {
     const thisYm = ymOf(new Date());
     const prevYm = ymOf(
@@ -139,7 +160,13 @@ export async function getAnalyticsData(
         ord: sql<number>`count(*)::int`,
       })
       .from(orders)
-      .where(and(eq(orders.storeId, storeId), ne(orders.status, "cancelled")))
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          ne(orders.status, "cancelled"),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
       .groupBy(sql`1`)
       .orderBy(sql`1`);
 
@@ -242,6 +269,7 @@ export async function getAnalyticsData(
           and(
             eq(orders.id, orderItems.orderId),
             eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
             ne(orders.status, "cancelled"),
           ),
         )
@@ -284,7 +312,7 @@ export async function getAnalyticsData(
         last: sql<string>`${orders.shippingAddress}->>'lastName'`,
       })
       .from(orders)
-      .where(eq(orders.storeId, storeId))
+      .where(and(eq(orders.storeId, storeId), ...(scoped ? [scoped] : [])))
       .orderBy(desc(orders.createdAt))
       .limit(5);
     const recentOrders: RecentOrder[] = recentRows.map((r) => ({

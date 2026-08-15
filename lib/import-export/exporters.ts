@@ -18,6 +18,7 @@ import "server-only";
 //    see the note on that function for what a positional array costs.
 
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
+import type { LocationScope } from "@/lib/locations/scope";
 import { withUser, type UserIdentity } from "@/lib/db/client";
 import {
   categories,
@@ -43,6 +44,36 @@ export interface ExportContext {
   admin: UserIdentity;
   /** Resource-specific narrowing from the UI (a status filter, a location). */
   filters?: Record<string, string | undefined>;
+  /**
+   * ★★ THE VIEWER'S LOCATION SCOPE — `null` for unrestricted, ids otherwise.
+   *
+   * Resolved ONCE by the route (the gate) rather than per exporter, and applied
+   * to every resource that has a location. Without it an export was a scope
+   * BYPASS: the orders LIST filtered to a restricted admin's shops while
+   * Export handed them every location's rows — customer names, addresses and
+   * phones included. The narrower path was the visible one, which is the worst
+   * way round.
+   *
+   * ⚠ NOT the same as `filters.location`, which is what the merchant PICKED.
+   * That one narrows; this one bounds. A picked location outside the scope must
+   * still return nothing.
+   */
+  locationScope?: LocationScope;
+}
+
+/**
+ * The location predicate for one column, or null when the viewer is
+ * unrestricted and there is nothing to add.
+ *
+ * ⚠ An EMPTY scope means "assigned to nothing that still exists" and must match
+ * NOTHING — `inArray(col, [])` is the correct expression of that, and is why
+ * this returns a predicate rather than skipping when the list is empty.
+ */
+function scopeCondition(
+  scope: LocationScope | undefined,
+  column: Parameters<typeof inArray>[0],
+) {
+  return scope === null || scope === undefined ? null : inArray(column, scope);
 }
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -255,6 +286,11 @@ async function* exportInventory(
     ];
     if (locationFilter && locationFilter !== "all")
       conds.push(eq(inventoryLevels.locationId, locationFilter));
+    const scopedInv = scopeCondition(
+      ctx.locationScope,
+      inventoryLevels.locationId,
+    );
+    if (scopedInv) conds.push(scopedInv);
 
     const page = await withUser(ctx.admin, (db) =>
       db
@@ -323,6 +359,9 @@ async function* exportOrders(ctx: ExportContext): AsyncGenerator<ExportRecord> {
     const conds = [eq(orders.storeId, ctx.storeId), gt(orders.id, cursor)];
     const status = ctx.filters?.status;
     if (status && status !== "all") conds.push(eq(orders.status, status));
+    // ★ Bounds what the merchant picked, rather than replacing it.
+    const scoped = scopeCondition(ctx.locationScope, orders.locationId);
+    if (scoped) conds.push(scoped);
 
     const page = await withUser(ctx.admin, (db) =>
       db
