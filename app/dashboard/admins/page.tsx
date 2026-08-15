@@ -3,6 +3,8 @@ import { withService } from "@/lib/db/client";
 import { admins, roles } from "@/drizzle/schema";
 import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import { UsersManagementView } from "./users-management-view";
+import { getStoreLocations } from "@/lib/pos/locations";
+import { listAdminLocations } from "@/app/actions/location-actions";
 
 export interface RoleOption {
   slug: string;
@@ -86,12 +88,22 @@ export default async function UsersPage() {
           { slug: "member", name: "Member", color: "blue" },
         ];
 
+  // Only meaningful for a multi-shop store — the invite dialog hides the field
+  // entirely below two, because a scope picker with one option is a decision
+  // nobody has to make.
+  const locations = await getStoreLocations(storeId).catch(() => []);
+  // Who is currently restricted to what, so the editor opens on today's answer
+  // rather than resetting anyone to unrestricted on save.
+  const { bindings } = await listAdminLocations();
+
   return (
     <UsersManagementView
       currentUserId={access.userId}
       profiles={profiles}
       roleOptions={roleOptions}
       canManage={canManage}
+      locations={locations.map((l) => ({ id: l.id, name: l.name }))}
+      bindings={bindings}
     />
   );
 }

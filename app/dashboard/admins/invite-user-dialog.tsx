@@ -26,16 +26,22 @@ import { Loader2, UserPlus } from "lucide-react";
 export function InviteUserDialog({
   className,
   label = "Add User",
+  locations = [],
 }: {
   className?: string;
   label?: string;
   size?: "default" | "sm" | "lg";
+  /** The store's shops. Empty for a single-location store, which hides the
+   *  field entirely — a scope picker with one option is a decision nobody has
+   *  to make. */
+  locations?: { id: string; name: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
+  const [locationIds, setLocationIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -54,6 +60,11 @@ export function InviteUserDialog({
     formData.set("lastName", lastName.trim());
     formData.set("email", email);
     formData.set("role", role);
+    // ★ append, not set — the field is multi-value, and the action reads it
+    // with getAll. Skipped for a superadmin, who is unrestricted by definition.
+    if (role !== "superadmin") {
+      for (const id of locationIds) formData.append("locationIds", id);
+    }
 
     startTransition(async () => {
       const result = await inviteUser(formData);
@@ -162,6 +173,45 @@ export function InviteUserDialog({
               </SelectContent>
             </Select>
           </div>
+
+          {/* ★ Hidden for a superadmin: they see every shop by definition, so
+              a picker there would imply a restriction that does not apply.
+              Hidden for a single-location store for the same reason. */}
+          {locations.length > 1 && role !== "superadmin" && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-[14px] font-medium">Locations</Label>
+              <p className="-mt-1 text-[12.5px] text-[var(--dash-text-3)]">
+                Which shops they can see. Leave all unticked for full access to
+                every location.
+              </p>
+              <div className="flex flex-col gap-1.5 rounded-md border border-[var(--dash-border)] p-3">
+                {locations.map((l) => {
+                  const checked = locationIds.includes(l.id);
+                  return (
+                    <label
+                      key={l.id}
+                      className="flex cursor-pointer items-center gap-2.5 text-[14px]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={isPending}
+                        onChange={(e) =>
+                          setLocationIds((ids) =>
+                            e.target.checked
+                              ? [...ids, l.id]
+                              : ids.filter((id) => id !== l.id),
+                          )
+                        }
+                        className="h-4 w-4 accent-[var(--dash-text)]"
+                      />
+                      {l.name}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="rounded-md border border-[var(--dash-red)]/30 bg-[var(--dash-red)]/10 px-4 py-3">

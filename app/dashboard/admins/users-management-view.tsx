@@ -35,6 +35,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { InviteUserDialog } from "./invite-user-dialog";
+import { setAdminLocations } from "@/app/actions/location-actions";
+import { MapPin } from "lucide-react";
 import { roleBadgeClass } from "../lib/permissions";
 import type { Profile, RoleOption } from "./page";
 import {
@@ -55,6 +57,11 @@ type Props = {
   profiles: Profile[];
   roleOptions: RoleOption[];
   canManage?: boolean;
+  /** The store's shops, for the invite dialog's scope picker. */
+  locations?: { id: string; name: string }[];
+  /** adminId → location ids. An admin ABSENT from this map is unrestricted —
+   *  absence is not restriction (lib/locations/scope.ts). */
+  bindings?: Record<string, string[]>;
 };
 
 export function UsersManagementView({
@@ -62,13 +69,16 @@ export function UsersManagementView({
   profiles,
   roleOptions,
   canManage = true,
+  locations = [],
+  bindings = {},
 }: Props) {
   const router = useRouter();
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
   const [actionType, setActionType] = useState<
-    "delete" | "role" | "suspend" | null
+    "delete" | "role" | "suspend" | "locations" | null
   >(null);
   const [newRole, setNewRole] = useState<string>("member");
+  const [newLocations, setNewLocations] = useState<string[]>([]);
   const [isPending, startTransition] = useTransition();
 
   const sortedProfiles = useMemo(
@@ -117,6 +127,9 @@ export function UsersManagementView({
             !selectedUser.is_suspended,
           );
           break;
+        case "locations":
+          result = await setAdminLocations(selectedUser.id, newLocations);
+          break;
       }
 
       if (result.error) {
@@ -138,6 +151,9 @@ export function UsersManagementView({
     setSelectedUser(user);
     setActionType(type);
     if (type === "role") setNewRole(user.role);
+    // Ticked to what they have today, so opening the dialog and saving is a
+    // no-op rather than a silent reset to unrestricted.
+    if (type === "locations") setNewLocations(bindings[user.id] ?? []);
   };
 
   return (
@@ -152,6 +168,7 @@ export function UsersManagementView({
             className="dash-btn dash-btn-primary shrink-0"
             label="Invite user"
             size="default"
+            locations={locations}
           />
         )}
       </header>
@@ -235,6 +252,20 @@ export function UsersManagementView({
                             <UserCog className="mr-2 h-4 w-4" />
                             Change role
                           </DropdownMenuItem>
+                          {/* Only where there is a choice to make, and never
+                              for a superadmin — they are unrestricted by
+                              definition, so a scope editor there would imply a
+                              limit that does not apply. */}
+                          {locations.length > 1 &&
+                            profile.role !== "superadmin" && (
+                              <DropdownMenuItem
+                                className="cursor-pointer"
+                                onClick={() => openDialog(profile, "locations")}
+                              >
+                                <MapPin className="mr-2 h-4 w-4" />
+                                Locations
+                              </DropdownMenuItem>
+                            )}
                           <DropdownMenuItem
                             className="cursor-pointer"
                             onClick={() => openDialog(profile, "suspend")}
@@ -273,6 +304,7 @@ export function UsersManagementView({
             <DialogTitle>
               {actionType === "delete" && "Remove user"}
               {actionType === "role" && "Change role"}
+              {actionType === "locations" && "Location access"}
               {actionType === "suspend" &&
                 (selectedUser?.is_suspended
                   ? "Un-suspend user"
@@ -282,6 +314,8 @@ export function UsersManagementView({
               {actionType === "delete" &&
                 "Are you sure you want to remove this user? This cannot be undone."}
               {actionType === "role" && "Select a new role for this user."}
+              {actionType === "locations" &&
+                "Which shops this person can see. Untick everything for full access to all locations."}
               {actionType === "suspend" &&
                 (selectedUser?.is_suspended
                   ? "This user will regain access."
@@ -290,6 +324,45 @@ export function UsersManagementView({
           </DialogHeader>
 
           <div className="py-4">
+            {actionType === "locations" && (
+              <div className="flex flex-col gap-2">
+                {locations.map((l) => {
+                  const checked = newLocations.includes(l.id);
+                  return (
+                    <label
+                      key={l.id}
+                      className="flex cursor-pointer items-center gap-2.5 text-[14px]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={isPending}
+                        onChange={(e) =>
+                          setNewLocations((ids) =>
+                            e.target.checked
+                              ? [...ids, l.id]
+                              : ids.filter((id) => id !== l.id),
+                          )
+                        }
+                        className="h-4 w-4 accent-[var(--dash-text)]"
+                      />
+                      {l.name}
+                    </label>
+                  );
+                })}
+                {/* ★ Said out loud, because "none ticked" reading as "sees
+                    everything" is the opposite of what a merchant expects from
+                    an empty checkbox list. It is the existing contract —
+                    absence is not restriction — so the UI has to explain it
+                    rather than quietly rely on it. */}
+                {newLocations.length === 0 && (
+                  <p className="mt-1 text-[12.5px] text-[var(--dash-text-3)]">
+                    Nothing ticked — this person will see every location.
+                  </p>
+                )}
+              </div>
+            )}
+
             {actionType === "role" && (
               <Select
                 value={newRole}

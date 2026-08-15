@@ -9,6 +9,7 @@ import {
   authErrorCode,
 } from "@/lib/auth/firebase-users";
 import { setUserClaims } from "@/lib/auth/firebase-claims";
+import { setAdminLocations } from "./location-actions";
 import { withService, withUser } from "@/lib/db/client";
 import { admins } from "@/drizzle/schema";
 import { wrapBrandedEmail } from "@/lib/email/layout";
@@ -45,6 +46,13 @@ export async function inviteUser(formData: FormData) {
   const lastName = (formData.get("lastName") as string) || null;
   const email = formData.get("email") as string;
   const role = formData.get("role") as string;
+  // ★ MULTI-VALUE. `getAll` rather than `get`: a staff member can cover several
+  // shops (a supervisor across Delhi and Jaipur), so the field is a set from
+  // the start rather than a single id somebody later has to widen.
+  const locationIds = formData
+    .getAll("locationIds")
+    .map(String)
+    .filter(Boolean);
 
   if (!firstName || !firstName.trim()) {
     return { error: "First name is required." };
@@ -140,6 +148,29 @@ export async function inviteUser(formData: FormData) {
     // Cleanup: delete the auth user so no orphan account is left behind.
     await deleteAuthUser(uid);
     return { error: "Failed to create user profile." };
+  }
+
+  // ── Location scope ────────────────────────────────────────────────────────
+  // ★ ASSIGNED AT INVITE, not in a second trip to another screen. The scope
+  // machinery already existed (admin_locations + getViewerLocations), but the
+  // only way to set it was an action with no caller — so in practice every
+  // invited admin saw every shop. Deciding who covers where is part of deciding
+  // who someone IS.
+  //
+  // ★ EMPTY MEANS UNRESTRICTED, and that is the existing contract
+  // (lib/locations/scope.ts: null = all). So leaving the field alone invites
+  // exactly the admin this form always did — no migration, no behaviour change
+  // for anyone who ignores it.
+  //
+  // ⚠ Best-effort AFTER the account exists: a superadmin is unrestricted by
+  // definition and the write is skipped for them, and a failure here must not
+  // orphan an auth user we have just created. It leaves them unrestricted,
+  // which is visible on the staff list and fixable in one click — the opposite
+  // failure, an admin who can see nothing and cannot be told why, is not.
+  if (role !== "superadmin" && locationIds.length > 0) {
+    await setAdminLocations(uid, locationIds).catch((err) =>
+      console.error("inviteUser setAdminLocations error:", err),
+    );
   }
 
   // Mirror role + force_password_reset into the auth token as custom claims so

@@ -5,6 +5,7 @@ import { getStoreBrand } from "@/lib/store/brand";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { effectivePlan, PLAN_META } from "@/lib/plans";
 import { DashboardTopbar } from "./dashboard-topbar";
+import { getViewerLocationNames } from "@/lib/locations/scope";
 import { DashboardSidebar } from "./dashboard-sidebar";
 import { MobileNavProvider } from "./dashboard-mobile-nav";
 import { getViewerContext } from "./lib/access";
@@ -141,6 +142,11 @@ export default async function DashboardLayout({
   // Live count of unhandled enquiries → sidebar badge (only when the viewer can
   // see enquiries, and only when there's at least one new one).
   const canViewEnquiries = can(permissions, "enquiries", "view", isSuperadmin);
+
+  // ★ EMPTY for an unrestricted viewer, which is what hides the tag. A
+  // restricted admin otherwise sees the same screens with rows quietly missing
+  // and nothing on the page to explain why.
+  const scopedLocations = await getViewerLocationNames();
   const newEnquiries = canViewEnquiries ? await getNewEnquiriesCount() : 0;
 
   // NOTE: no low-stock badge on Inventory. It was removed deliberately, and
@@ -231,6 +237,7 @@ export default async function DashboardLayout({
           <DashboardTopbar
             email={profile.email}
             role={profile.role ?? ""}
+            scopedLocations={scopedLocations}
             firstName={profile.first_name}
             lastName={profile.last_name}
             storeName={store.name}

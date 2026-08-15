@@ -12,6 +12,7 @@ vi.mock("@/lib/auth/firebase-claims", () => ({
   setUserClaims: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
+vi.mock("./location-actions", () => ({ setAdminLocations: vi.fn() }));
 vi.mock("@/lib/email/layout", () => ({
   wrapBrandedEmail: vi.fn((s: string) => s),
 }));
@@ -51,6 +52,7 @@ import { inviteUser } from "./invite-user";
 import { createAuthUser, deleteAuthUser } from "@/lib/auth/firebase-users";
 import { setUserClaims } from "@/lib/auth/firebase-claims";
 import { getServerUser } from "@/lib/auth/server-user";
+import { setAdminLocations } from "./location-actions";
 
 function makeFormData(fields: Record<string, string | null | undefined>) {
   const fd = new FormData();
@@ -98,6 +100,8 @@ describe("inviteUser", () => {
     vi.mocked(createAuthUser).mockResolvedValue("new-user");
     vi.mocked(deleteAuthUser).mockResolvedValue();
     vi.mocked(setUserClaims).mockResolvedValue();
+    // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS.
+    vi.mocked(setAdminLocations).mockResolvedValue({ success: true });
   });
 
   it("rejects empty first name", async () => {
@@ -188,5 +192,57 @@ describe("inviteUser", () => {
     const sentHtml = resendSend.mock.calls[0][0].html as string;
     expect(sentHtml).not.toContain("<img/onerror");
     expect(sentHtml).toContain("&lt;img");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Location scope at invite time. The machinery (admin_locations,
+  // getViewerLocations, setAdminLocations) already existed — but the only way to
+  // set it was an action with no caller, so in practice every invited admin saw
+  // every shop.
+  // ---------------------------------------------------------------------------
+  describe("inviteUser — location scope", () => {
+    function formWith(locationIds: string[], role = "member") {
+      const fd = new FormData();
+      fd.set("firstName", "Ada");
+      fd.set("email", "ada@example.com");
+      fd.set("role", role);
+      // ★ append, not set — the field is multi-value: one person can cover
+      // several shops.
+      for (const id of locationIds) fd.append("locationIds", id);
+      return fd;
+    }
+
+    it("restricts the new admin to the locations given", async () => {
+      await inviteUser(formWith(["loc-1", "loc-2"]));
+      expect(setAdminLocations).toHaveBeenCalledWith("new-user", [
+        "loc-1",
+        "loc-2",
+      ]);
+    });
+
+    // ★ EMPTY = UNRESTRICTED, the existing contract (null = all). So the field
+    // being ignored invites exactly the admin this form always did — no
+    // behaviour change for anyone who never touches it.
+    it("leaves an admin unrestricted when none are given", async () => {
+      await inviteUser(formWith([]));
+      expect(setAdminLocations).not.toHaveBeenCalled();
+    });
+
+    // A superadmin sees everything by definition; writing a scope for one would
+    // store a restriction that getViewerLocations then ignores, which is worse
+    // than storing nothing — the staff list would show a limit that isn't real.
+    it("never scopes a superadmin", async () => {
+      await inviteUser(formWith(["loc-1"], "superadmin"));
+      expect(setAdminLocations).not.toHaveBeenCalled();
+    });
+
+    // ⚠ Best-effort: a failure here leaves them unrestricted, which is visible
+    // on the staff list and fixable in one click. Failing the invite would leave
+    // an orphaned auth user instead.
+    it("still creates the admin when the scope write fails", async () => {
+      vi.mocked(setAdminLocations).mockRejectedValue(new Error("db down"));
+      const r = await inviteUser(formWith(["loc-1"]));
+      expect(r.error).toBeUndefined();
+    });
   });
 });

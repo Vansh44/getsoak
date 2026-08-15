@@ -2868,6 +2868,43 @@ group, span}` (span = columns of the 4-wide desktop grid),
       backfilled ON (`online_fulfil` on the default location — the
       `reserve_stock` wrapper sends every online order there) and one
       introducing NEW behaviour is backfilled OFF (`pickup`, `returns`).
+    - **★★ STAFF ARE SCOPED AT INVITE, AND THE SCOPE IS VISIBLE.** The
+      machinery all existed — `admin_locations`, `getViewerLocations()` (null =
+      unrestricted), orders/inventory/notification-recipients already filtered
+      by it, and `setAdminLocations`/`listAdminLocations` — but **nothing in the
+      UI called those two actions**, so in practice every invited admin saw
+      every shop. Three additions close it:
+      - **The invite takes locations** (`formData.getAll("locationIds")` —
+        multi-value, because one supervisor can cover Delhi AND Jaipur). Written
+        best-effort AFTER the account exists: a failure leaves them
+        unrestricted, which is visible on the staff list and fixable in a click,
+        where failing the invite would orphan the auth user just created.
+      - **A Locations item on each staff row**, opening on today's bindings so
+        saving is a no-op rather than a silent reset to unrestricted.
+      - **★ A TAG IN THE TOPBAR, right of the role** (`location-tag.tsx`), with
+        a dropdown only when there are several — a dropdown that opens to one
+        item promises a choice it does not have. It is an ANSWER, not a filter:
+        a restricted admin otherwise sees the same screens with rows quietly
+        missing and nothing to explain why, which is the most confusing thing
+        scope can do to somebody. The panel says the scope is fixed, so the list
+        of names does not read as something you pick from.
+      - **★ EMPTY MEANS UNRESTRICTED throughout**, the existing contract, so a
+        merchant who ignores the field invites exactly the admin they always
+        did — no migration, no behaviour change. Both the invite and the editor
+        say so out loud, because an empty checkbox list reading as "sees
+        everything" is the opposite of what anyone expects.
+      - **★ SUPERADMINS ARE NEVER SCOPED** — unrestricted by definition, so the
+        picker is hidden for them and the write is skipped. Storing a scope
+        `getViewerLocations` then ignores would show a limit on the staff list
+        that isn't real. The whole field hides below two locations.
+      - **`getViewerLocationNames()` is a SEPARATE read** from
+        `getViewerLocations`: that one answers a SECURITY question on every
+        scoped query and stays a bare id list, so joining names onto it would
+        make every order page pay for a label only the header uses.
+      - ⚠ **It shows scope; it does not switch it.** A multi-location admin sees
+        all their shops' data at once. An ACTIVE-location switcher (pick one,
+        the whole dashboard narrows) is the natural follow-up and is a bigger
+        change — a current-location that every scoped read honours.
     - **Location CRUD no longer requires POS to be switched on** — only Pro. A
       warehouse that fulfils online orders needs no till. The sidebar entry is
       hidden until the store has 2+ locations or POS is on, so a
