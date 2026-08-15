@@ -48,6 +48,7 @@ export function SmsLogsView({
   q,
   days,
   error,
+  platform = false,
 }: {
   rows: SmsLogRow[];
   total: number;
@@ -59,6 +60,10 @@ export function SmsLogsView({
   q: string;
   days: number;
   error?: string;
+  /** Operator console (store_id IS NULL) rather than one store's log. The
+   *  EmailLogsView contract, mirrored — without it this page told an operator
+   *  about "this store", which on the platform console names nothing. */
+  platform?: boolean;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -82,9 +87,9 @@ export function SmsLogsView({
         <div>
           <h1>SMS logs</h1>
           <p>
-            Every text this store has sent. A message blocked by a carrier for
-            not matching its DLT template arrives here as sent — carriers drop
-            those silently, so a delivery report is the only place it shows.
+            {platform
+              ? "Every text StoreMink itself has sent. Merchants' own messages to their shoppers are logged in their store, not here — SMS is a per-store connection."
+              : "Every text this store has sent. A message blocked by a carrier for not matching its DLT template arrives here as sent — carriers drop those silently, so a delivery report is the only place it shows."}
           </p>
         </div>
       </header>
@@ -150,7 +155,19 @@ export function SmsLogsView({
         ) : rows.length === 0 ? (
           <p className="px-5 py-10 text-center text-[13px] text-[var(--dash-text-3)]">
             <MessageSquare className="mx-auto mb-2 h-5 w-5 opacity-40" />
-            No messages yet.
+            {platform ? (
+              <>
+                No platform messages — and there cannot be any yet.
+                <span className="mt-1.5 block">
+                  StoreMink has no SMS sender of its own. The one-time code sent
+                  during signup comes from Firebase phone auth, which Google
+                  delivers on its own infrastructure and which never passes
+                  through this system, so it leaves no row here.
+                </span>
+              </>
+            ) : (
+              "No messages yet."
+            )}
           </p>
         ) : (
           <div className="dash-table-wrap">

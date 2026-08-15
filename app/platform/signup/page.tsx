@@ -15,6 +15,7 @@ import {
   getFirebaseAuth,
   establishSession,
   firebaseAuthErrorMessage,
+  phoneLinkErrorMessage,
 } from "@/lib/auth/firebase-client";
 import {
   checkStoreSlugAvailability,
@@ -186,9 +187,26 @@ export default function SignupPage() {
     return verifierRef.current;
   }, []);
 
-  const [step, setStep] = useState<Step>("email");
+  const [step, setStepRaw] = useState<Step>("email");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // ★★ AN ERROR BELONGS TO THE STEP THAT RAISED IT.
+  //
+  // There is ONE `error` state and ONE banner, rendered above whichever step is
+  // showing — so any transition that forgets to clear it carries the last
+  // step's failure onto the next one, where it describes nothing. Two of the
+  // fourteen transitions forgot: `resumeWizard` (which jumps straight to
+  // phone/name from the session cookie) and the theme step's Continue.
+  //
+  // Clearing at each call site is what produced the bug; the fifteenth site
+  // would have forgotten too. Going through here makes it structural — a step
+  // change cannot leave a stale error behind. Where an error must SURVIVE a
+  // transition (nothing does today), set it after the call.
+  const setStep = useCallback((next: Step) => {
+    setError("");
+    setStepRaw(next);
+  }, []);
 
   // Account
   const [email, setEmail] = useState("");
@@ -267,7 +285,7 @@ export default function SignupPage() {
           : "phone",
     );
     return true;
-  }, []);
+  }, [setStep]);
 
   // On mount: resume a refreshed tab from the existing session cookie.
   const resumed = useRef(false);
@@ -473,7 +491,7 @@ export default function SignupPage() {
       );
       setPhoneSent(true);
     } catch (err) {
-      setError(firebaseAuthErrorMessage(err));
+      setError(phoneLinkErrorMessage(err));
     }
     setBusy(false);
   }
@@ -497,7 +515,7 @@ export default function SignupPage() {
       setStep("name");
     } catch (err) {
       setBusy(false);
-      setError(firebaseAuthErrorMessage(err));
+      setError(phoneLinkErrorMessage(err));
     }
   }
 

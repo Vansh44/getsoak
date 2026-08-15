@@ -24,6 +24,20 @@
 //     service/transactional, but that is a determination to make with the
 //     operator, per template — not one to assume in code.
 //
+// ── ⚠ "BUT I GOT A SIGNUP OTP BY SMS" — YES, AND IT IS NOT A COUNTEREXAMPLE ─
+// The signup and set-password screens send a phone OTP through
+// `PhoneAuthProvider.verifyPhoneNumber` (§19), which is the FIREBASE WEB SDK
+// running in the browser. Google sends that message from its own
+// infrastructure, on its own carrier relationships and its own DLT
+// registration; the "StoreMink" in the body is the Firebase project's display
+// name inside Google's fixed template. No StoreMink server code is in that
+// path, nothing reaches `lib/sms/`, and it leaves NO row in `sms_logs`.
+//
+// It cannot be reused here for two reasons. It is a fixed-purpose verification
+// API — there is no parameter for your own copy, only a Google-generated code
+// — and it is a TRANSACTIONAL auth message, which is a different regulatory
+// category from a promotional announcement no matter who sends it.
+//
 // ── ★ SO IT REFUSES WITH A REASON RATHER THAN QUEUEING ────────────────────
 // The alternative — accept the send and let it fail at the carrier — produces
 // no bounce, no error and a log full of rows marked `sent`. §23's rule: a

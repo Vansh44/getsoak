@@ -212,6 +212,27 @@ the second worst**, hence the banner.
 Decided 2026-08-15. Building it gated rather than omitting it, so the audience,
 composer and log are designed for two channels from the start.
 
+### ⚠ "But signup already sends an SMS OTP"
+
+It does, and it is not a counterexample. That message comes from
+`PhoneAuthProvider.verifyPhoneNumber` (§19) — the **Firebase Web SDK, in the
+browser**. Google sends it from its own infrastructure, on its own carrier
+relationships and its own DLT registration; the "StoreMink" in the body is the
+Firebase project's display name inside Google's fixed template.
+
+Three consequences worth knowing:
+
+- **No StoreMink code is in that path.** It never touches `lib/sms/`, so it
+  leaves no row in `sms_logs` and appears in no operator log.
+- **It cannot carry your own copy.** It is a fixed-purpose verification API:
+  the only variable is a Google-generated code.
+- **It is transactional auth**, a different regulatory category from a
+  promotional announcement regardless of who sends it.
+
+So StoreMink genuinely has no sender of its own for arbitrary SMS.
+
+### The three blockers
+
 Three things are missing, and only the first is ours:
 
 1. **StoreMink has no Twilio account of its own.** SMS is BYO-per-store (§37) —

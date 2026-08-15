@@ -30,7 +30,20 @@ export default async function PlatformSmsLogsPage({
   // No basePath prop: `SmsLogsView` navigates to `/dashboard/logs/sms-logs`,
   // which is this route on BOTH consoles — the operator hub deliberately
   // mirrors the merchant path rather than inventing a second one.
+  //
+  // `platform` IS needed, though: without it the page told an operator about
+  // "every text this store has sent", which on a store_id IS NULL view names
+  // nothing, and offered "No messages yet" to someone who had just received a
+  // StoreMink SMS during signup — which reads as a bug rather than as the
+  // designed state.
   return (
-    <SmsLogsView {...result} page={page} status={status} q={q} days={days} />
+    <SmsLogsView
+      {...result}
+      page={page}
+      status={status}
+      q={q}
+      days={days}
+      platform
+    />
   );
 }
