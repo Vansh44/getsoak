@@ -35,6 +35,11 @@ import {
   shouldSendDirectReceipt,
 } from "@/lib/email/pos-receipt";
 import { TENDER_LABEL } from "@/lib/pos/receipt";
+import {
+  getCreditBalance,
+  getCreditBalances,
+  spendCredit,
+} from "@/lib/credit/store-credit";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
@@ -78,6 +83,7 @@ import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { posTotals } from "@/lib/pos/totals";
 import { isPosDateRangeKey, posDateRange } from "@/lib/pos/date-range";
 import {
+  accountTenderTotal,
   settleTenders,
   validateTenderShape,
   type PosTender,
@@ -502,6 +508,9 @@ export interface PosCustomer {
   name: string;
   phone: string;
   email: string | null;
+  /** Store-credit balance (§29). Rides along with the customer so attaching one
+   *  brings their balance without a second round trip at the counter. */
+  storeCredit: number;
 }
 
 /**
@@ -552,6 +561,13 @@ export async function searchPosCustomers(
         .limit(10),
     );
 
+    // ★ ONE query for every balance, not one per row. A search returns up to
+    // ten customers and runs on each keystroke burst at a counter.
+    const balances = await getCreditBalances(
+      op.storeId,
+      rows.map((r) => r.id),
+    );
+
     return {
       customers: rows.map((r) => ({
         id: r.id,
@@ -560,6 +576,7 @@ export async function searchPosCustomers(
           r.phone,
         phone: r.phone,
         email: r.email,
+        storeCredit: balances.get(r.id) ?? 0,
       })),
     };
   } catch (err) {
@@ -630,6 +647,8 @@ export async function createPosCustomer(
           name: valid.name,
           phone: valid.phone,
           email: valid.email,
+          // A row created this second cannot have a balance.
+          storeCredit: 0,
         },
       };
     }
@@ -658,6 +677,9 @@ export async function createPosCustomer(
           row.phone,
         phone: row.phone,
         email: row.email,
+        // This is an EXISTING customer (the phone was already on file), so
+        // they may well have one.
+        storeCredit: await getCreditBalance(op.storeId, row.id),
       },
     };
   } catch (err) {
@@ -1133,6 +1155,28 @@ export async function placePosSale(
   if ("error" in settled) return { error: settled.error };
   const changeDue = settled.change;
 
+  // ── Store credit (§29) ────────────────────────────────────────────────────
+  // ★ A BALANCE BELONGS TO SOMEBODY. Without an attached customer there is no
+  // account to draw on, so this is refused rather than silently ignored — the
+  // cashier needs to know the sale is short, not discover it at the drawer.
+  const creditAsked = accountTenderTotal(tenders, "store_credit");
+  if (creditAsked > 0 && !customerId) {
+    return { error: "Attach a customer before paying with store credit." };
+  }
+  if (creditAsked > 0 && customerId) {
+    // A PRE-check, purely so the cashier gets a useful message with the real
+    // balance in it. It is NOT the guarantee — `spendCredit` below is a single
+    // conditional UPDATE, so the balance is re-proved atomically at the moment
+    // it moves and two tills cannot overdraw the same account between here and
+    // there.
+    const balance = await getCreditBalance(op.storeId, customerId);
+    if (balance + 0.0001 < creditAsked) {
+      return {
+        error: `That customer has ₹${balance.toLocaleString("en-IN")} in store credit, which doesn't cover ₹${creditAsked.toLocaleString("en-IN")}.`,
+      };
+    }
+  }
+
   // 8. Allocate a per-location receipt number.
   let receiptNo: string | null = null;
   try {
@@ -1180,6 +1224,12 @@ export async function placePosSale(
           total,
           currency: "INR",
           notes: opts.note ?? null,
+          // ★ CREDIT IS A PAYMENT, NOT A DISCOUNT (§29). `total` stays the full
+          // goods value and this records what was settled from the balance —
+          // netting it off would understate the sale on the receipt, compute
+          // GST on the wrong base, and make a later credit note reverse the
+          // wrong amount.
+          storeCreditUsed: creditAsked > 0 ? creditAsked : null,
           stockStatus: "reserved",
           salesChannel: "pos",
           shiftId,
@@ -1236,6 +1286,34 @@ export async function placePosSale(
       return { error: `Not enough stock for ${label} at this location.` };
     }
     reserved.push({ p: l.product_id, v: l.variant_id, q: l.quantity });
+  }
+
+  // ★★ SPENT AFTER THE ORDER EXISTS, because the ledger row references the
+  // order — the same ordering constraint reserve_stock_at has. And spent BEFORE
+  // the items are written, so the only rollback needed on failure is the two
+  // steps already above it.
+  //
+  // ⚠ This is the ONE place a POS sale can fail for a reason the cashier could
+  // not have predicted: the pre-check above passed, and the balance moved
+  // underneath us (the customer spent it at another till in the interim). That
+  // is rare and it is not an error — it is refused with the real reason, and
+  // the sale can be re-rung against a different tender.
+  if (creditAsked > 0 && customerId) {
+    const spent = await spendCredit({
+      storeId: op.storeId,
+      customerId,
+      amount: creditAsked,
+      orderId,
+      note: `In-store sale ${orderRef}`,
+    });
+    if (!spent) {
+      await releaseStock();
+      await deleteOrder();
+      return {
+        error:
+          "That store credit was just used elsewhere. Check the balance and take payment another way.",
+      };
+    }
   }
 
   try {

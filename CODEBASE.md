@@ -4111,10 +4111,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         history, matching checkout's `applied > 0`. A spent-to-zero balance
         still renders, because the history explains where the money went and
         vanishing would look like it was lost.
+    - **★★ AND IT CAN BE SPENT AT THE TILL** (`store_credit` in
+      `TENDER_METHODS`). It was the one genuinely inconsistent hole in the POS:
+      a shop could refund a customer to credit across the counter and then
+      refuse that credit at the same counter.
+    - **★ A BALANCE BELONGS TO SOMEBODY**, so `placePosSale` refuses a credit
+      tender with no attached customer rather than ignoring it — the cashier
+      needs to know the sale is short before the drawer opens.
+    - **★ THE PRE-CHECK IS FOR THE MESSAGE, NOT THE GUARANTEE.**
+      `getCreditBalance` runs first only so the refusal can quote the real
+      balance; `try_spend_customer_credit` is a single conditional UPDATE, so the
+      balance is re-proved atomically where it moves and two tills cannot
+      overdraw one account.
+    - **★ SPENT AFTER THE ORDER EXISTS AND BEFORE THE ITEMS**, because the ledger
+      row references the order (the `reserve_stock_at` constraint) and that
+      ordering keeps the rollback to the two steps already above it. A balance
+      that moved underneath the sale UNWINDS it — releases stock, deletes the
+      order — rather than completing it unpaid.
+    - **★ `total` STAYS WHOLE**; `orders.store_credit_used` records what the
+      balance settled. Credit is a payment, not a discount.
+    - **★★ THE COLLECTION COUNTER'S ALLOWLIST IS NARROWER**
+      (`COUNTER_TENDER_METHODS`). `markCollected` shares `validateTenderShape`,
+      so simply widening the global list made it ACCEPT credit and mark a
+      collection paid against a balance nothing deducted — the exact failure the
+      allowlist exists to prevent, reintroduced at the other counter by widening
+      a shared constant. **A test caught it.** The allowed set is per COUNTER
+      now; wire the spend into `markCollected` and the two lists can merge again.
+      A test pins their difference.
     - **Not built:** gift cards (they share this ledger shape — that is why
-      `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
-      needs no migration), a merchant grant UI (`issueCredit` takes
-      `kind: 'grant'` and is ready), and split-tender refunds.
+      `kind` is an enum, and why `gift_card` is still refused: no ledger stands
+      behind it), expiry (`'expire'` is reserved in the CHECK so it needs no
+      migration), a merchant grant UI (`issueCredit` takes `kind: 'grant'` and is
+      ready), split-tender refunds, and spending credit at a COLLECTION.
 
 30. **Custom domains & TLS — three conditions, and nobody is watching.**
     `lib/domains/`, `/dashboard/settings/domain`, Pro-only. A domain is marked

@@ -896,6 +896,9 @@ export function SellClient({
           onComplete={completeSale}
           receiptEmail={receiptEmail}
           onReceiptEmail={setReceiptEmail}
+          // Rides along with the attached customer — null for a walk-in, which
+          // is what hides the option entirely.
+          storeCredit={customer?.storeCredit ?? null}
           onVerifyManager={(pin) =>
             verifyManagerPin(pin, {
               lines: saleLines(),

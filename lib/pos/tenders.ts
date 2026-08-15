@@ -38,25 +38,70 @@ export const MAX_TENDERS = 6;
 /**
  * What the till may actually be paid with TODAY.
  *
- * ★ `gift_card` and `store_credit` are deliberately absent even though
- * PosTenderMethod declares them: neither feature is built, so there is no
- * balance to check a tender against. Accepting one would mark a sale paid in
- * full, and let the goods leave the shelf, against money that never existed.
+ * ★ `gift_card` IS STILL ABSENT, and for the original reason: no ledger stands
+ * behind it, so accepting one would mark a sale paid in full — and let the
+ * goods leave the shelf — against money that never existed. A list the SERVER
+ * accepts must never be wider than what the system can actually settle, because
+ * these are server actions and the register's own JavaScript is not their only
+ * caller (that is exactly how the `managerApproved` boolean was bypassable).
  *
- * The register only offers cash/card/upi — but the callers are server actions,
- * so the register's own JavaScript is not their only caller. That is exactly
- * how the `managerApproved` boolean was bypassable (§22); the lesson is that a
- * list the SERVER accepts must never be wider than what the system can
- * actually settle.
+ * ★★ `store_credit` IS NOW HERE, because the ledger finally is (§29): a real
+ * balance, an append-only history, and `try_spend_customer_credit` — a single
+ * conditional UPDATE, so two tills cannot overdraw the same balance. It was the
+ * one genuinely inconsistent hole in the till: a shop could refund a customer
+ * to credit across the counter and then refuse that credit at the same counter.
  *
- * Add them back in the same commit that builds the ledger behind them.
+ * ⚠ Being on this list is NOT the whole gate. `placePosSale` additionally
+ * requires an ATTACHED CUSTOMER (a balance belongs to somebody) and SPENDS the
+ * credit through the RPC before the sale completes. This list says "the shape
+ * is settleable"; the action proves the money exists.
  */
 export const TENDER_METHODS: PosTenderMethod[] = [
   "cash",
   "card",
   "upi",
   "razorpay",
+  "store_credit",
 ];
+
+/**
+ * ★★ WHAT A COLLECTION COUNTER MAY TAKE — NARROWER, AND THAT IS THE POINT.
+ *
+ * `markCollected` settles a pay-at-store collection, and it has no store-credit
+ * spend wired into it. Because it shares `validateTenderShape`, simply adding
+ * `store_credit` to the list above made that counter ACCEPT credit and mark the
+ * order paid against a balance nothing ever deducted — the exact failure the
+ * allowlist exists to prevent, reintroduced at the other counter by widening a
+ * shared constant. A test caught it.
+ *
+ * So the allowed set is per COUNTER, not global. Wire the spend into
+ * `markCollected` and this list can simply become the one above.
+ */
+export const COUNTER_TENDER_METHODS: PosTenderMethod[] = [
+  "cash",
+  "card",
+  "upi",
+  "razorpay",
+];
+
+/** Tenders that need a customer on the sale, because they draw on a balance
+ *  that belongs to one. Checked in the action, listed here so there is one
+ *  place to add the next such method. */
+export const ACCOUNT_TENDERS: PosTenderMethod[] = ["store_credit"];
+
+export function isAccountTender(method: PosTenderMethod): boolean {
+  return ACCOUNT_TENDERS.includes(method);
+}
+
+/** How much of a sale is being settled from an account balance. */
+export function accountTenderTotal(
+  tenders: PosTender[],
+  method: PosTenderMethod,
+): number {
+  return tenders
+    .filter((t) => t.method === method)
+    .reduce((sum, t) => sum + (t.amount || 0), 0);
+}
 
 /**
  * Shape validation, before any DB work. Returns an error message, or null when
@@ -68,11 +113,14 @@ export const TENDER_METHODS: PosTenderMethod[] = [
 export function validateTenderShape(
   tenders: PosTender[],
   emptyMessage: string,
+  /** Defaults to the SELL counter's set. A caller that cannot settle every
+   *  method — see COUNTER_TENDER_METHODS — passes its own. */
+  allowed: PosTenderMethod[] = TENDER_METHODS,
 ): string | null {
   if (!Array.isArray(tenders) || tenders.length === 0) return emptyMessage;
   if (tenders.length > MAX_TENDERS) return "Too many payments.";
   for (const t of tenders) {
-    if (!TENDER_METHODS.includes(t?.method)) {
+    if (!allowed.includes(t?.method)) {
       return "Invalid payment method.";
     }
     if (!Number.isFinite(t.amount) || t.amount <= 0) {
@@ -124,7 +172,10 @@ export function settleTenders(
     .reduce((s, t) => s + (t.amount || 0), 0);
   if (nonCash > 0 && changeDue(nonCash, total) > 0) {
     return {
-      error: `A card or UPI payment can't be more than the ₹${total.toLocaleString("en-IN")} owed.`,
+      // Store credit is non-cash too, and over-applying it would hand real
+      // change out of the drawer against a balance — turning credit into a
+      // cash withdrawal.
+      error: `A card, UPI or store-credit payment can't be more than the ₹${total.toLocaleString("en-IN")} owed.`,
     };
   }
 

@@ -17,6 +17,11 @@ vi.mock("@/lib/notifications/record", () => ({
   recordEvent: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
+vi.mock("@/lib/credit/store-credit", () => ({
+  getCreditBalance: vi.fn(),
+  getCreditBalances: vi.fn(),
+  spendCredit: vi.fn(),
+}));
 vi.mock("@/lib/email/pos-receipt", async (orig) => ({
   // Keep the REAL rule — the point of these tests is that placePosSale asks it
   // correctly — and stub only the send.
@@ -50,6 +55,11 @@ import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import {
+  getCreditBalance,
+  getCreditBalances,
+  spendCredit,
+} from "@/lib/credit/store-credit";
 import { sendPosReceipt } from "@/lib/email/pos-receipt";
 import {
   getCatalogSnapshot,
@@ -163,6 +173,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
   vi.mocked(getStoreSettings).mockResolvedValue(SETTINGS);
+  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS.
+  vi.mocked(getCreditBalance).mockResolvedValue(0);
+  vi.mocked(getCreditBalances).mockResolvedValue(new Map());
+  vi.mocked(spendCredit).mockResolvedValue(true);
   seedHappyPath();
 });
 
@@ -177,16 +191,26 @@ describe("placePosSale — gates", () => {
     expect((await placePosSale([line], [])).error).toMatch(/take a payment/i);
   });
 
-  it("★ refuses a tender the system cannot settle — gift card and store credit are declared but unbuilt", async () => {
-    // The register only offers cash/card/upi, but this is a server action and
-    // the register's JS is not its only caller. Accepting either would mark a
-    // sale paid in full against a balance that does not exist.
-    for (const method of ["gift_card", "store_credit"] as const) {
-      const res = await placePosSale([line], [
-        { method, amount: 100 },
-      ] as never);
-      expect(res.error).toMatch(/invalid payment method/i);
-    }
+  // ★ Still refused: no ledger stands behind a gift card, so accepting one
+  // would mark a sale paid in full — and let the goods leave the shelf —
+  // against money that never existed. This is a server action and the
+  // register's JS is not its only caller.
+  it("★ refuses a gift card — declared but unbuilt", async () => {
+    const res = await placePosSale([line], [
+      { method: "gift_card", amount: 100 },
+    ] as never);
+    expect(res.error).toMatch(/invalid payment method/i);
+  });
+
+  // ★★ Store credit IS settleable now (§29), but a balance belongs to
+  // somebody: without an attached customer there is no account to draw on, and
+  // the cashier needs to know the sale is short rather than find out at the
+  // drawer.
+  it("★ refuses store credit with no customer attached", async () => {
+    const res = await placePosSale([line], [
+      { method: "store_credit", amount: 118 },
+    ] as never);
+    expect(res.error).toMatch(/attach a customer/i);
   });
 
   it("rejects invalid quantities and unknown tender methods", async () => {
@@ -982,6 +1006,117 @@ describe("placePosSale — line discounts", () => {
 // ---------------------------------------------------------------------------
 // Emailing a receipt to a walk-in (roadmap Step 4).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Store credit as a till tender (§29). The ledger existed and online checkout
+// spent it; the counter refused it, so a shop could refund a customer to credit
+// across the counter and then not accept it at the same counter.
+// ---------------------------------------------------------------------------
+describe("placePosSale — store credit", () => {
+  /** The ownership read comes first, then the happy-path queue. */
+  function seedWithCustomer() {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [{ id: "cust-1", email: null }],
+        [PRODUCT],
+        [BILLING],
+        [TAX_CLASS],
+        [{ state_code: "07" }],
+        [{ prefix: "DEL" }],
+      ],
+      executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
+      returning: [{ id: "o1", order_ref: "ORD100110006" }],
+    });
+  }
+
+  const creditOnly = [{ method: "store_credit" as const, amount: 118 }];
+
+  it("settles a sale entirely from the balance", async () => {
+    seedWithCustomer();
+    vi.mocked(getCreditBalance).mockResolvedValue(500);
+    const r = await placePosSale([line], creditOnly, { customerId: "cust-1" });
+    expect(r.success).toBe(true);
+    expect(spendCredit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        customerId: "cust-1",
+        amount: 118,
+        // The order id is generated before the insert, so it is asserted
+        // against the one the sale reports rather than a literal — the point is
+        // that the ledger row references THIS order.
+        orderId: r.orderId,
+      }),
+    );
+  });
+
+  // ★ CREDIT IS A PAYMENT, NOT A DISCOUNT. Netting it off `total` would
+  // understate the sale, compute GST on the wrong base, and make a later credit
+  // note reverse the wrong amount.
+  it("keeps the FULL total and records what the balance settled", async () => {
+    seedWithCustomer();
+    vi.mocked(getCreditBalance).mockResolvedValue(500);
+    await placePosSale([line], creditOnly, { customerId: "cust-1" });
+    const order = dbHolder.current.calls.values[0];
+    expect(order.total).toBe(118);
+    expect(order.storeCreditUsed).toBe(118);
+  });
+
+  it("leaves storeCreditUsed null on an ordinary cash sale", async () => {
+    const r = await placePosSale([line], cash);
+    expect(r.success).toBe(true);
+    expect(dbHolder.current.calls.values[0].storeCreditUsed).toBeNull();
+    expect(spendCredit).not.toHaveBeenCalled();
+  });
+
+  it("splits with another tender", async () => {
+    seedWithCustomer();
+    vi.mocked(getCreditBalance).mockResolvedValue(50);
+    const r = await placePosSale(
+      [line],
+      [
+        { method: "store_credit", amount: 50 },
+        { method: "cash", amount: 68 },
+      ],
+      { customerId: "cust-1" },
+    );
+    expect(r.success).toBe(true);
+    expect(vi.mocked(spendCredit).mock.calls[0][0].amount).toBe(50);
+  });
+
+  // The pre-check exists so the cashier gets the real balance in the message,
+  // rather than a bare refusal after the customer has been told a total.
+  it("refuses when the balance doesn't cover it, and says the balance", async () => {
+    seedWithCustomer();
+    vi.mocked(getCreditBalance).mockResolvedValue(40);
+    const r = await placePosSale([line], creditOnly, { customerId: "cust-1" });
+    expect(r.error).toMatch(/40/);
+    expect(spendCredit).not.toHaveBeenCalled();
+    expect(dbHolder.current.calls.values).toHaveLength(0);
+  });
+
+  // ★★ THE RACE. The pre-check passed and the balance moved underneath us —
+  // the customer spent it at another till. try_spend_customer_credit is a
+  // single conditional UPDATE, so it refuses rather than overdrawing, and the
+  // sale must UNWIND rather than complete unpaid.
+  it("rolls the sale back when the balance moved underneath it", async () => {
+    seedWithCustomer();
+    vi.mocked(getCreditBalance).mockResolvedValue(500);
+    vi.mocked(spendCredit).mockResolvedValue(false);
+
+    const r = await placePosSale([line], creditOnly, { customerId: "cust-1" });
+    expect(r.success).toBeUndefined();
+    expect(r.error).toMatch(/just used elsewhere/i);
+    // The order row is deleted and the stock released — a sale that took no
+    // money must not leave goods off the shelf.
+    expect(dbHolder.current.calls.delete.length).toBeGreaterThan(0);
+  });
+
+  it("never touches the balance for a sale that fails earlier", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+    await placePosSale([line], creditOnly, { customerId: "cust-1" });
+    expect(spendCredit).not.toHaveBeenCalled();
+  });
+});
+
 describe("placePosSale — receipt email", () => {
   it("sends one to a walk-in who asked for it", async () => {
     const r = await placePosSale([line], cash, {
@@ -1141,6 +1276,10 @@ describe("createPosCustomer", () => {
       name: "Asha Rao",
       phone: "9876543210",
       email: "a@x.com",
+      // An EXISTING customer may already hold credit, so the balance is read
+      // and comes back with them. (The mock's queue is exhausted here, which
+      // reads as no balance.)
+      storeCredit: 0,
     });
   });
 

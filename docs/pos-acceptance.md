@@ -2073,6 +2073,68 @@ variant from another product/store and an unpublished product. Burst more than
 catalog/logistics values under the request host, rejects invalid references and
 rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 
+## 11b. Store credit at the till (§29)
+
+⚠ Needs a customer with a balance — refund an order to store credit first.
+
+**PS-CR.1 — The option appears only when there is something to spend**
+Ring up a sale with no customer attached, open **Take payment**.
+**Expect:** no Store credit button. Attach a customer with a ₹0 balance:
+still absent. Attach one with a balance: it appears.
+**Why:** a greyed-out button on every walk-in sale is a control that never
+works and one more thing to read past at a busy counter.
+
+**PS-CR.2 — It settles a sale**
+Attach a customer with ₹500, ring up ₹118, tap Store credit → **Apply ₹118**.
+**Expect:** the sale completes. Their balance is ₹382, and `/profile` shows the
+movement.
+
+**PS-CR.3 ★ — The total stays whole**
+After PS-CR.2, open the order in the dashboard.
+**Expect:** total **₹118**, not ₹0, with ₹118 recorded as store credit used.
+Credit is a payment, not a discount — netting it off would understate the sale,
+compute GST on the wrong base, and make a later credit note reverse the wrong
+amount.
+
+**PS-CR.4 — It splits**
+₹50 credit + ₹68 cash on a ₹118 sale.
+**Expect:** accepted; ₹50 leaves the balance and ₹50 only.
+
+**PS-CR.5 — It can't exceed the balance**
+With ₹40 available, try to apply ₹118.
+**Expect:** refused at the pad — "Only ₹40 of store credit is available." The
+server refuses it too; the pad just gets there first, before the customer has
+been told a total.
+
+**PS-CR.6 ★ — No customer, no credit**
+Call `placePosSale` with a store-credit tender and no `customerId`.
+**Expect:** "Attach a customer before paying with store credit." A balance
+belongs to somebody.
+
+**PS-CR.7 ★★ — The race**
+Attach a customer with ₹118 on two tills. Complete on the first, then complete
+on the second.
+**Expect:** the second is refused — "That store credit was just used
+elsewhere" — the order row is gone and the stock is back. A sale that took no
+money must never leave goods off the shelf.
+
+**PS-CR.8 ★★ — A collection still refuses it**
+At `/pos/pickups`, take payment on a pay-at-store collection.
+**Expect:** no Store credit option, and the action refuses one if posted
+directly. No spend is wired there, so accepting it would mark the collection
+paid against a balance nothing deducted.
+
+**PS-CR.9 — Cancelling gives it back**
+Cancel the PS-CR.2 sale from the dashboard.
+**Expect:** ₹118 returns to the balance, once. Cancelling twice reinstates
+once — keyed on the order, or a second cancel would mint money.
+
+**PS-CR.10 — A gift card is still refused**
+Post a `gift_card` tender.
+**Expect:** "Invalid payment method." No ledger stands behind it.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2095,6 +2157,7 @@ Real and deliberate, so nobody files them as bugs:
 | **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                            |
 | **A walk-in with NO record can't get an emailed receipt**          | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
 | **The customer claim has never been run in a browser**             | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
+| **Store credit can't be spent at a COLLECTION**                    | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so `COUNTER_TENDER_METHODS` deliberately excludes it rather than marking a collection paid against a balance nothing deducted                                                 |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                                |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                            |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |
