@@ -10,7 +10,7 @@ import {
 import {
   getFirebaseAuth,
   establishSession,
-  firebaseAuthErrorMessage,
+  phoneLinkErrorMessage,
 } from "@/lib/auth/firebase-client";
 import { setPassword, getSetPasswordProfile } from "@/app/actions/set-password";
 import { Button } from "@/components/ui/button";
@@ -111,7 +111,7 @@ export default function SetPasswordPage() {
       setOtpSent(true);
       setOtpError("");
     } catch (err) {
-      setOtpError(firebaseAuthErrorMessage(err));
+      setOtpError(phoneLinkErrorMessage(err));
     }
     setLoadingOtp(false);
   };
@@ -141,7 +141,7 @@ export default function SetPasswordPage() {
       setIsPhoneVerified(true);
       setOtpError("");
     } catch (err) {
-      setOtpError(firebaseAuthErrorMessage(err));
+      setOtpError(phoneLinkErrorMessage(err));
     }
     setLoadingOtp(false);
   };

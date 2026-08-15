@@ -124,12 +124,49 @@ export function firebaseAuthErrorMessage(err: unknown): string {
       return "That code has expired. Please request a new one.";
     case "auth/account-exists-with-different-credential":
       return "An account already exists with a different sign-in method.";
+    // ★ RAISED ONLY BY CREDENTIAL LINKING, so the message can name the cause
+    // without knowing the caller. It had NO case at all, which meant the
+    // single most likely way `updatePhoneNumber` fails — the number is on
+    // somebody else's account — fell through to "Something went wrong".
+    case "auth/credential-already-in-use":
+      return "That's already linked to another account.";
     case "auth/popup-closed-by-user":
     case "auth/cancelled-popup-request":
       return ""; // user cancelled — nothing to surface
     default:
       return "Something went wrong. Please try again.";
   }
+}
+
+/**
+ * The same mapper, for the two screens that LINK a phone to an existing
+ * account (`updatePhoneNumber`): signup's phone step and set-password's.
+ *
+ * ★ THE SHARED MESSAGE IS WRONG IN THIS CONTEXT, WHICH IS WHY THIS EXISTS.
+ * "An account already exists with a different sign-in method" is Google-popup
+ * language — accurate on the login screen, meaningless under a box asking for
+ * a mobile number, where it reads as though the EMAIL were the problem. Both
+ * linking-conflict codes mean one thing here: the number is on somebody else's
+ * account. Firebase raises `credential-already-in-use` for it, and
+ * `account-exists-with-different-credential` when one-account-per-email is on,
+ * so both are handled rather than guessing which.
+ *
+ * Everything else defers to `firebaseAuthErrorMessage`, so the phone-specific
+ * codes it already knows about (invalid number, expired code, quota) keep their
+ * wording and there is no second copy to drift.
+ */
+export function phoneLinkErrorMessage(err: unknown): string {
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? String((err as { code?: unknown }).code)
+      : "";
+  if (
+    code === "auth/credential-already-in-use" ||
+    code === "auth/account-exists-with-different-credential"
+  ) {
+    return "That mobile number is already linked to another StoreMink account. Use a different number, or log in to the account that has it.";
+  }
+  return firebaseAuthErrorMessage(err);
 }
 
 /** Sign out of both the client SDK and the server session cookie. */
