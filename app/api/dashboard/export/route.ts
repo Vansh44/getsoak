@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { getActingStoreId, getViewerContext } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import { can } from "@/app/dashboard/lib/permissions";
 import { rateLimit } from "@/lib/rate-limit";
 import { logError } from "@/lib/observability/logger";
@@ -86,6 +87,9 @@ export async function GET(request: Request) {
 
   const storeId = await getActingStoreId();
   const admin = { uid: ctx.userId, email: ctx.userEmail };
+  // ★ RESOLVED HERE, at the gate, not inside each exporter — one place to get
+  // it right, and one place to look when asking whether an export is bounded.
+  const locationScope = await getViewerLocations();
   const stamp = new Date().toISOString().slice(0, 10);
 
   // --- the blank template ---------------------------------------------------
@@ -151,6 +155,7 @@ export async function GET(request: Request) {
           storeId,
           admin,
           filters,
+          locationScope,
         })) {
           controller.enqueue(
             encoder.encode(serializeCsvRow(toCells(resource, record))),

@@ -332,13 +332,58 @@ describe("pos-staff-actions", () => {
       );
     });
 
+    // ★★ AN ADMIN MUST NOT COMPLETE THIS. Finishing sets a cashier/manager
+    // claim, and proxy.ts sends those from /dashboard straight to /pos — so an
+    // owner who invites themselves "to try the till" would lose the dashboard
+    // for EVERY store they administer. Claims are per-user, not per-store,
+    // which is why the check looks across all of them.
+    it("refuses when the account is a dashboard admin", async () => {
+      vi.mocked(getServerUser).mockResolvedValue({
+        id: "fb1",
+        email: "p@x.com",
+        phoneConfirmed: true,
+      } as any);
+      // 1st select = the staff row, 2nd = the admins lookup.
+      useSelects([[staffRow], [{ id: "fb1" }]]);
+
+      const r = await completeStaffRegistration("t", "12345678");
+      expect(r.error).toMatch(/already a dashboard admin/i);
+      // Nothing written, and crucially no claim set — the claim IS the lockout.
+      expect(dbHolder.current.calls.set).toHaveLength(0);
+      expect(setUserClaims).not.toHaveBeenCalled();
+    });
+
+    // Wrongly refusing costs a retry; wrongly allowing costs a dashboard.
+    it("fails CLOSED when the admin lookup errors", async () => {
+      vi.mocked(getServerUser).mockResolvedValue({
+        id: "fb1",
+        email: "p@x.com",
+        phoneConfirmed: true,
+      } as any);
+      dbHolder.current = makeDbMock({ selectQueue: [[staffRow]] });
+      const realSelect = dbHolder.current.db.select;
+      let n = 0;
+      dbHolder.current.db.select = (...args: any[]) => {
+        n += 1;
+        if (n === 2) throw new Error("db down");
+        return realSelect(...args);
+      };
+
+      const r = await completeStaffRegistration("t", "12345678");
+      expect(r.error).toMatch(/couldn't verify/i);
+      expect(setUserClaims).not.toHaveBeenCalled();
+    });
+
     it("links the account, stores the PIN hash, activates, and sets the role claim", async () => {
       vi.mocked(getServerUser).mockResolvedValue({
         id: "fb1",
         email: "P@X.com", // case-insensitive match
         phoneConfirmed: true,
       } as any);
-      useSelects([[staffRow]]);
+      // 2nd entry = the admins lookup finding nothing, which is what lets a
+      // genuine staff member through. Seeded explicitly rather than relying on
+      // an exhausted queue.
+      useSelects([[staffRow], []]);
 
       const r = await completeStaffRegistration("t", "12345678");
       expect(r.success).toBe(true);

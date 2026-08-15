@@ -12,7 +12,7 @@ import "server-only";
 // ★ A balance is money. Treat a bug here the way you'd treat a bug in
 // refunds — it is the same thing pointed the other way.
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   customerCreditBalances,
@@ -63,6 +63,51 @@ export async function getCreditBalance(
     logError("credit.balance", err, { storeId, customerId });
     return 0;
   }
+}
+
+/**
+ * Balances for several customers at once.
+ *
+ * ★ ONE query, not one per customer. The till's customer search returns up to
+ * ten rows and runs on a keystroke burst at a counter; a per-row balance lookup
+ * would turn one search into eleven round trips against a database ~46 ms away.
+ *
+ * Missing customers are simply absent from the map — the caller reads that as
+ * zero, which is what no balance row means.
+ */
+export async function getCreditBalances(
+  storeId: string,
+  customerIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const ids = customerIds.filter(Boolean);
+  if (!storeId || ids.length === 0) return out;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          customerId: customerCreditBalances.customerId,
+          balance: customerCreditBalances.balance,
+        })
+        .from(customerCreditBalances)
+        .where(
+          and(
+            eq(customerCreditBalances.storeId, storeId),
+            inArray(customerCreditBalances.customerId, ids),
+          ),
+        ),
+    );
+    for (const r of rows) {
+      out.set(r.customerId, Math.max(0, Number(r.balance ?? 0)));
+    }
+  } catch (err) {
+    // A failed read reports NO balances, which the till renders as "no credit
+    // to spend" — the safe direction: it costs a customer the use of their
+    // credit for a moment, where the opposite would offer money we could not
+    // prove exists.
+    logError("credit.balances", err, { storeId });
+  }
+  return out;
 }
 
 /**

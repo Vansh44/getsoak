@@ -57,6 +57,12 @@ import {
 } from "@/app/actions/pos-layout-actions";
 import { LayoutEditMode } from "./layout-editor";
 import { TenderPanel } from "./tender-panel";
+import { ParkedPanel } from "./parked-panel";
+import {
+  listParkedSales,
+  parkSale,
+  type ParkedSale,
+} from "@/app/actions/pos-park-actions";
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
 import { posTotals } from "@/lib/pos/totals";
@@ -116,6 +122,23 @@ export function SellClient({
   const [gstin, setGstin] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState("");
+  const [parked, setParked] = useState<ParkedSale[]>([]);
+  const [parkedOpen, setParkedOpen] = useState(false);
+  const [parking, setParking] = useState(false);
+  const [parkLabel, setParkLabel] = useState("");
+
+  const refreshParked = useCallback(async () => {
+    const res = await listParkedSales();
+    if (!res.error) setParked(res.sales);
+  }, []);
+
+  // ★ Loaded once on mount, not polled. A held cart is created BY this till or
+  // by a colleague at the same counter, and both paths refresh explicitly —
+  // polling the list would be a query every few seconds on the one screen whose
+  // whole design goal is to open without waiting on the network.
+  useEffect(() => {
+    void refreshParked();
+  }, [refreshParked]);
   // Manager-arranged till grid. Empty = not configured = show everything.
   const [layout, setLayout] = useState<LayoutEntry[]>([]);
   const [canEditLayout, setCanEditLayout] = useState(false);
@@ -413,6 +436,36 @@ export function SellClient({
       quantity: l.quantity,
       lineDiscount: l.lineDiscount || undefined,
     }));
+
+  // ★ A PARK MOVES NOTHING — no money, no stock, no order. It stores the
+  // choices so far, which is what makes it safe to abandon.
+  const handlePark = async () => {
+    if (cart.length === 0) return;
+    setParking(true);
+    const res = await parkSale({
+      label: parkLabel.trim() || null,
+      lines: saleLines(),
+      orderDiscount: cappedDiscount,
+      customerId: customer?.id ?? null,
+      customerGstin: gstin.trim() || null,
+    });
+    setParking(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+
+    // Cleared exactly like a completed sale: the counter is now free for the
+    // next customer, which is the entire point of holding one.
+    setCart([]);
+    setDiscount(0);
+    setCustomer(null);
+    setGstin("");
+    setReceiptEmail("");
+    setParkLabel("");
+    setError(null);
+    void refreshParked();
+  };
 
   const completeSale = async (
     tenders: PosTender[],
@@ -818,6 +871,28 @@ export function SellClient({
             >
               Charge ₹{estTotal.toLocaleString("en-IN")}
             </button>
+
+            {/* Hold sits UNDER Charge and is quieter: the common act is taking
+                money, and a hold button of equal weight next to it is one
+                mis-tap away from a customer walking off unpaid. */}
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                disabled={cart.length === 0 || parking}
+                onClick={handlePark}
+                className="flex-1 rounded-xl bg-white/10 py-2.5 text-sm font-medium transition-colors hover:bg-white/20 disabled:opacity-40"
+              >
+                {parking ? "Holding…" : "Hold sale"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setParkedOpen(true)}
+                className="rounded-xl bg-white/10 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+              >
+                Held
+                {parked.length > 0 ? ` (${parked.length})` : ""}
+              </button>
+            </div>
           </div>
         </aside>
       </div>
@@ -889,6 +964,52 @@ export function SellClient({
         />
       )}
 
+      {parkedOpen && (
+        <ParkedPanel
+          sales={parked}
+          cartHasItems={cart.length > 0}
+          onResume={(sale) => {
+            // ★ RESUMED AS CHOICES, RE-PRICED HERE. The catalogue is the source
+            // of the name and unit price, so a cart held before a price change
+            // comes back at today's — and placePosSale re-reads again at
+            // completion, so nothing here is ever the basis for a charge.
+            const restored = sale.lines.flatMap((l) => {
+              const item = catalog.byId(l.productId, l.variantId);
+              if (!item) return [];
+              return [
+                {
+                  key: itemKey({
+                    productId: l.productId,
+                    variantId: l.variantId,
+                  } as CartLine),
+                  productId: l.productId,
+                  variantId: l.variantId,
+                  name: item.name,
+                  variantName: item.variantName ?? null,
+                  unitPrice: item.price,
+                  quantity: l.quantity,
+                  lineDiscount: l.lineDiscount ?? 0,
+                } as CartLine,
+              ];
+            });
+            const dropped = sale.lines.length - restored.length;
+            setCart(restored);
+            setDiscount(sale.orderDiscount || 0);
+            setGstin(sale.customerGstin ?? "");
+            // A product deleted while the cart was held. Said out loud —
+            // silently shrinking a resumed basket is how a customer is charged
+            // for less than they picked up.
+            setError(
+              dropped > 0
+                ? `${dropped} item${dropped === 1 ? " is" : "s are"} no longer in the catalogue and couldn't be restored.`
+                : null,
+            );
+          }}
+          onChanged={refreshParked}
+          onClose={() => setParkedOpen(false)}
+        />
+      )}
+
       {tendering && (
         <TenderPanel
           total={estTotal}
@@ -896,6 +1017,9 @@ export function SellClient({
           onComplete={completeSale}
           receiptEmail={receiptEmail}
           onReceiptEmail={setReceiptEmail}
+          // Rides along with the attached customer — null for a walk-in, which
+          // is what hides the option entirely.
+          storeCredit={customer?.storeCredit ?? null}
           onVerifyManager={(pin) =>
             verifyManagerPin(pin, {
               lines: saleLines(),

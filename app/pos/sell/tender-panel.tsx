@@ -40,6 +40,7 @@ export function TenderPanel({
   onVerifyManager,
   receiptEmail,
   onReceiptEmail,
+  storeCredit,
 }: {
   total: number;
   /** The collection counter is settling an order bought weeks ago, not ringing
@@ -69,6 +70,16 @@ export function TenderPanel({
    */
   receiptEmail?: string;
   onReceiptEmail?: (value: string) => void;
+  /**
+   * The attached customer's store-credit balance, or null when no customer is
+   * attached (a balance belongs to somebody).
+   *
+   * ★ DISPLAY AND A CAP, NEVER THE AUTHORITY. `placePosSale` re-reads the
+   * balance and spends it through a conditional UPDATE, so a number that went
+   * stale between opening this panel and completing the sale costs a clear
+   * refusal, not an overdraw.
+   */
+  storeCredit?: number | null;
 }) {
   const [method, setMethod] = useState<PosTenderMethod>("cash");
   const [amount, setAmount] = useState<string>("");
@@ -84,8 +95,33 @@ export function TenderPanel({
   const entered = Number(amount) || 0;
   const change = method === "cash" ? changeDue(entered, remaining) : 0;
 
+  // ★ OFFERED ONLY WHEN THERE IS SOMETHING TO SPEND. A greyed-out "Store
+  // credit" button on every walk-in sale is a control that never works and one
+  // more thing to read past at a busy counter.
+  const creditAvailable = Math.max(0, storeCredit ?? 0);
+  // What is left of the balance after credit already staged on THIS sale —
+  // otherwise tapping it twice would offer the full balance again.
+  const creditStaged = taken
+    .filter((t) => t.method === "store_credit")
+    .reduce((sum, t) => sum + t.amount, 0);
+  const creditLeft = Math.max(0, creditAvailable - creditStaged);
+  const methods =
+    creditLeft > 0
+      ? [...METHODS, { id: "store_credit" as const, label: "Store credit" }]
+      : METHODS;
+
   const addTender = (value: number) => {
     if (value <= 0) return;
+    // ★ Clamped to what is actually on the account. The server refuses an
+    // overdraw anyway, but a refusal that arrives AFTER the customer has been
+    // told a total is the thing to avoid — the counter should not be able to
+    // stage a payment that cannot settle.
+    if (method === "store_credit" && value > creditLeft + 0.0001) {
+      setError(
+        `Only ₹${creditLeft.toLocaleString("en-IN")} of store credit is available.`,
+      );
+      return;
+    }
     setError(null);
     setTaken((t) => [
       ...t,
@@ -240,8 +276,8 @@ export function TenderPanel({
 
             {!covered && (
               <>
-                <div className="mb-3 flex gap-1.5">
-                  {METHODS.map((m) => (
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  {methods.map((m) => (
                     <button
                       key={m.id}
                       type="button"
@@ -256,6 +292,25 @@ export function TenderPanel({
                     </button>
                   ))}
                 </div>
+
+                {method === "store_credit" && (
+                  <div className="mb-3">
+                    <button
+                      type="button"
+                      onClick={() => addTender(Math.min(creditLeft, remaining))}
+                      className="w-full rounded-lg bg-white/10 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+                    >
+                      Apply ₹
+                      {Math.min(creditLeft, remaining).toLocaleString("en-IN")}
+                    </button>
+                    <p className="mt-1.5 text-center text-xs text-white/40">
+                      ₹{creditLeft.toLocaleString("en-IN")} available
+                      {creditLeft < remaining
+                        ? " — the rest still needs paying"
+                        : ""}
+                    </p>
+                  </div>
+                )}
 
                 {method === "cash" && (
                   <div className="mb-3 grid grid-cols-4 gap-1.5">

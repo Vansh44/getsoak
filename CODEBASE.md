@@ -2207,6 +2207,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         screen). PIN → `posLoginWithPin` (server-side scrypt verify → signed
         `pos_operator` cookie); password → Firebase `signInWithEmailAndPassword`
         - `establishSession` (the standard `sm_session`).
+      - **★★ REGISTRATION IS RESUMABLE, and it was not.** Step 1 creates the
+        Firebase account but the invite is only consumed at step 3, so anyone
+        who closed the tab in between — or whose phone OTP failed — hit
+        `auth/email-already-in-use` on their next try and got "ask your manager
+        to invite a different email". A dead end: a fresh invite to the same
+        address hit the identical wall, and their own invitation had locked
+        them out. Found in PRODUCTION (a `pos_staff` row still `invited`, a
+        live Firebase account, nothing in the database pointing at it). Step 1
+        now falls back to `signInWithEmailAndPassword`, which grants nothing
+        new — it needs the real password, and `completeStaffRegistration` still
+        checks the session's email against the INVITED email and requires an
+        unconsumed token. A resumed attempt that already verified its phone
+        skips straight to the PIN step, because re-verifying one Firebase has
+        already linked is how a resumable flow dead-ends twice. ⚠ The password
+        is deliberately NOT reset for them: an invite token proves inbox
+        control, but silently overwriting the credential of what may be their
+        SHOPPER account elsewhere on the platform is more than this flow is
+        entitled to.
+      - **★★ AND A DASHBOARD ADMIN MAY NOT COMPLETE IT.** Finishing sets a
+        `cashier`/`manager` claim, and `proxy.ts` sends those from `/dashboard`
+        to `/pos` — so an owner who invited themselves "to try the till" would
+        lose the dashboard for EVERY store they administer, recoverable only by
+        editing claims by hand. Firebase claims are per-USER, not per-store, so
+        the check spans all stores; the model genuinely cannot express "admin
+        here, cashier there", and refusing with a reason beats a silent
+        lockout. The owner needs none of this anyway —
+        `resolvePosOperator` resolves an owner with no `pos_staff` row and no
+        device restriction. Fails CLOSED, and uses try/catch rather than
+        `.catch()` because a synchronous throw inside the callback escapes
+        `withService` before it becomes a promise (a test caught that).
       - **Self-service reset** ("Forgot PIN or password?" on the login screen):
         `requestPosCredentialReset` mails a single-use, 1-hour link to
         `/pos/reset?token=…` (`reset_token`/`reset_expires_at`, added by
@@ -2566,6 +2596,44 @@ group, span}` (span = columns of the 4-wide desktop grid),
         stock and the default gained one it never had, silently, compounding
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
+      - **★★ HOLD A SALE** (`lib/pos/park.ts` pure, `pos-park-actions.ts`,
+        `supabase/pos_14_parked_sales.sql` — ⚠ **not applied**). Suspend the
+        cart, serve the next customer, bring it back.
+        - **★ A TABLE, NOT localStorage.** A park has to survive the thing it
+          exists for: the till IDLE-LOCKS after ten minutes and `posLock` clears
+          the session, which is exactly the window in which a held cart matters.
+          It also has to be resumable from a DIFFERENT till — one cashier holds,
+          another finishes when the customer reaches a free counter. Neither
+          works in browser storage.
+        - **★★ IT HOLDS NO STOCK, DELIBERATELY.** §23's `holdStock` was
+          considered and rejected: a cashier could park ten carts and empty the
+          shelf on paper, an abandoned park would strand stock until something
+          swept it, and the shop would reorder goods it still has. A park is a
+          note to self, not a promise. The consequence is already handled —
+          `placePosSale` re-reads prices and reserves atomically at completion,
+          so a resumed cart whose goods sold out fails THERE against live data
+          with the existing "only N left". The panel says so in as many words,
+          because assuming a hold reserves stock is how a cashier promises
+          something that then sells.
+        - **★ PRICES ARE NOT STORED — only CHOICES** (product, variant,
+          quantity, markdowns, customer). A held cart can sit for hours, and
+          keeping a price would let a resumed sale charge yesterday's, which is
+          the same reason `placePosSale` ignores client prices at all. Resuming
+          re-prices from the catalogue; an item deleted meanwhile is dropped and
+          SAID, since silently shrinking a resumed basket charges someone for
+          less than they picked up.
+        - **★★ RESUME IS A CONDITIONAL CLAIM** — the DELETE returns the row, so
+          two tills resuming the same cart cannot both get it. The loser is
+          told rather than silently loading a basket the other cashier is
+          already ringing up, which is how one basket gets charged twice.
+        - **★ PER LOCATION, capped at `MAX_PARKED_SALES` (20).** A held cart
+          belongs to the SHOP, not the cashier, so whoever is free can finish
+          it; `parked_by_name` rides along so a busy counter can tell three
+          apart. The cap is a ceiling, not a preference: without it a stuck
+          button — or a cashier parking instead of voiding — fills the list
+          until it is useless for finding the one cart that matters, which is
+          the only thing the list is for. An unnamed hold is labelled by what it
+          contains and who held it, never "Untitled".
       - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
         to the end of the register grid — `isOutOfStock` in
         `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
@@ -2800,6 +2868,75 @@ group, span}` (span = columns of the 4-wide desktop grid),
       backfilled ON (`online_fulfil` on the default location — the
       `reserve_stock` wrapper sends every online order there) and one
       introducing NEW behaviour is backfilled OFF (`pickup`, `returns`).
+    - **★★ STAFF ARE SCOPED AT INVITE, AND THE SCOPE IS VISIBLE.** The
+      machinery all existed — `admin_locations`, `getViewerLocations()` (null =
+      unrestricted), orders/inventory/notification-recipients already filtered
+      by it, and `setAdminLocations`/`listAdminLocations` — but **nothing in the
+      UI called those two actions**, so in practice every invited admin saw
+      every shop. Three additions close it:
+      - **The invite takes locations** (`formData.getAll("locationIds")` —
+        multi-value, because one supervisor can cover Delhi AND Jaipur). Written
+        best-effort AFTER the account exists: a failure leaves them
+        unrestricted, which is visible on the staff list and fixable in a click,
+        where failing the invite would orphan the auth user just created.
+      - **A Locations item on each staff row**, opening on today's bindings so
+        saving is a no-op rather than a silent reset to unrestricted.
+      - **★ A TAG IN THE TOPBAR, right of the role** (`location-tag.tsx`), with
+        a dropdown only when there are several — a dropdown that opens to one
+        item promises a choice it does not have. It is an ANSWER, not a filter:
+        a restricted admin otherwise sees the same screens with rows quietly
+        missing and nothing to explain why, which is the most confusing thing
+        scope can do to somebody. The panel says the scope is fixed, so the list
+        of names does not read as something you pick from.
+      - **★ EMPTY MEANS UNRESTRICTED throughout**, the existing contract, so a
+        merchant who ignores the field invites exactly the admin they always
+        did — no migration, no behaviour change. Both the invite and the editor
+        say so out loud, because an empty checkbox list reading as "sees
+        everything" is the opposite of what anyone expects.
+      - **★ SUPERADMINS ARE NEVER SCOPED** — unrestricted by definition, so the
+        picker is hidden for them and the write is skipped. Storing a scope
+        `getViewerLocations` then ignores would show a limit on the staff list
+        that isn't real. The whole field hides below two locations.
+      - **`getViewerLocationNames()` is a SEPARATE read** from
+        `getViewerLocations`: that one answers a SECURITY question on every
+        scoped query and stays a bare id list, so joining names onto it would
+        make every order page pay for a label only the header uses.
+      - **★★ AND THE EXPORT WAS A WAY OUT OF IT.** The orders exporter filtered
+        on `store_id` alone while the orders LIST filtered by location, so a
+        restricted admin saw their own shop on screen, pressed Export, and got
+        every location's rows — names, addresses, phones. The narrower path was
+        the visible one, which is the worst way round: nothing on screen
+        suggested the button escaped the scope. `ExportContext.locationScope` is
+        resolved ONCE by the route (the gate) and applied by orders and
+        inventory; `export-scope.test.ts` fails when a location-bearing exporter
+        is added without it, because what goes wrong is the THIRD one, written
+        by someone who never read this. ⚠ It BOUNDS `filters.location` rather
+        than replacing it — a picked location outside the scope must still
+        return nothing.
+      - **★ ANALYTICS IS SCOPED ONLY FOR A RESTRICTED VIEWER.** `null` keeps the
+        whole-business figures, which is the reason to run several shops at all;
+        a restricted admin sees only their own, or the first screen they land on
+        would hand them every branch's revenue while the orders list refuses
+        them a single order from it. ORDER-shaped figures only — product and
+        customer counts stay whole, because both are store-wide by decision, so
+        what a branch manager reads is "my sales, the store's catalogue".
+      - **★ THE LOCATIONS LIST SHOWS ONLY THEIR OWN SHOPS**, or it would put
+        back exactly what scoping orders and inventory took away. And
+        `saveLocationCapabilities` is now SUPERADMIN-ONLY: a capability decides
+        whether a shop sells, fulfils online orders or takes returns — it
+        reshapes the business, not one shop's day, and the `locations` grant a
+        branch manager needs to READ their shop must not also let them switch
+        online fulfilment off for the whole store (§22's owner-only rule).
+      - **⚠ ALREADY SCOPED, verified rather than assumed:** POS shifts and cash
+        (every read sits behind `resolvePosOperator`, which binds to the
+        operator's own location; there is no dashboard shift view). **Nothing to
+        scope:** the customers section shows no order data at all — reviews and
+        blogs only — so if order history is added there later it must be scoped
+        then.
+      - ⚠ **It shows scope; it does not switch it.** A multi-location admin sees
+        all their shops' data at once. An ACTIVE-location switcher (pick one,
+        the whole dashboard narrows) is the natural follow-up and is a bigger
+        change — a current-location that every scoped read honours.
     - **Location CRUD no longer requires POS to be switched on** — only Pro. A
       warehouse that fulfils online orders needs no till. The sidebar entry is
       hidden until the store has 2+ locations or POS is on, so a
@@ -4081,10 +4218,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         history, matching checkout's `applied > 0`. A spent-to-zero balance
         still renders, because the history explains where the money went and
         vanishing would look like it was lost.
+    - **★★ AND IT CAN BE SPENT AT THE TILL** (`store_credit` in
+      `TENDER_METHODS`). It was the one genuinely inconsistent hole in the POS:
+      a shop could refund a customer to credit across the counter and then
+      refuse that credit at the same counter.
+    - **★ A BALANCE BELONGS TO SOMEBODY**, so `placePosSale` refuses a credit
+      tender with no attached customer rather than ignoring it — the cashier
+      needs to know the sale is short before the drawer opens.
+    - **★ THE PRE-CHECK IS FOR THE MESSAGE, NOT THE GUARANTEE.**
+      `getCreditBalance` runs first only so the refusal can quote the real
+      balance; `try_spend_customer_credit` is a single conditional UPDATE, so the
+      balance is re-proved atomically where it moves and two tills cannot
+      overdraw one account.
+    - **★ SPENT AFTER THE ORDER EXISTS AND BEFORE THE ITEMS**, because the ledger
+      row references the order (the `reserve_stock_at` constraint) and that
+      ordering keeps the rollback to the two steps already above it. A balance
+      that moved underneath the sale UNWINDS it — releases stock, deletes the
+      order — rather than completing it unpaid.
+    - **★ `total` STAYS WHOLE**; `orders.store_credit_used` records what the
+      balance settled. Credit is a payment, not a discount.
+    - **★★ THE COLLECTION COUNTER'S ALLOWLIST IS NARROWER**
+      (`COUNTER_TENDER_METHODS`). `markCollected` shares `validateTenderShape`,
+      so simply widening the global list made it ACCEPT credit and mark a
+      collection paid against a balance nothing deducted — the exact failure the
+      allowlist exists to prevent, reintroduced at the other counter by widening
+      a shared constant. **A test caught it.** The allowed set is per COUNTER
+      now; wire the spend into `markCollected` and the two lists can merge again.
+      A test pins their difference.
     - **Not built:** gift cards (they share this ledger shape — that is why
-      `kind` is an enum), expiry (`'expire'` is reserved in the CHECK so it
-      needs no migration), a merchant grant UI (`issueCredit` takes
-      `kind: 'grant'` and is ready), and split-tender refunds.
+      `kind` is an enum, and why `gift_card` is still refused: no ledger stands
+      behind it), expiry (`'expire'` is reserved in the CHECK so it needs no
+      migration), a merchant grant UI (`issueCredit` takes `kind: 'grant'` and is
+      ready), split-tender refunds, and spending credit at a COLLECTION.
 
 30. **Custom domains & TLS — three conditions, and nobody is watching.**
     `lib/domains/`, `/dashboard/settings/domain`, Pro-only. A domain is marked

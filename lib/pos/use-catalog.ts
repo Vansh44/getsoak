@@ -54,6 +54,9 @@ export interface CatalogApi extends CatalogState {
   /** Every cached SKU, in catalogue order — the idle grid and the layout
    *  editor both work from the whole list rather than a search result. */
   all: () => CatalogItem[];
+  /** One SKU by its ids. Used when resuming a held sale, which stores CHOICES
+   *  and re-prices from the catalogue rather than trusting a stored price. */
+  byId: (productId: string, variantId: string | null) => CatalogItem | null;
   /** Decrement cached stock after a sale, keyed `productId:variantId`. */
   applySold: (sold: Map<string, number>) => void;
   /** Force a refresh (e.g. the cashier suspects the grid is stale). */
@@ -176,6 +179,16 @@ export function useCatalog(
     [],
   );
   const all = useCallback(() => indexRef.current.all, []);
+  // Linear over the cached list, like `searchLocal` and for the same reason:
+  // a resume looks up a handful of lines once, so an extra index to keep in
+  // step through every sync would cost more than it saves.
+  const byId = useCallback(
+    (productId: string, variantId: string | null) =>
+      indexRef.current.all.find(
+        (i) => i.productId === productId && (i.variantId ?? null) === variantId,
+      ) ?? null,
+    [],
+  );
   const applySold = useCallback(
     (sold: Map<string, number>) => {
       if (sold.size === 0) return;
@@ -187,5 +200,13 @@ export function useCatalog(
     [key, setIndex],
   );
 
-  return { ...state, search, scan, all, applySold, resync: () => void sync() };
+  return {
+    ...state,
+    search,
+    scan,
+    all,
+    byId,
+    applySold,
+    resync: () => void sync(),
+  };
 }

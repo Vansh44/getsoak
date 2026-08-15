@@ -20,7 +20,7 @@ import "server-only";
 // still exists" and must show NOTHING, or deleting a location would silently
 // promote a restricted admin to seeing the whole store.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { adminLocations, storeLocations } from "@/drizzle/schema";
 import { getViewerContext } from "@/app/dashboard/lib/access";
@@ -89,4 +89,41 @@ export function scopeAllows(
   if (scope === null) return true;
   if (!locationId) return true;
   return scope.includes(locationId);
+}
+
+/**
+ * The viewer's scope with NAMES, for the topbar tag.
+ *
+ * ★ A SEPARATE READ FROM `getViewerLocations`, deliberately. That one answers a
+ * SECURITY question and is called on every scoped query, so it stays a bare id
+ * list — joining names onto it would make every order page pay for a label only
+ * the header uses.
+ *
+ * Returns [] for an unrestricted viewer, which is what the tag renders as
+ * nothing: an owner does not need telling they can see their own store.
+ */
+export async function getViewerLocationNames(): Promise<
+  { id: string; name: string }[]
+> {
+  const scope = await getViewerLocations();
+  if (scope === null) return [];
+  // An EMPTY scope is "assigned to nothing that still exists" — a real state
+  // (their shop was deleted) and NOT unrestricted. There are no names to show,
+  // but the caller must not read the empty array as "sees everything"; that
+  // distinction lives in getViewerLocations, which returns [] not null.
+  if (scope.length === 0) return [];
+
+  try {
+    return await withService((db) =>
+      db
+        .select({ id: storeLocations.id, name: storeLocations.name })
+        .from(storeLocations)
+        .where(inArray(storeLocations.id, scope))
+        .orderBy(storeLocations.name),
+    );
+  } catch {
+    // The tag is an explanation, not a gate — losing it costs a label, and the
+    // scope itself is enforced elsewhere regardless.
+    return [];
+  }
 }

@@ -7,6 +7,7 @@ import { TopbarProfile, formatRole } from "./topbar-profile";
 import { useMobileNav } from "./dashboard-mobile-nav";
 import { useChat } from "./chat-context";
 import { NotificationBell } from "./components/notification-bell";
+import { LocationTag } from "./location-tag";
 
 // Plan pill styling on the dark topbar — neutral for free, brand-tinted as the
 // plan climbs, mirroring the console's plan colours.
@@ -24,6 +25,7 @@ export function DashboardTopbar({
   storeName,
   planId,
   planName,
+  scopedLocations = [],
 }: {
   email: string;
   role: string;
@@ -34,6 +36,9 @@ export function DashboardTopbar({
   storeName?: string;
   planId?: string;
   planName?: string;
+  /** The shops this viewer is restricted to. EMPTY = unrestricted, and the tag
+   *  renders nothing — the platform console passes nothing at all. */
+  scopedLocations?: { id: string; name: string }[];
 }) {
   const { setOpen } = useMobileNav();
   const { isChatOpen, toggleChat } = useChat();
@@ -91,6 +96,10 @@ export function DashboardTopbar({
             <span className="hidden sm:inline-flex items-center rounded-full bg-white/10 px-2.5 h-[34px] text-[12.5px] font-medium text-white/85 shrink-0">
               {formatRole(role)}
             </span>
+            {/* Immediately right of the role: both answer "who am I here", and
+                for a restricted admin the second is the one that explains why
+                their screens look different from a colleague's. */}
+            <LocationTag locations={scopedLocations} />
           </div>
         )}
       </div>

@@ -45,6 +45,7 @@ import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
 import {
   settleTenders,
   validateTenderShape,
+  COUNTER_TENDER_METHODS,
   type PosTender,
 } from "@/lib/pos/tenders";
 import { currentShiftIdFor } from "./pos-shift-actions";
@@ -254,6 +255,10 @@ export async function markCollected(
     const bad = validateTenderShape(
       tenders,
       `Take the ₹${due.toLocaleString("en-IN")} owed on this order before handing it over.`,
+      // ★ NARROWER than the sell counter: no store-credit spend is wired here,
+      // so accepting one would mark a collection paid against a balance nothing
+      // deducted.
+      COUNTER_TENDER_METHODS,
     );
     if (bad) return { error: bad };
     const settled = settleTenders(tenders, due);

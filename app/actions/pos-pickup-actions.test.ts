@@ -260,6 +260,9 @@ describe("markCollected — the money", () => {
   });
 
   it("★ refuses a tender the system cannot settle", async () => {
+    // ★ store_credit is in the SELL counter's allowlist now (§29), but not
+    // this one — no spend is wired here, so accepting it would mark a
+    // collection paid against a balance nothing deducted.
     for (const method of ["gift_card", "store_credit", "bitcoin"]) {
       // Re-seeded per case: each call consumes the queued pre-claim read.
       dbHolder.current = seed(UNPAID);

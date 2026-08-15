@@ -9,6 +9,7 @@ import {
   settleTenders,
   validateTenderShape,
   TENDER_METHODS,
+  COUNTER_TENDER_METHODS,
   MAX_TENDERS,
   type PosTender,
 } from "./tenders";
@@ -18,15 +19,56 @@ const card = (amount: number): PosTender => ({ method: "card", amount });
 const upi = (amount: number): PosTender => ({ method: "upi", amount });
 
 describe("the allowlist", () => {
-  it("★★ refuses gift_card and store_credit — there is no ledger behind them", () => {
-    // Both are declared in PosTenderMethod but deliberately not accepted:
-    // taking one marks a sale paid in full against money that never existed.
-    expect(TENDER_METHODS).not.toContain("gift_card");
-    expect(TENDER_METHODS).not.toContain("store_credit");
-    for (const m of ["gift_card", "store_credit"] as const) {
-      expect(validateTenderShape([{ method: m, amount: 100 }], "x")).toBe(
-        "Invalid payment method.",
-      );
+  it("★★ refuses gift_card — there is no ledger behind it", () => {
+    // Accepting one would mark a sale paid in full, and let the goods leave the
+    // shelf, against money that never existed.
+    expect(
+      validateTenderShape([{ method: "gift_card", amount: 10 }] as never, "x"),
+    ).toMatch(/invalid payment method/i);
+  });
+
+  // ★★ store_credit IS settleable now (§29) — but only where the spend is
+  // wired. The SELL counter spends it; the COLLECTION counter does not, and
+  // sharing one global list is what would silently mark a collection paid
+  // against a balance nothing deducted.
+  it("accepts store_credit at the sell counter", () => {
+    expect(
+      validateTenderShape(
+        [{ method: "store_credit", amount: 10 }] as never,
+        "x",
+      ),
+    ).toBeNull();
+  });
+
+  it("refuses store_credit at the collection counter", () => {
+    expect(
+      validateTenderShape(
+        [{ method: "store_credit", amount: 10 }] as never,
+        "x",
+        COUNTER_TENDER_METHODS,
+      ),
+    ).toMatch(/invalid payment method/i);
+  });
+
+  // The collection counter's list is the sell counter's MINUS the account
+  // tenders. Pinned so a future method added to one is a deliberate decision
+  // about the other, not an oversight.
+  it("the collection list is the sell list minus account tenders", () => {
+    const extra = TENDER_METHODS.filter(
+      (m) => !COUNTER_TENDER_METHODS.includes(m),
+    );
+    expect(extra).toEqual(["store_credit"]);
+  });
+
+  it("the collection counter still takes the money instruments", () => {
+    for (const method of ["cash", "card", "upi"] as const) {
+      expect(
+        validateTenderShape(
+          [{ method, amount: 10 }],
+          "x",
+          COUNTER_TENDER_METHODS,
+        ),
+      ).toBeNull();
     }
   });
 

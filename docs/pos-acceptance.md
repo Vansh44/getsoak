@@ -2073,6 +2073,135 @@ variant from another product/store and an unpublished product. Burst more than
 catalog/logistics values under the request host, rejects invalid references and
 rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 
+## 11b. Store credit at the till (§29)
+
+⚠ Needs a customer with a balance — refund an order to store credit first.
+
+**PS-CR.1 — The option appears only when there is something to spend**
+Ring up a sale with no customer attached, open **Take payment**.
+**Expect:** no Store credit button. Attach a customer with a ₹0 balance:
+still absent. Attach one with a balance: it appears.
+**Why:** a greyed-out button on every walk-in sale is a control that never
+works and one more thing to read past at a busy counter.
+
+**PS-CR.2 — It settles a sale**
+Attach a customer with ₹500, ring up ₹118, tap Store credit → **Apply ₹118**.
+**Expect:** the sale completes. Their balance is ₹382, and `/profile` shows the
+movement.
+
+**PS-CR.3 ★ — The total stays whole**
+After PS-CR.2, open the order in the dashboard.
+**Expect:** total **₹118**, not ₹0, with ₹118 recorded as store credit used.
+Credit is a payment, not a discount — netting it off would understate the sale,
+compute GST on the wrong base, and make a later credit note reverse the wrong
+amount.
+
+**PS-CR.4 — It splits**
+₹50 credit + ₹68 cash on a ₹118 sale.
+**Expect:** accepted; ₹50 leaves the balance and ₹50 only.
+
+**PS-CR.5 — It can't exceed the balance**
+With ₹40 available, try to apply ₹118.
+**Expect:** refused at the pad — "Only ₹40 of store credit is available." The
+server refuses it too; the pad just gets there first, before the customer has
+been told a total.
+
+**PS-CR.6 ★ — No customer, no credit**
+Call `placePosSale` with a store-credit tender and no `customerId`.
+**Expect:** "Attach a customer before paying with store credit." A balance
+belongs to somebody.
+
+**PS-CR.7 ★★ — The race**
+Attach a customer with ₹118 on two tills. Complete on the first, then complete
+on the second.
+**Expect:** the second is refused — "That store credit was just used
+elsewhere" — the order row is gone and the stock is back. A sale that took no
+money must never leave goods off the shelf.
+
+**PS-CR.8 ★★ — A collection still refuses it**
+At `/pos/pickups`, take payment on a pay-at-store collection.
+**Expect:** no Store credit option, and the action refuses one if posted
+directly. No spend is wired there, so accepting it would mark the collection
+paid against a balance nothing deducted.
+
+**PS-CR.9 — Cancelling gives it back**
+Cancel the PS-CR.2 sale from the dashboard.
+**Expect:** ₹118 returns to the balance, once. Cancelling twice reinstates
+once — keyed on the order, or a second cancel would mint money.
+
+**PS-CR.10 — A gift card is still refused**
+Post a `gift_card` tender.
+**Expect:** "Invalid payment method." No ledger stands behind it.
+
+---
+
+## 11c. Hold (park) a sale (§22)
+
+⚠ Needs `supabase/pos_14_parked_sales.sql` applied.
+
+**PS-PK.1 — Hold and clear**
+Scan two items, tap **Hold sale**.
+**Expect:** the cart empties and the counter is free for the next customer.
+**Held (1)** appears beside the button.
+
+**PS-PK.2 — Bring it back**
+Tap **Held**, then the row.
+**Expect:** the same items, quantities, discount and GSTIN return; the row is
+gone from the list.
+
+**PS-PK.3 ★ — It doesn't reserve stock**
+Hold a cart containing the last unit of something. Sell that unit on another
+till, then resume the held cart and try to complete it.
+**Expect:** the sale is refused at completion with "just sold out" / "only N
+left" — against LIVE stock. Holding is a note to self, not a promise: reserving
+would let one cashier empty a shelf on paper and strand it when they walk off.
+The panel says this in as many words.
+
+**PS-PK.4 ★ — It re-prices**
+Hold a cart, change that product's price in the dashboard, resume.
+**Expect:** today's price, not the one at hold time. Only choices are stored.
+
+**PS-PK.5 — A deleted product is reported, not swallowed**
+Hold a cart, delete one of its products, resume.
+**Expect:** the rest comes back AND a message naming how many couldn't be
+restored. Silently shrinking a resumed basket charges someone for less than
+they picked up.
+
+**PS-PK.6 ★★ — Two tills can't resume the same cart**
+Open the held list on two tills. Resume the same row on both.
+**Expect:** one loads it; the other is told "someone else may have resumed it"
+and its list refreshes. Both loading it is how one basket is charged twice.
+
+**PS-PK.7 — Resuming over a non-empty cart asks first**
+Scan something, then resume a held sale.
+**Expect:** a confirm before the current cart is replaced.
+
+**PS-PK.8 — Discard**
+Tap the bin on a held row.
+**Expect:** a confirm, then it's gone. Nothing was reserved, so nothing is
+released.
+
+**PS-PK.9 — The cap**
+Hold 20 carts, try a 21st.
+**Expect:** refused — "There are already 20 held sales at this counter. Finish
+or discard one first."
+
+**PS-PK.10 — It survives the idle lock**
+Hold a cart, let the till idle-lock, sign back in.
+**Expect:** still in the list. This is the case it exists for — browser storage
+would not survive it.
+
+**PS-PK.11 — Another till at the same shop sees it**
+Hold on till A, open **Held** on till B at the same location.
+**Expect:** it's there. A held cart belongs to the shop. A till at a DIFFERENT
+location must not see it.
+
+**PS-PK.12 — An empty cart can't be held**
+Tap Hold with nothing scanned.
+**Expect:** the button is disabled; posting directly is refused.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2095,6 +2224,8 @@ Real and deliberate, so nobody files them as bugs:
 | **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                            |
 | **A walk-in with NO record can't get an emailed receipt**          | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
 | **The customer claim has never been run in a browser**             | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
+| **Store credit can't be spent at a COLLECTION**                    | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so `COUNTER_TENDER_METHODS` deliberately excludes it rather than marking a collection paid against a balance nothing deducted                                                 |
+| **A held sale has no auto-expiry**                                 | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                       |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                                |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                            |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |

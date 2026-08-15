@@ -6,16 +6,32 @@ vi.mock("@/app/dashboard/lib/access", () => ({
   getViewerContext: vi.fn(),
 }));
 
-const dbHolder = vi.hoisted(() => ({ rows: [] as any[], throws: false }));
+// `queue` serves a DIFFERENT result per withService call, which
+// getViewerLocationNames needs (ids, then names). Empty queue falls back to
+// `rows`, so every existing test is untouched.
+const dbHolder = vi.hoisted(() => ({
+  rows: [] as any[],
+  queue: [] as any[][],
+  throws: false,
+  throwOnCall: 0,
+  calls: 0,
+}));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async () => {
+    dbHolder.calls += 1;
     if (dbHolder.throws) throw new Error("connection reset");
+    if (dbHolder.throwOnCall === dbHolder.calls) throw new Error("db down");
+    if (dbHolder.queue.length > 0) return dbHolder.queue.shift();
     return dbHolder.rows;
   }),
 }));
 
 import { getViewerContext } from "@/app/dashboard/lib/access";
-import { getViewerLocations, scopeAllows } from "./scope";
+import {
+  getViewerLocations,
+  scopeAllows,
+  getViewerLocationNames,
+} from "./scope";
 
 const viewer = (over: Record<string, unknown> = {}) => ({
   userId: "u1",
@@ -30,6 +46,10 @@ const viewer = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ Reset the new fields too, or a queue set in one test serves the next.
+  dbHolder.queue = [];
+  dbHolder.throwOnCall = 0;
+  dbHolder.calls = 0;
   dbHolder.rows = [];
   dbHolder.throws = false;
   vi.mocked(getViewerContext).mockResolvedValue(viewer() as any);
@@ -102,5 +122,61 @@ describe("scopeAllows", () => {
   // Treating this as unrestricted would silently promote them.
   it("allows nothing with an empty scope", () => {
     expect(scopeAllows([], "loc-1")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The topbar tag's read. A SEPARATE query from getViewerLocations, which
+// answers a SECURITY question on every scoped page and stays a bare id list —
+// joining names onto it would make every order page pay for a header label.
+// ---------------------------------------------------------------------------
+describe("getViewerLocationNames", () => {
+  it("returns nothing for an unrestricted viewer, so the tag hides", async () => {
+    vi.mocked(getViewerContext).mockResolvedValue({
+      isSuperadmin: true,
+    } as never);
+    await expect(getViewerLocationNames()).resolves.toEqual([]);
+  });
+
+  // ⚠ An EMPTY scope means "assigned to nothing that still exists" — a real
+  // state, NOT unrestricted. There are no names to show either way, but the
+  // distinction lives in getViewerLocations ([] vs null) and must stay there.
+  it("returns nothing for a viewer assigned to nothing that exists", async () => {
+    vi.mocked(getViewerContext).mockResolvedValue({
+      isSuperadmin: false,
+      profile: { id: "a1" },
+    } as never);
+    dbHolder.queue = [[]];
+    await expect(getViewerLocationNames()).resolves.toEqual([]);
+  });
+
+  it("names the shops a restricted viewer covers", async () => {
+    vi.mocked(getViewerContext).mockResolvedValue({
+      isSuperadmin: false,
+      profile: { id: "a1" },
+    } as never);
+    dbHolder.queue = [
+      [{ location_id: "loc-1" }, { location_id: "loc-2" }],
+      [
+        { id: "loc-1", name: "Delhi" },
+        { id: "loc-2", name: "Jaipur" },
+      ],
+    ];
+    await expect(getViewerLocationNames()).resolves.toEqual([
+      { id: "loc-1", name: "Delhi" },
+      { id: "loc-2", name: "Jaipur" },
+    ]);
+  });
+
+  // The tag is an explanation, not a gate — losing it costs a label, and the
+  // scope itself is enforced by getViewerLocations regardless.
+  it("loses the label rather than throwing when the name read fails", async () => {
+    vi.mocked(getViewerContext).mockResolvedValue({
+      isSuperadmin: false,
+      profile: { id: "a1" },
+    } as never);
+    dbHolder.queue = [[{ location_id: "loc-1" }]];
+    dbHolder.throwOnCall = 2; // the NAME read, after the ids resolved fine
+    await expect(getViewerLocationNames()).resolves.toEqual([]);
   });
 });
