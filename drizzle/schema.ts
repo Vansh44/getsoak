@@ -5612,3 +5612,32 @@ export const platformAnnouncementRecipients = pgTable(
     }).onDelete("set null"),
   ],
 );
+
+/** Suspended till transactions (§22). Hand-added: supabase/pos_14_parked_sales.sql
+ *  is not applied yet, so drizzle-kit has nothing to introspect. */
+export const posParkedSales = pgTable("pos_parked_sales", {
+  id: uuid().defaultRandom().primaryKey().notNull(),
+  storeId: uuid("store_id").notNull(),
+  locationId: uuid("location_id").notNull(),
+  label: text(),
+  // CHOICES, never prices — placePosSale re-reads those at completion.
+  lines: jsonb().notNull(),
+  orderDiscount: numeric("order_discount", {
+    precision: 10,
+    scale: 2,
+    mode: "number",
+  })
+    .default(0)
+    .notNull(),
+  customerId: text("customer_id"),
+  customerGstin: text("customer_gstin"),
+  note: text(),
+  parkedBy: text("parked_by"),
+  parkedByName: text("parked_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+    .defaultNow()
+    .notNull(),
+});

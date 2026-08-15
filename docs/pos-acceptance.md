@@ -2135,6 +2135,73 @@ Post a `gift_card` tender.
 
 ---
 
+## 11c. Hold (park) a sale (§22)
+
+⚠ Needs `supabase/pos_14_parked_sales.sql` applied.
+
+**PS-PK.1 — Hold and clear**
+Scan two items, tap **Hold sale**.
+**Expect:** the cart empties and the counter is free for the next customer.
+**Held (1)** appears beside the button.
+
+**PS-PK.2 — Bring it back**
+Tap **Held**, then the row.
+**Expect:** the same items, quantities, discount and GSTIN return; the row is
+gone from the list.
+
+**PS-PK.3 ★ — It doesn't reserve stock**
+Hold a cart containing the last unit of something. Sell that unit on another
+till, then resume the held cart and try to complete it.
+**Expect:** the sale is refused at completion with "just sold out" / "only N
+left" — against LIVE stock. Holding is a note to self, not a promise: reserving
+would let one cashier empty a shelf on paper and strand it when they walk off.
+The panel says this in as many words.
+
+**PS-PK.4 ★ — It re-prices**
+Hold a cart, change that product's price in the dashboard, resume.
+**Expect:** today's price, not the one at hold time. Only choices are stored.
+
+**PS-PK.5 — A deleted product is reported, not swallowed**
+Hold a cart, delete one of its products, resume.
+**Expect:** the rest comes back AND a message naming how many couldn't be
+restored. Silently shrinking a resumed basket charges someone for less than
+they picked up.
+
+**PS-PK.6 ★★ — Two tills can't resume the same cart**
+Open the held list on two tills. Resume the same row on both.
+**Expect:** one loads it; the other is told "someone else may have resumed it"
+and its list refreshes. Both loading it is how one basket is charged twice.
+
+**PS-PK.7 — Resuming over a non-empty cart asks first**
+Scan something, then resume a held sale.
+**Expect:** a confirm before the current cart is replaced.
+
+**PS-PK.8 — Discard**
+Tap the bin on a held row.
+**Expect:** a confirm, then it's gone. Nothing was reserved, so nothing is
+released.
+
+**PS-PK.9 — The cap**
+Hold 20 carts, try a 21st.
+**Expect:** refused — "There are already 20 held sales at this counter. Finish
+or discard one first."
+
+**PS-PK.10 — It survives the idle lock**
+Hold a cart, let the till idle-lock, sign back in.
+**Expect:** still in the list. This is the case it exists for — browser storage
+would not survive it.
+
+**PS-PK.11 — Another till at the same shop sees it**
+Hold on till A, open **Held** on till B at the same location.
+**Expect:** it's there. A held cart belongs to the shop. A till at a DIFFERENT
+location must not see it.
+
+**PS-PK.12 — An empty cart can't be held**
+Tap Hold with nothing scanned.
+**Expect:** the button is disabled; posting directly is refused.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2158,6 +2225,7 @@ Real and deliberate, so nobody files them as bugs:
 | **A walk-in with NO record can't get an emailed receipt**          | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
 | **The customer claim has never been run in a browser**             | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
 | **Store credit can't be spent at a COLLECTION**                    | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so `COUNTER_TENDER_METHODS` deliberately excludes it rather than marking a collection paid against a balance nothing deducted                                                 |
+| **A held sale has no auto-expiry**                                 | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                       |
 | **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                                |
 | **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                            |
 | **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |

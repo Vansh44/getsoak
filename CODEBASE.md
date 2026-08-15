@@ -2596,6 +2596,44 @@ group, span}` (span = columns of the 4-wide desktop grid),
         stock and the default gained one it never had, silently, compounding
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
+      - **★★ HOLD A SALE** (`lib/pos/park.ts` pure, `pos-park-actions.ts`,
+        `supabase/pos_14_parked_sales.sql` — ⚠ **not applied**). Suspend the
+        cart, serve the next customer, bring it back.
+        - **★ A TABLE, NOT localStorage.** A park has to survive the thing it
+          exists for: the till IDLE-LOCKS after ten minutes and `posLock` clears
+          the session, which is exactly the window in which a held cart matters.
+          It also has to be resumable from a DIFFERENT till — one cashier holds,
+          another finishes when the customer reaches a free counter. Neither
+          works in browser storage.
+        - **★★ IT HOLDS NO STOCK, DELIBERATELY.** §23's `holdStock` was
+          considered and rejected: a cashier could park ten carts and empty the
+          shelf on paper, an abandoned park would strand stock until something
+          swept it, and the shop would reorder goods it still has. A park is a
+          note to self, not a promise. The consequence is already handled —
+          `placePosSale` re-reads prices and reserves atomically at completion,
+          so a resumed cart whose goods sold out fails THERE against live data
+          with the existing "only N left". The panel says so in as many words,
+          because assuming a hold reserves stock is how a cashier promises
+          something that then sells.
+        - **★ PRICES ARE NOT STORED — only CHOICES** (product, variant,
+          quantity, markdowns, customer). A held cart can sit for hours, and
+          keeping a price would let a resumed sale charge yesterday's, which is
+          the same reason `placePosSale` ignores client prices at all. Resuming
+          re-prices from the catalogue; an item deleted meanwhile is dropped and
+          SAID, since silently shrinking a resumed basket charges someone for
+          less than they picked up.
+        - **★★ RESUME IS A CONDITIONAL CLAIM** — the DELETE returns the row, so
+          two tills resuming the same cart cannot both get it. The loser is
+          told rather than silently loading a basket the other cashier is
+          already ringing up, which is how one basket gets charged twice.
+        - **★ PER LOCATION, capped at `MAX_PARKED_SALES` (20).** A held cart
+          belongs to the SHOP, not the cashier, so whoever is free can finish
+          it; `parked_by_name` rides along so a busy counter can tell three
+          apart. The cap is a ceiling, not a preference: without it a stuck
+          button — or a cashier parking instead of voiding — fills the list
+          until it is useless for finding the one cart that matters, which is
+          the only thing the list is for. An unnamed hold is labelled by what it
+          contains and who held it, never "Untitled".
       - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
         to the end of the register grid — `isOutOfStock` in
         `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
