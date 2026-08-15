@@ -137,9 +137,34 @@ the second worst**, hence the banner.
     nobody asked for. Switching a chip resets paging for the mirror reason: a
     term matching four people has no page 4, and an empty screen reads as "no
     results".
-- **Phase 3 — Logs hub.** `LogsRail` parameterised by registry; platform log
-  types (email, SMS, failures, announcements) under `/dashboard/logs`, with 307s
-  from `/dashboard/email-logs` and `/dashboard/failures`.
+- **Phase 3 — Logs hub ✅**
+  Email logs, SMS logs and the cross-store failure feed behind one entry at
+  `/dashboard/logs`, with 307s from the old `/dashboard/email-logs` and
+  `/dashboard/failures`.
+  - **★ `LogsRail` TAKES ITS REGISTRY AS A PROP.** Both consoles share
+    `DashboardSidebar`, and their logs are NOT the same set — an operator has no
+    import/export jobs and no per-store activity feed, a merchant has no
+    cross-store failure view. Hardcoding `LOG_TYPES` would have put three rail
+    entries in front of routes the platform does not have. It defaults to the
+    merchant registry, so every existing call site is unchanged.
+  - **★ A LANDING, NOT A REDIRECT TO THE FIRST LOG.** The merchant hub can
+    default to its Activity feed; the platform has no cross-store equivalent, so
+    "Logs" would silently mean "Email logs" and hide that the other two exist.
+  - **★ `getSmsLogs` GAINED HOST-DERIVED SCOPE**, mirroring `getEmailLogs`. It
+    used `getActingStoreId()`, whose never-null fallback resolves the WholeSip
+    store — so on the operator console it would have served one merchant's SMS
+    log as though it were the platform's. The platform scope re-checks operator
+    membership inside the action, because a server action is an independently
+    reachable POST endpoint.
+  - **★ `log-types.test.ts` IS A DRIFT GUARD IN BOTH DIRECTIONS**: `fs.readdir`
+    asserts every rail entry has a page, and every page has a rail entry. It
+    also fails if the platform registry ever acquires the merchant-only keys —
+    the guard against "tidying up" by pointing the platform sidebar at
+    `LOG_TYPES`.
+  - **⚠ The platform SMS log is EMPTY today**, and honestly so: nothing writes
+    a `store_id IS NULL` row because there is no platform Twilio account. The
+    page exists because adding it at the moment the first message goes out is
+    how a send with no log ships.
 - **Phase 4 — Announcements.** Broadcast to merchants and their staff.
 
 ## ⚠ Announcement SMS cannot send yet, and that is not a code problem

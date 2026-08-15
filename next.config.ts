@@ -108,6 +108,32 @@ const nextConfig: NextConfig = {
         destination: "/dashboard/logs/:path*",
         permanent: false,
       },
+      // The OPERATOR console's two logs moved under the same hub, for the same
+      // reason: they were top-level entries with no relationship shown, so the
+      // console had two answers to "where do I look?" and no list of the rest.
+      //
+      // ⚠ These sources are platform-only paths — the merchant dashboard has
+      // never had `/dashboard/email-logs` or `/dashboard/failures` (its logs
+      // were `/dashboard/activity/*`, redirected above). So a global redirect
+      // is safe on every host: on a merchant host these 404 today, and
+      // afterwards they land on that store's own equivalent, which is an
+      // improvement rather than a hazard.
+      //
+      // 307 again, deliberately. `getPlatformOverview`-era links and operator
+      // bookmarks point here, and a 308 is cached by browsers indefinitely —
+      // the trap proxy.ts already had to work around with `Cache-Control:
+      // no-store` on the custom-domain hop (§30). There are no SEO signals to
+      // consolidate behind a login.
+      {
+        source: "/dashboard/email-logs",
+        destination: "/dashboard/logs/email-logs",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/failures",
+        destination: "/dashboard/logs/failures",
+        permanent: false,
+      },
     ];
   },
 };

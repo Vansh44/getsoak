@@ -6,6 +6,7 @@ import { DashboardTopbar } from "@/app/dashboard/dashboard-topbar";
 import { DashboardSidebar } from "@/app/dashboard/dashboard-sidebar";
 import { MobileNavProvider } from "@/app/dashboard/dashboard-mobile-nav";
 import type { SectionGroup } from "@/app/dashboard/lib/permissions";
+import { PLATFORM_LOG_TYPES } from "./logs/log-types";
 import "@/app/dashboard/dashboard.css";
 
 const dashFont = Inter({
@@ -67,15 +68,13 @@ export default async function PlatformDashboardLayout({
           icon: "users" as const,
         },
         {
-          href: "/dashboard/email-logs",
-          label: "Email logs",
-          icon: "mail" as const,
-        },
-        {
-          // Cross-store failures. Operations rather than Administration: it is
-          // something an operator watches, not something they configure.
-          href: "/dashboard/failures",
-          label: "Failures",
+          // Email, SMS and the cross-store failure feed, behind one entry.
+          // They used to be two top-level items with no relationship shown, so
+          // "where do I look?" had two answers and no list of the rest.
+          // Operations rather than Administration: this is where you look when
+          // something is wrong, not a setting.
+          href: "/dashboard/logs",
+          label: "Logs",
           icon: "activity" as const,
         },
       ],
@@ -129,7 +128,10 @@ export default async function PlatformDashboardLayout({
           lastName=""
         />
         <div className="flex flex-1 overflow-hidden">
-          <DashboardSidebar groups={navGroups} />
+          {/* The operator log registry, not the merchant one: this console has
+              no import/export jobs and no per-store activity feed, and its
+              failure feed spans every store. */}
+          <DashboardSidebar groups={navGroups} logTypes={PLATFORM_LOG_TYPES} />
 
           <div className="dash-main">
             <div className="dash-content">{children}</div>

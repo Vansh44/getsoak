@@ -8,6 +8,7 @@ import { SidebarNavLink } from "./sidebar-nav-link";
 import { navIcons, type NavIconKey } from "./nav-icons";
 import { useMobileNav } from "./dashboard-mobile-nav";
 import { LogsRail } from "./logs/logs-rail";
+import type { LogType } from "./logs/log-types";
 
 type Child = {
   label: string;
@@ -69,7 +70,21 @@ export function resolveActiveSection<
   );
 }
 
-export function DashboardSidebar({ groups }: { groups?: Group[] }) {
+export function DashboardSidebar({
+  groups,
+  logTypes,
+  logsBasePath = "/dashboard/logs",
+}: {
+  groups?: Group[];
+  /** The log registry for THIS console. Absent = the merchant's (LogsRail's
+   *  own default) — the operator console passes its own, which has no
+   *  import/export and adds announcements. */
+  logTypes?: LogType[];
+  /** Which path prefix opens the logs panel. Both consoles use /dashboard/logs
+   *  today; it is a prop so a future third console cannot silently inherit the
+   *  wrong one. */
+  logsBasePath?: string;
+}) {
   const pathname = usePathname();
   const { open, setOpen } = useMobileNav();
   const allItems = groups ? groups.flatMap((g) => g.items) : [];
@@ -125,7 +140,7 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
   // LOG_TYPES, because Import and Export share a pathname and only `?kind=`
   // tells them apart, which the generic child matcher below cannot see. So it
   // gets the same panel treatment through its own rail.
-  const inLogs = pathname.startsWith("/dashboard/logs");
+  const inLogs = pathname.startsWith(logsBasePath);
 
   useEffect(() => {
     setOpen(false);
@@ -169,7 +184,7 @@ export function DashboardSidebar({ groups }: { groups?: Group[] }) {
                 {/* useSearchParams needs a boundary, or this opts the whole
                     sidebar into a client-side bailout during rendering. */}
                 <Suspense fallback={<div className="h-[164px]" />}>
-                  <LogsRail />
+                  <LogsRail types={logTypes} />
                 </Suspense>
               </div>
             </div>

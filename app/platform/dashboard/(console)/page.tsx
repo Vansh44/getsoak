@@ -196,7 +196,7 @@ export default async function PlatformDashboard() {
               All stores <ArrowRight className="h-4 w-4" />
             </Link>
             <Link
-              href="/dashboard/failures"
+              href="/dashboard/logs/failures"
               className="inline-flex items-center gap-2 rounded-lg border border-white/20 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
             >
               Failures <Radar className="h-4 w-4" />
@@ -387,14 +387,14 @@ export default async function PlatformDashboard() {
           <Queue
             label="Email failures"
             count={insights.attention.emailFailures24h}
-            href="/dashboard/email-logs?status=failed"
+            href="/dashboard/logs/email-logs?status=failed"
             hint="In the last 24 hours"
             icon={MailWarning}
           />
           <Queue
             label="SMS failures"
             count={insights.attention.smsFailures24h}
-            href="/dashboard/failures?source=sms"
+            href="/dashboard/logs/sms-logs?status=failed"
             hint="In the last 24 hours"
             icon={MessageSquareWarning}
           />

@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Download,
   Mail,
+  Megaphone,
   MessageSquare,
   Upload,
 } from "lucide-react";
@@ -35,16 +36,32 @@ const ICONS = {
   download: Download,
   upload: Upload,
   alert: AlertTriangle,
+  megaphone: Megaphone,
 } as const satisfies Record<LogType["icon"], React.ElementType>;
 
-export function LogsRail() {
+/**
+ * The rail, over a registry.
+ *
+ * ★ `types` IS A PROP BECAUSE THERE ARE TWO CONSOLES. The merchant dashboard
+ * and the operator console share this sidebar, and their logs are NOT the same
+ * set — an operator has no import/export jobs, and a merchant has no
+ * cross-store failure feed. Hardcoding `LOG_TYPES` meant the platform console
+ * would render merchant rail entries pointing at routes it does not have.
+ * It defaults to the merchant registry so every existing call site is
+ * unchanged.
+ */
+export function LogsRail({ types = LOG_TYPES }: { types?: LogType[] } = {}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  // `activeLogKey` serves both registries: it keys off distinct pathnames, and
+  // only the merchant's Import/Export pair needs the `?kind=` tiebreak. On the
+  // hub itself it falls through to "activity", which no platform entry claims —
+  // so nothing is lit, which is right: the hub is not one of the logs.
   const active = activeLogKey(pathname, searchParams.get("kind") ?? undefined);
 
   return (
     <nav aria-label="Log types" className="flex flex-col gap-0.5">
-      {LOG_TYPES.map((type) => {
+      {types.map((type) => {
         const Icon = ICONS[type.icon];
         const isActive = type.key === active;
         return (

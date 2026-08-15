@@ -5666,7 +5666,30 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       (`people-links.ts`, pure + tested) is the ONE link builder, because a
       "next page" that drops `?q=` turns a filtered list into an unfiltered one
       that still looks filtered.
-    - **⚠ Phases 3–4 are not built**: the Logs hub and Announcements. ⚠ **Announcement SMS cannot send** — no
+    - **★★ `LogsRail` TAKES ITS REGISTRY AS A PROP, AND THAT IS LOAD-BEARING.**
+      Both consoles share `DashboardSidebar`, and their logs are NOT the same
+      set: an operator has no import/export jobs and no per-store activity feed
+      (`activity_events` is store-scoped, and a cross-store feed of every event
+      on the platform is noise, not a log), while a merchant must never have the
+      `{ kind: "platform" }` failure view. Hardcoding `LOG_TYPES` put three rail
+      entries in front of routes the platform does not have. It DEFAULTS to the
+      merchant registry so every existing call site is unchanged;
+      `PLATFORM_LOG_TYPES` lives beside the operator hub. `log-types.test.ts`
+      guards it in BOTH directions (`fs.readdir`: every entry has a page, every
+      page has an entry) and fails if the platform registry ever acquires the
+      merchant-only keys — the guard against "tidying up" into one list.
+      `/dashboard/logs` is a LANDING, not a redirect to the first log: the
+      merchant hub can default to Activity, the platform has no equivalent, so
+      "Logs" would silently mean "Email logs".
+    - **★ `getSmsLogs` NOW DERIVES SCOPE FROM THE HOST** like `getEmailLogs`.
+      It used `getActingStoreId()`, whose never-null fallback resolves the
+      WholeSip store — so on the operator console it would have served ONE
+      MERCHANT'S SMS log as though it were the platform's. Platform scope
+      (`store_id IS NULL`) re-checks `isPlatformAdmin` INSIDE the action; a
+      server action is an independently reachable POST endpoint, so the page
+      gate is not enough. ⚠ That log is EMPTY today and honestly so — nothing
+      writes a platform row, because there is no platform Twilio account.
+    - **⚠ Phase 4 is not built**: Announcements. ⚠ **Announcement SMS cannot send** — no
       platform Twilio account, no DLT registration, and a feature announcement
       is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
       is heavier than the transactional templates §37 models. It is built gated

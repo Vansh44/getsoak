@@ -10,8 +10,17 @@ export interface LogType {
   key: string;
   label: string;
   href: string;
-  /** lucide-react icon name, resolved in logs-rail.tsx. */
-  icon: "activity" | "mail" | "message" | "download" | "upload" | "alert";
+  /** lucide-react icon name, resolved in logs-rail.tsx. The union spans BOTH
+   *  consoles' registries — the operator console has an announcements log the
+   *  merchant one does not. */
+  icon:
+    | "activity"
+    | "mail"
+    | "message"
+    | "download"
+    | "upload"
+    | "alert"
+    | "megaphone";
   /** One line under the heading, so a rail entry explains itself. */
   blurb: string;
 }
