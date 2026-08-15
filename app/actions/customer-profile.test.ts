@@ -7,6 +7,8 @@ vi.mock("@/lib/auth/firebase-users", () => ({
   updateAuthUser: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
+vi.mock("@/lib/pos/claim-customer", () => ({ claimPosCustomer: vi.fn() }));
+vi.mock("@/lib/notifications/record", () => ({ emitEvent: vi.fn() }));
 vi.mock("@/lib/store/resolve", () => ({
   getCurrentStoreId: vi.fn(async () => "a0000000-0000-4000-8000-000000000001"),
   FALLBACK_STORE_ID: "a0000000-0000-4000-8000-000000000001",
@@ -25,6 +27,8 @@ vi.mock("@/lib/db/client", () => ({
 import { updateCustomerProfile } from "./customer-profile";
 import { updateAuthUser } from "@/lib/auth/firebase-users";
 import { getServerUser } from "@/lib/auth/server-user";
+import { claimPosCustomer } from "@/lib/pos/claim-customer";
+import { emitEvent } from "@/lib/notifications/record";
 
 function makeFormData(fields: Record<string, string | null | undefined>) {
   const fd = new FormData();
@@ -53,6 +57,8 @@ describe("updateCustomerProfile", () => {
     dbHolder.current = makeDbMock();
     vi.mocked(updateAuthUser).mockResolvedValue();
     vi.mocked(getServerUser).mockResolvedValue(serverUser() as any);
+    // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — restore explicitly.
+    vi.mocked(claimPosCustomer).mockResolvedValue({ claimed: false });
   });
 
   // First name is the only required field.
@@ -112,5 +118,83 @@ describe("updateCustomerProfile", () => {
     );
     await updateCustomerProfile(makeFormData({ firstName: "Ada" }));
     expect(dbHolder.current.calls.values[0].phone).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Adopting a till-created customer (roadmap Step 4 / pos_13).
+// ---------------------------------------------------------------------------
+describe("updateCustomerProfile — claiming a till-created customer", () => {
+  beforeEach(() => {
+    vi.mocked(claimPosCustomer).mockResolvedValue({ claimed: false });
+  });
+
+  // ★★ ORDER IS THE WHOLE THING. (store_id, phone) is UNIQUE, so if the till
+  // already recorded this person the insert is a duplicate-key error — signup
+  // would fail for exactly the customers who have shopped here before.
+  it("claims BEFORE it upserts", async () => {
+    const order: string[] = [];
+    vi.mocked(claimPosCustomer).mockImplementation(async () => {
+      order.push("claim");
+      return { claimed: false };
+    });
+    dbHolder.current = makeDbMock({ returning: [{ inserted: true }] });
+    const insert = dbHolder.current.db.insert;
+    dbHolder.current.db.insert = (...args: any[]) => {
+      order.push("upsert");
+      return insert(...args);
+    };
+
+    await updateCustomerProfile(makeFormData({ firstName: "Asha" }));
+    expect(order).toEqual(["claim", "upsert"]);
+  });
+
+  // ★ THE PHONE IS THE SECURITY BOUNDARY. A phone from the form would let
+  // anyone type a stranger's number and inherit their in-store order history.
+  it("passes the VERIFIED auth phone, never anything from the form", async () => {
+    vi.mocked(getServerUser).mockResolvedValue(
+      serverUser({ phone: "+919876543210" }) as any,
+    );
+    dbHolder.current = makeDbMock({ returning: [{ inserted: true }] });
+    const fd = makeFormData({ firstName: "Asha" });
+    fd.set("phone", "+919999999999"); // ignored by construction
+
+    await updateCustomerProfile(fd);
+    expect(claimPosCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uid: "user-1",
+        verifiedPhone: "+919876543210",
+      }),
+    );
+  });
+
+  it("scopes the claim to the host store", async () => {
+    dbHolder.current = makeDbMock({ returning: [{ inserted: true }] });
+    await updateCustomerProfile(makeFormData({ firstName: "Asha" }));
+    expect(claimPosCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({ storeId: expect.any(String) }),
+    );
+  });
+
+  // ★ BEST-EFFORT, AND THE CALLER PROVES IT. A lost link to in-store history
+  // is a disappointment; a shopper who cannot create an account at all is not.
+  // claimPosCustomer catches its own errors by contract — this asserts that
+  // signup survives even if that contract is ever broken.
+  it("still saves the profile when the claim throws", async () => {
+    vi.mocked(claimPosCustomer).mockRejectedValue(new Error("boom"));
+    dbHolder.current = makeDbMock({ returning: [{ inserted: true }] });
+    const r = await updateCustomerProfile(makeFormData({ firstName: "Asha" }));
+    expect(r).toEqual({ success: true });
+    expect(dbHolder.current.calls.values[0].firstName).toBe("Asha");
+  });
+
+  // ★ A claimed row is an UPDATE, so the signup event does not fire — correct:
+  // the store already knows this person. What is new is the ACCOUNT.
+  it("does not announce a signup for a row that was adopted", async () => {
+    vi.mocked(claimPosCustomer).mockResolvedValue({ claimed: true });
+    dbHolder.current = makeDbMock({ returning: [{ inserted: false }] });
+    vi.mocked(emitEvent).mockClear(); // this file's beforeEach does not
+    await updateCustomerProfile(makeFormData({ firstName: "Asha" }));
+    expect(emitEvent).not.toHaveBeenCalled();
   });
 });

@@ -28,6 +28,7 @@ import { withService, type Db } from "@/lib/db/client";
 import {
   activityEvents,
   notificationEmailQueue,
+  notificationSmsQueue,
   notificationPreferences,
   notifications,
   users,
@@ -43,6 +44,12 @@ import {
 import { renderNotification } from "./render";
 import type { EmailOrderSummary } from "@/lib/email/line-items";
 import { digestSendAfter } from "./digest";
+import {
+  loadSmsSender,
+  loadSmsTemplates,
+  phonesForRecipients,
+} from "@/lib/sms/channel";
+import { renderDltBody } from "@/lib/sms/dlt";
 import { selectRecipients } from "./routing";
 import { resolveNotification, type AudienceKey } from "./config";
 import { renderTemplate, templateValues } from "./template";
@@ -469,6 +476,12 @@ async function fanOut(
 
   const rows: (typeof notifications.$inferInsert)[] = [];
   const mail: (typeof notificationEmailQueue.$inferInsert)[] = [];
+  const sms: (typeof notificationSmsQueue.$inferInsert)[] = [];
+  // Gathered in the recipient loop, resolved once after it — see below.
+  const smsCandidates: {
+    recipient: (typeof unique)[number];
+    audienceKey: string;
+  }[] = [];
   // Only resolved lazily, and only if someone actually wants email — a
   // customer's address is a query we shouldn't pay for on every event.
   let customerEmail: string | null | undefined;
@@ -563,6 +576,87 @@ async function fanOut(
         });
       }
     }
+
+    // ── SMS ─────────────────────────────────────────────────────────────────
+    // Only the merchant's own switch is read here; whether the store CAN send
+    // (a connected provider, a mirrored DLT template) is resolved once, below,
+    // rather than per recipient. Nothing is loaded at all unless somebody has
+    // the switch on, so a store that never touches SMS pays no query for it.
+    if (audienceConfig?.channels.sms && audienceKey) {
+      smsCandidates.push({ recipient, audienceKey });
+    }
+  }
+
+  // ★ RESOLVED ONCE PER EVENT, NOT PER RECIPIENT. Three round trips at most —
+  // sender, templates, phones — and only when a switch is actually on.
+  if (smsCandidates.length > 0 && input.storeId) {
+    const sender = await loadSmsSender(db, input.storeId);
+    if (sender) {
+      const templates = await loadSmsTemplates(db, input.storeId, key);
+      // Nothing to send without a mirrored template: the carrier would drop it.
+      const wanted = smsCandidates.filter((c) => templates.has(c.audienceKey));
+      if (wanted.length > 0) {
+        const phones = await phonesForRecipients(
+          db,
+          wanted.map((c) => ({ id: c.recipient.id, type: c.recipient.type })),
+        );
+        for (const c of wanted) {
+          const phone = phones.get(c.recipient.id);
+          // No number on file = nothing to send to. Not an error: admins.phone
+          // is nullable and mostly empty.
+          if (!phone) continue;
+          const template = templates.get(c.audienceKey);
+          if (!template) continue;
+
+          // ★ RENDERED AT ENQUEUE, not at send. The values are snapshotted like
+          // the email queue's title/body, so a receipt keeps what it was written
+          // with — and a template whose mapping no longer fits is caught HERE,
+          // where it can be logged against the event, rather than in a worker
+          // retry loop.
+          const resolved = templateValues(
+            key,
+            {
+              storeName: config?.storeName ?? null,
+              actorLabel: input.actor?.label ?? null,
+              subjectLabel: input.subject?.label ?? null,
+              eventName: def?.label ?? key,
+              // ISO for the reason the web/email paths give above: every value
+              // goes through formatVariable exactly once, and a pre-formatted
+              // date gets misread on the second pass.
+              date: new Date().toISOString(),
+              link: null,
+            },
+            input.payload ?? null,
+          );
+          const values = template.variables.map((name) =>
+            String(resolved[name] ?? ""),
+          );
+          const rendered = renderDltBody(
+            { templateId: template.dltTemplateId, body: template.body },
+            values,
+          );
+          if (!rendered.ok) {
+            logWarn("sms: template no longer fits its mapping", {
+              storeId: input.storeId,
+              event: key,
+              audience: c.audienceKey,
+              reason: rendered.error,
+            });
+            continue;
+          }
+
+          sms.push({
+            storeId: input.storeId,
+            eventId,
+            recipientId: c.recipient.id,
+            recipientType: c.recipient.type,
+            phone,
+            eventKey: key,
+            values,
+          });
+        }
+      }
+    }
   }
 
   if (rows.length > 0) {
@@ -573,6 +667,11 @@ async function fanOut(
     // supabase/notifications_02_email_queue.sql for why a Resend call must
     // never sit on a checkout's code path.
     await db.insert(notificationEmailQueue).values(mail).onConflictDoNothing();
+  }
+  if (sms.length > 0) {
+    // Enqueue only, for the email queue's reason: a provider round trip has no
+    // business sitting on a checkout's code path.
+    await db.insert(notificationSmsQueue).values(sms).onConflictDoNothing();
   }
   return mail.some((m) => m.digest === "instant");
 }

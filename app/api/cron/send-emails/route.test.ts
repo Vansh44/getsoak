@@ -18,10 +18,12 @@ vi.mock("@/lib/email/notification-worker", () => ({
   processNotificationEmails: vi.fn(),
 }));
 vi.mock("@/lib/email/trigger-worker", () => ({ triggerEmailWorker: vi.fn() }));
+vi.mock("@/lib/sms/worker", () => ({ runSmsWorker: vi.fn() }));
 
 import { GET, POST } from "./route";
 import { processEmailQueue } from "@/lib/email/campaign-worker";
 import { processNotificationEmails } from "@/lib/email/notification-worker";
+import { runSmsWorker } from "@/lib/sms/worker";
 import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 
 function req(auth?: string): Request {
@@ -30,13 +32,22 @@ function req(auth?: string): Request {
   });
 }
 
-// Drains BOTH outbound queues (coupon campaigns + notification emails).
+// Drains all THREE outbound queues (coupon campaigns, notification emails and
+// SMS — the last rides the same heartbeat rather than getting its own job).
 // Auth is `Authorization: Bearer <CRON_SECRET>`; without the secret set the
 // route must refuse rather than run unauthenticated.
 describe("/api/cron/send-emails", () => {
   const OLD_ENV = process.env.CRON_SECRET;
 
   beforeEach(() => {
+    // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS.
+    vi.mocked(runSmsWorker).mockResolvedValue({
+      claimed: 0,
+      sent: 0,
+      failed: 0,
+      unknown: 0,
+      skipped: 0,
+    });
     vi.clearAllMocks();
     afterCalls.fns = [];
     process.env.CRON_SECRET = "s3cret";
@@ -87,7 +98,7 @@ describe("/api/cron/send-emails", () => {
     expect(processEmailQueue).not.toHaveBeenCalled();
   });
 
-  it("drains both queues on a valid secret", async () => {
+  it("drains all three queues on a valid secret", async () => {
     vi.mocked(processEmailQueue).mockResolvedValue({
       sent: 5,
       remaining: 0,
@@ -104,7 +115,32 @@ describe("/api/cron/send-emails", () => {
       ok: true,
       campaigns: { sent: 5, remaining: 0 },
       notifications: { sent: 2, remaining: 0 },
+      // SMS rides the same heartbeat rather than getting its own schedule —
+      // one more Cloud Scheduler entry is one more thing to forget, which
+      // docs/cron-jobs.md records happening three times already.
+      sms: { claimed: 0, sent: 0, failed: 0, unknown: 0, skipped: 0 },
     });
+  });
+
+  // ★ It must not be able to take the email queues down with it. SMS goes
+  // through a different provider entirely, so a Twilio outage has no business
+  // stopping a merchant's order confirmations.
+  it("still reports the email queues when the SMS worker throws", async () => {
+    vi.mocked(processEmailQueue).mockResolvedValue({
+      sent: 5,
+      remaining: 0,
+    } as any);
+    vi.mocked(processNotificationEmails).mockResolvedValue({
+      sent: 2,
+      remaining: 0,
+    } as any);
+    vi.mocked(runSmsWorker).mockRejectedValue(new Error("twilio down"));
+
+    const res = await GET(req("Bearer s3cret"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.campaigns).toEqual({ sent: 5, remaining: 0 });
+    expect(body.sms).toBeNull();
   });
 
   it("runs the workers sequentially, campaigns first", async () => {

@@ -29,8 +29,20 @@ import {
   sql,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import {
+  sendPosReceipt,
+  shouldSendDirectReceipt,
+} from "@/lib/email/pos-receipt";
+import { TENDER_LABEL } from "@/lib/pos/receipt";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
+import {
+  newPosCustomerId,
+  splitName,
+  validatePosCustomer,
+  type PosCustomerInput,
+} from "@/lib/pos/customer-claim";
 import {
   inventoryLevels,
   orderItems,
@@ -497,11 +509,10 @@ export interface PosCustomer {
  * or email. Store-scoped, so one store's register can never surface another
  * store's customer list.
  *
- * Only customers who already exist are searchable. The register deliberately
- * cannot CREATE one: `users.id` is the Firebase uid and `(phone, store_id)` is
- * unique, so a till-invented row would collide with — and break — that same
- * person's later online signup. Walk-in capture needs a claim/merge story and
- * belongs with the CRM phase (docs/pos-plan.md Phase 5+).
+ * The register CAN also create one — see `createPosCustomer` below. That was
+ * blocked until pos_13 gave the claim story it needed: a till-invented row now
+ * carries a `pos_…` id and is ADOPTED by that person's later online signup
+ * rather than colliding with it.
  */
 export async function searchPosCustomers(
   query: string,
@@ -556,6 +567,101 @@ export async function searchPosCustomers(
       customers: [],
       error: dbErrorMessage(err, "Couldn't search customers."),
     };
+  }
+}
+
+/**
+ * Record a walk-in the till has never seen before.
+ *
+ * ── ★ THE ID IS `pos_<uuid>`, AND THAT IS THE WHOLE MECHANISM ──────────────
+ * `users.id` IS the Firebase uid, so a row invented here has no natural key. A
+ * synthetic `pos_` id is one the shopper's later signup can ADOPT (see
+ * lib/pos/claim-customer.ts), and — because customer RLS matches `auth.uid()`
+ * against `users.id` — it is also a row no session can ever read. Invisible and
+ * claimable, with no policy written for either.
+ *
+ * ── ★ A DUPLICATE PHONE ATTACHES, IT DOES NOT FAIL ────────────────────────
+ * `(store_id, phone)` is UNIQUE, and the commonest way to reach this action is
+ * a cashier who searched, mistyped, and typed the number in by hand. Answering
+ * "that customer already exists" and stopping would leave them re-searching
+ * with a queue behind them; returning the existing customer is what they meant.
+ * It leaks nothing — it is the same row `searchPosCustomers` would have found
+ * for the number they just typed.
+ *
+ * ★ MANAGER-ONLY? NO — `sell`. Recording who bought something is part of
+ * ringing up a sale, and gating it above the person at the counter means it
+ * never gets done.
+ */
+export async function createPosCustomer(
+  input: PosCustomerInput,
+): Promise<{ customer?: PosCustomer; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+
+  const valid = validatePosCustomer(input);
+  if (!valid.ok) return { error: valid.error };
+
+  const { first, last } = splitName(valid.name);
+  const id = newPosCustomerId(() => crypto.randomUUID());
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .insert(users)
+        .values({
+          id,
+          storeId: op.storeId,
+          phone: valid.phone,
+          email: valid.email,
+          firstName: first,
+          lastName: last,
+        } as typeof users.$inferInsert)
+        // The phone is the identity here, so a conflict on it is "this person
+        // is already on file" — not an error to report.
+        .onConflictDoNothing()
+        .returning({ id: users.id }),
+    );
+
+    if (rows[0]) {
+      return {
+        customer: {
+          id: rows[0].id,
+          name: valid.name,
+          phone: valid.phone,
+          email: valid.email,
+        },
+      };
+    }
+
+    // Conflict: hand back whoever already holds that number for this store.
+    const existing = await withService((db) =>
+      db
+        .select({
+          id: users.id,
+          phone: users.phone,
+          email: users.email,
+          first_name: users.firstName,
+          last_name: users.lastName,
+        })
+        .from(users)
+        .where(and(eq(users.storeId, op.storeId), eq(users.phone, valid.phone)))
+        .limit(1),
+    );
+    const row = existing[0];
+    if (!row) return { error: "Couldn't save that customer." };
+    return {
+      customer: {
+        id: row.id,
+        name:
+          [row.first_name, row.last_name].filter(Boolean).join(" ").trim() ||
+          row.phone,
+        phone: row.phone,
+        email: row.email,
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't save that customer.") };
   }
 }
 
@@ -656,6 +762,9 @@ export async function placePosSale(
   tenders: PosTender[],
   opts: {
     customerId?: string | null;
+    /** Where to email a copy of the receipt. Optional — a walk-in who wants
+     *  nothing is the normal case, and asking must never gate a sale. */
+    receiptEmail?: string | null;
     customerGstin?: string | null;
     orderDiscount?: number;
     /** A manager's approval, as minted by `verifyManagerPin` for THIS cart.
@@ -715,12 +824,17 @@ export async function placePosSale(
   // store's customer — who would then see a foreign order in their history
   // (customers hold RLS SELECT on their own orders).
   let customerId: string | null = null;
+  // Read in the SAME query as the ownership check, because the receipt decision
+  // below needs it: an attached customer WITH an address already gets an order
+  // confirmation from the fan-out, and sending a second copy directly is the
+  // two-emails-for-one-action pattern (§24).
+  let customerEmail: string | null = null;
   if (typeof opts.customerId === "string" && opts.customerId.trim()) {
     const wanted = opts.customerId.trim();
     try {
       const owned = await withService((db) =>
         db
-          .select({ id: users.id })
+          .select({ id: users.id, email: users.email })
           .from(users)
           .where(and(eq(users.id, wanted), eq(users.storeId, op.storeId)))
           .limit(1),
@@ -728,6 +842,7 @@ export async function placePosSale(
       if (owned.length === 0)
         return { error: "That customer isn't in this store." };
       customerId = owned[0].id;
+      customerEmail = owned[0].email ?? null;
     } catch (err) {
       return { error: dbErrorMessage(err, "Couldn't verify the customer.") };
     }
@@ -1232,6 +1347,48 @@ export async function placePosSale(
     })),
   );
 
+  // ★ A COPY IN THEIR INBOX, WHEN NOTHING ELSE WILL SEND ONE.
+  // Deferred like emitEvent: a Resend round-trip has no business sitting on the
+  // path between a customer paying and the till showing the change due. It
+  // never throws, so a mail failure cannot cost a sale that has already taken
+  // money and moved stock.
+  const receiptTo = normalizeReceiptEmail(opts.receiptEmail);
+  if (
+    shouldSendDirectReceipt({
+      receiptEmail: receiptTo,
+      customerId,
+      customerEmail,
+    })
+  ) {
+    after(() =>
+      sendPosReceipt({
+        storeId: op.storeId,
+        to: receiptTo as string,
+        orderRef,
+        // The shop is deliberately absent: `op` carries a locationId, not a
+        // name, and a query for one line of copy is not worth a round trip on
+        // the sale path.
+        summary: {
+          currency: "INR",
+          items: priced.map((l) => ({
+            name: l.name,
+            variant: l.variant_name,
+            quantity: l.quantity,
+            total: l.amount,
+          })),
+          subtotal: totals.subtotal,
+          discount: totals.discount,
+          tax: totals.tax,
+          total: totals.total,
+        },
+        // The SAME map the thermal receipt prints from, so the paper in their
+        // hand and the copy in their inbox use identical words.
+        tenderLabels: tenders.map((t) => TENDER_LABEL[t.method] ?? t.method),
+        changeDue,
+      }),
+    );
+  }
+
   revalidatePath("/dashboard/orders");
   return {
     success: true,
@@ -1506,4 +1663,18 @@ export async function listPosSales(
   } catch (err) {
     return { sales: [], error: dbErrorMessage(err, "Couldn't load sales.") };
   }
+}
+
+/**
+ * A receipt address, or null.
+ *
+ * ★ A BAD ADDRESS IS DROPPED, NOT REFUSED. This runs AFTER the money is taken
+ * and the stock is moved; failing the sale over a typo in an OPTIONAL field
+ * would be the worst possible trade (roadmap invariant 6). The till validates
+ * before submitting, so a rejection here would be a second opinion nobody sees.
+ */
+function normalizeReceiptEmail(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim().toLowerCase().slice(0, 160);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : null;
 }

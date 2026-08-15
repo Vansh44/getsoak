@@ -44,10 +44,20 @@ export const CHANNELS: readonly ChannelDef[] = [
     note: "The notification bell in the dashboard.",
   },
   {
+    // ★★ `available` IS A PLATFORM STATEMENT, NOT A PER-STORE ONE, and that
+    // distinction is what makes flipping this safe. It says StoreMink supports
+    // the channel, so the switch is CONFIGURABLE. Whether a given store can
+    // actually DELIVER is three further conditions, all resolved at fan-out
+    // time in lib/sms/channel.ts: a connected and enabled provider, this
+    // switch, and a mirrored DLT template for that event and audience.
+    //
+    // Turning it on without those would have been the exact failure this flag
+    // exists to prevent — a channel accepting a "yes" it cannot honour — which
+    // is why it stayed false until all three existed.
     key: "sms",
     label: "SMS",
-    available: false,
-    note: "No SMS provider is connected yet.",
+    available: true,
+    note: "Needs your own Twilio account and DLT registration (Channels), plus an approved template per message.",
   },
   {
     key: "push",

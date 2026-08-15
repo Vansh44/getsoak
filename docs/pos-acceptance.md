@@ -809,6 +809,140 @@ orders must still reach everyone — `order.placed` is deliberately not narrowed
 
 ---
 
+## 7e. Till-created customers & the signup claim (roadmap Step 4)
+
+⚠ Needs `supabase/pos_13_customer_claim.sql` applied (staging: ✅ 2026-08-14).
+**None of these has been exercised in a browser yet** — 96 unit tests cover the
+rules, the claim statement, the action and the signup ordering, but nobody has
+rung up a walk-in on a real till.
+
+**PS-C.25 — A cashier can record a walk-in**
+Register → Customer → search "Asha". Nothing found.
+**Expect:** an **Add as a new customer** button under "No customer found", and
+below it "Or leave it — the sale can go through without one."
+**Not** a button beside the search box: reaching it only after an empty search
+means the search has happened by construction, so a cashier can't create a
+duplicate of someone already on file.
+
+**PS-C.26 — The typed query seeds the form**
+Search "Asha" → Add. Then separately search "9876543210" → Add.
+**Expect:** the first prefills **Name**, the second prefills **Mobile number**.
+Nothing is retyped.
+
+**PS-C.27 — A mobile is required, a name is required, email is not**
+Try to save with a name and no number.
+**Expect:** "A mobile number is needed so they can be found again later." The
+form also explains why: "The mobile links this to their account if they ever
+sign up online." Saving with no email must succeed.
+
+**PS-C.28 ★ — It attaches immediately**
+Save a new customer.
+**Expect:** the panel switches to the attached-customer card. Nobody adds a
+customer in order to then search for them.
+
+**PS-C.29 ★ — A duplicate phone attaches, it does not fail**
+Add a customer using the phone of someone already on file (the commonest route
+here is a cashier who mistyped a search and typed the number by hand).
+**Expect:** the EXISTING customer attaches, with their real name — not "that
+customer already exists". It leaks nothing: it is the same row the search would
+have returned for the number they just typed.
+
+**PS-C.30 ★ — The sale is attributed**
+Ring up a sale with the new customer attached. Then Dashboard → Orders.
+**Expect:** the order shows that customer. `orders.customer_id` is the
+`pos_<uuid>` id.
+
+**PS-C.31 ★★ — THE CLAIM. Their signup adopts the row**
+As that same person, sign up on the storefront with the SAME mobile number.
+**Expect:** signup succeeds, and `/orders` shows the in-store purchase from
+PS-C.30 under **In store**.
+**Was:** impossible — `(store_id, phone)` is UNIQUE, so the signup would have
+failed with a duplicate key for exactly the customers who have shopped here
+before.
+Check in SQL: that row's `id` is now the Firebase uid, `claimed_at` is stamped,
+and `orders.customer_id` followed it (ON UPDATE CASCADE across all six FKs).
+
+**PS-C.32 ★★ — An unclaimed row can never log in**
+Try to reach any customer page as a `pos_` customer.
+**Expect:** impossible by construction — customer RLS is
+`auth.uid() = users.id` and a `pos_…` id matches no Firebase uid. There is no
+policy for this and none should be added; the id shape IS the mechanism.
+
+**PS-C.33 ★★ — A claimed row is never re-adopted**
+Sign up a SECOND account using a phone that already belongs to a claimed
+customer of that store.
+**Expect:** the signup attaches or fails on the unique constraint — it must NOT
+adopt. Adopting would hand one customer's entire order history to whoever typed
+their number, which is the worst thing this feature could do.
+Same for a phone belonging to a normal signup row: those also have
+`claimed_at IS NULL`, so `claimed_at` alone is not the test — the `pos_` id is.
+
+**PS-C.34 ★ — A failed claim never blocks a signup**
+Break the claim (stop the DB mid-signup, or point it at a bad store id).
+**Expect:** the shopper still gets an account. They lose the link to their
+in-store history — a disappointment, not an outage. The claim never throws, at
+either layer.
+
+**PS-C.35 — A claimed customer is not announced as new**
+Watch `/dashboard/logs` while PS-C.31 runs.
+**Expect:** no `customer.signed_up` event. Correct: the store already knows this
+person from the shop. What is new is the ACCOUNT, not the customer.
+
+**PS-C.37 ★★ — Store credit survives the claim**
+At the till, refund a walk-in customer's sale to **store credit** (§29). Then
+have that person sign up with the same mobile.
+**Expect:** their balance is on the new account — `/profile` shows it.
+**Why it needs its own story:** `customer_credit_balances` and
+`customer_credit_ledger` have **no foreign key to `users`**, so `pos_13`'s
+`ON UPDATE CASCADE` never reaches them. Without the explicit repoint their
+balance is orphaned by their own signup: the store's books still say it is owed
+and the customer sees zero. Silent, and found by a complaint.
+
+**PS-C.38 ★ — A half-claim is impossible**
+Make a repoint fail (drop a privilege on `customer_credit_ledger` mid-signup).
+**Expect:** the claim reports nothing claimed and the `pos_` row is UNCHANGED —
+same id, `claimed_at` still NULL. One transaction, so no claim at all beats a
+claim that moved the person and left their balance behind.
+⚠ The shopper's signup then fails on the unique phone, which is the one place
+this trade bites. It is still the right way round.
+
+**PS-C.39 — A recorded walk-in gets an emailed receipt today**
+Record a walk-in WITH an email, attach them, ring up a sale.
+**Expect:** an order confirmation arrives. No new code — `placePosSale` emits
+`order.placed` and the fan-out resolves the address from their `users` row.
+
+**PS-C.36 — Receipt contact at the tender panel**
+Ring up a sale with NO customer attached. At **Take payment**, fill
+**Email a receipt (optional)** and complete the sale.
+**Expect:** a receipt arrives — items, what they paid with, change given, the
+order reference — from the store's own sending domain, and a row appears in
+Logs → Email logs with mailer **POS receipt**.
+
+**PS-C.40 ★ — One receipt, never two**
+Attach a customer who HAS an email, then also type an address in the receipt
+box, and complete.
+**Expect:** exactly ONE email — the order confirmation from the fan-out. The
+direct receipt must not also fire. Repeat with a customer who has NO email on
+file: exactly one email, this time the direct receipt.
+
+**PS-C.41 ★ — A typo cannot cost a sale**
+Type `not-an-email` in the receipt box and complete.
+**Expect:** the sale completes normally and no receipt is sent. The button is
+never disabled by that field — the money is taken and the stock has moved by
+the time the address is looked at, and the paper receipt is the real one.
+
+**PS-C.42 — The box clears between customers**
+Complete a sale with a receipt address, then start the next one.
+**Expect:** the field is empty. A leftover address would email the next
+customer's receipt to the previous one.
+
+**PS-C.43 — The collection counter has no receipt box**
+Open **Take payment** from `/pos/pickups` on a pay-at-store collection.
+**Expect:** no receipt field. That order was placed online and already carries
+an address; asking again at hand-over is a field with no job.
+
+---
+
 ## 8. Pickup — click & collect
 
 **PS-8.1 — Turn it on**
@@ -1943,27 +2077,29 @@ rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                                | Status                                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                   |
-| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                         |
-| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                        |
-| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                |
-| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                     |
-| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second |
-| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                               |
-| ~~**Collections were unreachable with an empty queue**~~           | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                  |
-| ~~**Two search screens for one counter moment**~~                  | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/pickups`, old paths 307                                                                                                                |
-| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The rail/drawer is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                         |
-| **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                               |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                        |
-| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                               |
-| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                          |
-| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                              |
-| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                          |
-| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                          |
-| ~~**Live delivery rates at checkout**~~                            | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                        |
-| **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                         |
-| **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                              |
-| **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                       |
-| **Shiprocket browser/API smoke test pending**                      | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                            |
+| Gap                                                                | Status                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                     |
+| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                           |
+| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                          |
+| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                  |
+| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                       |
+| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second   |
+| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                                 |
+| ~~**Collections were unreachable with an empty queue**~~           | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                    |
+| ~~**Two search screens for one counter moment**~~                  | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/pickups`, old paths 307                                                                                                                  |
+| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The rail/drawer is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                           |
+| **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                 |
+| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                          |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                                 |
+| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                            |
+| **A walk-in with NO record can't get an emailed receipt**          | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
+| **The customer claim has never been run in a browser**             | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
+| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                                |
+| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                            |
+| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |
+| ~~**Live delivery rates at checkout**~~                            | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                          |
+| **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                           |
+| **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                                |
+| **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                         |
+| **Shiprocket browser/API smoke test pending**                      | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                              |

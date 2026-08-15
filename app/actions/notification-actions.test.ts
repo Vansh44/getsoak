@@ -505,10 +505,24 @@ describe("saving notification configuration", () => {
         .error,
     ).toMatch(/invalid email frequency/i);
 
+    // ★ SMS is now AVAILABLE platform-wide, so the reason it is refused here
+    // changed: not "the platform doesn't support it" but "this store hasn't
+    // connected Twilio". Refused at SAVE rather than stored and ignored at
+    // send — a switch that looks on and sends nothing is worse than one you
+    // cannot set (the §23 canRequirePrepaid call).
     expect(
       (
         await saveNotificationConfig("order.placed", {
           audiences: { team: { channels: { sms: true } } },
+        })
+      ).error,
+    ).toMatch(/Connect Twilio in Channels/i);
+
+    // Push has no per-store connection at all, so it keeps the old refusal.
+    expect(
+      (
+        await saveNotificationConfig("order.placed", {
+          audiences: { team: { channels: { push: true } } },
         })
       ).error,
     ).toMatch(/isn't connected yet/i);

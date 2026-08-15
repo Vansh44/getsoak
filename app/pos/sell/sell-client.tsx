@@ -115,6 +115,7 @@ export function SellClient({
   const [customer, setCustomer] = useState<PosCustomer | null>(null);
   const [gstin, setGstin] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
+  const [receiptEmail, setReceiptEmail] = useState("");
   // Manager-arranged till grid. Empty = not configured = show everything.
   const [layout, setLayout] = useState<LayoutEntry[]>([]);
   const [canEditLayout, setCanEditLayout] = useState(false);
@@ -422,6 +423,7 @@ export function SellClient({
       approvalToken,
       customerId: customer?.id ?? null,
       customerGstin: gstin.trim() || null,
+      receiptEmail: receiptEmail.trim() || null,
     });
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
@@ -433,6 +435,9 @@ export function SellClient({
     setDiscount(0);
     setCustomer(null);
     setGstin("");
+    // Cleared with everything else: the next customer is a different person,
+    // and a receipt address left in the box would email them somebody else's.
+    setReceiptEmail("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
     router.refresh();
@@ -889,6 +894,8 @@ export function SellClient({
           total={estTotal}
           onCancel={() => setTendering(false)}
           onComplete={completeSale}
+          receiptEmail={receiptEmail}
+          onReceiptEmail={setReceiptEmail}
           onVerifyManager={(pin) =>
             verifyManagerPin(pin, {
               lines: saleLines(),

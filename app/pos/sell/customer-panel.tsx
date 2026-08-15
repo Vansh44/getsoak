@@ -2,20 +2,28 @@
 
 // Attach an existing customer to the sale, and capture a B2B GSTIN.
 //
-// Only customers who already exist are searchable. The register cannot CREATE
-// one: `users.id` is the Firebase uid and (phone, store_id) is unique, so a
-// till-invented row would collide with — and break — that same person's later
-// online signup. Walk-in capture needs a claim/merge story (CRM phase).
+// A walk-in who isn't on file can be added here. That was blocked until pos_13
+// gave it the claim story it needed — a till-created row carries a `pos_…` id
+// and is ADOPTED by that person's later online signup rather than colliding
+// with it (lib/pos/claim-customer.ts).
+//
+// ★ THE FORM OPENS FROM THE EMPTY STATE, NOT FROM A SECOND BUTTON. "Add
+// customer" sitting beside the search box invites a cashier to create a
+// duplicate of someone already on file; reaching it only after a search came
+// back empty means the search has happened by construction. The typed query is
+// carried into the form, so nothing is retyped.
 //
 // The GSTIN is independent of the attach: a business buyer can get their GSTIN
 // on the invoice without having an account at all.
 
 import { useEffect, useState } from "react";
-import { Loader2, Search, UserRound, X } from "lucide-react";
+import { Loader2, Search, UserPlus, UserRound, X } from "lucide-react";
 import {
+  createPosCustomer,
   searchPosCustomers,
   type PosCustomer,
 } from "@/app/actions/pos-sale-actions";
+import { normalizePhone } from "@/lib/pos/customer-claim";
 
 export function CustomerPanel({
   customer,
@@ -37,6 +45,13 @@ export function CustomerPanel({
   const [results, setResults] = useState<PosCustomer[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // null = not adding. An object = the form is open, seeded from the query.
+  const [draft, setDraft] = useState<{
+    name: string;
+    phone: string;
+    email: string;
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const q = query.trim();
   // Derived, not stored: below the 2-character floor there is nothing to show,
@@ -130,12 +145,104 @@ export function CustomerPanel({
                 </button>
               ))}
               {q.length >= 2 && !searching && visible.length === 0 && (
-                <p className="px-1 py-4 text-center text-sm text-white/40">
-                  No customer found. The sale can go through without one.
-                </p>
+                <div className="px-1 py-4 text-center">
+                  <p className="text-sm text-white/40">No customer found.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Seed whichever field the query looks like, so the
+                      // cashier types each detail exactly once.
+                      const asPhone = normalizePhone(q);
+                      setError(null);
+                      setDraft({
+                        name: asPhone ? "" : q,
+                        phone: asPhone ? asPhone : "",
+                        email: "",
+                      });
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-white/20"
+                  >
+                    <UserPlus className="h-4 w-4" />
+                    Add as a new customer
+                  </button>
+                  <p className="mt-2 text-xs text-white/30">
+                    Or leave it — the sale can go through without one.
+                  </p>
+                </div>
               )}
             </div>
           </>
+        )}
+
+        {draft && !customer && (
+          <div className="mb-4 rounded-xl border border-white/15 bg-white/5 p-3">
+            <div className="mb-2 text-xs font-medium text-white/60">
+              New customer
+            </div>
+            <div className="grid gap-2">
+              <input
+                value={draft.name}
+                autoFocus={!draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="Name"
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+              />
+              <input
+                value={draft.phone}
+                inputMode="numeric"
+                autoFocus={!!draft.name}
+                onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
+                placeholder="Mobile number"
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+              />
+              <input
+                value={draft.email}
+                inputMode="email"
+                onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+                placeholder="Email (optional)"
+                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+              />
+            </div>
+            {/* The mobile is what a later signup matches on, so it earns a line
+                of explanation rather than just being required. */}
+            <p className="mt-2 text-xs text-white/35">
+              The mobile links this to their account if they ever sign up
+              online.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  setError(null);
+                  const res = await createPosCustomer(draft);
+                  setSaving(false);
+                  if (res.error || !res.customer) {
+                    setError(res.error ?? "Couldn't save that customer.");
+                    return;
+                  }
+                  // Attaching immediately is the point of having opened this —
+                  // nobody adds a customer in order to then search for them.
+                  onPick(res.customer);
+                  setDraft(null);
+                }}
+                className="flex-1 rounded-lg bg-emerald-500 py-2 text-sm font-semibold text-black transition-colors hover:bg-emerald-400 disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Save & attach"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(null);
+                  setError(null);
+                }}
+                className="rounded-lg px-3 py-2 text-sm text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
 
         {gstEnabled && (

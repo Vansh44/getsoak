@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { NextResponse } from "next/server";
 import { processEmailQueue } from "@/lib/email/campaign-worker";
 import { processNotificationEmails } from "@/lib/email/notification-worker";
+import { runSmsWorker } from "@/lib/sms/worker";
 import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 
 // Drains BOTH outbound email queues:
@@ -45,12 +46,27 @@ async function handle(request: Request) {
   const campaigns = await processEmailQueue();
   const notifications = await processNotificationEmails();
 
-  // More to do in EITHER queue? Chain another run after this response is sent.
-  if (campaigns.remaining > 0 || notifications.remaining > 0) {
+  // ★ SMS RIDES THE SAME HEARTBEAT rather than getting its own schedule. It is
+  // the same job — drain what the fan-out queued — and a separate Cloud
+  // Scheduler entry is one more thing to create and one more thing to forget,
+  // which docs/cron-jobs.md records happening three times already.
+  //
+  // ⚠ It does NOT go through Resend, so unlike the two above it shares no rate
+  // limit with them; it is sequential only to keep one failure from masking
+  // another in the response.
+  const sms = await runSmsWorker().catch(() => null);
+
+  // More to do in ANY queue? Chain another run after this response is sent.
+  // A full SMS batch means there is probably more behind it.
+  if (
+    campaigns.remaining > 0 ||
+    notifications.remaining > 0 ||
+    (sms?.claimed ?? 0) >= 50
+  ) {
     after(() => triggerEmailWorker());
   }
 
-  return NextResponse.json({ ok: true, campaigns, notifications });
+  return NextResponse.json({ ok: true, campaigns, notifications, sms });
 }
 
 export const GET = handle;
