@@ -19,11 +19,15 @@ vi.mock("@/lib/email/notification-worker", () => ({
 }));
 vi.mock("@/lib/email/trigger-worker", () => ({ triggerEmailWorker: vi.fn() }));
 vi.mock("@/lib/sms/worker", () => ({ runSmsWorker: vi.fn() }));
+vi.mock("@/lib/announcements/worker", () => ({
+  processAnnouncements: vi.fn(),
+}));
 
 import { GET, POST } from "./route";
 import { processEmailQueue } from "@/lib/email/campaign-worker";
 import { processNotificationEmails } from "@/lib/email/notification-worker";
 import { runSmsWorker } from "@/lib/sms/worker";
+import { processAnnouncements } from "@/lib/announcements/worker";
 import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 
 function req(auth?: string): Request {
@@ -32,8 +36,9 @@ function req(auth?: string): Request {
   });
 }
 
-// Drains all THREE outbound queues (coupon campaigns, notification emails and
-// SMS — the last rides the same heartbeat rather than getting its own job).
+// Drains all FOUR outbound queues (coupon campaigns, notification emails,
+// platform announcements and SMS — the last two ride the same heartbeat rather
+// than getting their own jobs).
 // Auth is `Authorization: Bearer <CRON_SECRET>`; without the secret set the
 // route must refuse rather than run unauthenticated.
 describe("/api/cron/send-emails", () => {
@@ -47,6 +52,12 @@ describe("/api/cron/send-emails", () => {
       failed: 0,
       unknown: 0,
       skipped: 0,
+    });
+    vi.mocked(processAnnouncements).mockResolvedValue({
+      processed: 0,
+      sent: 0,
+      failed: 0,
+      remaining: 0,
     });
     vi.clearAllMocks();
     afterCalls.fns = [];
@@ -98,7 +109,7 @@ describe("/api/cron/send-emails", () => {
     expect(processEmailQueue).not.toHaveBeenCalled();
   });
 
-  it("drains all three queues on a valid secret", async () => {
+  it("drains all four queues on a valid secret", async () => {
     vi.mocked(processEmailQueue).mockResolvedValue({
       sent: 5,
       remaining: 0,
@@ -119,7 +130,34 @@ describe("/api/cron/send-emails", () => {
       // one more Cloud Scheduler entry is one more thing to forget, which
       // docs/cron-jobs.md records happening three times already.
       sms: { claimed: 0, sent: 0, failed: 0, unknown: 0, skipped: 0 },
+      // Announcements ride it too, for the same reason.
+      announcements: { processed: 0, sent: 0, failed: 0, remaining: 0 },
     });
+  });
+
+  // ★ Same rule for announcements: a broadcast is the LEAST urgent thing in
+  // this route, so a failure resolving one must never stop a merchant's order
+  // confirmations going out.
+  it("still reports the email queues when the announcement worker throws", async () => {
+    vi.mocked(processEmailQueue).mockResolvedValue({
+      sent: 5,
+      remaining: 0,
+    } as any);
+    vi.mocked(processNotificationEmails).mockResolvedValue({
+      sent: 2,
+      remaining: 0,
+    } as any);
+    vi.mocked(processAnnouncements).mockRejectedValue(new Error("db down"));
+
+    const res = await GET(req("Bearer s3cret"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.campaigns).toEqual({ sent: 5, remaining: 0 });
+    expect(body.notifications).toEqual({ sent: 2, remaining: 0 });
+    // Null, not absent: "we tried and it failed" is a different fact from
+    // "we did not run it", and the response has to be able to say which.
+    expect(body.announcements).toBeNull();
   });
 
   // ★ It must not be able to take the email queues down with it. SMS goes

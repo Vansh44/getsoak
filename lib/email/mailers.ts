@@ -23,6 +23,8 @@ export const MAILER_KEYS = [
   "pos_receipt",
   // Billing (platform → merchant)
   "billing",
+  // Platform → merchant broadcast (§38)
+  "announcement",
   // Platform security
   "operator_otp",
   "signup_otp",
@@ -116,6 +118,12 @@ export const MAILERS: MailerDef[] = [
     label: "Billing",
     description:
       "StoreMink plan receipts, renewal failures and downgrade notices.",
+  },
+  {
+    key: "announcement",
+    label: "Platform announcement",
+    description:
+      "A feature or operational notice StoreMink sent to merchants and their staff.",
   },
   {
     key: "operator_otp",

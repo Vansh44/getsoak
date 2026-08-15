@@ -68,6 +68,11 @@ export default async function PlatformDashboardLayout({
           icon: "users" as const,
         },
         {
+          href: "/dashboard/announcements",
+          label: "Announcements",
+          icon: "marketing" as const,
+        },
+        {
           // Email, SMS and the cross-store failure feed, behind one entry.
           // They used to be two top-level items with no relationship shown, so
           // "where do I look?" had two answers and no list of the rest.

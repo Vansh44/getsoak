@@ -165,7 +165,47 @@ the second worst**, hence the banner.
     a `store_id IS NULL` row because there is no platform Twilio account. The
     page exists because adding it at the moment the first message goes out is
     how a send with no log ships.
-- **Phase 4 — Announcements.** Broadcast to merchants and their staff.
+- **Phase 4 — Announcements ✅**
+  `/dashboard/announcements` — draft, check the reach, test-send, send, and a
+  per-recipient log. Schema: `supabase/announcements_01_schema.sql` (⚠ **not
+  applied** — run it as `postgres` before deploying).
+  - **★ RECIPIENTS ARE MATERIALISED AT SEND, NOT RESOLVED AT DELIVERY.** The
+    audience is a query over a moving target — stores sign up, staff leave,
+    plans lapse. Writing a row per person makes the send idempotent (a retried
+    worker claims rows rather than re-running a query that now returns
+    different people), resumable across the 60s request ceiling, and
+    **auditable**: "who was told, and when?" is answerable months later, which
+    for a pricing or policy notice is the only thing that matters.
+  - **★★ `category` DECIDES WHETHER CONSENT APPLIES, so it is a stored column
+    and not a checkbox.** `feature` is marketing and honours
+    `admins.marketing_opt_in`; `operational` is service correspondence about an
+    account somebody already has and does not. Somebody has to be able to answer
+    "why did this person get this after opting out?", and "it was a billing
+    deadline" only holds if the category was recorded at the time.
+  - **★ TILL STAFF ARE NEVER MARKETED TO.** `pos_staff` has no
+    `marketing_opt_in` column — nobody ever asked them — and an absent
+    preference is not consent. They still receive operational notices.
+  - **★ EVERY SKIP CARRIES A REASON.** "38 skipped" tells an operator nothing
+    about whether their audience is wrong or their list is dirty; "31 not opted
+    in, 7 suppressed" does.
+  - **★ THE PREVIEW RUNS THE SAME CODE AS THE SEND**, and the send button
+    requires one — "send to everyone" should not be reachable without having
+    looked at who everyone is. The confirm quotes the number back.
+  - **★ THE TEST-SEND TAKES NO RECIPIENT.** It mails the session's own address.
+    A recipient parameter would be an open relay: any operator could mail
+    arbitrary HTML to any address from StoreMink's verified sending domain.
+  - **★ EVERY MESSAGE LEAVES THROUGH `sendEmail`**, so it lands in `email_logs`
+    under the `announcement` mailer and `send-coverage.test.ts` keeps it there.
+    The worker rides `/api/cron/send-emails` rather than taking a new Cloud
+    Scheduler entry — `docs/cron-jobs.md` records a documented-but-never-created
+    job three times.
+  - **★ A SENT ANNOUNCEMENT IS IMMUTABLE**, enforced as a predicate on the
+    UPDATE rather than a read-then-write. Editing copy already in inboxes makes
+    the log a record of what we currently _say_ we sent.
+  - **★ `partial` IS A REAL OUTCOME.** Some bounced and the rest were told;
+    calling that "failed" invites an operator to send the whole thing again.
+  - **⚠ SMS is built and gated** — see below. Sending refuses with its reason
+    and writes no recipient rows.
 
 ## ⚠ Announcement SMS cannot send yet, and that is not a code problem
 

@@ -511,6 +511,20 @@ wholesip/
 │                              # can't proxy large bodies)
 │
 ├── lib/
+│   ├── announcements/         # ★ §38 platform → merchant broadcast:
+│   │                          # audience.ts (PURE: the consent rule, the skip
+│   │                          # vocabulary, the allowlisting normaliser —
+│   │                          # shared by the composer's preview and the real
+│   │                          # send so they cannot disagree), resolve.ts
+│   │                          # (candidate SQL + materialise; the status flip
+│   │                          # to 'sending' is LAST and in the same txn, so a
+│   │                          # crash mid-resolve leaves a draft rather than a
+│   │                          # half-sent broadcast), worker.ts (drains the
+│   │                          # queue on the send-emails heartbeat; `partial`
+│   │                          # is a real outcome), sms-availability.ts (the
+│   │                          # honest refusal — no platform Twilio, no DLT
+│   │                          # registration, and promotional SMS is a heavier
+│   │                          # regime than §37's transactional templates)
 │   ├── platform/              # ★ §38 operator-console READS: store-detail.ts
 │   │                          # (loadStoreDetail = one store in ONE round trip of
 │   │                          # scalar subqueries — 15 separate counts would be
@@ -5689,11 +5703,58 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       server action is an independently reachable POST endpoint, so the page
       gate is not enough. ⚠ That log is EMPTY today and honestly so — nothing
       writes a platform row, because there is no platform Twilio account.
-    - **⚠ Phase 4 is not built**: Announcements. ⚠ **Announcement SMS cannot send** — no
-      platform Twilio account, no DLT registration, and a feature announcement
-      is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
-      is heavier than the transactional templates §37 models. It is built gated
-      and refuses with a reason rather than queueing what carriers drop.
+    - **★★ ANNOUNCEMENTS — StoreMink telling its MERCHANTS something**
+      (`/dashboard/announcements`, `lib/announcements/`,
+      `supabase/announcements_01_schema.sql` — ⚠ **not applied**; run as
+      `postgres` before deploying). Distinct from every other messaging table
+      here: `notification_email_queue` is an EVENT fanned out to identified
+      recipients, `email_campaigns` is a MERCHANT mailing THEIR shoppers, this
+      is the PLATFORM mailing its merchants.
+      - **★ RECIPIENTS ARE MATERIALISED AT SEND, NOT RESOLVED AT DELIVERY.**
+        The audience is a query over a moving target — stores sign up, staff
+        leave, plans lapse. A row per person makes the send idempotent (a
+        retried worker claims rows instead of re-running a query that now
+        returns different people), resumable across the 60s ceiling, and
+        AUDITABLE: "who was told, and when?" months later, which for a pricing
+        or policy notice is the whole point. Unique indexes make a
+        double-submitted resolve a no-op rather than a second copy to everyone.
+      - **★★ `category` DECIDES WHETHER CONSENT APPLIES, so it is a COLUMN and
+        not a checkbox.** `feature` is marketing and honours
+        `admins.marketing_opt_in` (§25); `operational` is service
+        correspondence about an account somebody already holds and does not.
+        Recording it is what lets an opt-out complaint be answered.
+      - **★ TILL STAFF ARE NEVER MARKETED TO** — `pos_staff` has no
+        `marketing_opt_in` column, nobody ever asked them, and an absent
+        preference is not consent. They still get operational notices.
+      - **★ EVERY SKIP CARRIES A REASON** (no_consent / suppressed / duplicate
+        / no_email / no_phone). "38 skipped" says nothing about whether the
+        audience is wrong or the list is dirty. Consent, suppression and
+        de-duplication live in the PURE `audience.ts`, so the composer's
+        preview and the real send cannot disagree — and the preview runs the
+        SAME resolver, with the send button gated on having run it.
+      - **★ THE TEST-SEND TAKES NO RECIPIENT** — it mails the session's own
+        address. A recipient parameter would be an open relay from StoreMink's
+        verified sending domain.
+      - **★ A SENT ANNOUNCEMENT IS IMMUTABLE**, as a predicate on the UPDATE
+        rather than a read-then-write; `partial` is a real outcome, not a
+        failure (calling it failed invites a re-send to everyone it reached).
+      - Everything leaves through `sendEmail` (mailer `announcement`), and the
+        worker rides `/api/cron/send-emails` rather than taking a new Cloud
+        Scheduler entry.
+      - **⚠ SMS IS BUILT AND GATED, and two of the three blockers are not
+        code** (`sms-availability.ts`): StoreMink has no Twilio account of its
+        own (SMS is BYO-per-store, §37); DLT registration needs a Principal
+        Entity, a 6-char header and an APPROVED TEMPLATE PER BODY (7–21 business
+        days); and a feature announcement is PROMOTIONAL, not transactional —
+        numeric headers, DND/NDNC scrubbing, time-of-day limits. So it refuses
+        with its reason and writes NO recipient rows: a body that does not match
+        its template is dropped at the carrier silently, so accepting the send
+        would produce a queue of rows pending forever. §23's rule — a control
+        that always fails is worse than no control. ⚠ **Announcement SMS cannot send** — no
+        platform Twilio account, no DLT registration, and a feature announcement
+        is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
+        is heavier than the transactional templates §37 models. It is built gated
+        and refuses with a reason rather than queueing what carriers drop.
 
 ## 6. Commands
 
