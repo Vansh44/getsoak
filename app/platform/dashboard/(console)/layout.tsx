@@ -59,6 +59,14 @@ export default async function PlatformDashboardLayout({
         { href: "/dashboard", label: "Overview", icon: "home" as const },
         { href: "/dashboard/stores", label: "Stores", icon: "pos" as const },
         {
+          // Store owners, delegated dashboard staff and till staff, across
+          // every store. The operator's question is "who has access?", and
+          // until now it had no answer short of SQL against production.
+          href: "/dashboard/people",
+          label: "People",
+          icon: "users" as const,
+        },
+        {
           href: "/dashboard/email-logs",
           label: "Email logs",
           icon: "mail" as const,

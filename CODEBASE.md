@@ -5651,8 +5651,22 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       worst thing it could do after a 500.
     - **The list's History drawer was REMOVED**, not left beside the detail
       page. Two paths to the same data is the mess this was undoing.
-    - **⚠ Phases 2–4 are not built**: People (cross-store admins + POS staff),
-      the Logs hub, and Announcements. ⚠ **Announcement SMS cannot send** — no
+    - **★ PEOPLE UNIONS TWO TABLES FOR ONE QUESTION** (`lib/platform/people.ts`,
+      `/dashboard/people`). `admins` and `pos_staff` were each reachable only
+      from inside the store that owned them, so "which stores is this person
+      on?" was a hand-written query against production. Three rules: **`kind`
+      is never collapsed** (a dashboard login and a till PIN are different
+      access with different reach — flattening them makes revoking the wrong
+      one look like revoking the right one); **the same person may appear
+      TWICE** and that is correct (an owner who also rings the till holds two
+      credentials, revoked separately — deduplicating by email hides one); and
+      **the filter chips are counted WITHOUT the kind filter**, so selecting
+      "Till" still reports how many dashboard admins the same search returns,
+      instead of every unselected chip reading zero. `peopleHref`
+      (`people-links.ts`, pure + tested) is the ONE link builder, because a
+      "next page" that drops `?q=` turns a filtered list into an unfiltered one
+      that still looks filtered.
+    - **⚠ Phases 3–4 are not built**: the Logs hub and Announcements. ⚠ **Announcement SMS cannot send** — no
       platform Twilio account, no DLT registration, and a feature announcement
       is PROMOTIONAL (numeric headers, DND scrubbing, time-of-day limits), which
       is heavier than the transactional templates §37 models. It is built gated

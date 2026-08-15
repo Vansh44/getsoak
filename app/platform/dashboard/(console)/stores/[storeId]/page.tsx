@@ -441,9 +441,12 @@ export default async function StoreDetailPage({
             title="People"
             icon={<Users className="h-4 w-4" />}
             action={
-              <span className="text-xs text-slate-400">
-                {admins.length} dashboard · {posStaff.length} till
-              </span>
+              <Link
+                href={`/dashboard/people?store=${store.id}`}
+                className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+              >
+                Open in People
+              </Link>
             }
           >
             {people.length === 0 ? (

@@ -22,19 +22,19 @@ single scroll, under a metric row. Three consequences, all of them real:
 
 ## The information architecture
 
-| Group              | Entry          | Path                       | What it answers                            |
-| ------------------ | -------------- | -------------------------- | ------------------------------------------ |
-| **OPERATIONS**     | Overview       | `/dashboard`               | What needs someone right now?              |
-|                    | Stores         | `/dashboard/stores`        | The merchant estate                        |
-|                    | ↳ store detail | `/dashboard/stores/[id]`   | Everything about ONE merchant              |
-|                    | People         | `/dashboard/people`        | Who can sign in to which store _(phase 2)_ |
-|                    | Announcements  | `/dashboard/announcements` | Tell merchants something _(phase 4)_       |
-|                    | Logs           | `/dashboard/logs`          | What happened, what broke _(phase 3)_      |
-| **ADMINISTRATION** | Help Centre    | `/dashboard/help`          | Platform docs                              |
-|                    | Themes         | `/dashboard/themes`        | The catalog + demo stores                  |
-|                    | Pricing        | `/dashboard/pricing`       | What StoreMink charges                     |
-|                    | Operators      | `/dashboard/operators`     | Who runs the platform                      |
-|                    | Billing & tax  | `/dashboard/billing`       | StoreMink's own GST identity               |
+| Group              | Entry          | Path                       | What it answers                       |
+| ------------------ | -------------- | -------------------------- | ------------------------------------- |
+| **OPERATIONS**     | Overview       | `/dashboard`               | What needs someone right now?         |
+|                    | Stores         | `/dashboard/stores`        | The merchant estate                   |
+|                    | ↳ store detail | `/dashboard/stores/[id]`   | Everything about ONE merchant         |
+|                    | People         | `/dashboard/people`        | Who can sign in to which store        |
+|                    | Announcements  | `/dashboard/announcements` | Tell merchants something _(phase 4)_  |
+|                    | Logs           | `/dashboard/logs`          | What happened, what broke _(phase 3)_ |
+| **ADMINISTRATION** | Help Centre    | `/dashboard/help`          | Platform docs                         |
+|                    | Themes         | `/dashboard/themes`        | The catalog + demo stores             |
+|                    | Pricing        | `/dashboard/pricing`       | What StoreMink charges                |
+|                    | Operators      | `/dashboard/operators`     | Who runs the platform                 |
+|                    | Billing & tax  | `/dashboard/billing`       | StoreMink's own GST identity          |
 
 **The split is by job**, the rule `app/dashboard/lib/permissions.ts` already
 applies to the merchant nav. Operations is what an operator watches and acts on
@@ -117,7 +117,26 @@ the second worst**, hence the banner.
   mix, six attention queues and latest signups.
   The list's **History drawer was removed** rather than left alongside the
   detail page — two paths to the same data is the mess this revamp is undoing.
-- **Phase 2 — People.** Cross-store directory of dashboard admins and POS staff.
+- **Phase 2 — People ✅**
+  `/dashboard/people` (`lib/platform/people.ts`) unions `admins` and `pos_staff`
+  across every store, searchable by name/email/store, filterable by access kind,
+  and deep-linkable to one store (`?store=`) from the store detail page.
+  - **★ `kind` IS NEVER COLLAPSED.** A dashboard login and a till PIN are
+    different access with different reach; a flattened list would make revoking
+    the wrong one look identical to revoking the right one.
+  - **★ THE SAME PERSON MAY APPEAR TWICE, AND THAT IS CORRECT.** A shop owner
+    who also rings the till has both rows — two credentials, revoked
+    separately. Deduplicating by email would hide one.
+  - **★ THE CHIP COUNTS IGNORE THE KIND FILTER.** Counted under the search and
+    store filters alone, so selecting "Till" still reports how many dashboard
+    admins the same search returns. Counting them under the full filter makes
+    every unselected chip read zero, which is a dead end rather than a filter.
+  - **★ `peopleHref` IS ONE TESTED BUILDER** (`lib/platform/people-links.ts`).
+    A "next page" link that forgets `?q=` turns a filtered list into an
+    unfiltered one that still looks filtered, and the only symptom is rows
+    nobody asked for. Switching a chip resets paging for the mirror reason: a
+    term matching four people has no page 4, and an empty screen reads as "no
+    results".
 - **Phase 3 — Logs hub.** `LogsRail` parameterised by registry; platform log
   types (email, SMS, failures, announcements) under `/dashboard/logs`, with 307s
   from `/dashboard/email-logs` and `/dashboard/failures`.
