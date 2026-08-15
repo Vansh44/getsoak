@@ -657,20 +657,26 @@ the Twilio client and the `lib/sms/send.ts` choke point with its coverage guard,
 the Channels connection card, the SMS log as a sixth log plus a Failures source,
 and the DLT template mirror actions. See CODEBASE §37.
 
-### ⚠ NOTHING SENDS YET
+### ✅ IT SENDS
 
-`sms` is still `available: false` in `lib/notifications/channels.ts`, and that is
-correct rather than an oversight — flipping it would let a merchant switch on a
-channel with no registration behind it, accepting exactly the "yes" that flag
-exists to prevent. What is left:
+All five remaining pieces shipped: the queue worker on the existing email
+heartbeat, per-store channel resolution, phone resolution for both audiences,
+the SMS tab in the notification console, and STOP enforcement. `available` is
+now `true` — safe because it is a PLATFORM statement, while delivery is three
+per-store conditions resolved at fan-out. See CODEBASE §37.
 
-1. **The queue worker** — drain `notification_sms_queue` on the existing cron,
-   with the retry/backoff shape `notification-worker.ts` uses.
-2. **Per-store channel resolution** — connected AND enabled AND a template for
-   that event and audience. This replaces the static `available` flag for SMS.
-3. **Recipient phone resolution** — the `customerEmailFor` counterpart.
-4. **The template editor UI** in the notification console (the actions exist).
-5. **Opt-out (STOP) handling**, which is not optional.
+### ⚠ What is genuinely left
+
+1. **An inbound webhook to RECEIVE STOP.** `classifyInbound` and `suppressPhone`
+   are built and tested; nothing calls them. A merchant's Twilio number needs a
+   messaging webhook pointed at us. Until then opt-out is ENFORCED on send but
+   can only be RECORDED by hand — the wrong way round for the one part of this a
+   regulator cares about.
+2. **The `sms_suppressions` migration** — appended to `supabase/sms_01_schema.sql`
+   after the rest of that file was applied, so it needs running on its own.
+3. **Nobody has sent a real message.** Every path is unit-tested against mocks;
+   none has touched Twilio, and no merchant has a DLT registration to test with.
+   The first real send is the first real test.
 
 WhatsApp remains out of scope (owner, 2026-08-15). It needs no DLT but does need
 Meta Business verification and Meta-approved templates, so it is a separate track

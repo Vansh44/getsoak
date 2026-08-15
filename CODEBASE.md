@@ -5433,86 +5433,140 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       invented — nothing reads it to decide who may log in; the id shape does.
 
 37. **SMS — India's DLT rules, and why this is not a switch** (roadmap Step 5,
-    IN PROGRESS — pure rules only). `lib/sms/dlt.ts`. - **★★ THE ROADMAP SAID "UNLOCKING THEM IS THE WORK". IT WAS WRONG.** TRAI's
-    TCCCPR requires every business sending commercial SMS to an Indian number
-    to register on an operator-run DLT portal: a **Principal Entity** (PE-ID),
-    a **sender header** (6 characters, alphabetic for transactional), and
-    **every message template** with its variables marked. A body that does not
-    match an approved template, or a header not registered to that entity, is
-    **blocked at the carrier** — no bounce, no useful error, it just never
-    arrives. Registration takes 7–21 business days. - **★ SO SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE
-    EMAIL (§24).** The header IS the merchant's registered identity, so
-    StoreMink cannot send on their behalf from a generic one. `available:
-false` in `lib/notifications/channels.ts` must therefore NOT simply be
-    flipped: a channel switched on with no registration accepts a "yes" it can
-    never honour, which is the exact thing that flag exists to prevent. - **★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates are
-    free text with `{{token}}` substitution, validated only for unknown tokens.
-    DLT is the opposite — the body is FIXED at registration and only marked
-    variables may vary. An SMS body cannot be authored in the notification
-    console the way an email body is; it is authored on the DLT portal,
-    approved there, and MIRRORED here with its template id.
-    `renderDltBody` is positional, not named, because `{#var#}` carries no
-    name: the portal approves a SHAPE, and mapping named event values onto it
-    is where a mirror drifts from a registration. - **★ A SEGMENT IS A UNIT OF COST, AND ONE CHARACTER RE-PRICES A WHOLE
-    MESSAGE.** GSM-7 fits 160 characters; one character outside that set — an
-    emoji, curly quotes, or **₹** — forces the entire message to UCS-2 at 70.
-    A 150-character template costs one segment until someone types a rupee
-    sign, then three. `smsSegments` is what makes that visible before a
-    merchant is billed for it. - **★ `bodyMatchesTemplate` ASKS WHAT THE CARRIER ASKS, FIRST.** A drifted
-    body is dropped silently, and "the customer never got the message" is not
-    a diagnosis anyone can act on. - **⚠ DELIBERATELY NOT ENCODED:** the maximum variables per template, and
-    whether a variable may open a message. Operator documentation asserts these
-    inconsistently, and a rule invented here would reject templates the
-    merchant's own portal approved — leaving them unable to tell whose rule
-    they broke. What IS enforced is universal: the body must match apart from
-    its variables, and a variable may not END the message (which would leave it
-    with no fixed tail). - **★ BYO PER STORE, decided 2026-08-15** (owner). Merchants connect their own
-    Twilio account in **Channels → Twilio SMS**; StoreMink never fronts the
-    carrier bill and never carries their spam risk. Schema in
-    `supabase/sms_01_schema.sql` (⚠ **not applied**): `store_sms_providers`
-    (the `store_payment_providers` shape — service-role only, auth token
-    AES-256-GCM under `PAYMENT_CRED_KEY`, encrypted rather than hashed because
-    it is PRESENTED on every request), `store_sms_templates`, `sms_logs` and
-    `notification_sms_queue`. - **★ THE DLT FIELDS ARE NOT NULL, not optional extras.** A connection stored
-    without a sender header and Entity ID looks connected and delivers
-    nothing — the carrier drops it silently, so the merchant gets no error to
-    act on. `saveSmsCredentials` verifies by FETCHING the account rather than
-    sending (verifying by sending costs money and puts a test SMS on
-    somebody's phone) and refuses a suspended account, which authenticates
-    perfectly and delivers nothing. Pausing keeps the credentials; only
-    Disconnect discards them, and the confirm says so — the header and entity
-    id live on the DLT portal and cannot be retyped from memory. - **★★ `lib/sms/send.ts` IS THE CHOKE POINT**, with `send-coverage.test.ts`
-    written at the SAME TIME as the channel rather than retroactively. The
-    email guard was written after eight scattered `resend.emails.send` calls
-    had accumulated recording nothing; there is no reason to rediscover that
-    on the second channel. It fails on a direct `twilioSendSms` call, on
-    anything reaching `api.twilio.com` outside the client, and if the choke
-    point stops writing a row for any of sent/failed/skipped. - **★ THE CLIENT'S OUTCOME VOCABULARY IS THE POINT** (`lib/sms/twilio.ts`,
-    plain fetch, the razorpay.ts shape): `rejected` is a verdict, `unknown` is
-    a timeout or a 5xx where the message may well have gone. Collapsing them
-    is what makes a retry send someone the same message twice — §26's refund
-    rule, reused. - **★ SMS LOGS ARE A SIXTH LOG** (`/dashboard/logs/sms-logs`), on the SAME
-    `activity` section, plus their own **Failures** source — separate from
-    Email because an SMS has a failure cause email never has (a body that
-    drifted from its registered template) and one chip cannot stand for two
-    remedies. The extra column is **segments**, because that is what the
-    merchant is billed. ⚠ The page says the thing merchants otherwise learn the
-    hard way: **a message a carrier blocked for not matching its DLT template
-    appears here as SENT.** Carriers drop those silently, so a delivery report
-    is the only place they exist. - **★ TEMPLATES ARE A MIRROR, NOT AN EDITOR**
-    (`app/actions/sms-template-actions.ts`). Validated on save against the pure
-    rules; the variable mapping must match the template's shape exactly, and
-    names are checked against the SAME `variableNamesFor` the email validator
-    uses, so a token that works in an email body is not mysteriously rejected
-    here. Cost is derived on read, never stored, so it cannot go stale against
-    an edited body. - **⚠ NOTHING SENDS YET, and `available: false` in
-    `lib/notifications/channels.ts` is CORRECT rather than an oversight** —
-    flipping it would let a merchant switch on a channel with no registration
-    behind it, accepting exactly the "yes" that flag exists to prevent. Left to
-    build: the queue worker, per-store channel resolution (connected AND
-    enabled AND a template for that event+audience), recipient phone
-    resolution, the template editor UI in the notification console, and opt-out
-    (STOP) handling.
+    SHIPPED; nothing has been sent against a real carrier yet). `lib/sms/` —
+    `dlt.ts` (pure rules), `twilio.ts` (client), `send.ts` (the choke point),
+    `channel.ts` (per-store resolution), `worker.ts` (the queue),
+    `suppression.ts` (STOP).
+    - **★★ THE ROADMAP SAID "UNLOCKING THEM IS THE WORK". IT WAS WRONG.**
+      TRAI's TCCCPR requires every business sending commercial SMS to an Indian
+      number to register on an operator-run DLT portal: a **Principal Entity**
+      (PE-ID), a **sender header** (6 characters, alphabetic for
+      transactional), and **every message template** with its variables marked.
+      A body that does not match an approved template, or a header not
+      registered to that entity, is **blocked at the carrier** — no bounce, no
+      useful error, it just never arrives. Registration takes 7–21 business
+      days.
+    - **★ SO SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE
+      EMAIL (§24).** The header IS the merchant's registered identity, so
+      StoreMink cannot send on their behalf from a generic one.
+      `available: false` in `lib/notifications/channels.ts` must therefore NOT simply be
+      flipped: a channel switched on with no registration accepts a "yes" it
+      can never honour, which is the exact thing that flag exists to prevent.
+    - **★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates
+      are free text with `{{token}}` substitution, validated only for unknown
+      tokens. DLT is the opposite — the body is FIXED at registration and only
+      marked variables may vary. An SMS body cannot be authored in the
+      notification console the way an email body is; it is authored on the DLT
+      portal, approved there, and MIRRORED here with its template id.
+      `renderDltBody` is positional, not named, because `{#var#}` carries no
+      name: the portal approves a SHAPE, and mapping named event values onto it
+      is where a mirror drifts from a registration.
+    - **★ A SEGMENT IS A UNIT OF COST, AND ONE CHARACTER RE-PRICES A WHOLE
+      MESSAGE.** GSM-7 fits 160 characters; one character outside that set — an
+      emoji, curly quotes, or **₹** — forces the entire message to UCS-2 at 70.
+      A 150-character template costs one segment until someone types a rupee
+      sign, then three. `smsSegments` is what makes that visible before a
+      merchant is billed for it.
+    - **★ `bodyMatchesTemplate` ASKS WHAT THE CARRIER ASKS, FIRST.** A drifted
+      body is dropped silently, and "the customer never got the message" is not
+      a diagnosis anyone can act on.
+    - **⚠ DELIBERATELY NOT ENCODED:** the maximum variables per template, and
+      whether a variable may open a message. Operator documentation asserts
+      these inconsistently, and a rule invented here would reject templates the
+      merchant's own portal approved — leaving them unable to tell whose rule
+      they broke. What IS enforced is universal: the body must match apart from
+      its variables, and a variable may not END the message (which would leave
+      it with no fixed tail).
+    - **★ BYO PER STORE, decided 2026-08-15** (owner). Merchants connect their
+      own Twilio account in **Channels → Twilio SMS**; StoreMink never fronts
+      the carrier bill and never carries their spam risk. Schema in
+      `supabase/sms_01_schema.sql` (⚠ **not applied**): `store_sms_providers`
+      (the `store_payment_providers` shape — service-role only, auth token
+      AES-256-GCM under `PAYMENT_CRED_KEY`, encrypted rather than hashed
+      because it is PRESENTED on every request), `store_sms_templates`,
+      `sms_logs` and `notification_sms_queue`.
+    - **★ THE DLT FIELDS ARE NOT NULL, not optional extras.** A connection
+      stored without a sender header and Entity ID looks connected and delivers
+      nothing — the carrier drops it silently, so the merchant gets no error to
+      act on. `saveSmsCredentials` verifies by FETCHING the account rather than
+      sending (verifying by sending costs money and puts a test SMS on
+      somebody's phone) and refuses a suspended account, which authenticates
+      perfectly and delivers nothing. Pausing keeps the credentials; only
+      Disconnect discards them, and the confirm says so — the header and entity
+      id live on the DLT portal and cannot be retyped from memory.
+    - **★★ `lib/sms/send.ts` IS THE CHOKE POINT**, with `send-coverage.test.ts`
+      written at the SAME TIME as the channel rather than retroactively. The
+      email guard was written after eight scattered `resend.emails.send` calls
+      had accumulated recording nothing; there is no reason to rediscover that
+      on the second channel. It fails on a direct `twilioSendSms` call, on
+      anything reaching `api.twilio.com` outside the client, and if the choke
+      point stops writing a row for any of sent/failed/skipped.
+    - **★ THE CLIENT'S OUTCOME VOCABULARY IS THE POINT** (`lib/sms/twilio.ts`,
+      plain fetch, the razorpay.ts shape): `rejected` is a verdict, `unknown`
+      is a timeout or a 5xx where the message may well have gone. Collapsing
+      them is what makes a retry send someone the same message twice — §26's
+      refund rule, reused.
+    - **★ SMS LOGS ARE A SIXTH LOG** (`/dashboard/logs/sms-logs`), on the SAME
+      `activity` section, plus their own **Failures** source — separate from
+      Email because an SMS has a failure cause email never has (a body that
+      drifted from its registered template) and one chip cannot stand for two
+      remedies. The extra column is **segments**, because that is what the
+      merchant is billed. ⚠ The page says the thing merchants otherwise learn
+      the hard way: **a message a carrier blocked for not matching its DLT
+      template appears here as SENT.** Carriers drop those silently, so a
+      delivery report is the only place they exist.
+    - **★ TEMPLATES ARE A MIRROR, NOT AN EDITOR**
+      (`app/actions/sms-template-actions.ts`). Validated on save against the
+      pure rules; the variable mapping must match the template's shape exactly,
+      and names are checked against the SAME `variableNamesFor` the email
+      validator uses, so a token that works in an email body is not
+      mysteriously rejected here. Cost is derived on read, never stored, so it
+      cannot go stale against an edited body.
+    - **★★ `available` IS A PLATFORM STATEMENT, NOT A PER-STORE ONE**, and that
+      is what made flipping it to `true` safe. It says StoreMink supports the
+      channel, so the switch is CONFIGURABLE; whether a store can DELIVER is
+      three further conditions resolved at fan-out (`lib/sms/channel.ts`): a
+      connected + enabled provider, the merchant's switch, and a mirrored DLT
+      template for that event and audience.
+    - **★ `sms` GAINS NO FIELD ON THE EVENT REGISTRY.** There is no defensible
+      platform default: ON queues messages every carrier blocks, OFF makes the
+      field noise on all 38 events. The existence of an approved template IS
+      the real switch, since DLT registration for an event is an unambiguous
+      statement of intent.
+    - **★ SWITCHING SMS ON IS REFUSED WITHOUT A CONNECTION**, rather than
+      stored and ignored at send — the same call `canRequirePrepaid` makes
+      (§23). A setting that does nothing is worse than one you cannot set,
+      because the merchant believes they turned it on. `storeCanSendSms` fails
+      CLOSED for that reason; the suppression check fails OPEN, because a blip
+      must never stop order confirmations.
+    - **★★ THE WORKER RETRIES A REJECTION AND NEVER AN UNKNOWN**
+      (`lib/sms/worker.ts`). A rejection is a verdict — the message provably
+      did not go. An `unknown` (timeout, 5xx) may well have gone, and sending
+      again to find out is the one thing that cannot be undone: a phone buzzing
+      twice is worse than once. §26's refund rule, reused.
+    - **★★ STOP IS PER STORE, the opposite of `email_suppressions`.** That one
+      is global because a hard bounce bounces for everyone and the sending
+      domain is the PLATFORM's; an SMS opt-out withdraws consent from ONE
+      business, says nothing about whether the number works, and the header is
+      the merchant's own identity. Global would let one shopper's STOP to one
+      shop silence every other shop they buy from. **Checked at SEND, not at
+      enqueue** — someone can text STOP between the order and the drain, and
+      that message is the one that gets a complaint.
+    - **★ SMS RIDES THE EMAIL HEARTBEAT** rather than taking a new Cloud
+      Scheduler entry; `docs/cron-jobs.md` records a job being documented but
+      never created three times. It cannot take the email queues down with it.
+    - **★ THE SMS TAB IS ITS OWN EDITOR**, not the Subject/Body fields beside
+      it: a DLT body has no subject and is not authored here, so the generic
+      form would invite a merchant to write something a carrier silently drops.
+      It saves separately, to a different table under different validation, and
+      says so. Templates are loaded by the PAGE, not by `getNotificationDetail`
+      — one action calling another duplicates its gate and silently adds a
+      query to a read every caller thought it understood (a test caught exactly
+      that).
+    - **⚠ Not built:** an inbound webhook to RECEIVE STOP. `classifyInbound`
+      and `suppressPhone` exist and are tested, but nothing calls them yet — a
+      merchant's Twilio number needs a messaging webhook pointed at us. Until
+      then opt-out is enforced on send but can only be recorded by hand.
 
 ## 6. Commands
 

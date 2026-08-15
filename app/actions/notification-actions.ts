@@ -647,6 +647,9 @@ export interface NotificationDetail {
   variables: TemplateVariable[];
   audience: StoreAudience;
   canManage: boolean;
+  /** Whether this store has a working SMS connection — so the SMS tab can say
+   *  "nothing will send yet" instead of letting someone configure in the dark. */
+  smsConnected: boolean;
   error?: string;
 }
 
@@ -690,6 +693,7 @@ export async function getNotificationDetail(
       variables: variablesFor(def.key),
       audience: await getStoreNotificationAudience(),
       canManage: access.can("notifications", "manage"),
+      smsConnected: storeId ? await storeCanSendSms(storeId) : false,
     };
   } catch (error) {
     logError("notifications: detail read failed", error, { key });

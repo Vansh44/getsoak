@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireSectionAccess } from "../../../lib/access";
 import { getNotificationDetail } from "@/app/actions/notification-actions";
+import { getSmsTemplates } from "@/app/actions/sms-template-actions";
 import { eventFromSlug } from "@/lib/notifications/events";
 import { NotificationDetailView } from "./notification-detail-view";
 
@@ -32,7 +33,18 @@ export default async function NotificationDetailPage({
       ? audienceParam
       : undefined;
 
-  const detail = await getNotificationDetail(def.key);
+  // ★ COMPOSED HERE, not inside getNotificationDetail. One server action
+  // calling another duplicates its permission gate and — as a test caught —
+  // silently adds a query to a read every caller thought it understood. The
+  // page is the place that knows it needs both.
+  //
+  // Loaded server-side rather than fetched by the SMS tab on mount: the rest of
+  // this page already is, and a client fetch would add a loading flash plus an
+  // effect that setStates on arrival, which the React lint rightly rejects.
+  const [detail, sms] = await Promise.all([
+    getNotificationDetail(def.key),
+    getSmsTemplates(def.key),
+  ]);
   if ("error" in detail) {
     // An unknown key is a 404, not an error banner — the URL is wrong.
     if (detail.error === "Unknown notification.") notFound();
@@ -52,5 +64,11 @@ export default async function NotificationDetailPage({
     );
   }
 
-  return <NotificationDetailView detail={detail} scopedAudience={scoped} />;
+  return (
+    <NotificationDetailView
+      detail={detail}
+      smsTemplates={sms.templates}
+      scopedAudience={scoped}
+    />
+  );
 }

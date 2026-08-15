@@ -29,6 +29,8 @@ import {
   type NotificationDetail,
 } from "@/app/actions/notification-actions";
 import { CHANNELS, type ChannelKey } from "@/lib/notifications/channels";
+import { SmsTemplateEditor } from "./sms-template-editor";
+import type { SmsTemplate } from "@/app/actions/sms-template-actions";
 import { DIGESTS, type Digest } from "@/lib/notifications/events";
 import { renderTemplate } from "@/lib/notifications/template";
 import { sampleValuesFor } from "@/lib/notifications/variables";
@@ -115,9 +117,12 @@ function Field({
 
 export function NotificationDetailView({
   detail,
+  smsTemplates,
   scopedAudience,
 }: {
   detail: NotificationDetail;
+  /** The store's mirrored DLT templates for this event, loaded by the page. */
+  smsTemplates: SmsTemplate[];
   /** Set when the URL named an audience: the page then shows only that one and
    *  hides the switcher — you answered "who is this for" by choosing a tab. */
   scopedAudience?: "team" | "customer";
@@ -517,188 +522,205 @@ export function NotificationDetailView({
               </div>
             </div>
 
-            <div className="dash-card-body divide-y divide-[rgba(17,24,39,0.06)]">
-              {activeChannel === "email" && current.key === "team" && (
-                <>
-                  <Field label="Cc" hint="Optional. Comma-separated.">
-                    <input
-                      value={template.cc ?? ""}
-                      readOnly={readOnly}
-                      onChange={(e) =>
-                        setTemplate(activeChannel, { cc: e.target.value })
-                      }
-                      className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
-                    />
-                  </Field>
-                  <Field label="Bcc" hint="Optional. Comma-separated.">
-                    <input
-                      value={template.bcc ?? ""}
-                      readOnly={readOnly}
-                      onChange={(e) =>
-                        setTemplate(activeChannel, { bcc: e.target.value })
-                      }
-                      className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
-                    />
-                  </Field>
-                </>
-              )}
-
-              <Field
-                label={activeChannel === "email" ? "Subject" : "Title"}
-                hint="Clear it to fall back to the built-in wording."
-              >
-                <input
-                  value={template.subject ?? ""}
-                  readOnly={readOnly}
-                  placeholder={defaults?.subject}
-                  onChange={(e) =>
-                    setTemplate(activeChannel, { subject: e.target.value })
-                  }
-                  className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
-                />
-                <div className="mt-1.5 flex flex-wrap items-center gap-3">
-                  <p className="text-[12px] text-[var(--dash-text-3)]">
-                    Preview:{" "}
-                    <span className="font-medium">
-                      {renderTemplate(
-                        template.subject || defaults?.subject || "",
-                        samples,
-                        "text",
-                      )}
-                    </span>
-                  </p>
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => revert("subject")}
-                      disabled={template.subject === defaults?.subject}
-                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                      Reset to default
-                    </button>
-                  )}
-                </div>
-              </Field>
-
-              <Field
-                label="Message"
-                hint={
-                  activeChannel === "email"
-                    ? "HTML. Use <p>, <ul>/<li> and <strong> — the email styles them for you."
-                    : "Clear it to fall back to the built-in wording."
+            {/* ★ SMS GETS ITS OWN EDITOR, not the Subject/Body fields beside
+                it. A DLT body is fixed at registration and has no subject, so
+                the generic form would invite a merchant to author something a
+                carrier will silently drop. */}
+            {activeChannel === "sms" ? (
+              <SmsTemplateEditor
+                eventKey={notification.key}
+                audience={current.key}
+                variables={detail.variables}
+                readOnly={readOnly}
+                smsConnected={detail.smsConnected}
+                initial={
+                  smsTemplates.find((t) => t.audience === current.key) ?? null
                 }
-              >
-                <textarea
-                  value={template.body ?? ""}
-                  readOnly={readOnly}
-                  placeholder={defaults?.body}
-                  rows={activeChannel === "email" ? 12 : 3}
-                  onChange={(e) =>
-                    setTemplate(activeChannel, { body: e.target.value })
-                  }
-                  className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 font-mono text-[12.5px] text-[var(--dash-text)] outline-none"
-                />
+              />
+            ) : (
+              <div className="dash-card-body divide-y divide-[rgba(17,24,39,0.06)]">
+                {activeChannel === "email" && current.key === "team" && (
+                  <>
+                    <Field label="Cc" hint="Optional. Comma-separated.">
+                      <input
+                        value={template.cc ?? ""}
+                        readOnly={readOnly}
+                        onChange={(e) =>
+                          setTemplate(activeChannel, { cc: e.target.value })
+                        }
+                        className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
+                      />
+                    </Field>
+                    <Field label="Bcc" hint="Optional. Comma-separated.">
+                      <input
+                        value={template.bcc ?? ""}
+                        readOnly={readOnly}
+                        onChange={(e) =>
+                          setTemplate(activeChannel, { bcc: e.target.value })
+                        }
+                        className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
+                      />
+                    </Field>
+                  </>
+                )}
 
-                <div className="mt-1.5 flex flex-wrap items-center gap-3">
-                  {!readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => revert("body")}
-                      disabled={template.body === defaults?.body}
-                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
-                    >
-                      <RotateCcw className="h-3 w-3" />
-                      Reset to default
-                    </button>
-                  )}
-                  {/* A preview shows what you think you wrote; a real email in
-                      your own inbox shows what recipients will actually see. */}
-                  {!readOnly && activeChannel === "email" && (
-                    <button
-                      type="button"
-                      onClick={sendTest}
-                      disabled={isSending}
-                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-accent)] hover:underline disabled:opacity-50"
-                    >
-                      <Send className="h-3 w-3" />
-                      {isSending ? "Sending…" : "Send test to me"}
-                    </button>
-                  )}
-                </div>
-
-                <div className="mt-2 overflow-hidden rounded-md border border-[var(--dash-border)]">
-                  <div className="border-b border-[var(--dash-border)] bg-[var(--dash-surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">
-                    {activeChannel === "email"
-                      ? `Inbox preview — ${current.label.toLowerCase()}`
-                      : "Bell preview"}
-                  </div>
-                  {activeChannel === "email" ? (
-                    // An iframe so the email's own styles can't leak into the
-                    // dashboard (and the dashboard's can't flatter the email).
-                    <iframe
-                      title="Email preview"
-                      className="h-[420px] w-full border-0 bg-white"
-                      sandbox=""
-                      srcDoc={preview}
-                    />
-                  ) : (
-                    <div className="p-3">
-                      <div className="text-[13px] font-semibold text-[var(--dash-text)]">
+                <Field
+                  label={activeChannel === "email" ? "Subject" : "Title"}
+                  hint="Clear it to fall back to the built-in wording."
+                >
+                  <input
+                    value={template.subject ?? ""}
+                    readOnly={readOnly}
+                    placeholder={defaults?.subject}
+                    onChange={(e) =>
+                      setTemplate(activeChannel, { subject: e.target.value })
+                    }
+                    className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 text-[13px] text-[var(--dash-text)] outline-none"
+                  />
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                    <p className="text-[12px] text-[var(--dash-text-3)]">
+                      Preview:{" "}
+                      <span className="font-medium">
                         {renderTemplate(
                           template.subject || defaults?.subject || "",
                           samples,
                           "text",
                         )}
-                      </div>
-                      <div className="mt-0.5 text-[12.5px] text-[var(--dash-text-2)]">
-                        {renderTemplate(
-                          template.body || defaults?.body || "",
-                          samples,
-                          "text",
-                        )
-                          .split("\n")
-                          .filter(Boolean)
-                          .slice(0, 2)
-                          .join(" · ")}
-                      </div>
+                      </span>
+                    </p>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => revert("subject")}
+                        disabled={template.subject === defaults?.subject}
+                        className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Reset to default
+                      </button>
+                    )}
+                  </div>
+                </Field>
+
+                <Field
+                  label="Message"
+                  hint={
+                    activeChannel === "email"
+                      ? "HTML. Use <p>, <ul>/<li> and <strong> — the email styles them for you."
+                      : "Clear it to fall back to the built-in wording."
+                  }
+                >
+                  <textarea
+                    value={template.body ?? ""}
+                    readOnly={readOnly}
+                    placeholder={defaults?.body}
+                    rows={activeChannel === "email" ? 12 : 3}
+                    onChange={(e) =>
+                      setTemplate(activeChannel, { body: e.target.value })
+                    }
+                    className="w-full rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-2 font-mono text-[12.5px] text-[var(--dash-text)] outline-none"
+                  />
+
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3">
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        onClick={() => revert("body")}
+                        disabled={template.body === defaults?.body}
+                        className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-text-2)] hover:text-[var(--dash-text)] disabled:opacity-40 disabled:hover:text-[var(--dash-text-2)]"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Reset to default
+                      </button>
+                    )}
+                    {/* A preview shows what you think you wrote; a real email in
+                      your own inbox shows what recipients will actually see. */}
+                    {!readOnly && activeChannel === "email" && (
+                      <button
+                        type="button"
+                        onClick={sendTest}
+                        disabled={isSending}
+                        className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--dash-accent)] hover:underline disabled:opacity-50"
+                      >
+                        <Send className="h-3 w-3" />
+                        {isSending ? "Sending…" : "Send test to me"}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="mt-2 overflow-hidden rounded-md border border-[var(--dash-border)]">
+                    <div className="border-b border-[var(--dash-border)] bg-[var(--dash-surface-2)] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--dash-text-3)]">
+                      {activeChannel === "email"
+                        ? `Inbox preview — ${current.label.toLowerCase()}`
+                        : "Bell preview"}
                     </div>
-                  )}
-                </div>
-              </Field>
-
-              <Field
-                label="Variables"
-                hint="Click to copy. Anything else is rejected when you save."
-              >
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {detail.variables.map((variable) => (
-                    <button
-                      key={variable.name}
-                      type="button"
-                      title={`${variable.description} e.g. ${variable.sample}`}
-                      onClick={() =>
-                        navigator.clipboard
-                          ?.writeText(`{{${variable.name}}}`)
-                          .then(() =>
-                            toast.success(`Copied {{${variable.name}}}`),
+                    {activeChannel === "email" ? (
+                      // An iframe so the email's own styles can't leak into the
+                      // dashboard (and the dashboard's can't flatter the email).
+                      <iframe
+                        title="Email preview"
+                        className="h-[420px] w-full border-0 bg-white"
+                        sandbox=""
+                        srcDoc={preview}
+                      />
+                    ) : (
+                      <div className="p-3">
+                        <div className="text-[13px] font-semibold text-[var(--dash-text)]">
+                          {renderTemplate(
+                            template.subject || defaults?.subject || "",
+                            samples,
+                            "text",
+                          )}
+                        </div>
+                        <div className="mt-0.5 text-[12.5px] text-[var(--dash-text-2)]">
+                          {renderTemplate(
+                            template.body || defaults?.body || "",
+                            samples,
+                            "text",
                           )
-                          .catch(() => {})
-                      }
-                      className="rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-2 py-1 font-mono text-[11.5px] text-[var(--dash-text-2)] transition-colors hover:border-[var(--dash-border-hover)] hover:text-[var(--dash-text)]"
-                    >
-                      {`{{${variable.name}}}`}
-                    </button>
-                  ))}
-                </div>
-              </Field>
+                            .split("\n")
+                            .filter(Boolean)
+                            .slice(0, 2)
+                            .join(" · ")}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Field>
 
-              {channelDef && !channelDef.available && (
-                <p className="pt-3 text-[12.5px] text-[var(--dash-text-3)]">
-                  {channelDef.note}
-                </p>
-              )}
-            </div>
+                <Field
+                  label="Variables"
+                  hint="Click to copy. Anything else is rejected when you save."
+                >
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {detail.variables.map((variable) => (
+                      <button
+                        key={variable.name}
+                        type="button"
+                        title={`${variable.description} e.g. ${variable.sample}`}
+                        onClick={() =>
+                          navigator.clipboard
+                            ?.writeText(`{{${variable.name}}}`)
+                            .then(() =>
+                              toast.success(`Copied {{${variable.name}}}`),
+                            )
+                            .catch(() => {})
+                        }
+                        className="rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-2 py-1 font-mono text-[11.5px] text-[var(--dash-text-2)] transition-colors hover:border-[var(--dash-border-hover)] hover:text-[var(--dash-text)]"
+                      >
+                        {`{{${variable.name}}}`}
+                      </button>
+                    ))}
+                  </div>
+                </Field>
+
+                {channelDef && !channelDef.available && (
+                  <p className="pt-3 text-[12.5px] text-[var(--dash-text-3)]">
+                    {channelDef.note}
+                  </p>
+                )}
+              </div>
+            )}
           </section>
         </>
       )}
