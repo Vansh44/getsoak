@@ -126,7 +126,15 @@ export function PosNav({
   const badgeFor = (key: PosNavKey) => (key === "pickups" ? ordersWaiting : 0);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white">
+    <div
+      className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white"
+      // ★ Stops iOS rubber-band overscroll from revealing the page behind the
+      // register. The body is near-white (globals.css), so a bounce on a till
+      // flashes a white band under a dark full-screen app. Scoped to this
+      // element rather than html/body: globally it would also kill
+      // pull-to-refresh on the storefront, which shoppers do use.
+      style={{ overscrollBehavior: "none" }}
+    >
       {/* ── The rail (lg and up) ─────────────────────────────────────────── */}
       <nav
         aria-label="Register"

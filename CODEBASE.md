@@ -1205,6 +1205,23 @@ wholesip/
      Adding a class is safe because no rule in the file is a bare element
      selector — they are all `.dash-*`, so scoping an overlay cannot restyle its
      internals by accident. Keep it that way.
+   - **★★ `100vh` IS THE WRONG UNIT ON iOS — use `dvh` for anything full-height.**
+     Safari resolves `100vh` to the LARGE viewport (the height the page would
+     have with the toolbars hidden), so with the address bar on screen the
+     element is TALLER than what is visible. `html, body { min-height }` in
+     `globals.css` had it, and the POS shell is `h-dvh` — so on an iPad the two
+     disagreed by exactly the toolbar's height and the register broke four ways
+     at once: the page became scrollable, the nav rail lost its top, the product
+     grid lost its bottom row, and the leftover strip of body below the shell
+     rendered in the near-white `--background`. One cause, four symptoms, which
+     is why it read as "the layout is broken" rather than as a height bug.
+     `min-height: 100vh` stays FIRST as the fallback, with `100dvh` after it.
+     ⚠ **Chrome on desktop cannot reproduce this** — `vh` and `dvh` are equal
+     there — so a full-height change is only really tested on a device.
+     The POS shell additionally sets `overscroll-behavior: none` so an iOS
+     rubber-band bounce cannot reveal that near-white body behind a dark
+     full-screen till. Scoped to that element, NOT html/body: globally it would
+     also disable pull-to-refresh on the storefront.
    - **⚠ `dashboard.css` IS UNLAYERED, so it beats every Tailwind utility**
      regardless of specificity (utilities live in `@layer utilities`). That is
      fine for rules that predate the utilities at a call site, but a NEW base

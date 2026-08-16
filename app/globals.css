@@ -39,7 +39,22 @@ body {
      breaks `position: sticky` everywhere (e.g. the help-centre docs rails). */
   overflow-x: clip;
   color: #111827;
+  /* ★★ `100vh` IS THE WRONG UNIT ON iOS, and it broke the iPad register.
+     Safari resolves `100vh` to the LARGE viewport — the height the page would
+     have if the toolbars were hidden — so with the address bar on screen the
+     body is TALLER than what you can actually see. The POS shell is `h-dvh`
+     (the real, visible height), so the two disagreed by exactly the toolbar's
+     height: the page became scrollable, the register's rail lost its top and
+     the product grid lost its bottom row, and the leftover strip of body below
+     the shell rendered in the default white.
+
+     `dvh` tracks the visible viewport as the toolbars come and go, which is
+     what a full-height app shell means everywhere else. The `100vh` line stays
+     FIRST as the fallback for anything that doesn't know `dvh` — a browser that
+     ignores the second declaration keeps today's behaviour rather than
+     collapsing to auto height. */
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
