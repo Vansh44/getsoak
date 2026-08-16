@@ -59,6 +59,7 @@ import {
 import type { PosTender } from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { PosScreen } from "./pos-screen";
+import { POS_POLL_MS, usePoll } from "./use-poll";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -163,6 +164,36 @@ export function CounterClient({
       else setQueue(res.orders);
     });
   }, []);
+
+  // ── The queue, kept live ──────────────────────────────────────────────────
+  // A collection is created by a SHOPPER, so nothing on this screen makes one
+  // appear — without this the counter only learns about an order when somebody
+  // reloads the page, which is what a shop actually hit.
+  //
+  // ★ QUIET, AND NOT A TRANSITION. `start()` sets `pending`, which draws the
+  // spinner in the search box — a background re-read that flashes "searching…"
+  // every thirty seconds is worse than no refresh, because it looks like the
+  // till is doing something the cashier didn't ask for. Errors are swallowed
+  // for the same reason: a toast nobody triggered, on a repeating timer, is how
+  // a shop learns to dismiss toasts without reading them. The next explicit
+  // action still surfaces the failure.
+  //
+  // ★ SUSPENDED WHILE THE CASHIER IS MID-ACTION. `settle()` removes a row
+  // optimistically, so a poll landing between the tap and the server's answer
+  // would put it back — under the finger of someone who has just handed the
+  // goods over. Searching pauses it too: the queue isn't on screen, so re-reading
+  // it is a request for nothing.
+  const idle =
+    !busy && !tendering && !confirmUnprepared && !searching && !pending;
+  usePoll(
+    useCallback(() => {
+      void getPickupQueue().then((res) => {
+        if (!res.error) setQueue(res.orders);
+      });
+    }, []),
+    POS_POLL_MS,
+    idle,
+  );
 
   /**
    * One query, resolved against everything this operator may look at.

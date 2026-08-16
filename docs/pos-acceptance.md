@@ -1074,6 +1074,40 @@ money goes under the same setting. A **prepaid** collection is unaffected either
 way — no money changes hands, so blocking it would refuse a customer their own
 paid-for goods.
 
+**PS-8.33 ★★ — Handing over an unpacked order is possible, not silent**
+As a cashier, find a collection still in "To prepare" and tap **Hand over**.
+**Expect:** a dialog — "Nobody has checked ORD… off as packed. Do you have the
+goods to hand over now?" — with **Not yet** and **Yes, hand over**. "Not yet"
+changes nothing. "Yes" completes the collection.
+**Was:** it completed on the FIRST tap, silently, so an order nobody had packed
+could leave the "To prepare" queue without being done.
+**Why it is not simply refused:** marking ready is manager-only, so a hard gate
+strands a cashier alone at the counter, unable to serve a customer standing in
+front of them — and someone who ordered online then walked in early is an
+ordinary collection, not an error.
+
+**PS-8.34 ★ — A prepared order is never nagged**
+Hand over an order already marked ready.
+**Expect:** no dialog, straight through — and with a money-due order, straight to
+the tender pad. A confirmation on the ordinary path is one people learn to
+dismiss unread, which would make it useless on the path that needs it.
+
+**PS-8.35 ★ — The skip leaves a trace with no new column**
+Hand over an unprepared order, then read the row in `orders`.
+**Expect:** `pickup_ready_at` equals `collected_at` exactly — both written by the
+same statement. On an order that WAS marked ready first, `pickup_ready_at` keeps
+its earlier value. That equality is how "collected without being prepared" is
+answerable afterwards, and it stops the shopper's tracker showing a collection
+that skipped a step it claims to have.
+
+**PS-8.36 ★ — `fulfilment.collectUnprepared` = manager_only**
+Set it to "Only a manager" and repeat PS-8.33 as a cashier.
+**Expect:** refused with "Ask a manager to check it off before handing it over" —
+and **no dialog at all**, because a prompt this cashier could never satisfy is
+worse than a plain refusal. As a manager the dialog appears and works.
+**Default is "Anyone at the till"**, which is both today's behaviour and the
+right answer for a shop where one person serves and packs.
+
 **PS-8.18 ★ — The hold starts when it's READY**
 Set ready = 3 days, hold = 5 days, place a pickup order.
 **Expect:** `pickup_expires_at` is 8 days out, not 5. Otherwise a slow shop eats
@@ -1880,6 +1914,33 @@ read "0 items" and offered **Hand over** — the server refused correctly, so no
 money was ever lost, but the cashier tapped expecting to hand goods over and got
 an error about payment.
 
+**PS-19.21 ★★ — One hamburger, every width**
+Open any POS screen on a desktop, a landscape iPad and a phone.
+**Expect:** no 76px rail at any size. A 3-line button top-left opens a slide-over
+holding every destination this operator may reach, with the collections count on
+the rows AND on the closed button. Esc closes it; so does navigating, including
+via the browser's back button. The top bar names the screen and shows the shop
+and who is signed in (the name drops on a phone).
+**Why:** the register is HORIZONTALLY constrained — the product grid and the cart
+split the width — so on an iPad the rail cost a column of products on the one
+screen a cashier is in all day, to save a tap on screens visited a few times a
+shift.
+**Also check:** the screens that are not the register no longer draw their own
+title bar under the top bar; their subtitle ("3 shown", a location name) now sits
+above the content.
+
+**PS-19.22 ★★ — A new collection appears without a refresh**
+Sit on `/pos/sell` with the tab focused. Place a pickup order on the storefront.
+**Expect:** within ~30 seconds the hamburger's green count goes up, with no
+reload. Open `/pos/pickups` and the row is in "To prepare" without a refresh.
+**Then:** switch to another browser tab for a few minutes and come back — the
+count is right immediately on return, not after another wait.
+**Was:** a collection is created by a SHOPPER, so nothing on the till caused a
+re-render; the queue and badge only moved when someone reloaded.
+**Must NOT happen:** the search-box spinner flashing on its own every 30s; an
+error toast nobody triggered; a row you just tapped reappearing under your finger
+mid-hand-over; requests continuing while the tab is hidden.
+
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
 **Expect:** no Returns entry in the rail (it is gated on `refund`, the only
@@ -2217,7 +2278,11 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                                 |
 | ~~**Collections were unreachable with an empty queue**~~           | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                    |
 | ~~**Two search screens for one counter moment**~~                  | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/pickups`, old paths 307                                                                                                                  |
-| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The rail/drawer is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                           |
+| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The nav is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                                   |
+| ~~**The rail cost a column of products on an iPad**~~              | **FIXED** (PS-19.21). The 76px `lg` rail is gone — one hamburger drawer at every width. The register is horizontally constrained, so the tap it saved was the wrong thing to optimise                                                                  |
+| ~~**A new collection needed a manual page refresh**~~              | **FIXED** (PS-19.22). A collection is created on the storefront, so nothing at the counter made it appear. The badge and the queue poll every 30s, visible-tab only, suspended mid-action                                                              |
+| ~~**A cashier could hand over an order nobody packed**~~           | **FIXED** (PS-8.33–8.36). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement, gated by `fulfilment.collectUnprepared` — refusing outright would strand a cashier alone at the counter                 |
+| ~~**Every POS sale failed on insert**~~                            | **FIXED**. `placePosSale` wrote `store_credit_used: null` into a `NOT NULL DEFAULT 0` column, so every sale using no credit failed from the moment `147fe24` deployed. `OrderInsert` + `satisfies` makes it a compile error                            |
 | **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                 |
 | **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                          |
 | ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                                 |

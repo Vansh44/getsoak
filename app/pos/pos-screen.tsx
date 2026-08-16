@@ -8,11 +8,18 @@
 //
 // There is no back button, deliberately. Back-to-/pos was the only way out of
 // these screens, which made every switch a three-tap trip through a page whose
-// entire content was "You're signed in". The rail (or the hamburger, below
-// `lg`) is the way out now, and it goes anywhere in one tap.
+// entire content was "You're signed in". The hamburger is the way out now, and
+// it goes anywhere in one tap.
 //
-// The title is `lg`-only: below that the nav's own top bar already names the
-// screen, and two titles stacked on a phone is just lost height.
+// ★ THE TITLE IS NOT DRAWN VISIBLY ANY MORE. It used to render on `lg`, where
+// the nav had a rail instead of a top bar; now the top bar is at every width, so
+// this would be a second bar stacked directly under it saying the same word —
+// every `title` passed in is its nav label. It stays as an `sr-only` h1,
+// because the visible one is in the nav, outside this landmark, and a page with
+// no heading is a page a screen-reader user cannot orient in.
+//
+// The SUBTITLE does still render: "3 shown", a location name — the part the nav
+// cannot know. It sits above the content rather than in a bar of its own.
 
 export function PosScreen({
   title,
@@ -38,28 +45,25 @@ export function PosScreen({
 
   return (
     <>
-      {/* With actions the header has to render at every size; without them it
-          would be an empty bar on a phone, so it waits for the wide layout. */}
-      <header
-        className={`h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4 ${
-          actions ? "flex" : "hidden lg:flex"
-        }`}
-      >
-        <h1 className="hidden shrink-0 text-lg font-semibold lg:block">
-          {title}
-        </h1>
-        {subtitle && (
-          <span className="hidden truncate text-sm text-white/45 lg:block">
-            {subtitle}
-          </span>
-        )}
-        {actions && (
+      {/* Only when there is something to put in it. An empty bar under the nav's
+          own is pure lost height, and on a till height is the product grid. */}
+      {actions && (
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
           <div className="ml-auto flex items-center gap-2">{actions}</div>
-        )}
-      </header>
+        </header>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={`${body} p-4`}>{children}</div>
+        <div className={`${body} p-4`}>
+          {/* Not shown, but the page still needs a heading: the visible title
+              lives in the nav's top bar, which is outside this landmark, so
+              without this a screen reader lands on a document with no h1. */}
+          <h1 className="sr-only">{title}</h1>
+          {subtitle && (
+            <p className="mb-3 truncate text-sm text-white/45">{subtitle}</p>
+          )}
+          {children}
+        </div>
       </div>
     </>
   );

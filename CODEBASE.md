@@ -2810,10 +2810,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
         five screens had a back arrow to `/pos` and nothing else, in three
         different hand-rolled forms; Stock → Drawer was three taps through a
         page whose entire content was "You're signed in".
-      - **★ RAIL ON WIDE, DRAWER ON NARROW.** A hidden menu costs a tap on every
-        switch and till work is muscle memory, so above `lg` the destinations
-        stay on screen (76px rail); below it the same list is the hamburger
-        drawer, because a portrait tablet cannot spare the product grid.
+      - **★★ ONE HAMBURGER, EVERY WIDTH** (owner's call, 2026-08-16). It shipped
+        as a 76px rail above `lg` and a drawer below it, reasoning that a hidden
+        menu costs a tap on every switch and till work is muscle memory. In use
+        that traded wrong: the register is HORIZONTALLY constrained — the product
+        grid and the cart split the width — so on an iPad the rail was costing a
+        COLUMN OF PRODUCTS on the one screen a cashier spends all day in, while
+        the tap it saved was for screens visited a few times a shift. The rail is
+        gone; the drawer serves both, which also leaves ONE navigation to reason
+        about instead of two that could drift.
+      - **★ THE TOP BAR NOW OWNS THE TITLE**, at every width rather than below
+        `lg`, and carries the location plus who is signed in (which used to live
+        in the rail's footer — on a shared till that is not decoration). So
+        `PosScreen` stopped drawing its own `lg` title: it would have been a
+        second bar stacked directly under this one saying the same word, since
+        every `title` passed in IS its nav label. It keeps the SUBTITLE, the part
+        the nav cannot know, and the title survives as an `sr-only` h1 — the
+        visible one is outside that landmark, and a page with no heading is one a
+        screen-reader user cannot orient in. `PosScreen`'s header now renders
+        only when a screen passes `actions`, which none currently do.
       - **★ `lib/pos/nav.ts` IS THE REGISTRY** — pure and icon-free (icons live
         in the client component, keyed by `key`, the `lib/logs/failure-types.ts`
         split) so a server component and a test can import it. `posNavFor(role)`
@@ -2888,9 +2903,30 @@ group, span}` (span = columns of the 4-wide desktop grid),
         exact shape that must never be publicly callable. `pickup-count.test.ts`
         pins its predicate to `getPickupQueue`'s, because a badge that disagrees
         with the list under it is worse than no badge.
+      - **★★ AND IT IS POLLED, BECAUSE NOTHING AT THE COUNTER CREATES ONE**
+        (`app/pos/use-poll.ts`, 30s). A collection is placed on the STOREFRONT,
+        so no action on the till makes it appear — the queue and the badge only
+        moved when a human reloaded the page, which is what a shop actually hit.
+        `getPickupCount` is the polled action: it re-resolves the operator (ids
+        never come from the client) and returns the same single indexed COUNT.
+        Four rules keep it from being a nuisance: it **only ticks while the tab
+        is VISIBLE** — a till is left open all night and background timers keep
+        running, so without that every closed shop spends the small hours making
+        requests nobody reads — and it fires once on becoming visible again;
+        `null` from a lapsed session means **keep the last number** rather than
+        flicker to zero, which reads as work vanishing; the queue's own poll is
+        **quiet** (no `useTransition`, so it never flashes the search spinner,
+        and its errors are swallowed — a toast nobody triggered on a repeating
+        timer teaches people to dismiss toasts unread); and it is **suspended
+        while the cashier is mid-action**, because `settle()` removes a row
+        optimistically and a poll landing between the tap and the answer would
+        put it back under their finger. A poll rather than a socket on purpose:
+        one COUNT that changes a few times an hour does not justify a held
+        connection per till, a reconnect story, and a server that tracks which
+        locations are watching. That is the seam to replace if it ever does.
       - `app/pos/pos-screen.tsx` is the shared chrome for every screen that is
-        not the register (title, subtitle, scroll body). **No back button**, by
-        design — the rail goes anywhere in one tap, and back-to-`/pos` was what
+        not the register (subtitle, scroll body). **No back button**, by
+        design — the hamburger goes anywhere in one tap, and back-to-`/pos` was what
         made every switch a three-tap trip. The ONE exception is the return
         detail: that is a step in a flow, not a destination. Three screens also
         stopped painting `bg-neutral-950` over the shell's `bg-[#0b0f14]`, and
