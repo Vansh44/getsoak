@@ -73,6 +73,16 @@ export async function startInvoicePayment(input: {
     return { ok: false, error: "We couldn't find that invoice." };
   }
 
+  // ★★ AI credits were paid in their own one-time Razorpay checkout. They have
+  // an invoice for accounting, not an outstanding obligation. Even if a future
+  // UI/query regression displays one here, never create another order for it.
+  if (invoice.kind !== "subscription") {
+    return {
+      ok: false,
+      error: "That one-time purchase is already settled.",
+    };
+  }
+
   if (invoice.status === "paid") {
     return { ok: false, error: "That invoice is already paid." };
   }
@@ -259,7 +269,8 @@ export async function confirmInvoicePayment(input: {
 }
 
 /**
- * Invoices this store still owes, newest first — what a "pay now" surface lists.
+ * Subscription invoices this store still owes, newest first — what a "pay now"
+ * surface lists. One-time AI-credit invoices are receipts, never plan debt.
  *
  * Excludes `uncollectible` and `void`: both are closed decisions, and offering
  * to pay one would take money for a period the merchant never received.
@@ -284,6 +295,7 @@ export async function listPayableInvoices(
         .where(
           and(
             eq(billingInvoices.storeId, storeId),
+            eq(billingInvoices.kind, "subscription"),
             inArray(billingInvoices.status, ["open", "processing"]),
           ),
         )

@@ -82,9 +82,14 @@ async function settlePurchase(
         )
         .returning({ id: aiCreditPurchases.id }),
     );
-    // The status update lost the race (already paid) — the credits step below
-    // is idempotent anyway, but nothing to do if we didn't claim the row.
-    if (claimed.length === 0) return;
+    // The status update lost the race (already paid). A concurrent winner may
+    // still be between granting credits and issuing the receipt, or a previous
+    // best-effort invoice write may have failed. Retrying the paid-finalization
+    // is idempotent and repairs that document without granting credits twice.
+    if (claimed.length === 0) {
+      await issueCreditInvoice(purchase.id);
+      return;
+    }
   } catch (err) {
     console.error(
       "settlePurchase (status):",
@@ -396,6 +401,10 @@ export async function confirmCreditPurchase(
   const purchase = purchaseRows[0];
   if (!purchase) return { error: "Purchase not found." };
   if (purchase.status === "paid") {
+    // A dropped response can make the browser repeat confirmation after the
+    // purchase committed. Re-issue idempotently so a transient document write
+    // self-heals; the credits ledger itself remains untouched.
+    await issueCreditInvoice(purchase.id);
     return { success: true, creditsAdded: purchase.credits };
   }
   if (purchase.status !== "pending" || !purchase.rzp_order_id) {

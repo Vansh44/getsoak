@@ -842,7 +842,10 @@ wholesip/
 │   │                          # failure, because a blip must never invent a tax
 │   │                          # charge; amountDueForInvoice returns NULL rather
 │   │                          # than the full total, since guessing when credit
-│   │                          # may be applied would double-charge.
+│   │                          # may be applied would double-charge;
+│   │                          # finalizePaidAiCreditsInvoice atomically issues
+│   │                          # a one-time credit receipt AS PAID — it never
+│   │                          # enters subscription collection.
 │   │                          # ★★ manual-pay.ts (server-only): paying an open
 │   │                          # invoice on session — TODAY the only way a
 │   │                          # renewal is paid, since automatic collection is
@@ -851,7 +854,9 @@ wholesip/
 │   │                          # UNCOLLECTIBLE/VOID one: those belong to a cycle
 │   │                          # the merchant was already downgraded for, so
 │   │                          # taking money would charge for service never
-│   │                          # received. Paying during grace restores the plan
+│   │                          # received. The query and start guard both exclude
+│   │                          # AI-credit receipts, preventing a second charge
+│   │                          # even if one layer regresses. Paying during grace restores the plan
 │   │                          # AT ONCE via advanceAfterPayment — the SAME
 │   │                          # advance the worker uses, never a second copy.
 │   │                          # ★★ enrol.ts (server-only): a merchant's FIRST
@@ -1143,7 +1148,9 @@ wholesip/
 │                              # legal serials beyond 9,999) and canonicalizes the
 │                              # scheduled-plan constraint in both environments;
 │                              # 0003 adds orders.pickup_prepared_at so actual
-│                              # packing is distinct from the checkout promise.
+│                              # packing is distinct from the checkout promise;
+│                              # 0004 repairs paid AI-credit invoices left open
+│                              # and therefore falsely presented as plan debt.
 ├── scripts/
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
@@ -1876,7 +1883,15 @@ running subscription is how you get chargebacks.
       (env `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`; totally separate from a
       store's BYO gateway) → `confirmCreditPurchase` (HMAC verify → paid →
       `add_ai_credits`); dropped callbacks self-heal via reconcile-on-read on
-      page load (no webhook in v1). Operators grant free credits from the
+      page load (no webhook in v1). The linked accounting invoice is finalized
+      directly as `paid` after capture: it is a receipt for the same one-time
+      checkout, never a collectible subscription invoice. The Plans debt query
+      filters `kind = 'subscription'`, and the payment starter repeats that
+      guard so a display regression cannot double-charge a credit pack. Migration
+      `20260816_0004_ai_credit_invoice_paid_repair` corrects already-paid packs
+      whose invoices were historically left `open`; repeated payment confirmation
+      retries this idempotent receipt transition, so a transient document write
+      self-heals without granting credits twice. Operators grant free credits from the
       stores console (`grantAiCredits`, superadmin-only, audited with the
       operator's email as the ledger ref) and see per-store AI used / credit
       balance / gateway state (batch-enriched `listAllStores`) plus a History
@@ -5647,9 +5662,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         sweep. Hooking only the confirm path would leave every reconciled purchase
         without a document, which is exactly the case where the merchant is
         already unsure what happened. Pinned by a mutation.
-      - **★ DRAFT AT PURCHASE, FINALIZED ON PAYMENT** — the enrolment rule, so an
-        abandoned checkout never burns a number. And the draft is raised AFTER the
-        gateway order, so a purchase that died there leaves no document at all.
+      - **★ DRAFT AT PURCHASE, FINALIZED DIRECTLY AS PAID ON PAYMENT** — the
+        enrolment issue-number rule, but not its collection state: Razorpay already
+        captured this one-time checkout, so `open` would falsely expose the same
+        money as debt. The draft is raised AFTER the gateway order, so a purchase
+        that died there leaves no document at all. Repeat confirmation retries this
+        transition idempotently if the first best-effort document write failed.
       - **★ The link lives on the PURCHASE** (`ai_credit_purchases.invoice_id`,
         UNIQUE where not null), not on the invoice: `billing_invoices` is the
         generic document table and already carries one product-specific column, so

@@ -25,7 +25,7 @@ const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
   loadInvoiceParties: vi.fn(),
   createAiCreditsInvoice: vi.fn(),
-  finalizeInvoice: vi.fn(),
+  finalizePaidAiCreditsInvoice: vi.fn(),
 }));
 vi.mock("./invoice-store", () => store);
 
@@ -63,7 +63,10 @@ beforeEach(() => {
     finalizedAt: null,
     invoiceRef: null,
   });
-  store.finalizeInvoice.mockResolvedValue({ id: "inv-1", status: "open" });
+  store.finalizePaidAiCreditsInvoice.mockResolvedValue({
+    id: "inv-1",
+    status: "paid",
+  });
 });
 
 describe("draftCreditInvoice", () => {
@@ -77,7 +80,7 @@ describe("draftCreditInvoice", () => {
 
   it("★★ does NOT finalize — an unpaid purchase must not burn a GST number", async () => {
     await draftCreditInvoice(args);
-    expect(store.finalizeInvoice).not.toHaveBeenCalled();
+    expect(store.finalizePaidAiCreditsInvoice).not.toHaveBeenCalled();
   });
 
   it("★ links it to the purchase, so settling can find it", async () => {
@@ -112,10 +115,13 @@ describe("draftCreditInvoice", () => {
 });
 
 describe("issueCreditInvoice", () => {
-  it("finalizes the linked draft", async () => {
+  it("finalizes the linked draft directly as paid", async () => {
     dbHolder.current = makeDbMock({ selectQueue: [[{ invoiceId: "inv-1" }]] });
     await issueCreditInvoice("pur-1", NOW);
-    expect(store.finalizeInvoice).toHaveBeenCalledWith("inv-1", NOW);
+    expect(store.finalizePaidAiCreditsInvoice).toHaveBeenCalledWith(
+      "inv-1",
+      NOW,
+    );
   });
 
   it("★★ does NOTHING for a purchase with no invoice", async () => {
@@ -124,13 +130,13 @@ describe("issueCreditInvoice", () => {
     // sale, which is worse than no number.
     dbHolder.current = makeDbMock({ selectQueue: [[{ invoiceId: null }]] });
     await issueCreditInvoice("pur-old", NOW);
-    expect(store.finalizeInvoice).not.toHaveBeenCalled();
+    expect(store.finalizePaidAiCreditsInvoice).not.toHaveBeenCalled();
   });
 
   it("★ does nothing when the purchase is gone", async () => {
     dbHolder.current = makeDbMock({ selectQueue: [[]] });
     await issueCreditInvoice("pur-x", NOW);
-    expect(store.finalizeInvoice).not.toHaveBeenCalled();
+    expect(store.finalizePaidAiCreditsInvoice).not.toHaveBeenCalled();
   });
 
   it("★★ NEVER THROWS — the credits are already granted by this point", async () => {

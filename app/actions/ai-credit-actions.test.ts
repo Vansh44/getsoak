@@ -140,14 +140,15 @@ describe("confirmCreditPurchase", () => {
     expect(invoice.issueCreditInvoice).not.toHaveBeenCalled();
   });
 
-  it("★ issues nothing for an ALREADY-paid purchase", async () => {
-    // Idempotent: re-confirming reports success without re-issuing anything.
+  it("★ retries the receipt for an ALREADY-paid purchase", async () => {
+    // Idempotent: re-confirming cannot grant credits twice, but it does repair
+    // a receipt whose best-effort write failed after the purchase committed.
     dbHolder.current = makeDbMock({
       selectQueue: [[pendingPurchase({ status: "paid" })]],
     });
     const res = await confirmCreditPurchase("pur-1", "pay_1", "sig");
     expect("success" in res).toBe(true);
-    expect(invoice.issueCreditInvoice).not.toHaveBeenCalled();
+    expect(invoice.issueCreditInvoice).toHaveBeenCalledWith("pur-1");
   });
 
   it("★ refuses a purchase belonging to another store", async () => {

@@ -27,7 +27,7 @@ import { logError } from "@/lib/observability/logger";
 import { buildAiCreditsInvoice } from "./invoice";
 import {
   createAiCreditsInvoice,
-  finalizeInvoice,
+  finalizePaidAiCreditsInvoice,
   loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
@@ -98,8 +98,10 @@ export async function draftCreditInvoice(input: {
  * by reconciliation without a document, which is precisely the case where the
  * merchant is already unsure what happened.
  *
- * ★ `finalizeInvoice` claims on `finalized_at IS NULL`, so a purchase settled
- * twice issues one document.
+ * ★ `finalizePaidAiCreditsInvoice` issues and marks the document paid in the
+ * same idempotent transition. The checkout already captured this one-time
+ * purchase; exposing it as an open subscription debt would invite a second
+ * charge.
  */
 export async function issueCreditInvoice(
   purchaseId: string,
@@ -120,7 +122,7 @@ export async function issueCreditInvoice(
     // worse than no number.
     if (!invoiceId) return;
 
-    await finalizeInvoice(invoiceId, now);
+    await finalizePaidAiCreditsInvoice(invoiceId, now);
   } catch (err) {
     logError("billing.issue_credit_invoice", err, { purchaseId });
   }

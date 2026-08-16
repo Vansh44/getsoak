@@ -12,7 +12,7 @@
 //   • paying during grace restores the plan AT ONCE, not at the next cron tick.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { makeDbMock } from "@/app/actions/_test-helpers";
+import { makeDbMock, sqlParamValues } from "@/app/actions/_test-helpers";
 
 vi.mock("@/lib/observability/logger", () => ({
   logError: vi.fn(),
@@ -50,7 +50,11 @@ vi.mock("./collect", () => collect);
 const worker = vi.hoisted(() => ({ advanceAfterPayment: vi.fn() }));
 vi.mock("./renewal-worker", () => worker);
 
-import { confirmInvoicePayment, startInvoicePayment } from "./manual-pay";
+import {
+  confirmInvoicePayment,
+  listPayableInvoices,
+  startInvoicePayment,
+} from "./manual-pay";
 
 const STORE = "store-1";
 const INVOICE = "inv-1";
@@ -114,6 +118,19 @@ describe("startInvoicePayment", () => {
     invStore.getInvoice.mockResolvedValue(openInvoice({ storeId: "other" }));
     const res = await startInvoicePayment(args);
     expect(res.ok).toBe(false);
+    expect(collect.beginAttempt).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ refuses an AI-credit receipt before creating another order", async () => {
+    invStore.getInvoice.mockResolvedValue(
+      openInvoice({ kind: "ai_credits", cycleSeq: null }),
+    );
+    const res = await startInvoicePayment(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/one-time purchase.*settled/i);
+    expect(invStore.amountDueForInvoice).not.toHaveBeenCalled();
     expect(collect.beginAttempt).not.toHaveBeenCalled();
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
   });
@@ -211,6 +228,16 @@ describe("startInvoicePayment", () => {
       "att-1",
       "failed",
       expect.anything(),
+    );
+  });
+});
+
+describe("listPayableInvoices", () => {
+  it("★★ queries subscription debt only, never one-time credit receipts", async () => {
+    seed([[]]);
+    await listPayableInvoices(STORE);
+    expect(sqlParamValues(dbHolder.current.calls.where[0])).toEqual(
+      expect.arrayContaining([STORE, "subscription", "open", "processing"]),
     );
   });
 });

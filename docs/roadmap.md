@@ -762,19 +762,19 @@ UPI or e-mandate — every amount change (tier, period, locations) goes through
 dead for most Indian merchants, and add-ons are deprecated. StoreMink computes
 the amount; the gateway only collects it.
 
-| Phase                                                | State                                 |
-| ---------------------------------------------------- | ------------------------------------- |
-| 1 · Architecture + the 13 defects it replaces        | ✅ done                               |
-| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                 |
-| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                               |
-| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                               |
-| 4 · Signup enrolment on the new system               | ✅ done                               |
-| 5 · Buying an extra location on the new system       | ✅ done                               |
-| 6 · Webhook processor off the request path           | ⏳ reconciliation is rollout fallback |
-| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)         |
-| 8 · AI-credit invoicing                              | ✅ done                               |
-| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                    |
-| 10 · Autopay — mandate capture + recurring charge    | 🧪 **enabled for verification**       |
+| Phase                                                | State                                                                |
+| ---------------------------------------------------- | -------------------------------------------------------------------- |
+| 1 · Architecture + the 13 defects it replaces        | ✅ done                                                              |
+| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                                                |
+| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                                                              |
+| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                                                              |
+| 4 · Signup enrolment on the new system               | ✅ done                                                              |
+| 5 · Buying an extra location on the new system       | ✅ done                                                              |
+| 6 · Webhook processor off the request path           | ⏳ reconciliation is rollout fallback                                |
+| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)                                        |
+| 8 · AI-credit invoicing                              | ✅ done — one-time receipts finalize paid; legacy open rows repaired |
+| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                                                   |
+| 10 · Autopay — mandate capture + recurring charge    | 🧪 **enabled for verification**                                      |
 
 **★ AUTOPAY IS ENABLED FOR VERIFICATION, AND THE MANUAL SYSTEM REMAINS.**
 `RECURRING_CHARGE_VERIFIED` is true as of 2026-08-16 for test-mode staging and
