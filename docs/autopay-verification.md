@@ -60,8 +60,10 @@ is the "promise a charge that never comes" failure again.
 
 ## How the mandate is captured
 
-`startEnrolment` creates a Razorpay customer and an AUTHORISATION order instead
-of a plain one. All three of these must hold:
+Paid enrolment begins only from a store's **Plans & Billing** dashboard; signup
+always creates a Free store and never opens Razorpay. `startEnrolment` creates a
+Razorpay customer and an AUTHORISATION order instead of a plain one. All three
+of these must hold:
 
 - `RECURRING_CHARGE_VERIFIED` is true (we can actually collect),
 - `mandateFitsGateway(size)` — above ₹99,999 the authorisation order itself is
@@ -83,8 +85,8 @@ that merchant every cycle. `GET /payments/:id` returns `token_id` and
 
 The same server-created customer id is supplied to Checkout **together with
 `recurring: true`**. Razorpay Standard Checkout defaults `recurring` to false;
-the 2026-08-16 signup flow supplied only `customer_id`, so Checkout legitimately
-collected the first invoice as a one-time payment. A regression test now pins
+the retired 2026-08-16 signup payment flow supplied only `customer_id`, so
+Checkout legitimately collected the first invoice as a one-time payment. A regression test now pins
 both fields for mandate orders and their absence for AI-credit/other one-time
 orders. Resuming a dismissed authorisation checkout also restores both fields.
 

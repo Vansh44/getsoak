@@ -24,23 +24,12 @@ import {
   getSignupResumeInfo,
   type SlugCheck,
 } from "@/app/actions/store-signup";
-// ★ The NEW billing system (§34). The first cycle is a one-time ORDER paid on
-// session, not a Razorpay Subscription — StoreMink computes the amount and the
-// gateway only collects it, so a later price change needs nothing updated at the
-// provider. Razorpay cannot update a Subscription authorised by UPI or
-// e-mandate at all, which is why the old path had to go.
-import {
-  startSignupSubscribe,
-  confirmSignupSubscribe,
-} from "@/app/actions/subscribe-actions";
-import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import {
   CheckCircle2,
   ChevronRight,
   ChevronLeft,
   ExternalLink,
   Loader2,
-  Check,
   Eye,
   EyeOff,
   Lock,
@@ -54,8 +43,6 @@ import {
   isThemeSelectable,
   type ThemeIndustry,
 } from "@/lib/themes/meta";
-import { PLAN_META, PLAN_LIMITS, type Plan } from "@/lib/plans";
-import type { PlanPrice, PlanPricing } from "@/lib/plans/pricing";
 import { COUNTRIES, DEFAULT_COUNTRY } from "@/lib/countries";
 import PhoneInput, { isValidPhoneNumber } from "react-phone-number-input";
 import "react-phone-number-input/style.css";
@@ -72,55 +59,6 @@ import {
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-type BillingPeriod = "monthly" | "yearly";
-
-const FREE_PRICE: PlanPrice = {
-  monthlyInr: 0,
-  yearlyInr: 0,
-  baseMonthlyInr: null,
-  baseYearlyInr: null,
-};
-
-function isPlanPricing(value: unknown): value is PlanPricing {
-  if (!value || typeof value !== "object") return false;
-  return (["free", "basic", "pro"] as Plan[]).every((plan) => {
-    const row = (value as Record<string, unknown>)[plan];
-    if (!row || typeof row !== "object") return false;
-    const p = row as Record<string, unknown>;
-    return (
-      typeof p.monthlyInr === "number" &&
-      p.monthlyInr >= 0 &&
-      typeof p.yearlyInr === "number" &&
-      p.yearlyInr >= 0 &&
-      (p.baseMonthlyInr === null || typeof p.baseMonthlyInr === "number") &&
-      (p.baseYearlyInr === null || typeof p.baseYearlyInr === "number")
-    );
-  });
-}
-
-function annualOfferLabel(pricing: PlanPricing): string | null {
-  const paid = (["basic", "pro"] as Plan[])
-    .map((plan) => pricing[plan])
-    .filter((row) => row.monthlyInr > 0);
-  const months = paid.map(
-    (row) => (row.monthlyInr * 12 - row.yearlyInr) / row.monthlyInr,
-  );
-  if (
-    months.length > 0 &&
-    months.every((value) => value > 0 && Number.isInteger(value)) &&
-    months.every((value) => value === months[0])
-  ) {
-    return `${months[0]} ${months[0] === 1 ? "month" : "months"} free`;
-  }
-  return paid.some((row) => row.yearlyInr < row.monthlyInr * 12)
-    ? "Save with yearly"
-    : null;
-}
-
-function inr(value: number): string {
-  return `₹${value.toLocaleString("en-IN")}`;
-}
-
 // Steps in flow order. "password" is the second screen of the Account stage.
 type Step =
   | "email"
@@ -131,7 +69,6 @@ type Step =
   | "store"
   | "location"
   | "theme"
-  | "plan"
   | "creating";
 
 // Progress stages shown in the stepper (Account folds email+password).
@@ -142,7 +79,6 @@ const STAGES = [
   "Store",
   "Location",
   "Theme",
-  "Plan",
 ] as const;
 function stageOf(step: Step): number {
   switch (step) {
@@ -158,10 +94,8 @@ function stageOf(step: Step): number {
       return 3;
     case "location":
       return 4;
-    case "theme":
-      return 5;
     default:
-      return 6; // plan / creating
+      return 5; // theme / creating
   }
 }
 
@@ -195,29 +129,6 @@ const CONSENT_DOC_NAMES = CONSENT_DOCS.map((d, i) =>
     ? `the ${d.title}`
     : `${i === CONSENT_DOCS.length - 1 ? " and " : ", "}${d.title}`,
 ).join("");
-
-// Short marketing bullets per plan (derived from the plan catalog; kept concise
-// for the signup card, not the full feature matrix).
-const PLAN_BULLETS: Record<Plan, string[]> = {
-  free: [
-    "Free .storemink.com address",
-    "Up to 25 products",
-    "Cash on delivery",
-    "1 staff account",
-  ],
-  basic: [
-    "Everything in Free, plus:",
-    "Connect a custom domain",
-    "Online payments (Razorpay)",
-    "Up to 500 products · 3 staff",
-  ],
-  pro: [
-    "Everything in Basic, plus:",
-    "Unlimited products & staff",
-    "Email marketing campaigns",
-    "Highest AI limits",
-  ],
-};
 
 export default function SignupPage() {
   // Firebase phone linking: invisible reCAPTCHA + the verificationId from
@@ -311,46 +222,6 @@ export default function SignupPage() {
   // Theme
   const [template, setTemplate] = useState<string>(DEFAULT_THEME_ID);
   const [themeFilter, setThemeFilter] = useState<ThemeIndustry | "all">("all");
-
-  // Plan
-  const [period, setPeriod] = useState<BillingPeriod>("monthly");
-  const [selectedPlan, setSelectedPlan] = useState<Plan>("free");
-  const [pricing, setPricing] = useState<PlanPricing | null>(null);
-  const [pricingLoading, setPricingLoading] = useState(false);
-  const [pricingError, setPricingError] = useState("");
-
-  // The store, once provisioned (a paid plan creates it before payment, so an
-  // abandoned payment doesn't recreate/duplicate the store on retry).
-  const [createdStoreId, setCreatedStoreId] = useState<string | null>(null);
-  const [createdSlug, setCreatedSlug] = useState<string | null>(null);
-
-  const loadPricing = useCallback(async (): Promise<PlanPricing | null> => {
-    setPricingLoading(true);
-    setPricingError("");
-    try {
-      const response = await fetch("/api/plans/pricing", { cache: "no-store" });
-      const payload: unknown = await response.json();
-      if (!response.ok || !isPlanPricing(payload)) {
-        throw new Error("pricing unavailable");
-      }
-      setPricing(payload);
-      return payload;
-    } catch {
-      setPricingError(
-        "Paid plan pricing is temporarily unavailable. You can retry or create your store on Free.",
-      );
-      setSelectedPlan("free");
-      return null;
-    } finally {
-      setPricingLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (step === "plan" && !pricing && !pricingLoading && !pricingError) {
-      void loadPricing();
-    }
-  }, [loadPricing, pricing, pricingError, pricingLoading, step]);
 
   async function restartSignup() {
     setBusy(true);
@@ -649,17 +520,15 @@ export default function SignupPage() {
     }
   }
 
-  // ── Finalize (plan step) ───────────────────────────────────────────────────
-  // Creates the store once (on free), then — for a paid plan — opens the
-  // Razorpay autopay mandate and activates the plan on success. An abandoned
-  // payment leaves a working Free store the merchant can upgrade later.
-  async function ensureStore(): Promise<{
-    storeId: string;
-    slug: string;
-  } | null> {
-    if (createdStoreId && createdSlug) {
-      return { storeId: createdStoreId, slug: createdSlug };
-    }
+  // ── Finalize ───────────────────────────────────────────────────────────────
+  // Signup never asks for money. Every store starts on Free, reaches a working
+  // dashboard immediately, and can authorise a paid subscription later from
+  // Plans & Billing where payment recovery has a dedicated surface.
+  async function finalize() {
+    setBusy(true);
+    setError("");
+    setStep("creating");
+
     const res = await createStore({
       name,
       template,
@@ -676,124 +545,11 @@ export default function SignupPage() {
     });
     if (res.error || !res.storeId || !res.slug) {
       setError(res.error ?? "Could not create your store.");
-      return null;
-    }
-    setCreatedStoreId(res.storeId);
-    setCreatedSlug(res.slug);
-    return { storeId: res.storeId, slug: res.slug };
-  }
-
-  async function finalize() {
-    setBusy(true);
-    setError("");
-
-    if (selectedPlan !== "free" && !pricing) {
       setBusy(false);
-      setError("Load the current plan price before starting payment.");
+      setStep("theme");
       return;
     }
-
-    // The wizard can sit open while an operator reprices. Re-read immediately
-    // before a paid checkout and make the merchant review any changed number;
-    // never let the Razorpay modal be the first place they see the new amount.
-    if (selectedPlan !== "free" && pricing) {
-      const quoted =
-        period === "yearly"
-          ? pricing[selectedPlan].yearlyInr
-          : pricing[selectedPlan].monthlyInr;
-      const latest = await loadPricing();
-      if (!latest) {
-        setBusy(false);
-        setError("We couldn't confirm the current price. Retry before paying.");
-        return;
-      }
-      const current =
-        period === "yearly"
-          ? latest[selectedPlan].yearlyInr
-          : latest[selectedPlan].monthlyInr;
-      if (current !== quoted) {
-        setBusy(false);
-        setError(
-          "Pricing changed while you were signing up. Review the updated plan price, then continue.",
-        );
-        return;
-      }
-    }
-
-    if (selectedPlan === "free") {
-      setStep("creating");
-      const store = await ensureStore();
-      if (!store) {
-        setBusy(false);
-        setStep("plan");
-        return;
-      }
-      window.location.href = dashboardUrl(store.slug);
-      return;
-    }
-
-    // Paid: provision the store, then collect the autopay mandate.
-    const store = await ensureStore();
-    if (!store) {
-      setBusy(false);
-      return;
-    }
-
-    const start = await startSignupSubscribe(
-      store.storeId,
-      selectedPlan,
-      period,
-    );
-    if (!start.ok) {
-      setBusy(false);
-      setError(start.error);
-      return;
-    }
-
-    const opened = await openRazorpayModal({
-      keyId: start.keyId,
-      rzpOrderId: start.providerOrderId,
-      amountPaise: start.amountPaise,
-      customerId: start.providerCustomerId,
-      name: "StoreMink",
-      description: `${PLAN_META[selectedPlan].name} plan — first ${
-        period === "yearly" ? "year" : "month"
-      }`,
-      prefill: {
-        name: `${firstName} ${lastName}`.trim() || undefined,
-        email: email || undefined,
-        contact: phone || undefined,
-      },
-      onSuccess: async (res) => {
-        const done = await confirmSignupSubscribe(
-          store.storeId,
-          start.invoiceId,
-          res.razorpay_payment_id,
-          res.razorpay_signature,
-        );
-        // ★ GO TO THE DASHBOARD EITHER WAY. The store exists and the money has
-        // moved; parking a new merchant on the signup screen to read an error
-        // helps nobody. A confirm that did not land leaves an open invoice, which
-        // /dashboard/plans shows with a Pay button — unlike the old flow, there
-        // is no webhook this silently depends on.
-        if (!done.ok) {
-          console.error("signup: confirm subscription:", done.error);
-        }
-        window.location.href = dashboardUrl(store.slug);
-      },
-      onDismiss: () => {
-        setBusy(false);
-        // ★ The store is real and on Free — say so, because "payment failed" on
-        // the last step of signup reads as "your store wasn't created".
-        setError(
-          "Payment wasn't completed. Your store is ready on the Free plan — you can upgrade any time from Plans & Billing.",
-        );
-      },
-    });
-    if (!opened) {
-      setBusy(false);
-      setError("Couldn't open the payment window. Please try again.");
-    }
+    window.location.href = dashboardUrl(res.slug);
   }
 
   const h = slugHint();
@@ -805,11 +561,10 @@ export default function SignupPage() {
     store: "name",
     location: "store",
     theme: "location",
-    plan: "theme",
   };
 
   const width =
-    step === "theme" || step === "plan"
+    step === "theme"
       ? "max-w-5xl"
       : step === "location"
         ? "max-w-2xl"
@@ -1700,213 +1455,18 @@ export default function SignupPage() {
 
               <button
                 type="button"
-                onClick={() => setStep("plan")}
-                className="stq-btn stq-btn-primary w-full h-12 max-w-md flex items-center justify-center gap-2"
-              >
-                Continue <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-          )}
-
-          {/* ── Plan ──────────────────────────────────────────────── */}
-          {step === "plan" && (
-            <div className="animate-in fade-in slide-in-from-right-2 duration-300">
-              <h1 className="text-2xl font-bold text-gray-900 mb-1">
-                Choose your plan
-              </h1>
-              <p className="text-gray-500 mb-6">
-                Start free — upgrade any time. Paid plans unlock custom domains
-                and online payments.
-              </p>
-
-              {/* Billing period toggle. The offer label is derived from the
-                  operator's live prices; it is never a hard-coded promise. */}
-              {pricing && (
-                <div
-                  className="mb-6 inline-flex rounded-lg border border-gray-200 bg-white p-1"
-                  role="group"
-                  aria-label="Billing period"
-                >
-                  {(["monthly", "yearly"] as BillingPeriod[]).map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setPeriod(p)}
-                      aria-pressed={period === p}
-                      className={`rounded-md px-4 py-1.5 text-sm font-semibold capitalize transition-colors ${
-                        period === p
-                          ? "bg-primary text-white"
-                          : "text-gray-600 hover:text-gray-900"
-                      }`}
-                    >
-                      {p}
-                      {p === "yearly" && annualOfferLabel(pricing) && (
-                        <span
-                          className={`ml-1.5 text-[11px] ${period === "yearly" ? "text-white/80" : "text-emerald-600"}`}
-                        >
-                          {annualOfferLabel(pricing)}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {pricingLoading && !pricing && (
-                <div className="mb-6 flex h-24 items-center justify-center rounded-xl border border-gray-200 bg-white text-sm text-gray-500">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading
-                  current pricing…
-                </div>
-              )}
-
-              {pricingError && !pricing && (
-                <div
-                  role="status"
-                  className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
-                >
-                  <p>{pricingError}</p>
-                  <button
-                    type="button"
-                    onClick={loadPricing}
-                    disabled={pricingLoading}
-                    className="mt-3 font-semibold text-primary hover:underline disabled:opacity-50"
-                  >
-                    Retry pricing
-                  </button>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                {(pricing
-                  ? (["free", "basic", "pro"] as Plan[])
-                  : (["free"] as Plan[])
-                ).map((planId) => {
-                  const meta = PLAN_META[planId];
-                  const limits = PLAN_LIMITS[planId];
-                  const selected = selectedPlan === planId;
-                  const price = pricing?.[planId] ?? FREE_PRICE;
-                  const priceInr =
-                    period === "yearly"
-                      ? Math.round(price.yearlyInr / 12)
-                      : price.monthlyInr;
-                  const baseTotal =
-                    period === "yearly"
-                      ? price.baseYearlyInr
-                      : price.baseMonthlyInr;
-                  const baseInr =
-                    baseTotal === null
-                      ? null
-                      : period === "yearly"
-                        ? Math.round(baseTotal / 12)
-                        : baseTotal;
-                  return (
-                    <div
-                      key={planId}
-                      onClick={() => setSelectedPlan(planId)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setSelectedPlan(planId);
-                        }
-                      }}
-                      role="radio"
-                      aria-checked={selected}
-                      tabIndex={0}
-                      className={`relative cursor-pointer rounded-xl border-2 bg-white p-5 shadow-sm transition-all ${
-                        selected
-                          ? "border-primary ring-2 ring-primary ring-offset-2"
-                          : "border-gray-200 hover:border-primary/50 hover:shadow-md"
-                      }`}
-                    >
-                      {planId === "basic" && (
-                        <span className="absolute right-3 top-3 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
-                          Popular
-                        </span>
-                      )}
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-bold text-gray-900">
-                          {meta.name}
-                        </h3>
-                        {selected && (
-                          <CheckCircle2 className="h-5 w-5 text-primary" />
-                        )}
-                      </div>
-                      <div className="mt-2 mb-1">
-                        {priceInr === 0 ? (
-                          <span className="text-2xl font-extrabold text-gray-900">
-                            Free
-                          </span>
-                        ) : (
-                          <>
-                            {baseInr !== null && baseInr > priceInr && (
-                              <span className="mr-2 text-sm text-gray-400 line-through">
-                                {inr(baseInr)}
-                              </span>
-                            )}
-                            <span className="text-2xl font-extrabold text-gray-900">
-                              {inr(priceInr)}
-                            </span>
-                            <span className="text-sm text-gray-500">/mo</span>
-                          </>
-                        )}
-                      </div>
-                      <p className="mb-3 min-h-5 text-xs font-medium text-gray-500">
-                        {priceInr === 0
-                          ? "Free forever. No card needed."
-                          : period === "yearly"
-                            ? `${inr(price.yearlyInr)} billed once a year`
-                            : `${inr(price.monthlyInr)} billed every month`}
-                      </p>
-                      <p className="mb-4 h-8 text-xs text-gray-500">
-                        {meta.tagline}
-                      </p>
-                      <ul className="flex flex-col gap-2">
-                        {PLAN_BULLETS[planId].map((b) => (
-                          <li
-                            key={b}
-                            className="flex items-start gap-2 text-sm text-gray-600"
-                          >
-                            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                            {b}
-                          </li>
-                        ))}
-                      </ul>
-                      {limits.removeBadge && (
-                        <p className="mt-3 text-[11px] font-medium text-gray-400">
-                          No “Powered by StoreMink” badge
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <button
-                type="button"
                 onClick={finalize}
                 disabled={busy}
                 className="stq-btn stq-btn-primary w-full h-12 max-w-md flex items-center justify-center gap-2"
               >
                 {busy ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : selectedPlan === "free" ? (
-                  "Create my store"
+                  <Loader2 className="h-5 w-5 animate-spin" />
                 ) : (
-                  `Subscribe to ${PLAN_META[selectedPlan].name} & continue`
+                  <>
+                    Create my free store <ChevronRight className="h-5 w-5" />
+                  </>
                 )}
               </button>
-
-              {createdStoreId && createdSlug && selectedPlan !== "free" && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    (window.location.href = dashboardUrl(createdSlug))
-                  }
-                  className="mt-3 w-full max-w-md text-center text-sm font-medium text-gray-500 hover:text-primary"
-                >
-                  Continue on Free for now →
-                </button>
-              )}
             </div>
           )}
 

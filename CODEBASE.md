@@ -382,14 +382,11 @@ wholesip/
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
-│   │   ├── subscribe-actions.ts # ★ §34 the NEW subscribe path: startSubscribe /
-│   │                      # confirmSubscribe. Runs ALONGSIDE the old
-│   │                      # subscription-actions.ts until the cutover, and
-│   │                      # REFUSES when the old system already has a live
-│   │                      # mandate — failing CLOSED on a read error, because
-│   │                      # billing one store from two systems has no single
-│   │                      # place to stop it. ⚠ NOT the same file as
-│   │                      # billing-actions.ts (§17 tax classes).
+│   │   ├── subscribe-actions.ts # ★ §34 dashboard-only subscription path:
+│   │                      # startSubscribe / confirmSubscribe plus manual
+│   │                      # invoices, plan/location changes and cancellation.
+│   │                      # Signup creates Free stores and cannot call a
+│   │                      # billing action. ⚠ NOT billing-actions.ts (§17).
 │   ├── billing-actions.ts # ★ Invoices & tax (§17): tax-class CRUD + save billing/
 │   │   │                      # invoice settings. Gated on `billing`, revalidates TAGS.billing.
 │   │   ├── store-domain.ts    # Custom domain connect (§30) — the GATE only; the
@@ -2033,7 +2030,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
 19. **Signup wizard (Shopify-style, `app/platform/signup/page.tsx`).** One
     client wizard, one focused screen per step, with a progress stepper. Step
     order: **email → password (+ Continue with Google) → email OTP → phone OTP
-    → name → store → location → theme → plan**. Data model: names go to
+    → name → store → location → theme → dashboard**. There is no plan or payment
+    step: every store is created on Free and paid upgrades happen later from the
+    store-host `/dashboard/plans` surface. This keeps store creation independent
+    of gateway availability and removes the paid-but-not-onboarded failure mode.
+    Data model: names go to
     `admins.first_name`/`last_name`; the selling **business address** is a
     structured country + street/building + optional second line + city +
     state/province + postal/PIN code. The server requires every core field,
@@ -2092,44 +2093,30 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     right step (phone / name / dashboard); the same path recovers a refreshed tab
     from the session cookie. **Google users have NO password**, so the store-host
     login (`app/auth/login/login-form.tsx`) ALSO offers "Continue with Google"
-    (signInWithPopup); a Google owner can set a password via "Forgot password?". - **Plan + payment**: the plan step reuses the existing merchant subscription
-    flow (§ subscription-actions). The client does NOT import `PLAN_META` prices:
-    it fetches uncached operator-managed prices from
-    **`GET /api/plans/pricing`**, a Route Handler rather than a read-only Server
-    Action. A failed database read answers 503 and paid checkout stays disabled
-    (Free remains available) instead of silently quoting compiled defaults.
-    Monthly cards show the live charged price and optional operator "Was" price;
-    yearly cards show the comparable monthly equivalent plus the exact annual
-    debit, and their savings label is derived from the current values rather
-    than hard-coded. A paid-plan tap re-reads once more before opening checkout;
-    if the amount changed while the wizard was open, the merchant must review
-    the new card before continuing. Live billing price readers fail closed on database errors,
-    so a money action never charges a fallback amount. Free finishes immediately; a paid plan
-    (Basic/Pro, monthly/yearly) creates the store first (on free), then opens
-    the Razorpay **autopay mandate** via `startSignupSubscribe` /
-    `confirmSignupSubscribe` (`app/actions/subscribe-actions.ts`). Those
-    are signup-context wrappers: the store was just created on the PLATFORM
-    host, so `getActingStoreId` can't resolve it — the caller passes the new
-    store id and `assertStoreOwner` authorises them as its superadmin, then
-    both delegate to the SAME `startPlanSubscriptionForStore` /
-    `confirmSubscriptionForStore` cores the dashboard uses. An abandoned
-    payment leaves a working Free store (upgrade later at `/dashboard/plans`).
-    **The post-payment handoff is read-your-own-writes.** `createStore` uses
-    Next 16 `updateTag(STORE_TAG)`, not stale-while-revalidate, and tenant
-    resolution never caches a missing store host. This prevents a successful
-    checkout from redirecting into a cached pre-creation miss, which used to
-    fall back to WholeSip and falsely render "No access to this dashboard".
-    Dashboard metadata is platform-owned (`StoreMink — Operations Centre`, with
-    child titles suffixed `— StoreMink`) and never reads merchant/fallback brand
-    data, so WholeSip cannot leak into the admin browser tab.
-    Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
-    `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
-    Browser geolocation is followed by the keyless BigDataCloud client-side
-    reverse-geocode endpoint, so country/city/state/postal code fill when the
-    provider has them even if the optional Google Maps key/script is missing;
-    Google additionally fills street/building components and remains the richer
-    draggable-map enhancement. Autofill never locks a field, and a map or
-    geocoder failure never blocks the complete plain address form.
+    (signInWithPopup); a Google owner can set a password via "Forgot password?".
+    - **Free-first handoff**: the Theme screen ends with **Create my free store**.
+      `createStore` is the only mutation; it already persists `plan = 'free'`, and
+      success redirects straight to the new store's dashboard. Signup imports no
+      pricing reader, Razorpay client or subscription action. The former
+      platform-host `startSignupSubscribe` / `confirmSignupSubscribe` public
+      actions were removed with the plan step; all paid enrolment now begins only
+      after tenant resolution on `/dashboard/plans`.
+      **The post-payment handoff is read-your-own-writes.** `createStore` uses
+      Next 16 `updateTag(STORE_TAG)`, not stale-while-revalidate, and tenant
+      resolution never caches a missing store host. This prevents a successful
+      checkout from redirecting into a cached pre-creation miss, which used to
+      fall back to WholeSip and falsely render "No access to this dashboard".
+      Dashboard metadata is platform-owned (`StoreMink — Operations Centre`, with
+      child titles suffixed `— StoreMink`) and never reads merchant/fallback brand
+      data, so WholeSip cannot leak into the admin browser tab.
+      Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
+      `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
+      Browser geolocation is followed by the keyless BigDataCloud client-side
+      reverse-geocode endpoint, so country/city/state/postal code fill when the
+      provider has them even if the optional Google Maps key/script is missing;
+      Google additionally fills street/building components and remains the richer
+      draggable-map enhancement. Autofill never locks a field, and a map or
+      geocoder failure never blocks the complete plain address form.
 
 20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
     is a WIDGET the merchant can remove, re-order, or add back — Shopify's
@@ -5426,20 +5413,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         announce a grace window a rollback then un-started.
       - **★ BEST-EFFORT, NEVER THROWS.** A mail outage must not fail a
         collection, block a cycle advance, or abort a downgrade.
-    - **★ SIGNUP ENROLS ON THE NEW SYSTEM** (`startSignupSubscribe` /
-      `confirmSignupSubscribe`). The wizard runs on the PLATFORM host, where
-      `getActingStoreId()` resolves the FALLBACK store rather than the one created
-      seconds earlier — so the client names the store and
-      **`assertStoreSuperadmin` is the entire security boundary**: without it any
-      signed-in user could post another store's id and buy, or settle, a
-      subscription on it. Superadmin, not any admin, mirroring the old gate — a
-      new path to the same act must not be easier to pass than the one it
-      replaces — and it returns null on a read error, so a blip refuses rather
-      than authorises. Both entry points delegate to
-      `startSubscribeForStore`/`confirmSubscribeForStore`, the SAME cores the
-      dashboard uses: a second copy of the plan validation, legacy-mandate check
-      or price lookup is how a merchant gets billed differently depending on
-      which screen they subscribed from.
+    - **★ SIGNUP NEVER TAKES PAYMENT.** Every new store starts on Free and goes
+      directly to its dashboard. `startSubscribe` / `confirmSubscribe` are
+      store-host dashboard actions, so tenant identity comes from the resolved
+      host/session rather than a newly created store id supplied by the browser.
+      Besides smoothing onboarding, this removes two public signup-context money
+      actions and the entire class of platform-host/fallback-tenant mistakes.
     - **★★ AN ENROLMENT IS AN OFFER; A RENEWAL IS AN OBLIGATION.**
       `startEnrolment` deliberately does NOT finalize its invoice —
       `confirmEnrolment` does, once the payment verifies. Finalizing up front did
