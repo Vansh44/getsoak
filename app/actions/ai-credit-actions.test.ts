@@ -39,6 +39,7 @@ const rzp = vi.hoisted(() => ({
   capturedPayment: vi.fn(),
   rzpCreateOrder: vi.fn(),
   rzpFetchOrderPayments: vi.fn(),
+  verifyCapturedCheckoutPayment: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
@@ -65,6 +66,7 @@ function pendingPurchase(over: Record<string, unknown> = {}) {
     store_id: STORE,
     credits: 25,
     pack_id: "small",
+    amount_inr: 59,
     status: "pending",
     rzp_order_id: "order_1",
     ...over,
@@ -80,6 +82,10 @@ beforeEach(() => {
     keySecret: "secret",
   });
   rzp.verifyCheckoutSignature.mockReturnValue(true);
+  rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+    ok: true,
+    gatewayRead: true,
+  });
   rzp.rzpCreateOrder.mockResolvedValue({ ok: true, data: { id: "order_1" } });
   invoice.draftCreditInvoice.mockResolvedValue("inv-1");
   invoice.issueCreditInvoice.mockResolvedValue(undefined);
@@ -135,6 +141,16 @@ describe("confirmCreditPurchase", () => {
 
   it("★★ issues NOTHING when the signature fails", async () => {
     rzp.verifyCheckoutSignature.mockReturnValue(false);
+    const res = await confirmCreditPurchase("pur-1", "pay_1", "sig");
+    expect("error" in res).toBe(true);
+    expect(invoice.issueCreditInvoice).not.toHaveBeenCalled();
+  });
+
+  it("grants no credits when Razorpay reports a mismatched payment", async () => {
+    rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+      ok: false,
+      error: "The captured amount does not match the invoice.",
+    });
     const res = await confirmCreditPurchase("pur-1", "pay_1", "sig");
     expect("error" in res).toBe(true);
     expect(invoice.issueCreditInvoice).not.toHaveBeenCalled();

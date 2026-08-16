@@ -22,7 +22,9 @@ continue without automatic debits.
 | Collection routing                          | `collectionRoute` — mandate ceiling AND the AFA limit         |
 | Unknown-outcome handling                    | `collect.ts` + `lib/billing/reconcile.ts`                     |
 | Checkout token capture                      | `ensureRzpCustomer` + `readMandateFromPayment`                |
+| Checkout customer binding                   | `providerCustomerId` → Checkout `customer_id`                 |
 | Authorised ceiling persistence              | `billing_payment_attempts.mandate_max_paise` → mandate        |
+| On-session capture verification             | HMAC + payment order/amount/currency/status cross-check       |
 
 The API shapes were taken from Razorpay's published reference on **2026-08-14**,
 not inferred:
@@ -76,6 +78,17 @@ and a signature — never a token — so a client-supplied `token_id` would be a
 value the browser chose, and attaching a mandate is standing permission to debit
 that merchant every cycle. `GET /payments/:id` returns `token_id` and
 `customer_id`, and we have just verified that payment's signature.
+
+The same server-created customer id is also supplied to Checkout for an
+authorisation order. Omitting it left the REST order associated with a customer
+while the browser window opened as an ordinary unbound checkout, which could
+complete the first charge without exposing the mandate registration flow.
+
+Before an entitlement is granted, StoreMink fetches the returned payment id and
+requires its `order_id`, amount, currency and `captured` status to match the
+durable attempt. If Razorpay's read endpoint is temporarily unavailable, the
+cryptographically verified checkout HMAC remains the availability fallback and
+the existing reconciliation sweep remains the after-the-fact source of truth.
 
 A failed lookup returns null and the plan is still granted: the money is already
 captured, so losing autopay is the acceptable half of that trade.

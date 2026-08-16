@@ -30,6 +30,7 @@ vi.mock("@/lib/payments/provider", () => provider);
 
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
+  verifyCapturedCheckoutPayment: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
@@ -87,6 +88,10 @@ beforeEach(() => {
   });
   rzp.rzpCreateOrder.mockResolvedValue({ ok: true, data: { id: "order_1" } });
   rzp.verifyCheckoutSignature.mockReturnValue(true);
+  rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+    ok: true,
+    gatewayRead: true,
+  });
   invStore.getInvoice.mockResolvedValue(openInvoice());
   invStore.finalizeInvoice.mockResolvedValue(openInvoice());
   invStore.amountDueForInvoice.mockResolvedValue(5_000_00);
@@ -252,7 +257,9 @@ describe("confirmInvoicePayment", () => {
   };
 
   function seedAttempt() {
-    seed([[{ id: "att-1", providerOrderId: "order_1" }]]);
+    seed([
+      [{ id: "att-1", providerOrderId: "order_1", amountPaise: 5_000_00 }],
+    ]);
   }
 
   it("settles the payment and reports the plan restored", async () => {
@@ -265,6 +272,18 @@ describe("confirmInvoicePayment", () => {
 
   it("★★ REFUSES an unverified signature and settles nothing", async () => {
     rzp.verifyCheckoutSignature.mockReturnValue(false);
+    seedAttempt();
+    const res = await confirmInvoicePayment(args);
+    expect(res.ok).toBe(false);
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(worker.advanceAfterPayment).not.toHaveBeenCalled();
+  });
+
+  it("refuses a gateway record that contradicts the signed callback", async () => {
+    rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+      ok: false,
+      error: "The captured amount does not match the invoice.",
+    });
     seedAttempt();
     const res = await confirmInvoicePayment(args);
     expect(res.ok).toBe(false);

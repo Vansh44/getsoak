@@ -754,6 +754,7 @@ export default function SignupPage() {
       keyId: start.keyId,
       rzpOrderId: start.providerOrderId,
       amountPaise: start.amountPaise,
+      customerId: start.providerCustomerId ?? undefined,
       name: "StoreMink",
       description: `${PLAN_META[selectedPlan].name} plan — first ${
         period === "yearly" ? "year" : "month"

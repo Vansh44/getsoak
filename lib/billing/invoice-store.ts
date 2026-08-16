@@ -32,7 +32,7 @@ import type { BuiltInvoice, TaxContext } from "./invoice";
 export interface InvoiceRow {
   id: string;
   storeId: string;
-  kind: "subscription" | "ai_credits";
+  kind: "subscription" | "ai_credits" | "addon";
   status: string;
   totalPaise: number;
   cycleSeq: number | null;
@@ -509,7 +509,13 @@ function toInvoiceRow(row: {
   invoiceRef: string | null;
   finalizedAt: string | null;
 }): InvoiceRow | null {
-  if (row.kind !== "subscription" && row.kind !== "ai_credits") return null;
+  if (
+    row.kind !== "subscription" &&
+    row.kind !== "ai_credits" &&
+    row.kind !== "addon"
+  ) {
+    return null;
+  }
   return { ...row, kind: row.kind };
 }
 

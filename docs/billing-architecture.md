@@ -686,6 +686,11 @@ three webhooks discarded.
 An AI credit purchase is an `invoices` row with `kind = 'ai_credits'`, its own
 payment attempt, and **never** a line on a subscription invoice.
 
+The plan-purchase UI follows the same boundary: AI credits are the only add-on
+offered, but the review explicitly presents them as a second, one-time checkout
+and invoice after the subscription succeeds. Cancelling that optional checkout
+does not roll back or disguise the plan payment.
+
 - `cycle_seq` is NULL, so the one-invoice-per-cycle constraint does not apply.
 - The credit grant is keyed on `invoice_id`, **unique in the ledger** — three
   identical webhooks grant once (§53). The existing `ai_credit_ledger` already

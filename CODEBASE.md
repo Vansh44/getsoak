@@ -300,6 +300,10 @@ wholesip/
 │   │   │                      # pickup mappings and configure the tracking webhook
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
+│   │   ├── plans/             # ★ Plans & Billing (§34): subscription status,
+│   │   │                      # payable subscription invoices, AI usage/top-ups,
+│   │   │                      # invoice history and the accessible three-step
+│   │   │                      # plan → one-time AI credits → review/payment dialog
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
 │   │   ├── activity/          # ★ THE LOGS HUB (§33). layout.tsx + logs-rail.tsx
 │   │   │                      # give every log one left rail (log-types.ts is the
@@ -867,8 +871,11 @@ wholesip/
 │   │                          # registered opportunistically for later cycles.
 │   │                          # The plan is NOT granted until the payment is
 │   │                          # captured (grace is for renewals, where
-│   │                          # something has already been paid for). The HMAC
-│   │                          # signature is the trust boundary. BOTH stores.plan
+│   │                          # something has already been paid for). Checkout
+│   │                          # requires BOTH the order HMAC and, when Razorpay's
+│   │                          # read API is available, a captured INR payment whose
+│   │                          # order and amount exactly match the durable attempt.
+│   │                          # BOTH stores.plan
 │   │                          # (the entitlement every gate reads) and
 │   │                          # billing_subscriptions move, and the comp floor
 │   │                          # holds — the old confirmSubscription wrote

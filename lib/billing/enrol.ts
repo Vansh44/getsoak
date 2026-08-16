@@ -39,6 +39,7 @@ import {
   rzpCreateCustomer,
   rzpCreateOrder,
   rzpFetchPayment,
+  verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { billingMayApplyPlan } from "@/lib/payments/plan-change";
@@ -563,6 +564,7 @@ export async function confirmEnrolment(input: {
     id: string;
     state: string;
     providerOrderId: string | null;
+    amountPaise: number;
     mandateMaxPaise: number | null;
   } | null = null;
   try {
@@ -572,6 +574,7 @@ export async function confirmEnrolment(input: {
           id: billingPaymentAttempts.id,
           state: billingPaymentAttempts.state,
           providerOrderId: billingPaymentAttempts.providerOrderId,
+          amountPaise: billingPaymentAttempts.amountPaise,
           mandateMaxPaise: billingPaymentAttempts.mandateMaxPaise,
         })
         .from(billingPaymentAttempts)
@@ -611,6 +614,20 @@ export async function confirmEnrolment(input: {
       invoiceId: input.invoiceId,
     });
     return { ok: false, error: "We couldn't verify that payment." };
+  }
+
+  const observedPayment = await verifyCapturedCheckoutPayment(creds, {
+    paymentId: input.providerPaymentId,
+    orderId: attempt.providerOrderId,
+    amountPaise: attempt.amountPaise,
+  });
+  if (!observedPayment.ok) {
+    logWarn("billing.confirm_gateway_mismatch", {
+      storeId: input.storeId,
+      invoiceId: input.invoiceId,
+      reason: observedPayment.error,
+    });
+    return { ok: false, error: observedPayment.error };
   }
 
   const settled = await settleAttempt(attempt.id, "captured", {

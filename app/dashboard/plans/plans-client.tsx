@@ -16,10 +16,14 @@ import {
   FileText,
   Check,
   BadgeCheck,
-  CalendarClock,
   RefreshCw,
-  X,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   confirmCreditPurchase,
   startCreditPurchase,
@@ -190,7 +194,9 @@ export function PlansBillingClient({
   const term = renewalTerm({
     expiresAt,
     expired,
-    hasMandate: subscription.active,
+    // A paid cycle and an authorised mandate are different facts. An active
+    // manual-renewal subscription must say "ends", not promise a renewal.
+    hasMandate: subscription.autopay,
     cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
     status: subscription.status,
   });
@@ -655,7 +661,11 @@ export function PlansBillingClient({
         <div className="mt-6 grid gap-4 md:grid-cols-3">
           {PLAN_IDS.map((p) => {
             const meta = PLAN_META[p];
-            const isCurrent = p === plan;
+            // Same tier on the other billing cycle is a real plan change. The
+            // old card disabled it, even though the server supports it.
+            const isCurrent =
+              p === plan &&
+              (p === "free" || period === (subscription.period ?? "monthly"));
             const isUpgrade = PLAN_RANK[p] > PLAN_RANK[plan];
             const p_ = pricing[p];
             // The headline is ALWAYS per month so the two tabs compare like
@@ -757,8 +767,10 @@ export function PlansBillingClient({
             refresh();
           }}
           pricing={pricing}
+          packs={packs}
           currentPlan={plan}
           currentPeriod={subscription.period ?? "monthly"}
+          hasAutopay={subscription.autopay}
         />
       )}
     </div>
@@ -815,8 +827,10 @@ function UpgradeModal({
   onClose,
   onActivated,
   pricing,
+  packs,
   currentPlan,
   currentPeriod,
+  hasAutopay,
 }: {
   plan: Plan;
   period: "monthly" | "yearly";
@@ -825,16 +839,24 @@ function UpgradeModal({
   onClose: () => void;
   onActivated: () => void;
   pricing: PlanPricing;
+  packs: CreditPack[];
   currentPlan: Plan;
   currentPeriod: "monthly" | "yearly";
+  hasAutopay: boolean;
 }) {
-  const meta = PLAN_META[plan];
-  // From the resolved pricing, not PLAN_META — this dialog is the last thing
-  // someone reads before authorising a payment, so it must state the amount
-  // that is actually taken.
-  const price =
-    period === "yearly" ? pricing[plan].yearlyInr : pricing[plan].monthlyInr;
+  const [stage, setStage] = useState<1 | 2 | 3>(1);
+  const [selectedPlan, setSelectedPlan] = useState<Plan>(plan);
+  const [selectedPeriod, setSelectedPeriod] = useState<"monthly" | "yearly">(
+    period,
+  );
+  const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const meta = PLAN_META[selectedPlan];
+  const selectedPack = packs.find((pack) => pack.id === selectedPackId) ?? null;
+  const price =
+    selectedPeriod === "yearly"
+      ? pricing[selectedPlan].yearlyInr
+      : pricing[selectedPlan].monthlyInr;
 
   // No live mandate yet (free, or an operator-granted paid plan) → start a
   // fresh subscription for the target plan. An existing active subscription →
@@ -849,19 +871,79 @@ function UpgradeModal({
       ? pricing[currentPlan].yearlyInr
       : pricing[currentPlan].monthlyInr;
   const targetAmount =
-    period === "yearly" ? pricing[plan].yearlyInr : pricing[plan].monthlyInr;
+    selectedPeriod === "yearly"
+      ? pricing[selectedPlan].yearlyInr
+      : pricing[selectedPlan].monthlyInr;
   const dearer = targetAmount > currentAmount;
 
   const isPlanChange = hasActiveSubscription && purchasesAvailable;
-  const isNewSubscription = !hasActiveSubscription && purchasesAvailable;
+  const isNewSubscription =
+    selectedPlan !== "free" && !hasActiveSubscription && purchasesAvailable;
 
   // ★ THE NEW BILLING SYSTEM (§34). The first cycle is a one-time ORDER paid on
   // session, not a Razorpay Subscription — StoreMink computes the amount and the
   // gateway only collects it, so a later price change needs nothing updated at
   // the provider. See docs/billing-architecture.md §2.
+  async function buySelectedCredits() {
+    if (!selectedPack) {
+      setWorking(false);
+      onActivated();
+      return;
+    }
+
+    setWorking(true);
+
+    const start = await startCreditPurchase(selectedPack.id);
+    if ("error" in start) {
+      setWorking(false);
+      toast.info(
+        `Your plan change is complete, but the credit top-up could not start: ${start.error}`,
+      );
+      onActivated();
+      return;
+    }
+    const opened = await openRazorpayModal({
+      keyId: start.keyId,
+      rzpOrderId: start.rzpOrderId,
+      amountPaise: start.amountPaise,
+      name: "StoreMink",
+      description: `${selectedPack.credits} AI credits — one-time purchase`,
+      onSuccess: async (res) => {
+        const confirmed = await confirmCreditPurchase(
+          start.purchaseId,
+          res.razorpay_payment_id,
+          res.razorpay_signature,
+        );
+        setWorking(false);
+        if (confirmed.error) {
+          toast.info(
+            "The credit payment was received and is being reconciled. Don't pay again.",
+          );
+        } else {
+          toast.success(`${confirmed.creditsAdded} AI credits added.`);
+        }
+        onActivated();
+      },
+      onDismiss: () => {
+        setWorking(false);
+        toast.info(
+          "Your plan change is complete. The optional AI-credit purchase was cancelled.",
+        );
+        onActivated();
+      },
+    });
+    if (!opened) {
+      setWorking(false);
+      toast.info(
+        "Your plan change is complete, but the AI-credit payment window could not open.",
+      );
+      onActivated();
+    }
+  }
+
   async function subscribe() {
     setWorking(true);
-    const start = await startSubscribe(plan, period);
+    const start = await startSubscribe(selectedPlan, selectedPeriod);
     if (!start.ok) {
       toast.error(start.error);
       setWorking(false);
@@ -871,8 +953,9 @@ function UpgradeModal({
       keyId: start.keyId,
       rzpOrderId: start.providerOrderId,
       amountPaise: start.amountPaise,
+      customerId: start.providerCustomerId ?? undefined,
       name: "StoreMink",
-      description: `${meta.name} plan — first ${period === "yearly" ? "year" : "month"}`,
+      description: `${meta.name} plan — first ${selectedPeriod === "yearly" ? "year" : "month"}`,
       onSuccess: async (res) => {
         const confirmed = await confirmSubscribe(
           start.invoiceId,
@@ -894,7 +977,11 @@ function UpgradeModal({
             `You're on the ${meta.name} plan. Autopay isn't set up yet, so we'll ask you to pay each renewal.`,
           );
         }
-        onActivated();
+        if (!confirmed.ok) {
+          onActivated();
+        } else {
+          await buySelectedCredits();
+        }
       },
       onDismiss: () => {
         setWorking(false);
@@ -912,7 +999,7 @@ function UpgradeModal({
     // No `when` — the server derives it from the direction of the change.
     // Offering "switch now" on a downgrade looks helpful and is the option
     // that triggers a refund of money already paid.
-    const res = await changeMyPlan(plan, period);
+    const res = await changeMyPlan(selectedPlan, selectedPeriod);
     if (!res.ok) {
       setWorking(false);
       toast.error(res.error);
@@ -923,7 +1010,7 @@ function UpgradeModal({
     if (!res.payment) {
       setWorking(false);
       toast.success(res.message);
-      onActivated();
+      await buySelectedCredits();
       return;
     }
 
@@ -938,8 +1025,8 @@ function UpgradeModal({
       onSuccess: async (r) => {
         const done = await confirmMyPlanChange(
           res.payment!.invoiceId,
-          plan,
-          period,
+          selectedPlan,
+          selectedPeriod,
           r.razorpay_payment_id,
           r.razorpay_signature,
         );
@@ -950,7 +1037,11 @@ function UpgradeModal({
         } else {
           toast.success(`You're on ${meta.name}.`);
         }
-        onActivated();
+        if (!done.ok) {
+          onActivated();
+        } else {
+          await buySelectedCredits();
+        }
       },
       onDismiss: () => {
         setWorking(false);
@@ -963,79 +1054,328 @@ function UpgradeModal({
     }
   }
 
+  const steps = ["Choose plan", "AI credits", "Review & pay"];
+  const recurringLabel = selectedPeriod === "yearly" ? "year" : "month";
+
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
+    <Dialog open onOpenChange={(open) => !open && !working && onClose()}>
+      <DialogContent
+        showCloseButton={!working}
+        className="max-h-[calc(100dvh-1rem)] gap-0 overflow-hidden p-0 sm:max-w-5xl"
       >
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50">
-              <CalendarClock className="h-5 w-5 text-indigo-600" />
-            </div>
-            <h2 className="text-lg font-semibold text-[#111827]">
-              Move to {meta.name}
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[#6b7280] hover:bg-[#f3f4f6]"
-          >
-            <X className="h-4 w-4" />
-          </button>
+        <div className="border-b border-[#e5e7eb] bg-[#111827] px-6 py-5 text-white">
+          <DialogTitle className="text-xl font-semibold text-white">
+            Purchase subscription
+          </DialogTitle>
+          <DialogDescription className="mt-1 text-sm text-white/70">
+            Review every recurring and one-time charge before opening Razorpay.
+          </DialogDescription>
         </div>
 
-        <p className="mt-4 text-sm text-[#5b6472]">
-          The {meta.name} plan is{" "}
-          <span className="font-semibold text-[#111827]">
-            ₹{price.toLocaleString("en-IN")}
-            {period === "yearly" ? "/year" : "/month"}
-          </span>
-          .{" "}
-          {isNewSubscription
-            ? "You'll authorise autopay once — it then renews automatically, and you can cancel anytime."
-            : isPlanChange
-              ? "Choose when to start — right away (charged now, prorated) or at your next renewal, on your existing autopay."
-              : "This change isn't self-serve yet — our team will switch it for you."}
-        </p>
+        <ol className="grid grid-cols-3 border-b border-[#e5e7eb] bg-white px-4 py-4 sm:px-7">
+          {steps.map((label, index) => {
+            const number = (index + 1) as 1 | 2 | 3;
+            const complete = stage > number;
+            const current = stage === number;
+            return (
+              <li
+                key={label}
+                aria-current={current ? "step" : undefined}
+                className={`flex min-w-0 items-center gap-2 text-xs font-semibold sm:text-sm ${
+                  complete
+                    ? "text-green-600"
+                    : current
+                      ? "text-indigo-700"
+                      : "text-[#9ca3af]"
+                }`}
+              >
+                <span
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+                    complete
+                      ? "bg-green-600 text-white"
+                      : current
+                        ? "bg-indigo-700 text-white"
+                        : "bg-[#f3f4f6]"
+                  }`}
+                >
+                  {complete ? <Check className="h-4 w-4" /> : number}
+                </span>
+                <span className="truncate">{label}</span>
+              </li>
+            );
+          })}
+        </ol>
 
-        {isNewSubscription ? (
-          <button
-            type="button"
-            onClick={subscribe}
-            disabled={working}
-            className="dash-btn dash-btn-primary mt-5 w-full justify-center"
-          >
-            {working ? "Opening…" : "Subscribe & set up autopay"}
-          </button>
-        ) : isPlanChange ? (
-          <button
-            type="button"
-            onClick={doChange}
-            disabled={working}
-            className="dash-btn dash-btn-primary mt-5 w-full justify-center"
-          >
-            {working
-              ? "Working…"
-              : dearer
-                ? "Switch now (prorated)"
-                : "Schedule for next renewal"}
-          </button>
-        ) : (
-          <a
-            href="mailto:support@storemink.com?subject=Change%20my%20plan"
-            className="dash-btn dash-btn-primary mt-5 w-full justify-center"
-          >
-            Contact us to change plan
-          </a>
-        )}
-      </div>
-    </div>
+        <div className="grid min-h-0 overflow-y-auto bg-[#f8fafc] md:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="p-5 sm:p-7">
+            {stage === 1 && (
+              <div>
+                <h3 className="text-lg font-semibold text-[#111827]">
+                  Choose a plan and billing cycle
+                </h3>
+                <div className="mt-4 inline-flex rounded-lg border border-[#d1d5db] bg-white p-1">
+                  {(["yearly", "monthly"] as const).map((candidate) => (
+                    <button
+                      key={candidate}
+                      type="button"
+                      onClick={() => setSelectedPeriod(candidate)}
+                      className={`rounded-md px-4 py-2 text-sm font-semibold capitalize ${
+                        selectedPeriod === candidate
+                          ? "bg-indigo-700 text-white"
+                          : "text-[#5b6472]"
+                      }`}
+                    >
+                      {candidate}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                  {PLAN_IDS.map((candidate) => {
+                    const amount =
+                      selectedPeriod === "yearly"
+                        ? pricing[candidate].yearlyInr
+                        : pricing[candidate].monthlyInr;
+                    const selected = candidate === selectedPlan;
+                    const current =
+                      candidate === currentPlan &&
+                      (candidate === "free" ||
+                        selectedPeriod === currentPeriod);
+                    return (
+                      <button
+                        key={candidate}
+                        type="button"
+                        onClick={() => {
+                          if (!current) {
+                            setSelectedPlan(candidate);
+                            if (candidate === "free") setSelectedPackId(null);
+                          }
+                        }}
+                        disabled={current}
+                        className={`rounded-xl border bg-white p-4 text-left transition ${
+                          selected
+                            ? "border-indigo-700 ring-2 ring-indigo-100"
+                            : "border-[#e5e7eb] hover:border-indigo-300"
+                        } disabled:cursor-not-allowed disabled:bg-green-50/60`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-[#111827]">
+                            {PLAN_META[candidate].name}
+                          </span>
+                          {current && (
+                            <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-2 text-xl font-bold text-[#111827]">
+                          {amount === 0
+                            ? "Free"
+                            : `₹${amount.toLocaleString("en-IN")}`}
+                        </div>
+                        <div className="mt-1 text-xs text-[#5b6472]">
+                          {amount === 0
+                            ? "No recurring charge"
+                            : `Billed every ${recurringLabel}`}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {stage === 2 && (
+              <div>
+                <h3 className="text-lg font-semibold text-[#111827]">
+                  Optional AI credits
+                </h3>
+                <p className="mt-1 text-sm text-[#5b6472]">
+                  AI credits are a one-time purchase, never renew, and never
+                  expire. They use a separate payment and invoice from your
+                  plan.
+                </p>
+                {selectedPlan === "free" ? (
+                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+                    AI-credit top-ups require Basic or Pro. No add-on will be
+                    added to this change.
+                  </div>
+                ) : (
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPackId(null)}
+                      className={`rounded-xl border bg-white p-4 text-left ${
+                        selectedPackId === null
+                          ? "border-indigo-700 ring-2 ring-indigo-100"
+                          : "border-[#e5e7eb]"
+                      }`}
+                    >
+                      <span className="font-semibold text-[#111827]">
+                        No top-up
+                      </span>
+                      <p className="mt-1 text-xs text-[#5b6472]">
+                        Continue with the plan allowance.
+                      </p>
+                    </button>
+                    {packs.map((pack) => (
+                      <button
+                        key={pack.id}
+                        type="button"
+                        onClick={() => setSelectedPackId(pack.id)}
+                        className={`relative rounded-xl border bg-white p-4 text-left ${
+                          selectedPackId === pack.id
+                            ? "border-indigo-700 ring-2 ring-indigo-100"
+                            : "border-[#e5e7eb]"
+                        }`}
+                      >
+                        {pack.popular && (
+                          <span className="absolute right-3 top-3 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+                            Popular
+                          </span>
+                        )}
+                        <span className="font-semibold text-[#111827]">
+                          {pack.credits} credits
+                        </span>
+                        <p className="mt-1 text-sm font-semibold text-[#111827]">
+                          ₹{pack.priceInr.toLocaleString("en-IN")} once
+                        </p>
+                        <p className="mt-1 text-xs text-[#5b6472]">
+                          {pack.name} pack · never expires
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {stage === 3 && (
+              <div>
+                <h3 className="text-lg font-semibold text-[#111827]">
+                  Review before payment
+                </h3>
+                <div className="mt-5 divide-y divide-[#e5e7eb] rounded-xl border border-[#e5e7eb] bg-white px-5">
+                  <div className="flex justify-between gap-4 py-4 text-sm">
+                    <span className="text-[#5b6472]">Current plan</span>
+                    <span className="font-semibold text-[#111827]">
+                      {PLAN_META[currentPlan].name}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 py-4 text-sm">
+                    <span className="text-[#5b6472]">New plan</span>
+                    <span className="font-semibold text-[#111827]">
+                      {meta.name} · {selectedPeriod}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 py-4 text-sm">
+                    <span className="text-[#5b6472]">AI-credit add-on</span>
+                    <span className="text-right font-semibold text-[#111827]">
+                      {selectedPack
+                        ? `${selectedPack.credits} credits · ₹${selectedPack.priceInr.toLocaleString("en-IN")} once`
+                        : "None"}
+                    </span>
+                  </div>
+                </div>
+                {selectedPack && (
+                  <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-900">
+                    Two secure payment windows will open: the subscription
+                    first, then the optional one-time credit top-up. Cancelling
+                    the second does not undo the plan purchase.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <aside className="border-t border-[#e5e7eb] bg-white p-5 md:border-l md:border-t-0 sm:p-6">
+            <h3 className="font-semibold text-[#111827]">Summary</h3>
+            <dl className="mt-4 space-y-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <dt className="text-[#5b6472]">Plan</dt>
+                <dd className="font-semibold text-[#111827]">{meta.name}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-[#5b6472]">Billing</dt>
+                <dd className="font-semibold capitalize text-[#111827]">
+                  {selectedPeriod}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3 border-t border-[#e5e7eb] pt-3">
+                <dt className="font-semibold text-[#111827]">
+                  Advertised plan price
+                </dt>
+                <dd className="text-lg font-bold text-[#111827]">
+                  {price === 0 ? "Free" : `₹${price.toLocaleString("en-IN")}`}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-3 text-xs leading-5 text-[#5b6472]">
+              StoreMink calculates the exact prorated amount, account credit and
+              configured tax on the server. Razorpay shows that final amount
+              before you authorise payment.
+            </p>
+            <div className="mt-4 rounded-lg bg-green-50 p-3 text-xs leading-5 text-green-800">
+              <Lock className="mr-1 inline h-3.5 w-3.5" />
+              {isNewSubscription
+                ? "Autopay is offered when the mandate and billing contact are eligible; otherwise renewal stays manual."
+                : hasAutopay
+                  ? "Your authorised mandate remains attached. Charges outside its limits require manual approval."
+                  : "This subscription currently renews manually. This change does not pretend autopay is active."}
+            </div>
+
+            <div className="mt-6 space-y-2">
+              {stage < 3 ? (
+                <button
+                  type="button"
+                  onClick={() => setStage((stage + 1) as 2 | 3)}
+                  disabled={stage === 1 && selectedPlan === currentPlan}
+                  className="dash-btn dash-btn-primary w-full justify-center"
+                >
+                  {stage === 1 ? "Continue to AI credits" : "Review purchase"}
+                </button>
+              ) : isNewSubscription ? (
+                <button
+                  type="button"
+                  onClick={subscribe}
+                  disabled={working}
+                  className="dash-btn dash-btn-primary w-full justify-center"
+                >
+                  {working ? "Opening secure payment…" : "Continue to payment"}
+                </button>
+              ) : isPlanChange ? (
+                <button
+                  type="button"
+                  onClick={doChange}
+                  disabled={working}
+                  className="dash-btn dash-btn-primary w-full justify-center"
+                >
+                  {working
+                    ? "Preparing…"
+                    : dearer
+                      ? "Pay prorated change"
+                      : "Schedule at renewal"}
+                </button>
+              ) : (
+                <a
+                  href="mailto:support@storemink.com?subject=Change%20my%20plan"
+                  className="dash-btn dash-btn-primary w-full justify-center"
+                >
+                  Contact support
+                </a>
+              )}
+              {stage > 1 && !working && (
+                <button
+                  type="button"
+                  onClick={() => setStage((stage - 1) as 1 | 2)}
+                  className="dash-btn w-full justify-center"
+                >
+                  Back
+                </button>
+              )}
+            </div>
+          </aside>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

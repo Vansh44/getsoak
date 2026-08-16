@@ -28,6 +28,7 @@ import { logError, logWarn } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateOrder,
+  verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { beginAttempt, settleAttempt } from "./collect";
@@ -206,13 +207,18 @@ export async function confirmInvoicePayment(input: {
   if (!creds)
     return { ok: false, error: "Payments aren't available right now." };
 
-  let attempt: { id: string; providerOrderId: string | null } | null = null;
+  let attempt: {
+    id: string;
+    providerOrderId: string | null;
+    amountPaise: number;
+  } | null = null;
   try {
     attempt = await withService(async (db) => {
       const [row] = await db
         .select({
           id: billingPaymentAttempts.id,
           providerOrderId: billingPaymentAttempts.providerOrderId,
+          amountPaise: billingPaymentAttempts.amountPaise,
         })
         .from(billingPaymentAttempts)
         .where(
@@ -249,6 +255,20 @@ export async function confirmInvoicePayment(input: {
       invoiceId: input.invoiceId,
     });
     return { ok: false, error: "We couldn't verify that payment." };
+  }
+
+  const observedPayment = await verifyCapturedCheckoutPayment(creds, {
+    paymentId: input.providerPaymentId,
+    orderId: attempt.providerOrderId,
+    amountPaise: attempt.amountPaise,
+  });
+  if (!observedPayment.ok) {
+    logWarn("billing.manual_gateway_mismatch", {
+      storeId: input.storeId,
+      invoiceId: input.invoiceId,
+      reason: observedPayment.error,
+    });
+    return { ok: false, error: observedPayment.error };
   }
 
   const settled = await settleAttempt(attempt.id, "captured", {

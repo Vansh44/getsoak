@@ -29,6 +29,7 @@ import {
   capturedPayment,
   rzpCreateOrder,
   rzpFetchOrderPayments,
+  verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 
@@ -386,6 +387,7 @@ export async function confirmCreditPurchase(
         store_id: aiCreditPurchases.storeId,
         credits: aiCreditPurchases.credits,
         pack_id: aiCreditPurchases.packId,
+        amount_inr: aiCreditPurchases.amountInr,
         status: aiCreditPurchases.status,
         rzp_order_id: aiCreditPurchases.rzpOrderId,
       })
@@ -423,6 +425,20 @@ export async function confirmCreditPurchase(
   if (!valid) {
     console.error("confirmCreditPurchase: bad signature for", purchaseId);
     return { error: "Payment verification failed." };
+  }
+
+  const observedPayment = await verifyCapturedCheckoutPayment(creds, {
+    paymentId: rzpPaymentId,
+    orderId: purchase.rzp_order_id,
+    amountPaise: purchase.amount_inr * 100,
+  });
+  if (!observedPayment.ok) {
+    console.error(
+      "confirmCreditPurchase: gateway mismatch for",
+      purchaseId,
+      observedPayment.error,
+    );
+    return { error: observedPayment.error };
   }
 
   await settlePurchase(
