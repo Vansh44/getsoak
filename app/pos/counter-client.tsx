@@ -134,7 +134,15 @@ export function CounterClient({
   const [results, setResults] = useState<CounterRow[] | null>(null);
   const [lastSearched, setLastSearched] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [tendering, setTendering] = useState<PickupOrder | null>(null);
+  // `acked` rides along so the attestation survives the tender pad — otherwise
+  // confirming an unprepared order, then paying, would be refused by the server
+  // after the cashier had already keyed the cash in.
+  const [tendering, setTendering] = useState<{
+    order: PickupOrder;
+    acked: boolean;
+  } | null>(null);
+  const [confirmUnprepared, setConfirmUnprepared] =
+    useState<PickupOrder | null>(null);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
 
@@ -246,19 +254,35 @@ export function CounterClient({
     settle(id, message);
   };
 
-  /** Nothing owed hands over straight away; money due opens the tender pad. */
-  const handOver = (o: PickupOrder) => {
-    if (o.amountDue > 0) {
-      setTendering(o);
+  /**
+   * Nothing owed hands over straight away; money due opens the tender pad.
+   *
+   * An order nobody marked ready is confirmed first (`handoverGate`): the shop
+   * may genuinely be packing it while the customer waits, so this is a question,
+   * not a refusal — but it must never be the thing a mis-tap does.
+   */
+  const handOver = (o: PickupOrder, acked = false) => {
+    if (!acked && o.status !== "ready") {
+      setConfirmUnprepared(o);
       return;
     }
-    void act(o.id, markCollected, "Handed over.");
+    if (o.amountDue > 0) {
+      setTendering({ order: o, acked });
+      return;
+    }
+    void act(
+      o.id,
+      (id) => markCollected(id, [], { acknowledgeUnprepared: acked }),
+      "Handed over.",
+    );
   };
 
   const takePayment = async (tenders: PosTender[]) => {
-    const o = tendering;
-    if (!o) return {};
-    const res = await markCollected(o.id, tenders);
+    if (!tendering) return {};
+    const { order: o, acked } = tendering;
+    const res = await markCollected(o.id, tenders, {
+      acknowledgeUnprepared: acked,
+    });
     if (res.error) {
       // The panel stays open — the customer is standing there and the cashier
       // needs to see why, and to retry, without re-entering the tender. But the
@@ -407,17 +431,26 @@ export function CounterClient({
                 type="button"
                 disabled={busy === o.id}
                 onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
-                className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
               >
                 <PackageCheck className="h-4 w-4" />
                 Mark ready
               </button>
             )}
+            {/* ★ WHICH ONE IS LOUD FOLLOWS WHICH ONE IS EXPECTED. On an
+              unprepared order the next step is packing it, so hand-over drops
+              to secondary while "Mark ready" takes the green — for a cashier
+              with no `fulfil_pickup` there is no other button, so it stays
+              primary and their one action is not greyed into the background. */}
             <button
               type="button"
               disabled={busy === o.id}
               onClick={() => handOver(o)}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 ${
+                o.status === "awaiting" && canFulfilPickup
+                  ? "bg-white/10 font-medium hover:bg-white/20"
+                  : "bg-emerald-600 font-semibold hover:bg-emerald-500"
+              }`}
             >
               {busy === o.id ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -620,12 +653,49 @@ export function CounterClient({
 
       {tendering && (
         <TenderPanel
-          total={tendering.amountDue}
-          title={`Collect ${tendering.orderRef}`}
+          total={tendering.order.amountDue}
+          title={`Collect ${tendering.order.orderRef}`}
           confirmLabel="Take payment & hand over"
           onCancel={() => setTendering(null)}
           onComplete={takePayment}
         />
+      )}
+
+      {/* ★ A QUESTION, NOT A WARNING. The shop may well be packing this while
+        the customer waits, so the cashier is asked the one thing only they can
+        answer — is the box actually in your hands — rather than being told off.
+        It exists so that closing an unprepared order is never what a mis-tap
+        does. */}
+      {confirmUnprepared && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 p-5 ring-1 ring-white/10">
+            <h2 className="text-lg font-semibold">Not marked ready yet</h2>
+            <p className="mt-2 text-sm text-white/65">
+              Nobody has checked {confirmUnprepared.orderRef} off as packed. Do
+              you have the goods to hand over now?
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmUnprepared(null)}
+                className="flex-1 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
+              >
+                Not yet
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const o = confirmUnprepared;
+                  setConfirmUnprepared(null);
+                  handOver(o, true);
+                }}
+                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500"
+              >
+                Yes, hand over
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </PosScreen>
   );

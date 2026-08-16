@@ -3277,6 +3277,49 @@ group, span}` (span = columns of the 4-wide desktop grid),
         there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
         **no test coverage at all** before this; it does now, in both
         directions.
+      - **★★ BUT THE READY STEP WAS SKIPPABLE, SILENTLY** (`handoverGate`,
+        `lib/pos/collection-state.ts`; found 2026-08-16). `markCollected`
+        claimed `awaiting|ready` alike and the row drew ONE green button for
+        either, so a cashier could close an order out of the "To prepare"
+        queue that nobody had packed, in a single tap. The queue's two sections
+        exist to separate work the SHOP owes from parcels waiting on a
+        CUSTOMER, and this let the first vanish without being done.
+      - **★ REFUSING OUTRIGHT WOULD HAVE BEEN THE WRONG FIX**, and it is worth
+        being precise about why, because it is the obvious move. Marking ready
+        is manager-only, so a hard gate strands a cashier alone at the counter
+        with the customer in front of them, unable to serve an order the shop
+        can see — and someone who ordered online and walked in before the shop
+        got to it is an ORDINARY collection, not an error.
+      - **★ SO: POSSIBLE, DELIBERATE, RECORDED.** "Mark ready" conflates two
+        acts — _the goods are packed_ (a physical fact) and _tell the customer
+        to travel_ (a promise, and the entire reason for the manager gate).
+        When the customer is already at the counter the second is moot, and the
+        person holding the box is the best witness there is to the first. So a
+        hand-over from `awaiting` needs an ACKNOWLEDGEMENT, not a manager:
+        `needsPreparedAck` turns the server's refusal into a dialog asking the
+        one thing only the cashier can answer. It is never what a mis-tap does,
+        and the refusal lands BEFORE the money read and the claim, so nothing
+        has moved when it fires.
+      - **★ THE AUDIT TRAIL NEEDS NO NEW COLUMN.** The claim writes
+        `pickup_ready_at = coalesce(pickup_ready_at, now())` in the SAME
+        statement as `collected_at`, so the two are byte-identical exactly when
+        nobody prepared it, and a genuine earlier ready time is preserved. It
+        also stops the shopper's tracker showing a collection that skipped a
+        step it claims to have.
+      - **★ THE SETTINGS READ IS SKIPPED ON THE ORDINARY PATH.** A prepared
+        order is allowed whatever the policy says, so consulting it would be a
+        round trip that cannot change the outcome — the shape of thing that
+        makes a till feel slow. Pinned by a test.
+      - **`fulfilment.collectUnprepared`** (`anyone` | `manager_only`, section
+        `locations`, Pro, `dependsOn: fulfilment.offerPickup`) lets a shop where
+        picking is a separate job from serving demand the manager. `anyone` is
+        both today's behaviour (invariant 1) and the right default. Under
+        `manager_only` a cashier gets the REASON and no dialog — a prompt they
+        could never satisfy is worse than a plain refusal.
+      - **Shopify's flow is the same two steps** — prepare → _Mark as ready for
+        pickup_ (which sends the customer notification) → _Mark as picked up_ —
+        though it puts no manager/cashier split on either.
+        ([Shopify Help Center](https://help.shopify.com/en/manual/sell-in-person/shopify-pos/order-management/local-pickup-for-online-orders))
       - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
         (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
         not a delivery with a different address, and these pages used one

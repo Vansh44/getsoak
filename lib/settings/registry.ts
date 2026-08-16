@@ -46,6 +46,7 @@ export const SETTING_KEYS = [
   "fulfilment.pickupReadyDays",
   "fulfilment.pickupHoldDays",
   "fulfilment.pickupPayment",
+  "fulfilment.collectUnprepared",
   "orders.allowCustomerCancellation",
   "orders.cancellationWindow",
   "orders.cancellationWindowHours",
@@ -330,6 +331,37 @@ export const SETTINGS: readonly SettingDef[] = [
         label: "Pay at the counter only",
         description:
           "Nothing is charged online; the shop takes payment on collection.",
+      },
+    ],
+    minPlan: "pro",
+    dependsOn: "fulfilment.offerPickup",
+  },
+  {
+    key: "fulfilment.collectUnprepared",
+    label: "Handing over an order nobody marked ready",
+    description:
+      "A customer sometimes walks in before the shop has packed their order. This is who may serve them. Either way the till asks the cashier to confirm the goods are in hand — it is never a single tap.",
+    group: "Checkout",
+    section: "locations",
+    type: "select",
+    // ★ `anyone` IS TODAY'S BEHAVIOUR (roadmap invariant 1) — and it is also the
+    // right default. Marking ready is manager-only because it TELLS A CUSTOMER
+    // TO TRAVEL; when they are already at the counter that reason is gone, and a
+    // cashier holding the box is the best witness there is that it is packed.
+    // The bug being fixed was that this happened SILENTLY, not that it happened.
+    defaultValue: "anyone",
+    options: [
+      {
+        value: "anyone",
+        label: "Anyone at the till",
+        description:
+          "A cashier can pack and hand over on the spot, after confirming they have the goods.",
+      },
+      {
+        value: "manager_only",
+        label: "Only a manager",
+        description:
+          "A cashier must get someone with pickup permission to check the order off first. Choose this where picking is a separate job from serving.",
       },
     ],
     minPlan: "pro",

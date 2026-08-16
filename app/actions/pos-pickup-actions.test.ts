@@ -70,17 +70,23 @@ const CLAIMED = [
   },
 ];
 
+// Both fixtures are `ready`: these cases exercise the MONEY path, and an order
+// at the counter has normally been packed and checked off. The preparation gate
+// gets its own block below — leaving the status unset here would make every one
+// of these a test of `handoverGate` by accident.
 /** The pre-claim read: an order still owing money at the counter. */
 const UNPAID = {
   total: 340,
   payment_method: "pay_at_store",
   payment_status: "pending",
+  pickup_status: "ready",
 };
 /** The common case — bought and paid for online, just being picked up. */
 const PREPAID = {
   total: 340,
   payment_method: "razorpay",
   payment_status: "paid",
+  pickup_status: "ready",
 };
 
 /** markCollected's reads in order: the pre-claim look, then this order's holds. */
@@ -427,12 +433,132 @@ describe("markReadyForPickup — the capability split", () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     dbHolder.current = makeDbMock({
       selectQueue: [
-        [{ total: 0, payment_method: "razorpay", payment_status: "paid" }],
+        [
+          {
+            total: 0,
+            payment_method: "razorpay",
+            payment_status: "paid",
+            pickup_status: "ready",
+          },
+        ],
       ],
       returning: CLAIMED,
     });
     const res = await markCollected("ord-1");
     expect(res.error).toBeUndefined();
     expect(res.success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handing over an order nobody prepared
+//
+// markCollected accepted 'awaiting' as readily as 'ready', so a cashier could
+// close an order out of the "To prepare" queue that nobody had packed, in one
+// tap, silently. The fix is an acknowledgement, not a refusal: a customer who
+// arrives before the shop has packed is ordinary, and a cashier alone at the
+// counter must still be able to serve them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The literal text of a Drizzle `sql` fragment.
+ *
+ * It cannot be stringified — a fragment holds Column objects, and a column
+ * points back at its table, which points back at the column.
+ */
+const sqlText = (frag: unknown): string =>
+  ((frag as { queryChunks?: unknown[] })?.queryChunks ?? [])
+    .map((c) => {
+      const v = (c as { value?: unknown })?.value;
+      return Array.isArray(v) ? v.join("") : "";
+    })
+    .join(" ");
+
+describe("markCollected — an order that was never marked ready", () => {
+  const AWAITING = { ...PREPAID, pickup_status: "awaiting" };
+
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+    vi.mocked(getStoreSettings).mockResolvedValue({} as any);
+  });
+
+  it("refuses the first tap and offers the confirmation", async () => {
+    dbHolder.current = seed(AWAITING);
+    const res = await markCollected("ord-1");
+    expect(res.success).toBeUndefined();
+    expect(res.error).toMatch(/hasn't been marked ready/i);
+    expect(res.needsPreparedAck).toBe(true);
+    // ★ NOTHING MOVED. The refusal lands before the claim, so the goods stay on
+    // the shelf and the order is still waiting — the same ordering the money
+    // read already uses.
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("goes through once the cashier confirms they have the goods", async () => {
+    dbHolder.current = seed(AWAITING);
+    const res = await markCollected("ord-1", [], {
+      acknowledgeUnprepared: true,
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.success).toBe(true);
+  });
+
+  // ★ THE AUDIT TRAIL WITH NO NEW COLUMN: pickup_ready_at is written by the
+  // same statement as collected_at, so the two match exactly when nobody
+  // prepared it — and coalesce keeps a genuine earlier one.
+  it("stamps a ready time so the shopper's tracker is coherent", async () => {
+    dbHolder.current = seed(AWAITING);
+    await markCollected("ord-1", [], { acknowledgeUnprepared: true });
+    const set = dbHolder.current.calls.set[0];
+    expect(set.pickupReadyAt).toBeDefined();
+    expect(sqlText(set.pickupReadyAt)).toMatch(/coalesce/i);
+  });
+
+  it("under manager_only a cashier is refused, and offered no dialog", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      "fulfilment.collectUnprepared": "manager_only",
+    } as any);
+    dbHolder.current = seed(AWAITING);
+    const res = await markCollected("ord-1", [], {
+      acknowledgeUnprepared: true,
+    });
+    expect(res.error).toMatch(/ask a manager/i);
+    // A prompt this cashier could never satisfy is worse than the reason.
+    expect(res.needsPreparedAck).toBeUndefined();
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("under manager_only a manager may still confirm", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      "fulfilment.collectUnprepared": "manager_only",
+    } as any);
+    vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
+    dbHolder.current = seed(AWAITING);
+    const res = await markCollected("ord-1", [], {
+      acknowledgeUnprepared: true,
+    });
+    expect(res.success).toBe(true);
+  });
+
+  // A settings outage must not stop a shop handing over paid-for goods.
+  it("falls back to allowing when settings cannot be read", async () => {
+    vi.mocked(getStoreSettings).mockRejectedValue(new Error("down"));
+    dbHolder.current = seed(AWAITING);
+    const res = await markCollected("ord-1", [], {
+      acknowledgeUnprepared: true,
+    });
+    expect(res.success).toBe(true);
+  });
+
+  // ★ The acknowledgement is for the PREPARATION step only. It must not become
+  // a way to wave through an order that is already collected or expired — that
+  // is still the claim's job, and it matches zero rows.
+  it("does not let the acknowledgement revive a dead order", async () => {
+    dbHolder.current = seed(null);
+    const res = await markCollected("ord-1", [], {
+      acknowledgeUnprepared: true,
+    });
+    expect(res.success).toBeUndefined();
+    expect(res.error).toBeTruthy();
   });
 });

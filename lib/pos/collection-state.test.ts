@@ -4,7 +4,10 @@ import { join } from "node:path";
 import {
   collectionNote,
   collectionState,
+  handoverGate,
   isCollectable,
+  isPrepared,
+  normalizeUnpreparedPolicy,
 } from "./collection-state";
 
 const NOW = new Date("2026-08-12T10:00:00.000Z");
@@ -143,4 +146,110 @@ describe("collection state", () => {
       .sort();
     expect(live).toEqual(claimed);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Handing over something nobody prepared
+//
+// The bug: markCollected accepted 'awaiting' as readily as 'ready', and the row
+// drew one green button for either — so a cashier could close an order out of
+// the "To prepare" queue that nobody had packed, in one tap, silently.
+// ---------------------------------------------------------------------------
+
+describe("handoverGate", () => {
+  const ready = { status: "ready", canFulfilPickup: false } as const;
+  const awaiting = { status: "awaiting", canFulfilPickup: false } as const;
+
+  it("lets a prepared order straight through", () => {
+    expect(handoverGate({ ...ready, policy: "anyone" })).toEqual({
+      allowed: true,
+      unprepared: false,
+    });
+  });
+
+  // A prepared order must never ask for an acknowledgement — a confirmation on
+  // the ordinary path is one people learn to dismiss without reading, which is
+  // what would make it useless on the path that needs it.
+  it("never asks about an order that was marked ready", () => {
+    for (const policy of ["anyone", "manager_only"] as const) {
+      for (const canFulfilPickup of [true, false]) {
+        expect(
+          handoverGate({ status: "ready", canFulfilPickup, policy }),
+        ).toEqual({ allowed: true, unprepared: false });
+      }
+    }
+  });
+
+  it("stops an unprepared order until it is acknowledged", () => {
+    const r = handoverGate({ ...awaiting, policy: "anyone" });
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.reason).toMatch(/hasn't been marked ready/i);
+  });
+
+  // ★ POSSIBLE, DELIBERATE, RECORDED. A customer who arrives before the shop
+  // has packed is ordinary, and a cashier alone at the counter must be able to
+  // serve them — the acknowledgement is what stops it being a mis-tap.
+  it("lets an acknowledged cashier hand over, and flags it as unprepared", () => {
+    expect(
+      handoverGate({ ...awaiting, policy: "anyone", acknowledged: true }),
+    ).toEqual({ allowed: true, unprepared: true });
+  });
+
+  it("refuses a cashier outright under manager_only, ack or not", () => {
+    for (const acknowledged of [true, false]) {
+      const r = handoverGate({
+        ...awaiting,
+        policy: "manager_only",
+        acknowledged,
+      });
+      expect(r.allowed).toBe(false);
+      if (!r.allowed) expect(r.reason).toMatch(/ask a manager/i);
+    }
+  });
+
+  it("still asks a manager to acknowledge under manager_only", () => {
+    expect(
+      handoverGate({
+        status: "awaiting",
+        canFulfilPickup: true,
+        policy: "manager_only",
+      }).allowed,
+    ).toBe(false);
+    expect(
+      handoverGate({
+        status: "awaiting",
+        canFulfilPickup: true,
+        policy: "manager_only",
+        acknowledged: true,
+      }),
+    ).toEqual({ allowed: true, unprepared: true });
+  });
+
+  // An unknown or missing status is not "ready", so it takes the careful path
+  // rather than being waved through.
+  it.each([[null], [undefined], [""], ["collected"], ["nonsense"]])(
+    "treats the status %s as unprepared",
+    (status) => {
+      expect(isPrepared(status as string | null | undefined)).toBe(false);
+      expect(
+        handoverGate({ status, canFulfilPickup: false, policy: "anyone" })
+          .allowed,
+      ).toBe(false);
+    },
+  );
+});
+
+describe("normalizeUnpreparedPolicy", () => {
+  it("reads the one value that restricts", () => {
+    expect(normalizeUnpreparedPolicy("manager_only")).toBe("manager_only");
+  });
+
+  // ★ Anything unrecognised resolves to today's behaviour, so a typo or a
+  // half-written setting cannot quietly stop a shop serving customers.
+  it.each([[null], [undefined], ["anyone"], ["ANYONE"], [true], [0], [{}]])(
+    "falls back to anyone for %s",
+    (v) => {
+      expect(normalizeUnpreparedPolicy(v)).toBe("anyone");
+    },
+  );
 });

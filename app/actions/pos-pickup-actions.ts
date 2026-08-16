@@ -50,6 +50,12 @@ import {
 } from "@/lib/pos/tenders";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import {
+  handoverGate,
+  isPrepared,
+  normalizeUnpreparedPolicy,
+  type UnpreparedPolicy,
+} from "@/lib/pos/collection-state";
 
 /**
  * The shop an order is waiting at, returned alongside the claim itself.
@@ -196,7 +202,16 @@ export async function markCollected(
   /** What the customer handed over at the counter. Empty for an order already
    *  paid online, which is most of them. */
   tenders: PosTender[] = [],
-): Promise<{ success?: boolean; error?: string; changeDue?: number }> {
+  /** The cashier's attestation that an unprepared order is actually packed. */
+  opts: { acknowledgeUnprepared?: boolean } = {},
+): Promise<{
+  success?: boolean;
+  error?: string;
+  changeDue?: number;
+  /** The order was never marked ready and needs an explicit confirmation. The
+   *  counter turns this into a dialog rather than a dead error. */
+  needsPreparedAck?: boolean;
+}> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
@@ -213,6 +228,7 @@ export async function markCollected(
         total: unknown;
         payment_method: string | null;
         payment_status: string | null;
+        pickup_status: string | null;
       }
     | undefined;
   try {
@@ -222,6 +238,7 @@ export async function markCollected(
           total: orders.total,
           payment_method: orders.paymentMethod,
           payment_status: orders.paymentStatus,
+          pickup_status: orders.pickupStatus,
         })
         .from(orders)
         .where(
@@ -242,6 +259,49 @@ export async function markCollected(
     return { error: dbErrorMessage(err, "Couldn't read the order.") };
   }
   if (!owed) return { error: NOT_WAITING };
+
+  // ── Was this order ever prepared? ────────────────────────────────────────
+  // BEFORE the tenders, for the reason the money read is before the claim: a
+  // refusal has to land while the goods are still on the shelf and nothing has
+  // been taken. See `handoverGate` for why an unprepared collection is confirmed
+  // rather than forbidden — a customer who arrives before the shop has packed is
+  // ordinary, and a cashier alone at the counter must still be able to serve
+  // them.
+  // The settings read is skipped entirely for an order that WAS marked ready —
+  // the ordinary case, and `handoverGate` allows it whatever the policy says. A
+  // round trip on the common path to answer a question that cannot change the
+  // outcome is the shape of thing that makes a till feel slow.
+  if (!isPrepared(owed.pickup_status)) {
+    let policy: UnpreparedPolicy = "anyone";
+    try {
+      policy = normalizeUnpreparedPolicy(
+        (await getStoreSettings())["fulfilment.collectUnprepared"],
+      );
+    } catch {
+      // A settings blip must not refuse a customer standing at the counter —
+      // the same posture the shift lookup below takes.
+      policy = "anyone";
+    }
+    const canFulfilPickup = posCan(op.role, "fulfil_pickup");
+    const gate = handoverGate({
+      status: owed.pickup_status,
+      canFulfilPickup,
+      policy,
+      acknowledged: opts.acknowledgeUnprepared === true,
+    });
+    if (!gate.allowed) {
+      return {
+        error: gate.reason,
+        // Only an acknowledgeable refusal offers the dialog. Under
+        // `manager_only` there is nothing for this cashier to confirm, so the
+        // counter shows the reason and stops rather than popping a prompt that
+        // cannot succeed.
+        ...(policy === "anyone" || canFulfilPickup
+          ? { needsPreparedAck: true }
+          : {}),
+      };
+    }
+  }
 
   const due = amountDueAtCollection({
     paymentMethod: owed.payment_method,
@@ -317,6 +377,14 @@ export async function markCollected(
           collectedAt: sql`now()`,
           collectedBy: op.staffId ?? op.name,
           status: "completed",
+          // ★ THE AUDIT TRAIL, WITH NO NEW COLUMN. An order handed over straight
+          // from 'awaiting' never had a ready timestamp, which would leave the
+          // shopper's tracker showing a collection that jumped a step it says it
+          // has. This is written by the SAME statement as `collected_at`, so the
+          // two are byte-identical exactly when nobody prepared it — and `coalesce`
+          // keeps a genuine earlier one, which is what makes the difference
+          // readable afterwards.
+          pickupReadyAt: sql`coalesce(${orders.pickupReadyAt}, now())`,
           // "Pay at store" means the money changes hands at the counter — so
           // handing the order over IS the payment. Only that method is
           // settled here: an order already paid online must not be touched,
