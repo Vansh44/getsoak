@@ -6,9 +6,10 @@ import "server-only";
  * Design: docs/billing-architecture.md §7.
  *
  * ★★ THE FIRST CYCLE IS ALWAYS ON SESSION, with the merchant watching. When the
- * rollout gate, mandate ceiling and billing-contact checks pass, the same
- * verified payment also registers the mandate used by later automatic renewal;
- * otherwise it stays an ordinary one-time checkout and renewal remains manual.
+ * same verified payment also registers the mandate used by later automatic
+ * renewal. A new subscription now fails before Checkout when that mandate
+ * cannot be prepared; silently accepting a one-time first cycle misrepresents
+ * an autopay subscription and guarantees a surprise manual renewal.
  *
  * ★★ THE PLAN IS NOT GRANTED UNTIL THE PAYMENT IS CAPTURED. There is no grace on
  * the first cycle — grace exists for RENEWALS, where the merchant has already
@@ -37,7 +38,6 @@ import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateAuthorizationOrder,
   rzpCreateCustomer,
-  rzpCreateOrder,
   rzpFetchPayment,
   verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
@@ -84,11 +84,8 @@ export interface EnrolmentStart {
   amountPaise: number;
   /** What the merchant will be asked to authorise for future cycles. */
   suggestedMandateMaxPaise: number;
-  /**
-   * The Razorpay customer to attach at checkout, or null for a plain one-time
-   * payment. Non-null means this checkout ALSO registers a mandate.
-   */
-  providerCustomerId: string | null;
+  /** The Razorpay customer Checkout must bind to the recurring authorisation. */
+  providerCustomerId: string;
 }
 
 export type EnrolmentResult<T> =
@@ -200,6 +197,36 @@ export async function startEnrolment(input: {
 
   const price = await input.priceFor(input.plan, input.period);
   const tax = await loadTaxContext(input.storeId);
+  const mandateMax = mandateSizePaise({
+    planPaise: price.planPaise,
+    taxInclusive: tax.inclusive,
+  });
+
+  // A paid subscription is an autopay product. Never silently turn its first
+  // cycle into an ordinary payment: that succeeds today and surprises the
+  // merchant with a manual invoice next renewal.
+  if (!RECURRING_CHARGE_VERIFIED) {
+    return {
+      ok: false,
+      error: "Autopay is unavailable right now. No payment was taken.",
+    };
+  }
+  if (!mandateFitsGateway(mandateMax)) {
+    return {
+      ok: false,
+      error:
+        "This billing option is above Razorpay's autopay limit. Choose a shorter billing period. No payment was taken.",
+    };
+  }
+  const customerId = await ensureRzpCustomer(creds, input.storeId);
+  if (!customerId) {
+    return {
+      ok: false,
+      error:
+        "We couldn't prepare autopay. Check your billing email and phone, then try again. No payment was taken.",
+    };
+  }
+
   const cycle = cycleFrom(now, input.period, FIRST_CYCLE);
 
   // ★ No locations on a first cycle. Extra shops are bought AFTER a plan is
@@ -262,11 +289,6 @@ export async function startEnrolment(input: {
     return { ok: false, error: "Couldn't work out what's due." };
   }
 
-  const mandateMax = mandateSizePaise({
-    planPaise: price.planPaise,
-    taxInclusive: tax.inclusive,
-  });
-
   const attempt = await beginAttempt({
     invoiceId: invoice.id,
     storeId: input.storeId,
@@ -274,10 +296,7 @@ export async function startEnrolment(input: {
     mode: "manual",
     // Durable before checkout. Confirmation copies this exact value into the
     // mandate rather than trusting the browser or recomputing after a reprice.
-    mandateMaxPaise:
-      RECURRING_CHARGE_VERIFIED && mandateFitsGateway(mandateMax)
-        ? mandateMax
-        : null,
+    mandateMaxPaise: mandateMax,
   });
 
   // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
@@ -301,10 +320,9 @@ export async function startEnrolment(input: {
           keyId: creds.keyId,
           amountPaise: resumable.amountPaise,
           suggestedMandateMaxPaise: resumable.mandateMaxPaise ?? mandateMax,
-          // ★ A resumed order was created with whatever terms it had; the
-          // customer is already baked into it at the gateway. Re-attaching one
-          // here would be a second, different answer for the same order.
-          providerCustomerId: null,
+          // Checkout requires the same customer binding on every open. The
+          // order carrying customer_id is not enough by itself.
+          providerCustomerId: customerId,
         },
       };
     }
@@ -316,23 +334,6 @@ export async function startEnrolment(input: {
     };
   }
 
-  // ★★ AUTOPAY IS OFFERED ONLY WHEN WE COULD ACTUALLY COLLECT.
-  //
-  // Three conditions, and every one of them is a way a merchant would otherwise
-  // be told autopay is set up and then invoiced by hand forever:
-  //   • the charge path is verified (RECURRING_CHARGE_VERIFIED),
-  //   • the mandate fits Razorpay's ₹99,999 ceiling — above it the
-  //     AUTHORISATION ORDER itself is rejected (mandateFitsGateway),
-  //   • we have a billing contact, because a mandate belongs to a CUSTOMER and
-  //     the customer needs an email or a phone.
-  // Fail any of them and this stays an ordinary one-time checkout, which is a
-  // complete billing path on its own.
-  const wantsMandate =
-    RECURRING_CHARGE_VERIFIED && mandateFitsGateway(mandateMax);
-  const customerId = wantsMandate
-    ? await ensureRzpCustomer(creds, input.storeId)
-    : null;
-
   const notes = {
     store_id: input.storeId,
     invoice_id: invoice.id,
@@ -340,30 +341,23 @@ export async function startEnrolment(input: {
     // match it even if we never see the response.
     sm_billing_key: attempt.idempotencyKey,
   };
-  const order = customerId
-    ? await rzpCreateAuthorizationOrder(creds, {
-        amountPaise: amountDue,
-        customerId,
-        terms: {
-          maxAmountPaise: mandateMax,
-          // The mandate outlives the cycle it was authorised in; Razorpay wants
-          // Unix SECONDS, not milliseconds.
-          expireAtUnix: Math.floor(
-            new Date(
-              now.getTime() + MANDATE_YEARS * 365 * 86_400_000,
-            ).getTime() / 1000,
-          ),
-          frequency: input.period === "yearly" ? "yearly" : "monthly",
-        },
-        receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
-        description: "StoreMink subscription",
-        notes,
-      })
-    : await rzpCreateOrder(creds, {
-        amountPaise: amountDue,
-        receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
-        notes,
-      });
+  const order = await rzpCreateAuthorizationOrder(creds, {
+    amountPaise: amountDue,
+    customerId,
+    terms: {
+      maxAmountPaise: mandateMax,
+      // The mandate outlives the cycle it was authorised in; Razorpay wants
+      // Unix SECONDS, not milliseconds.
+      expireAtUnix: Math.floor(
+        new Date(now.getTime() + MANDATE_YEARS * 365 * 86_400_000).getTime() /
+          1000,
+      ),
+      frequency: input.period === "yearly" ? "yearly" : "monthly",
+    },
+    receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
+    description: "StoreMink subscription",
+    notes,
+  });
   if (!order.ok) {
     // A rejected order means nothing was created at the gateway, so the attempt
     // is genuinely dead. An UNKNOWN is left in flight for reconciliation.
@@ -810,10 +804,9 @@ async function activateSubscription(input: {
 /**
  * The Razorpay customer a mandate hangs off.
  *
- * ★ Best-effort by design: a failure here returns null, which downgrades this
- * checkout to an ordinary one-time payment rather than refusing the merchant's
- * subscription. Losing autopay is a smaller harm than losing the sale, and the
- * next renewal simply asks them to pay an invoice.
+ * Required before a new subscription checkout. A failure returns null and the
+ * caller stops before Razorpay opens; it must never silently sell an autopay
+ * subscription as a one-time payment.
  */
 async function ensureRzpCustomer(
   creds: { keyId: string; keySecret: string },
@@ -839,8 +832,7 @@ async function ensureRzpCustomer(
 /**
  * What mandate, if any, did this payment register?
  *
- * ★ Returns null for an ordinary one-time payment — most of them — so the
- * absence of a token is the normal case, not an error. A failed lookup is also
+ * ★ A missing token is anomalous for enrolment, but a failed lookup is still
  * null: the money is already captured by this point and the plan must be
  * granted regardless, so losing autopay is the acceptable half of that trade.
  */

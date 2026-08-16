@@ -78,15 +78,17 @@ Repeat with browser location allowed and then correct a geocoded field.
 code and country when its provider resolves them, but every field remains
 editable and coordinates remain optional.
 
-**PS-0.6 ★★ — Signup shows and charges the operator price**
+**PS-0.6 ★★ — Signup is Free-first; dashboard upgrade uses operator pricing**
 In the platform Pricing console set Basic to ₹1,500/month and ₹15,000/year with
 ₹2,000/₹20,000 "Was" prices; set Pro to ₹2,400/month and ₹24,000/year with
-₹5,000/₹50,000 "Was" prices. Open a fresh signup plan step.
-**Expect:** Basic shows ₹1,500 monthly or ₹1,250/month billed ₹15,000 yearly;
-Pro shows ₹2,400 monthly or ₹2,000/month billed ₹24,000 yearly; the matching
-"Was" figures are struck through. No deploy is required. If the live pricing
-read fails, paid cards do not quote code defaults and no paid checkout starts;
-Free remains available.
+₹5,000/₹50,000 "Was" prices. Complete a fresh signup, then open Plans & Billing
+from the new store dashboard.
+**Expect:** signup has six stages, no plan/payment screen and creates an active
+Free store immediately after Theme. The dashboard upgrade window shows Basic at
+₹1,500 monthly or ₹1,250/month billed ₹15,000 yearly and Pro at ₹2,400 monthly
+or ₹2,000/month billed ₹24,000 yearly, with matching "Was" figures struck
+through. If the live pricing read fails, no paid checkout starts and the Free
+store remains usable.
 
 ---
 

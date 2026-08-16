@@ -61,6 +61,14 @@ Verified against Razorpay's live documentation, August 2026:
 So the collection model becomes **token-based recurring**: authorise once,
 then charge the amount StoreMink computed, every cycle.
 
+The first-cycle Checkout is part of that authorisation, not a separate ordinary
+sale. The server creates a customer-bound authorisation order and Standard
+Checkout receives `order_id`, the same `customer_id`, and explicit
+`recurring: true` (Razorpay's default is false). If StoreMink cannot prepare
+those terms it refuses enrolment before Checkout opens; it does not collect a
+one-time first cycle and call that an autopay subscription. AI credits and
+immediate location/plan-change invoices remain deliberately one-time.
+
 ### 2a. ★★ Two different ceilings — do not conflate them
 
 This is the most misquoted pair of numbers in Indian recurring payments, and the

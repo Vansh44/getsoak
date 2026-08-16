@@ -14,13 +14,11 @@
  */
 
 import { revalidateTag } from "next/cache";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getActingStoreId, getManagerUserId } from "@/app/dashboard/lib/access";
-import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
-import { admins, stores } from "@/drizzle/schema";
+import { stores } from "@/drizzle/schema";
 import { getCurrentStore, STORE_TAG } from "@/lib/store/resolve";
-import { logError } from "@/lib/observability/logger";
 import {
   getExtraLocationPricingLive,
   getPlanPricingLive,
@@ -105,9 +103,8 @@ export async function startSubscribe(
   plan: unknown,
   period: unknown,
 ): Promise<SubscribeStart> {
-  // Same gate the existing subscribe flow uses, deliberately: this is a new
-  // path to the same act, and tightening it here would silently revoke the
-  // ability from a role that can subscribe today.
+  // Paid enrolment begins only after the dashboard has resolved both the
+  // signed-in manager and the store tenant from the store host.
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
@@ -115,16 +112,9 @@ export async function startSubscribe(
 }
 
 /**
- * ★ THE CORE, shared by the dashboard and by signup.
- *
- * The two differ ONLY in how the store and the caller are resolved: the
- * dashboard reads the store from the host, and signup cannot — the wizard runs
- * on the PLATFORM host, where `getActingStoreId()` has no store to resolve. So
- * the signup entry point names the store explicitly and proves the caller owns
- * it. Everything after that is identical, and must stay in one place: a second
- * copy of the plan validation, the legacy-mandate check or the price lookup is
- * how a merchant ends up billed differently depending on which screen they
- * subscribed from.
+ * Core dashboard enrolment after access and tenant resolution. Signup always
+ * creates Free stores and never reaches billing; upgrades begin from the
+ * store-host Plans & Billing page.
  */
 async function startSubscribeForStore(
   storeId: string,
@@ -173,7 +163,7 @@ export async function confirmSubscribe(
   );
 }
 
-/** ★ THE CORE — see startSubscribeForStore for why this split exists. */
+/** ★ THE CORE — the payment result is verified before entitlement changes. */
 async function confirmSubscribeForStore(
   storeId: string,
   invoiceId: unknown,
@@ -237,87 +227,11 @@ async function confirmSubscribeForStore(
 }
 
 // ---------------------------------------------------------------------------
-// Signup — the merchant's FIRST subscription, bought during the wizard.
-//
-// ★ WHY THESE EXIST AT ALL. The wizard runs on the PLATFORM host
-// (storemink.com/platform/signup), where there is no store to resolve from the
-// Host header — `getActingStoreId()` would return the fallback store. The store
-// has just been created a few lines earlier in the wizard, so the client knows
-// its id and passes it; these entry points prove the caller OWNS it and then
-// delegate to the same core the dashboard uses.
-//
-// ★ THE STORE ID FROM THE CLIENT IS NOT TRUSTED. `assertStoreSuperadmin` is the
-// whole security boundary here: without it, anyone signed in could post another
-// store's id and start — or settle — a subscription against it.
-// ---------------------------------------------------------------------------
-
-/**
- * The signed-in user's id, if they are the SUPERADMIN of this store.
- *
- * ★ Superadmin, not any admin: this buys a plan with a card. It mirrors the
- * check the old signup flow used, deliberately — a new path to the same act must
- * not be easier to pass than the one it replaces.
- *
- * Returns null on a read failure, so a database blip refuses rather than
- * authorises.
- */
-async function assertStoreSuperadmin(storeId: unknown): Promise<string | null> {
-  if (typeof storeId !== "string" || !storeId) return null;
-  const user = await getServerUser();
-  if (!user) return null;
-  try {
-    const rows = await withService((db) =>
-      db
-        .select({ role: admins.role })
-        .from(admins)
-        .where(and(eq(admins.id, user.id), eq(admins.storeId, storeId)))
-        .limit(1),
-    );
-    return rows[0]?.role === "superadmin" ? user.id : null;
-  } catch (err) {
-    logError("billing.assert_superadmin", err, { storeId });
-    return null;
-  }
-}
-
-/** Begin the first subscription during signup. */
-export async function startSignupSubscribe(
-  storeId: unknown,
-  plan: unknown,
-  period: unknown,
-): Promise<SubscribeStart> {
-  const userId = await assertStoreSuperadmin(storeId);
-  if (!userId)
-    return { ok: false, error: "You don't have permission to do this." };
-  return startSubscribeForStore(storeId as string, plan, period);
-}
-
-/** Settle it. */
-export async function confirmSignupSubscribe(
-  storeId: unknown,
-  invoiceId: unknown,
-  providerPaymentId: unknown,
-  signature: unknown,
-): Promise<SubscribeConfirm> {
-  const userId = await assertStoreSuperadmin(storeId);
-  if (!userId)
-    return { ok: false, error: "You don't have permission to do this." };
-  return confirmSubscribeForStore(
-    storeId as string,
-    invoiceId,
-    providerPaymentId,
-    signature,
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Manual payment — settling an invoice the merchant already owes.
 //
-// ★ Today this is the ONLY way a renewal gets paid, because automatic
-// collection is gated behind an unverified endpoint (lib/billing/gateway.ts).
-// Not a fallback: spec §18 makes it a first-class path, and it stays one after
-// the recurring charge lands, for amounts over the AFA limit and for merchants
-// with no live mandate.
+// A first-class fallback for renewals above the AFA limit, revoked/missing
+// mandates, and provider incidents. New enrolments no longer enter this path by
+// silently accepting a one-time first payment: they must authorise autopay.
 // ---------------------------------------------------------------------------
 
 export type PayInvoiceStart =

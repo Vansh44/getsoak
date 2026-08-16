@@ -22,9 +22,9 @@ export default async function PlansBillingPage() {
     getAiUsagePageData(),
     getMySubscription(),
     getPlanPricingLive(),
-    // ★ What they OWE, above everything else on the page. While automatic
-    // collection is gated (lib/billing/gateway.ts) this is the only way a
-    // renewal gets paid, so burying it would downgrade merchants who never
+    // ★ What they OWE, above everything else on the page. Manual collection is
+    // still required for amounts above the AFA limit, revoked mandates and
+    // provider incidents, so burying it would downgrade merchants who never
     // knew there was a bill.
     getPayableInvoices(),
   ]);
