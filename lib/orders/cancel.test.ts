@@ -207,6 +207,19 @@ describe("store credit comes back", () => {
     await releaseCancelledOrder(STORE, ORDER, runner);
     expect(reinstateCreditForOrder).toHaveBeenCalledWith(STORE, ORDER);
   });
+
+  it("★★ still reinstates credit and releases holds when stock must not be restocked", async () => {
+    // "Damaged — don't restock" is a stock decision, not permission to keep
+    // the customer's balance or leave a pickup reservation alive.
+    seed([], [[{ id: "hold-1" }]]);
+    await releaseCancelledOrder(STORE, ORDER, runner, "order_cancelled", {
+      restock: false,
+    });
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(rpcCalls()).toHaveLength(0);
+    expect(reinstateCreditForOrder).toHaveBeenCalledWith(STORE, ORDER);
+    expect(releaseHold).toHaveBeenCalledWith("hold-1");
+  });
 });
 
 // ---------------------------------------------------------------------------

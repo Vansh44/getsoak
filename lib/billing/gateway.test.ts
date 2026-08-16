@@ -47,10 +47,12 @@ const INPUT = {
   providerCustomerId: "cust_1",
   storeId: "store-1",
   description: "Pro monthly",
+  recordProviderOrderId: vi.fn(async () => true),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  INPUT.recordProviderOrderId.mockResolvedValue(true);
   // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS.
   vi.mocked(getPlatformRazorpayCreds).mockReturnValue(CREDS as any);
   vi.mocked(rzpCreateOrder).mockResolvedValue({
@@ -105,11 +107,16 @@ describe("charging a mandate", () => {
       ok: true,
       data: { providerPaymentId: "pay_1", status: "captured" },
     });
+    expect(INPUT.recordProviderOrderId).toHaveBeenCalledWith("order_1");
+    expect(
+      INPUT.recordProviderOrderId.mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(rzpChargeMandate).mock.invocationCallOrder[0]);
   });
 
-  it("★★ carries the idempotency key in NOTES, not just a header", async () => {
-    // The notes copy is what reconciliation matches on if the header is ever
-    // unsupported or renamed — the rule issue-refund.ts follows for refunds.
+  it("★★ carries the attempt key in both provider objects' NOTES", async () => {
+    // The recurring API documents no provider-side idempotency header. The
+    // notes copy connects the Razorpay objects to our durable attempt; the
+    // provider order id is the actual reconciliation handle.
     await impl(INPUT);
     expect(vi.mocked(rzpCreateOrder).mock.calls[0][1].notes).toMatchObject({
       idempotency_key: "idem-1",
@@ -155,11 +162,18 @@ describe("charging a mandate", () => {
     expect(res.outcome).toBe("unknown");
   });
 
-  it("★ a rejected order creation never becomes a charge", async () => {
+  it("★★ refuses to debit when the provider order could not be recorded", async () => {
+    INPUT.recordProviderOrderId.mockResolvedValue(false);
+    const res = (await impl(INPUT)) as any;
+    expect(res).toMatchObject({ ok: false, outcome: "rejected" });
+    expect(rzpChargeMandate).not.toHaveBeenCalled();
+  });
+
+  it("★ an unsuccessful order creation is a known NON-CHARGE", async () => {
     vi.mocked(rzpCreateOrder).mockResolvedValue({
       ok: false,
-      error: "bad amount",
-      outcome: "rejected",
+      error: "gateway timed out",
+      outcome: "unknown",
     } as any);
     const res = (await impl(INPUT)) as any;
     expect(res.outcome).toBe("rejected");

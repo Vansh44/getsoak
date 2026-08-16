@@ -133,16 +133,18 @@ export async function approveCancellation(
   // ── 2. Give the stock back ───────────────────────────────────────────────
   // Best-effort and idempotent, exactly as the dashboard path already treats
   // it: the status change is the source of truth and must never be blocked by
-  // a stock write. Skipped entirely when the merchant said not to restock —
-  // damaged or already-picked goods are theirs to judge.
-  if (input.restock) {
-    await releaseCancelledOrder(
-      storeId,
-      orderId,
-      withService,
-      input.fromRequest ? "customer_cancelled" : "order_cancelled",
-    );
-  }
+  // a cleanup write.
+  // Always run the cancellation cleanup. `restock` controls only whether
+  // physical units are returned: store credit is money and pickup holds are
+  // reservations, so neither may survive merely because the merchant said the
+  // goods are damaged or should not go back on sale.
+  await releaseCancelledOrder(
+    storeId,
+    orderId,
+    withService,
+    input.fromRequest ? "customer_cancelled" : "order_cancelled",
+    { restock: input.restock },
+  );
 
   // ── 3. Move the money ────────────────────────────────────────────────────
   const total = Number(claimed.total ?? 0);

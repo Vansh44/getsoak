@@ -87,10 +87,10 @@ disabled button — the only item on the roadmap actively refusing money.
 **PS-1.6 ★ — Buying charges now and lifts the cap in the same breath**
 Press it and confirm.
 **Expect:** the toast says you'll be charged the difference for the rest of the
-cycle; the card reads "2 of 3"; **Add location** is enabled; the Razorpay
-subscription moves to a plan at ₹5,000 + ₹1,000. Create the third location — it
-saves. A merchant charged for a location the cap still refuses is the failure
-this whole step exists to avoid.
+cycle; the card reads "2 of 3"; **Add location** is enabled; and the next
+StoreMink renewal invoice includes ₹5,000 + ₹1,000 (plus any applicable tax).
+Create the third location — it saves. A merchant charged for a location the cap
+still refuses is the failure this whole step exists to avoid.
 
 **PS-1.7 ★ — Releasing waits for the cycle end**
 With 3 locations paid for and only 2 in use, press **Release 1 unused**.
@@ -107,7 +107,7 @@ card.
 
 **PS-1.9 ★★ — A plan change keeps billing for the shops they keep**
 On a store paying for 1 extra location, switch monthly → yearly.
-**Expect:** the new subscription amount is ₹50,000 + ₹10,000, not ₹50,000. The
+**Expect:** the next yearly invoice is ₹50,000 + ₹10,000, not ₹50,000. The
 location is priced at the YEARLY rate. **Watch for:** dropping to the bare plan
 price while the merchant keeps every shop — a revenue leak invisible from both
 sides, and the reason `changePlan` threads the count through.
@@ -122,6 +122,15 @@ Call `createLocation` directly while at the allowance.
 **Expect:** refused. A count the client could name would be a free location
 (invariant 5 — a disabled control is not a permission).
 
+**PS-1.16 ★★ — A location must fit the full next autopay invoice**
+Use a Pro monthly store whose active mandate ceiling is above the location
+add-ons alone but below **base plan + all extra locations + GST**. Try to buy the
+location.
+**Expect:** refused before Razorpay checkout with the autopay-limit message. Now
+remove `max_amount_paise` from that active mandate and retry: also refused. A
+missing ceiling cannot fail open because the part-period payment could succeed
+today while the next automatic renewal is impossible.
+
 **PS-1.13 ★ — The price comes from the operator console, not the code**
 As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There
 is an **Extra POS location** row with Charged/month and Charged/year (the "Was"
@@ -133,10 +142,10 @@ location · ₹1,500/month", and buying one charges ₹1,500. Nothing needs a de
 **PS-1.14 ★★ — Repricing never touches a live subscription**
 With a merchant already paying for one extra location at ₹1,000, change the
 console price to ₹1,500.
-**Expect:** their subscription still bills the old amount. `razorpay_plans` is
-keyed on (plan, period, amount), so a new price mints a NEW Razorpay plan and
-grandfathers everyone already on the old one — the same rule tier repricing
-follows. They move to the new price only when they next change something.
+**Expect:** the current paid cycle and any already-finalized invoice stay
+unchanged; the next invoice built after the change uses ₹1,500. StoreMink owns
+the renewal amount now—there is no Razorpay plan mutation—and finalized GST
+documents remain immutable.
 
 **PS-1.15 ★ — The add-on never becomes a pricing card**
 After setting a price, open the public pricing page.
@@ -761,6 +770,13 @@ no "Store credit". A control that always fails is worse than no control.
 Look at every screen in this flow.
 **Expect:** no per-item cancel, approve, decline or refund anywhere. Whole-order
 only, by design — it needs partial fulfilment, which this system does not have.
+
+**PS-D.14 ★★ — “Don't restock” suppresses stock only**
+Approve a cancellation with **Restock OFF** for an order that used store credit
+and has pickup holds.
+**Expect:** physical stock is not added, but the spent store credit is
+reinstated exactly once and every pickup hold is released. “Damaged—don't put
+it back on sale” must not strand money or a reservation.
 
 ---
 

@@ -32,6 +32,9 @@ vi.mock("@/lib/db/client", () => ({
 const provider = vi.hoisted(() => ({ getPlatformRazorpayCreds: vi.fn() }));
 vi.mock("@/lib/payments/provider", () => provider);
 
+const pricing = vi.hoisted(() => ({ getPlanPricingLive: vi.fn() }));
+vi.mock("@/lib/plans/pricing", () => pricing);
+
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
@@ -91,6 +94,26 @@ beforeEach(() => {
   provider.getPlatformRazorpayCreds.mockReturnValue({
     keyId: "rzp_1",
     keySecret: "secret",
+  });
+  pricing.getPlanPricingLive.mockResolvedValue({
+    free: {
+      monthlyInr: 0,
+      yearlyInr: 0,
+      baseMonthlyInr: null,
+      baseYearlyInr: null,
+    },
+    basic: {
+      monthlyInr: 1500,
+      yearlyInr: 15000,
+      baseMonthlyInr: null,
+      baseYearlyInr: null,
+    },
+    pro: {
+      monthlyInr: 5000,
+      yearlyInr: 50000,
+      baseMonthlyInr: null,
+      baseYearlyInr: null,
+    },
   });
   rzp.rzpCreateOrder.mockResolvedValue({ ok: true, data: { id: "order_1" } });
   rzp.verifyCheckoutSignature.mockReturnValue(true);
@@ -310,6 +333,41 @@ describe("startLocationPurchase", () => {
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
   });
 
+  it("★★ includes the base plan in the mandate ceiling, not only locations", async () => {
+    // Pro ₹5,000 + two locations ₹2,000 = ₹7,000. The old check compared only
+    // ₹2,000 and incorrectly approved this ₹2,500 mandate.
+    seed([
+      [subRow({ mandateId: "mand-1" })],
+      [{ n: 2 }],
+      [{ maxAmountPaise: 250_000 }],
+    ]);
+    const res = await startLocationPurchase(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/autopay limit/i);
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ includes exclusive GST in the mandate ceiling", async () => {
+    store.loadTaxContext.mockResolvedValueOnce({
+      enabled: true,
+      rateBps: 1800,
+      inclusive: false,
+      supplierStateCode: "27",
+      placeOfSupply: "27",
+    });
+    // Listed renewal is ₹7,000 but the actual debit is ₹8,260 with GST.
+    seed([
+      [subRow({ mandateId: "mand-1" })],
+      [{ n: 2 }],
+      [{ maxAmountPaise: 700_000 }],
+    ]);
+    const res = await startLocationPurchase(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/autopay limit/i);
+  });
+
   it("★ a comfortable ceiling does not block the sale", async () => {
     seed([
       [subRow({ mandateId: "mand-1" })],
@@ -322,6 +380,15 @@ describe("startLocationPurchase", () => {
   it("★ NO mandate means manual renewal, which has no ceiling — silent, not refused", async () => {
     seed([[subRow({ mandateId: null })], [{ n: 2 }]]);
     expect((await startLocationPurchase(args)).ok).toBe(true);
+  });
+
+  it("★★ fails closed when an active mandate has no recorded ceiling", async () => {
+    seed([[subRow({ mandateId: "mand-1" })], [{ n: 2 }], []]);
+    const res = await startLocationPurchase(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/limit is unavailable/i);
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
   });
 
   it("★ an UNKNOWN order outcome leaves the attempt in flight, not failed", async () => {

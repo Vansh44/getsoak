@@ -4051,7 +4051,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
       returns, and **a timeout is indistinguishable from a success you never
       read**. So `refundOrder` inserts `order_refunds` as `pending` carrying an
       `idempotency_key` WE generated, sends that key to Razorpay as both the
-      idempotency header AND inside the refund's `notes`, and only then claims
+      endpoint-specific `X-Refund-Idempotency` header AND inside the refund's
+      `notes`, and only then claims
       `pending → completed|failed`. The `notes` copy is the load-bearing half:
       it still works if the header is ever unsupported or renamed, and it is
       what reconciliation looks the refund up by.
@@ -4113,8 +4114,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **A refund is NOT a restock** (roadmap invariant 8): returned goods may be
       damaged, and a cancellation has no goods at all. `pos_12_returns.sql`
       keeps `order_returns` and `order_refunds` apart; keep them apart.
-    - **⚠ Never exercised against a live Razorpay account**, and the exact
-      idempotency header name should be re-checked against their current docs.
+    - **⚠ Never exercised against a Razorpay test account.** The implementation
+      now matches the current refund API's `X-Refund-Idempotency` contract and
+      locally enforces its minimum 10 characters plus alphanumeric / `_` / `-`
+      alphabet. The notes key remains the reconciliation backstop.
 
 27. **Cancellation — a REQUEST, then a decision** (roadmap Step 2, rebuilt
     2026-08-09). Design: `docs/roadmap.md` Step 2.
@@ -4132,6 +4135,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
       customer path under automatic approval. Claim the status conditionally →
       release stock (`lib/orders/cancel.ts`) → move the money → notify, in that
       order and for stated reasons.
+    - **★★ “DON'T RESTOCK” MEANS PHYSICAL STOCK ONLY.** Cancellation cleanup
+      always runs: store credit is reinstated and pickup holds are released even
+      when `restock` is false. The old guard skipped the whole helper, silently
+      stranding money and reservations when a merchant marked goods damaged.
     - **★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
       `store_credit` as a method, so using it for both gives an `order_refunds`
       row either way (keeping `refundDueForOrder` and `payment_status` correct),
@@ -5415,7 +5422,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         on-session and unaffected by it, but every future cycle is debited
         automatically against a ceiling fixed when autopay was authorised. Selling
         a location that makes the next renewal undebitable is how a paying
-        merchant gets downgraded.
+        merchant gets downgraded. The comparison is against the **full next
+        invoice** — live base-plan price + every billed location + applicable
+        tax — not merely the new add-on count. An active mandate whose ceiling or
+        plan price cannot be read fails closed before checkout.
       - **★ A ZERO PART PERIOD GRANTS IT INSTEAD OF CHARGING ₹0** — at the end of
         a cycle the proration rounds to nothing and Razorpay refuses a ₹0 order.
         The merchant gains a few hours; the next renewal bills it in full.
@@ -5699,9 +5709,19 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         was on — the same "promise a charge that never comes" failure the
         activation email was fixed for. The existing invariant test caught the
         clamp, which is why it isn't one.
-        **⚠ STILL OFF, and one piece is genuinely missing: the checkout never
-        captures a token**, so no mandate is ever registered and `activateMandate`
-        remains dead code. `RECURRING_CHARGE_VERIFIED` gates the rest.
+        **⚠ STILL OFF pending the test-mode run.** Enrolment can create the
+        authorisation order and reads the token back from the verified payment;
+        the subsequent-charge implementation exists, but
+        `RECURRING_CHARGE_VERIFIED` prevents both mandate offering and automatic
+        debit until the provider behaviour below is observed.
+      - **★★ THE PROVIDER ORDER IS DURABLE BEFORE THE DEBIT.** Razorpay's
+        published recurring API does not promise a provider-side idempotency
+        header. `collectInvoice` therefore gives the provider seam a write-once
+        recorder; `chargeMandateViaRazorpay` persists `provider_order_id` before
+        calling `/payments/create/recurring`. A timeout can then be reconciled by
+        asking for payments on that order, and failure to persist the handle
+        refuses the debit. An order-creation timeout is a known non-charge
+        because the debit endpoint was never called.
     - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
       not the system. Every path (enrolment, manual payment, plan change, location
       purchase) confirms ON SESSION against a verified one-time checkout, and the

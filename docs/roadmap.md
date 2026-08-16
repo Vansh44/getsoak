@@ -782,26 +782,20 @@ merchant pays it on `/dashboard/plans`, and grace and downgrade run as designed.
 Six Razorpay facts need a test-mode account to settle; they are listed in the
 spec's §10 rather than guessed.
 
-**★★ AUTOPAY IS FIVE PARTS, AND ONLY ONE IS BUILT — do not read
-`RECURRING_CHARGE_VERIFIED` as the last switch.** No merchant has a mandate
-today, and none can get one:
+**★★ AUTOPAY'S CODE PATH IS BUILT, BUT ITS RELEASE EVIDENCE IS NOT.**
+`startEnrolment` can create the Razorpay customer and authorisation order;
+`confirmEnrolment` reads the mandate token back from the verified PAYMENT, not
+from the browser; and `chargeMandateViaRazorpay` creates a provider order,
+persists that order id before debit, then calls the recurring endpoint. Unknown
+outcomes remain in flight for reconciliation instead of being retried.
 
-1. `rzpCreateOrder` takes only `{amountPaise, receipt, notes}` — no
-   `customer_id`, no `token`, no `recurring` flag. The enrolment order is a
-   plain one-time order, so nothing at the gateway is asked to register a
-   mandate. **Not built.**
-2. The `/dashboard/plans` checkout does not request a recurring token, so
-   nothing comes back to record. **Not built.**
-3. `confirmEnrolment` accepts a `mandate` and `activateMandate` writes it.
-   **Built — and currently DEAD CODE**, because no caller passes one.
-4. `rzpChargeRecurring` throws. **Not built** (deliberately; see `gateway.ts`).
-5. Recurring outcomes arrive asynchronously, so phase 6's webhook processor is
-   part of autopay, not separate from it. **Not built.**
-
-So `mandateActivated` is false for every merchant, every activation email
-correctly withholds a renewal date, and `collectionRoute` always routes to
-manual. That is coherent and safe — it is simply not one flag away from
-automatic.
+Production still deliberately returns no charge function because
+`RECURRING_CHARGE_VERIFIED` is false. The exact recurring request behaviour,
+provider-side idempotency support, asynchronous event vocabulary and failure
+states still need the test-mode run in `docs/autopay-verification.md`; phase 6's
+webhook work follows that evidence. Until then no merchant is offered a mandate,
+activation emails promise no autopay, and every renewal invoice remains payable
+manually. That is coherent and safe — flipping the flag before the run is not.
 
 **★ THERE IS ONE BILLING SYSTEM NOW.** `subscription-actions.ts`,
 `lib/payments/subscription.ts`, the `razorpay_plans` cache and the five
@@ -883,19 +877,20 @@ discount — and the unpayable-remainder gap below the gateway minimum is handle
 
 ### Metered extra-location billing _(POS 7)_
 
-**★ An extra location is a PRICE RISE ON THE SAME SUBSCRIPTION, not a second
-one.** `razorpay_plans` is keyed on (plan, period, amount), so a different
-location count resolves to a different cached plan id with no new table;
-`planForRzpPlan` still maps it back to (tier, period) for the webhook; and
-`decidePlanChange`'s buy-now / release-at-cycle-end rule applies unaltered,
+**★ An extra location is a PRICE RISE ON THE SAME STOREMINK BILLING
+SUBSCRIPTION, not a second mandate.** The part-period amount is collected by a
+verified one-time checkout; `billing_subscriptions.billed_locations` then feeds
+every future invoice. Buying applies now and releasing waits for cycle end,
 keeping refunds out of the system. Priced from the operator console
 (`plan_prices`, key `extra_location`).
 
 Traps, each already paid for: `changePlan` must carry the count through or the
 merchant silently drops to the bare plan price while keeping every shop; the
 count is absolute, never a delta; it is written only when the change is live; the
-mandate ceiling is checked before the gateway; and it is refused, not clamped, in
-both directions.
+the mandate ceiling is checked before the gateway against the **full next
+invoice** (base plan + every extra location + tax), and an active mandate whose
+ceiling cannot be read fails closed; counts are refused, not clamped, in both
+directions.
 
 ---
 

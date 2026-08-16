@@ -110,7 +110,9 @@ directly against test mode and confirm:
       `over_afa_limit` and no charge is attempted.
 - [ ] **Timeout** — kill the network mid-charge. Confirm the attempt lands in
       `unknown` and that `lib/billing/reconcile.ts` settles it on the next
-      sweep by asking Razorpay directly.
+      sweep by asking Razorpay directly. Inspect the attempt first: its
+      `provider_order_id` must already be present, because the implementation
+      now persists that handle before submitting the debit.
 
 ### 3. Idempotency
 
@@ -118,7 +120,11 @@ directly against test mode and confirm:
       `billing_payment_attempts` must refuse the second, and the merchant must
       be charged **once**.
 - [ ] Confirm `idempotency_key` appears in the payment's `notes` at Razorpay —
-      that copy is what reconciliation matches on if the header is ever renamed.
+      that copy connects the provider object to our durable attempt.
+- [ ] Ask Razorpay support/test mode whether `/payments/create/recurring`
+      supports a provider-side idempotency header. The published recurring API
+      reference does not promise one; do not reuse the refund-only
+      `X-Refund-Idempotency` header without confirmation.
 
 ### 4. Only then
 

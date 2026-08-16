@@ -4,13 +4,13 @@ import "server-only";
  * Where the collection seam is wired to the real gateway.
  *
  * `lib/billing/collect.ts` takes a `ChargeFn` rather than importing Razorpay,
- * so everything above it is provable today. This module is the ONE place that
- * has to change when the provider call is settled — deliberately small, so
- * finishing it is obvious rather than archaeological.
+ * so everything above it is provable independently. This is the ONE
+ * provider-specific seam.
  *
- * ★★ IT RETURNS NULL TODAY, AND THAT IS THE SAFE ANSWER. Six Razorpay facts are
- * still unverified (docs/billing-architecture.md §10), the exact
- * subsequent-charge endpoint among them. The alternatives are both worse:
+ * ★★ PRODUCTION RETURNS NULL TODAY, AND THAT IS THE SAFE ANSWER. The charge
+ * implementation is present and contract-tested, but six Razorpay facts are
+ * still unverified in test mode (docs/autopay-verification.md). The alternatives
+ * are both worse:
  *
  *   • Guessing the signature would bake an unverified call into the money path
  *     and make it look tested.
@@ -35,12 +35,10 @@ import "server-only";
  *     not reproduce the signature).
  *  2. Confirm the recurring webhook event names, and the retry and
  *     payment-failure behaviour.
- *  3. Implement the call in `rzpChargeRecurring` below, sending
- *     `idempotencyKey` BOTH as the provider's idempotency header AND inside the
- *     payment's `notes` — the notes copy is what reconciliation matches on if
- *     the header is ever unsupported or renamed, exactly as
- *     `lib/payments/issue-refund.ts` does for refunds.
- *  4. Map the provider's status through `mapGatewayStatus`, which already
+ *  3. Confirm whether the recurring endpoint offers provider-side idempotency.
+ *     Its published reference does not promise a header, so today the durable
+ *     attempt, write-once provider order id and payment `notes` are the guard.
+ *  4. Confirm the provider's status vocabulary through `mapGatewayStatus`, which
  *     resolves anything unrecognised to `unknown` rather than to a failure.
  */
 
@@ -95,9 +93,10 @@ export function chargeUnavailableReason(): string | null {
  * indistinguishable from a charge that succeeded. Every failure below is
  * therefore mapped deliberately, and the DEFAULT is `unknown` — never `failed`.
  *
- * ★ The idempotency key rides in `notes` as well as the header, because the
- * notes copy is what `lib/billing/reconcile.ts` can match on if the header is
- * ever unsupported or renamed. Same rule `issue-refund.ts` follows for refunds.
+ * ★ The attempt's idempotency key rides in `notes`. Unlike refunds, Razorpay's
+ * published recurring-payment reference does not specify an idempotency header.
+ * The write-once provider order id is persisted BEFORE the debit call so an
+ * unknown outcome can be reconciled without sending the charge again.
  *
  * ⚠ Razorpay documents that for some banks the payment stays `created` rather
  * than reaching `captured` immediately. `mapGatewayStatus` resolves that to a
@@ -144,10 +143,21 @@ export const chargeMandateViaRazorpay: ChargeFn = async (input) => {
     notes: { idempotency_key: input.idempotencyKey, kind: "subscription" },
   });
   if (!order.ok) {
-    // Carries its own outcome — a 4xx is a decision, a 5xx or timeout is not.
-    // No payment was attempted either way, but an UNKNOWN order creation could
-    // have produced an order we then never charged, which is harmless.
-    return order;
+    // No debit was attempted: the recurring endpoint needs the order id, which
+    // we did not receive. Even if Razorpay created an orphan order, money cannot
+    // move on it, so this is a known non-charge and a later attempt is safe.
+    return { ok: false, error: order.error, outcome: "rejected" };
+  }
+
+  // ★★ DURABLE BEFORE DEBIT. If the charge times out after this point,
+  // reconciliation can ask Razorpay for payments on this exact order. Charging
+  // first and trying to save the id afterwards creates an unrecoverable gap.
+  if (!(await input.recordProviderOrderId(order.data.id))) {
+    return {
+      ok: false,
+      error: "Couldn't record the Razorpay order before charging it.",
+      outcome: "rejected",
+    };
   }
 
   // ── 2. The charge ────────────────────────────────────────────────────────

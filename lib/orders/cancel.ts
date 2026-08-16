@@ -41,17 +41,19 @@ export type DbRunner = <T>(fn: (db: Db) => Promise<T>) => Promise<T>;
  * Give back everything a cancelled order was holding.
  *
  * Best-effort by design: the status change is the source of truth and must
- * never be blocked by a stock write. A missed release shows up in the next
- * count; an order stuck un-cancelled because a ledger row failed is worse.
+ * never be blocked by a cleanup write. `options.restock: false` suppresses
+ * only the physical stock return; store-credit reinstatement and pickup-hold
+ * release still run because they are money/reservations, not restocking.
  *
- * Idempotent. Both halves are conditional claims, so calling it twice on the
- * same order releases nothing the second time.
+ * Idempotent. Every cleanup path uses a conditional claim or ledger key, so
+ * calling it twice releases nothing the second time.
  */
 export async function releaseCancelledOrder(
   storeId: string,
   orderId: string,
   runner: DbRunner,
   reason = "order_cancelled",
+  options: { restock?: boolean } = {},
 ): Promise<void> {
   // ── Reserved stock ───────────────────────────────────────────────────────
   // Claim the release by flipping stock_status 'reserved' → 'released' in ONE
@@ -59,28 +61,31 @@ export async function releaseCancelledOrder(
   //   • legacy / never-reserved orders sit at 'none'   → no phantom restock
   //   • an already-cancelled order is 'released'       → no double restock
   //   • two concurrent cancels                         → one UPDATE wins
-  const claimed = await runner((db) =>
-    db
-      .update(orders)
-      .set({ stockStatus: "released" })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.storeId, storeId),
-          eq(orders.stockStatus, "reserved"),
-        ),
-      )
-      // location_id rides along with the claim: a POS sale reserved at the
-      // register's own location (reserve_stock_at), so the units must go BACK
-      // there. The plain release_stock wrapper delegates to the store's
-      // DEFAULT location, which would move stock between shops silently — the
-      // selling location never recovering its unit and the default gaining one
-      // it never had, compounding per cancellation.
-      .returning({ id: orders.id, location_id: orders.locationId }),
-  ).catch((err) => {
-    logError("cancel: stock release claim", err, { orderId });
-    return [] as { id: string; location_id: string | null }[];
-  });
+  const claimed =
+    options.restock === false
+      ? []
+      : await runner((db) =>
+          db
+            .update(orders)
+            .set({ stockStatus: "released" })
+            .where(
+              and(
+                eq(orders.id, orderId),
+                eq(orders.storeId, storeId),
+                eq(orders.stockStatus, "reserved"),
+              ),
+            )
+            // location_id rides along with the claim: a POS sale reserved at
+            // the register's own location (reserve_stock_at), so the units must
+            // go BACK there. The plain release_stock wrapper delegates to the
+            // store's DEFAULT location, which would move stock between shops
+            // silently — the selling location never recovering its unit and
+            // the default gaining one it never had, compounding per cancel.
+            .returning({ id: orders.id, location_id: orders.locationId }),
+        ).catch((err) => {
+          logError("cancel: stock release claim", err, { orderId });
+          return [] as { id: string; location_id: string | null }[];
+        });
 
   if (claimed.length > 0) {
     // The claim already proved this order belongs to `storeId`.

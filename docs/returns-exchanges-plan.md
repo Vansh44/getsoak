@@ -167,11 +167,10 @@ So, in order:
 1. **INSERT `order_refunds` first**, `status: 'pending'`, carrying our own
    `idempotency_key` (uuid) under a UNIQUE index. The row exists before any
    money is asked to move.
-2. **Call Razorpay** with that key in `X-Razorpay-Idempotency-Key`, so a retry
+2. **Call Razorpay** with that key in `X-Refund-Idempotency`, so a retry
    of the same key returns the same refund rather than making a second one.
-   _(Verify the exact header against Razorpay's current docs at implementation
-   time — step 3 is what makes the design correct if it has changed or the
-   header is unsupported.)_
+   Razorpay requires at least 10 characters and permits only letters, numbers,
+   hyphens and underscores; StoreMink validates that before making the call.
 3. **On a known outcome**, claim `pending → completed|failed` conditionally,
    writing `gateway_refund_id`. On an **unknown** outcome (timeout, 5xx) leave
    it `pending` and return "we're checking" — never retry inline.
@@ -518,11 +517,10 @@ evidence that row will ever carry.
 cancel or pickup expiry (§2.2 — cancel will _prompt_), no store credit, no
 customer-initiated cancellation.
 
-**⚠ Verify before shipping:** the exact Razorpay idempotency header name
-(`X-Razorpay-Idempotency-Key`) against their current docs. The `notes` key is
-the load-bearing half and works regardless — but if the header is wrong, a
-retried call could create a second refund, and only reconciliation would catch
-it. Nothing here has been exercised against a live Razorpay account.
+**⚠ Still verify in test mode before shipping:** the current Razorpay API docs
+specify `X-Refund-Idempotency`, and the implementation and contract tests now
+match it. The `notes` key remains a reconciliation backstop. Nothing here has
+yet been exercised against a Razorpay test account.
 
 ---
 

@@ -389,12 +389,25 @@ export async function rzpRefund(
       outcome: "rejected",
     };
   }
+  if (!/^[A-Za-z0-9_-]{10,}$/.test(params.idempotencyKey)) {
+    // Razorpay rejects shorter keys and any punctuation outside `_` / `-`.
+    // Rejecting before the request keeps this a known non-event instead of
+    // relying on a provider 400 for a safety property we can prove locally.
+    return {
+      ok: false,
+      error: "Invalid refund idempotency key.",
+      outcome: "rejected",
+    };
+  }
   return rzpFetch<RzpRefund>(
     creds,
     `/payments/${encodeURIComponent(params.paymentId)}/refund`,
     {
       method: "POST",
-      headers: { "X-Razorpay-Idempotency-Key": params.idempotencyKey },
+      // Razorpay's refund API has its own idempotency header. This is NOT the
+      // generic-looking `X-Razorpay-Idempotency-Key`: using that unrecognised
+      // name silently removes the provider-side duplicate guard.
+      headers: { "X-Refund-Idempotency": params.idempotencyKey },
       body: JSON.stringify({
         amount: params.amountPaise,
         notes: { ...params.notes, sm_refund_key: params.idempotencyKey },

@@ -423,6 +423,31 @@ describe("collectInvoice — ordering and outcomes", () => {
     expect(arg.providerTokenId).toBe("tok_live_1");
   });
 
+  it("★★ gives the provider a write-once order recorder before debit", async () => {
+    let recorded = false;
+    const charge = vi.fn(async (input: Parameters<ChargeFn>[0]) => {
+      recorded = await input.recordProviderOrderId("order_recurring_1");
+      return {
+        ok: true as const,
+        data: { providerPaymentId: "pay_1", status: "captured" },
+      };
+    }) as unknown as ChargeFn;
+    seed({
+      selects: [
+        [{ id: ATTEMPT, state: "created", invoiceId: INVOICE }],
+        [{ state: "captured" }],
+      ],
+      returning: [{ id: ATTEMPT }],
+    });
+
+    await collectInvoice({ ...base, charge });
+
+    expect(recorded).toBe(true);
+    expect(dbHolder.current.calls.set).toContainEqual(
+      expect.objectContaining({ providerOrderId: "order_recurring_1" }),
+    );
+  });
+
   it("reports paid on a capture", async () => {
     seed({
       selects: [
