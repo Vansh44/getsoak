@@ -42,7 +42,6 @@ import {
   normalizeCollectionCode,
 } from "@/lib/fulfilment/collection-code";
 import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
-import { countPickupsWaiting } from "@/lib/pos/pickup-count";
 import {
   settleTenders,
   validateTenderShape,
@@ -88,27 +87,6 @@ function fail(msg: string) {
 }
 
 /** Orders waiting to be collected at THIS shop, oldest first. */
-/**
- * How many collections are waiting at THIS counter — the rail badge, polled.
- *
- * ★ A COUNT, NOT `getPickupQueue().orders.length`, for the reason
- * `countPickupsWaiting` already documents: this runs on every POS screen
- * including /pos/sell, whose design goal is a register that opens and scans
- * without waiting on the network. The queue read is two queries and up to 100
- * rows with their line-item counts; this is one indexed COUNT.
- *
- * ★ IT FAILS TO THE NUMBER THE CALLER ALREADY HAS. A polled badge that blanks
- * on a blip would flicker the count away and back, which reads as work
- * disappearing. `countPickupsWaiting` already swallows DB errors to 0, so the
- * only failure that reaches here is a lost session — and `null` says "keep what
- * you had" rather than "there is nothing".
- */
-export async function getPickupCount(): Promise<{ count: number | null }> {
-  const op = await resolvePosOperator();
-  if (!op || !posCan(op.role, "sell")) return { count: null };
-  return { count: await countPickupsWaiting(op.storeId, op.locationId) };
-}
-
 export async function getPickupQueue(
   query?: string,
 ): Promise<{ orders: PickupOrder[]; error?: string }> {

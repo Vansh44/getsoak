@@ -2932,6 +2932,23 @@ group, span}` (span = columns of the 4-wide desktop grid),
         one COUNT that changes a few times an hour does not justify a held
         connection per till, a reconnect story, and a server that tracks which
         locations are watching. That is the seam to replace if it ever does.
+      - **★★ THE POLLS ARE A ROUTE HANDLER, NOT SERVER ACTIONS**
+        (`app/api/pos/live`, `lib/pos/live.ts`). They shipped as actions and that
+        was wrong: Next.js "dispatches Server Actions one at a time per client"
+        (its own docs, `02-guides/server-actions.md`) — a queue in the CLIENT
+        dispatcher — so a background refresh in flight sat IN FRONT OF the
+        cashier's next tap. Tender a sale while the badge is polling and
+        `placePosSale` waited for the poll before it was even dispatched: a
+        visible stall on a money action, caused by a refresh nobody asked for,
+        and invisible in testing because it only shows under a slow network. The
+        same docs prescribe the fix — "use a Route Handler for non-mutation
+        requests". One route with a `need` param, so the gate, the `no-store`
+        headers and the failure shape cannot drift across three copies; the
+        OPERATOR always selects the scope. It delegates to the existing actions
+        for the queue and stock rather than re-querying, because a second copy of
+        the queue's predicate is how a badge ends up disagreeing with its list.
+        ⚠ `/api` bypasses `proxy.ts` (its matcher excludes it), so the route's
+        own `resolvePosOperator` IS the gate.
       - **★★ `lib/pos/use-poll.ts` IS THE ONE REFRESH MECHANISM**, used by the
         pickup badge, the pickup queue, `/pos/inventory` and the catalog sync.
         Stock moves for reasons that have nothing to do with the screen showing
@@ -2954,6 +2971,60 @@ group, span}` (span = columns of the 4-wide desktop grid),
         products a page, and nothing cached is authoritative (`placePosSale`
         re-reads price and re-reserves), so staleness there is a wrong label at
         worst, never a wrong charge or an oversell.
+      - **★★ THE CATCH-UP IS THROTTLED BY THE INTERVAL ITSELF**, and that is a
+        bug fix rather than a tuning knob. `visibilitychange` fires on EVERY tab
+        switch, window minimise and app switch, so the first version let somebody
+        flipping between two tabs kick off a full catalogue re-sync — several
+        requests over hundreds of products — on every flip. The rule: if we
+        already ran within one interval the data is exactly as fresh as the
+        schedule promises, so a catch-up adds nothing. Away longer than an
+        interval and it fires at once, which is the case that matters.
+      - **★ IT CHAINS `setTimeout`; IT IS NOT A `setInterval`.** The next run is
+        armed after the previous one SETTLES, so a slow response delays the next
+        request instead of stacking one on top of it — which is what stops a till
+        on bad wifi building a queue of overlapping polls. ⚠ Consequence for
+        tests: the re-arm happens in a microtask, so anything spanning more than
+        one tick needs `advanceTimersByTimeAsync`, not the sync form.
+      - **★★ A QUIET SHOP DOES NOT PAY WHAT A BUSY ONE DOES** (`backOff`). A
+        store taking two collections a day was making ~2,880 requests to learn
+        "still nothing" 2,878 times. A poll whose callback RETURNS `false`
+        (nothing moved) doubles its interval up to `POS_POLL_BACKOFF_MAX_MS`
+        (2 min); any change — or any catch-up — resets it to the base at once, so
+        the busy case is untouched. Opt-in, because a caller that cannot tell
+        (the catalog sync, which does not diff) would otherwise slow itself down
+        on no evidence: `undefined` counts as "changed". `sameQueue` /
+        `sameStock` are what answer it, and they also keep the previous array
+        IDENTITY so an unchanged poll does not re-render the list.
+      - **★ ±15% JITTER, because tills start together.** A deploy restarts every
+        one at once and a shop opens its registers within a minute of each other;
+        on a fixed interval they stay in step forever, turning steady traffic
+        into a spike against one Cloud SQL instance every interval.
+      - **★★ THE BADGE AND THE QUEUE NO LONGER BOTH ASK**
+        (`lib/pos/pickup-badge.ts`). The queue read already CONTAINS the count,
+        so `/pos/pickups` was making a second request for a fact the first one
+        carried — and worse, the two disagreed: the list dropped a row on
+        hand-over while the rail kept the old number for up to an interval. A
+        module-level store (`useSyncExternalStore`, stable snapshot identity)
+        lets the counter publish what it has and CLAIM the badge, and the nav
+        stops polling while claimed. ⚠ The claim is tied to the counter's poll
+        being LIVE, not to the screen being mounted: that poll suspends while the
+        cashier is mid-action or searching, and a claim held across it would
+        freeze the badge for as long as somebody left a search box full.
+      - **★ WHAT WAS DELIBERATELY NOT OPTIMISED.** `resolvePosOperator` costs ~2
+        queries for staff (device + `pos_staff`) and ~4 for an owner, which is
+        two thirds of a badge poll's cost — and it is NOT cached across requests,
+        because re-reading `pos_staff` every time is what makes deactivating a
+        cashier immediate (§22 invariant 1). Trading that for query count would
+        be trading a security property for a number. The lever pulled instead was
+        FREQUENCY.
+      - **⚠ THE LOAD IS O(TILLS), NOT O(EVENTS)**, and stays so. At 10,000 tills
+        the quiet steady state is ~83 req/s and ~250 DB qps of "nothing
+        happened". SSE would make it O(events) but costs one HELD connection per
+        till — ~125 Cloud Run instances at the default concurrency of 80 — plus a
+        reconnect story and per-location subscription tracking. Polling is right
+        until sub-5s latency is needed, which a collection queue does not need.
+        If it ever must go further, the next step is NOT SSE but a cheap cacheable
+        watermark per location, with the expensive read only on a change.
       - `app/pos/pos-screen.tsx` is the shared chrome for every screen that is
         not the register (subtitle, scroll body). **No back button**, by
         design — the hamburger goes anywhere in one tap, and back-to-`/pos` was what

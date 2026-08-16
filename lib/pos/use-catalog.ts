@@ -188,8 +188,19 @@ export function useCatalog(
   // and after the shop's wifi comes back the next attempt is up to five minutes
   // away. Now it pauses on both and catches up the instant either recovers —
   // which is exactly when a cashier returns to the screen and expects the
-  // numbers to be true. `syncingRef` inside `sync` already makes an overlapping
-  // call a no-op, so a catch-up landing on top of a slow sync is harmless.
+  // numbers to be true.
+  //
+  // ★★ AND THE CATCH-UP THROTTLE MATTERS MOST HERE. This is the heaviest poller
+  // in the register — a sync is keyset-paged at 300 products a page, so a large
+  // catalogue is several requests — and `visibilitychange` fires on EVERY tab
+  // switch. Unthrottled, somebody flipping between two tabs would kick off a
+  // full catalogue re-read on every flip. `usePoll` skips a catch-up when the
+  // last run was inside one interval, which is the right rule: the interval IS
+  // the freshness this promises. (`syncingRef` inside `sync` stops two
+  // OVERLAPPING syncs; it does nothing about ten sequential ones.)
+  //
+  // No `backOff`: `sync` does not diff, so it cannot report whether anything
+  // changed, and a poller that guesses would slow itself down on no evidence.
   usePoll(sync, RESYNC_MS);
 
   const search = useCallback(

@@ -24,6 +24,10 @@ function setOnline(v: boolean) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // ★ Jitter is ±15% of the interval. Pinning Math.random to 0.5 makes the
+  // multiplier exactly 1, so every timing assertion below is about the RULE
+  // being tested rather than about the spread. Jitter gets its own test.
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
   visibility = "visible";
   online = true;
   vi.spyOn(document, "visibilityState", "get").mockImplementation(
@@ -46,31 +50,38 @@ describe("usePoll", () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it("fires on the interval", () => {
+  // ⚠ `advanceTimersByTimeAsync`, not the sync form, throughout the tests that
+  // span more than ONE tick. The timer re-arms after the callback settles, so
+  // the next one is scheduled from a microtask — which the sync advance does not
+  // flush. That is deliberate in the implementation: chaining rather than a
+  // fixed-rate `setInterval` means a slow response delays the next request
+  // instead of stacking one on top of it, which is what stops a till on bad wifi
+  // building a queue of overlapping polls.
+  it("fires on the interval", async () => {
     const fn = vi.fn();
     renderHook(() => usePoll(fn, 1000));
-    vi.advanceTimersByTime(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
-  it("defaults to the shared POS interval", () => {
+  it("defaults to the shared POS interval", async () => {
     const fn = vi.fn();
     renderHook(() => usePoll(fn));
-    vi.advanceTimersByTime(POS_POLL_MS);
+    await vi.advanceTimersByTimeAsync(POS_POLL_MS);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it("stops entirely when disabled, and resumes when re-enabled", () => {
+  it("stops entirely when disabled, and resumes when re-enabled", async () => {
     const fn = vi.fn();
     const { rerender } = renderHook(
       ({ on }: { on: boolean }) => usePoll(fn, 1000, on),
       { initialProps: { on: false } },
     );
-    vi.advanceTimersByTime(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(fn).not.toHaveBeenCalled();
 
     rerender({ on: true });
-    vi.advanceTimersByTime(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
@@ -86,16 +97,16 @@ describe("usePoll", () => {
       expect(fn).not.toHaveBeenCalled();
     });
 
-    it("★ catches up the moment the tab is visible again", () => {
+    it("★ catches up the moment the tab is visible again", async () => {
       const fn = vi.fn();
       renderHook(() => usePoll(fn, 1000));
       setVisibility("hidden");
-      vi.advanceTimersByTime(5000);
+      await vi.advanceTimersByTimeAsync(5000);
       setVisibility("visible");
       // Immediately, not after another full interval: someone walking back to
       // the till expects the screen to be true now.
       expect(fn).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(1000);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(fn).toHaveBeenCalledTimes(2);
     });
 
@@ -170,7 +181,7 @@ describe("usePoll", () => {
 
   // ★ A flapping connection must not leave two timers running against one
   // screen — that is how a poll silently doubles its request rate.
-  it("never stacks intervals", () => {
+  it("never stacks intervals", async () => {
     const fn = vi.fn();
     renderHook(() => usePoll(fn, 1000));
     for (let i = 0; i < 5; i++) {
@@ -178,7 +189,7 @@ describe("usePoll", () => {
       setOnline(true);
     }
     fn.mockClear();
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -193,17 +204,150 @@ describe("usePoll", () => {
   // ★ The latest callback runs WITHOUT restarting the timer. A poll that resets
   // whenever its closure changes is a poll that may never fire — and these
   // callbacks close over search text and filters, which change constantly.
-  it("uses the latest callback without resetting the interval", () => {
+  it("uses the latest callback without resetting the interval", async () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = renderHook(
       ({ fn }: { fn: () => void }) => usePoll(fn, 1000),
       { initialProps: { fn: first } },
     );
-    vi.advanceTimersByTime(900);
+    await vi.advanceTimersByTimeAsync(900);
     rerender({ fn: second });
-    vi.advanceTimersByTime(100);
+    await vi.advanceTimersByTimeAsync(100);
     expect(second).toHaveBeenCalledTimes(1);
     expect(first).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What was added after measuring the mechanism at scale.
+// ---------------------------------------------------------------------------
+
+describe("usePoll — catch-up throttle", () => {
+  // ★★ THE BUG THIS FIXES. `visibilitychange` fires on EVERY tab switch, window
+  // minimise and app switch. Unthrottled, somebody flipping between two tabs
+  // kicked off a full catalogue re-sync — several requests over hundreds of
+  // products — on every single flip.
+  it("skips a catch-up when it already ran inside one interval", async () => {
+    const fn = vi.fn();
+    renderHook(() => usePoll(fn, 1000));
+    await vi.advanceTimersByTimeAsync(1000); // one scheduled run
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Flip away and back four times, well inside the interval.
+    for (let i = 0; i < 4; i++) {
+      setVisibility("hidden");
+      await vi.advanceTimersByTimeAsync(50);
+      setVisibility("visible");
+    }
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  // Away for longer than an interval is the case that matters — someone coming
+  // back to the till expecting the screen to be true.
+  it("still catches up after a real absence", async () => {
+    const fn = vi.fn();
+    renderHook(() => usePoll(fn, 1000));
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(5000);
+    setVisibility("visible");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles the network catch-up the same way", async () => {
+    const fn = vi.fn();
+    renderHook(() => usePoll(fn, 1000));
+    await vi.advanceTimersByTimeAsync(1000);
+    fn.mockClear();
+    for (let i = 0; i < 4; i++) {
+      setOnline(false);
+      await vi.advanceTimersByTimeAsync(20);
+      setOnline(true);
+    }
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("usePoll — back-off", () => {
+  // ★ A shop taking two collections a day was making ~2,880 requests to learn
+  // "still nothing" 2,878 times.
+  it("doubles while unchanged and resets on a change", async () => {
+    const fn = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    renderHook(() => usePoll(fn, { ms: 1000, backOff: true }));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // next in 2000
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // not yet
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(2); // next in 4000
+
+    fn.mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(fn).toHaveBeenCalledTimes(3);
+
+    // Reported a change ⇒ straight back to the base interval.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(4);
+  });
+
+  it("is capped, so a quiet till never goes silent", async () => {
+    const fn = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    renderHook(() => usePoll(fn, { ms: 30_000, backOff: true }));
+    for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(600_000);
+    const calls = fn.mock.calls.length;
+    // 10 × 10min at the 2-minute cap is ~50 runs; the point is that it keeps
+    // running rather than stretching without bound.
+    expect(calls).toBeGreaterThan(20);
+  });
+
+  // ★ An uninstrumented poll must not slow itself down on no evidence.
+  it("does not back off when the callback reports nothing", async () => {
+    const fn = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    renderHook(() => usePoll(fn, { ms: 1000, backOff: true }));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("stays at the base interval when back-off is off", async () => {
+    const fn = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    renderHook(() => usePoll(fn, { ms: 1000 }));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  // A throw is not a verdict on whether anything changed.
+  it("survives a callback that throws", async () => {
+    const fn = vi
+      .fn<() => Promise<boolean>>()
+      .mockRejectedValue(new Error("x"));
+    renderHook(() => usePoll(fn, { ms: 1000, backOff: true }));
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("usePoll — jitter", () => {
+  // ★ A deploy restarts every till at once and a shop opens its registers
+  // together; on a fixed interval they stay in step forever, turning steady
+  // traffic into a spike against one database every interval.
+  it("spreads the interval either side of the base", async () => {
+    const delays: number[] = [];
+    for (const r of [0, 0.5, 1]) {
+      vi.mocked(Math.random).mockReturnValue(r);
+      const fn = vi.fn();
+      const { unmount } = renderHook(() => usePoll(fn, 1000));
+      let waited = 0;
+      while (fn.mock.calls.length === 0 && waited < 3000) {
+        await vi.advanceTimersByTimeAsync(10);
+        waited += 10;
+      }
+      delays.push(waited);
+      unmount();
+    }
+    expect(delays[0]).toBeLessThan(1000);
+    expect(delays[2]).toBeGreaterThan(1000);
+    expect(new Set(delays).size).toBe(3);
   });
 });

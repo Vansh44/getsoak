@@ -43,7 +43,6 @@ import {
   X,
 } from "lucide-react";
 import { posLock } from "@/app/actions/pos-auth-actions";
-import { getPickupCount } from "@/app/actions/pos-pickup-actions";
 import { endSession } from "@/lib/auth/firebase-client";
 import {
   activePosNavKey,
@@ -52,6 +51,8 @@ import {
 } from "@/lib/pos/nav";
 import type { PosActorRole } from "@/lib/pos/permissions";
 import { usePoll } from "@/lib/pos/use-poll";
+import { fetchPickupCount } from "@/lib/pos/live";
+import { usePickupBadge } from "@/lib/pos/pickup-badge";
 
 /** Icons live here, not in the registry, so lib/pos/nav.ts stays free of a
  *  client dependency and can be imported by a server component or a test. */
@@ -111,20 +112,38 @@ export function PosNav({
   // supported way to adjust state to a prop: the layout re-renders with a fresh
   // count on every navigation, and without this the badge would freeze at
   // whatever it was when this component first mounted.
-  const [waiting, setWaiting] = useState(ordersWaiting);
+  const [polled, setPolled] = useState<number | null>(null);
   const [lastFromServer, setLastFromServer] = useState(ordersWaiting);
   if (ordersWaiting !== lastFromServer) {
     setLastFromServer(ordersWaiting);
-    setWaiting(ordersWaiting);
+    setPolled(null); // The server's number is newer than anything polled.
   }
+
+  // A screen that reads the queue publishes the count it already has, and says
+  // so — see lib/pos/pickup-badge.ts. While one is, this stops asking for a fact
+  // it would be fetching twice, and the badge tracks the list exactly instead of
+  // lagging it by up to an interval.
+  const shared = usePickupBadge();
+  const waiting = shared.count ?? polled ?? ordersWaiting;
+
   usePoll(
-    useCallback(() => {
-      void getPickupCount().then((r) => {
-        // null = we could not tell (a lapsed session). Keeping the last known
-        // number beats flickering it to zero, which reads as work vanishing.
-        if (r.count !== null) setWaiting(r.count);
+    useCallback(async () => {
+      const res = await fetchPickupCount();
+      // null = we could not tell (lapsed session, blip, offline). Keeping the
+      // last known number beats flickering to zero, which reads as work
+      // vanishing off a queue.
+      if (!res) return false;
+      let moved = false;
+      setPolled((cur) => {
+        moved = cur !== res.count;
+        return res.count;
       });
+      return moved;
     }, []),
+    // ★ Backs off while the count is unchanged: a shop taking two collections a
+    // day should not pay what a busy one does. Any change — or coming back to
+    // the tab — resets it to the base interval at once.
+    { enabled: !shared.owned, backOff: true },
   );
 
   // ★ THE DRAWER IS DERIVED FROM THE ROUTE IT WAS OPENED ON, not a boolean

@@ -18,7 +18,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PosScreen } from "../pos-screen";
-import { POS_POLL_MS, usePoll } from "@/lib/pos/use-poll";
+import { usePoll } from "@/lib/pos/use-poll";
+import { fetchStock } from "@/lib/pos/live";
 import {
   adjustPosStock,
   countPosStock,
@@ -87,13 +88,17 @@ export function InventoryClient({
   // and submits against another.
   const adjusting = openKey !== null;
   usePoll(
-    useCallback(() => {
-      void getPosInventory({ query: query.trim(), lowOnly }).then((res) => {
-        if (!res.error) setItems(res.items);
+    useCallback(async () => {
+      const res = await fetchStock(query.trim(), lowOnly);
+      if (!res || res.error) return false;
+      let moved = false;
+      setItems((cur) => {
+        moved = !sameStock(cur, res.items);
+        return moved ? res.items : cur;
       });
+      return moved;
     }, [query, lowOnly]),
-    POS_POLL_MS,
-    !adjusting,
+    { enabled: !adjusting, backOff: true },
   );
 
   const done = (msg: string) => {
@@ -173,6 +178,24 @@ export function InventoryClient({
         )}
       </div>
     </PosScreen>
+  );
+}
+
+/**
+ * Did any stock number move?
+ *
+ * Keeps the previous array identity when nothing changed, so a poll does not
+ * re-render (and re-sort) a list nobody is looking away from — and tells
+ * `usePoll` to back off, which is what stops a shelf nobody is touching costing
+ * the same as one being counted.
+ */
+function sameStock(a: PosInventoryItem[], b: PosInventoryItem[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (it, i) =>
+      it.productId === b[i].productId &&
+      it.variantId === b[i].variantId &&
+      it.onHand === b[i].onHand,
   );
 }
 

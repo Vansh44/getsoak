@@ -60,7 +60,9 @@ import {
 import type { PosTender } from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { PosScreen } from "./pos-screen";
-import { POS_POLL_MS, usePoll } from "@/lib/pos/use-poll";
+import { usePoll } from "@/lib/pos/use-poll";
+import { fetchPickupQueue } from "@/lib/pos/live";
+import { claimPickupBadge, publishPickupCount } from "@/lib/pos/pickup-badge";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -187,14 +189,39 @@ export function CounterClient({
   // it is a request for nothing.
   const idle =
     !busy && !tendering && !confirmUnprepared && !searching && !pending;
+
+  // ★ THE QUEUE ALREADY CARRIES THE COUNT, so publishing it stops the rail
+  // making a second request for the same fact — and, more importantly, keeps
+  // the badge exactly in step with the list. Before this the row vanished on
+  // hand-over while the badge kept the old number for up to an interval.
+  //
+  // The claim is tied to `idle`, not to being mounted: this poll suspends while
+  // the cashier is mid-action or searching, and a claim held across that would
+  // freeze the badge for as long as somebody left a search box full. Released,
+  // the nav picks polling straight back up.
+  useEffect(() => {
+    if (!idle) return;
+    return claimPickupBadge();
+  }, [idle]);
+
+  useEffect(() => {
+    // Includes the server-rendered first paint, so the badge agrees with the
+    // list before any poll has run.
+    if (!searching) publishPickupCount(queue.length);
+  }, [queue.length, searching]);
+
   usePoll(
-    useCallback(() => {
-      void getPickupQueue().then((res) => {
-        if (!res.error) setQueue(res.orders);
+    useCallback(async () => {
+      const res = await fetchPickupQueue();
+      if (!res || res.error) return false;
+      let moved = false;
+      setQueue((cur) => {
+        moved = !sameQueue(cur, res.orders);
+        return moved ? res.orders : cur;
       });
+      return moved;
     }, []),
-    POS_POLL_MS,
-    idle,
+    { enabled: idle, backOff: true },
   );
 
   /**
@@ -743,6 +770,24 @@ export function CounterClient({
       )}
     </PosScreen>
   );
+}
+
+/**
+ * Did the queue actually change?
+ *
+ * ★ IT DECIDES TWO THINGS. It keeps the previous array IDENTITY when nothing
+ * moved, so a poll every thirty seconds does not re-render the list (and reset
+ * anything keyed off it) for no reason — and it tells `usePoll` whether to back
+ * off, which is what stops a quiet shop paying a busy shop\'s request rate.
+ *
+ * Id + status is enough: those are the only fields a row\'s CONTROLS depend on.
+ * Money and expiry are rendered but do not change without one of them changing
+ * too, and comparing every field would make this a deep-equality helper nobody
+ * can reason about.
+ */
+function sameQueue(a: PickupOrder[], b: PickupOrder[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((o, i) => o.id === b[i].id && o.status === b[i].status);
 }
 
 function rowId(row: CounterRow): string {
