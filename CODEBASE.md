@@ -59,6 +59,14 @@ Paths with a file extension (public/ assets like `/themes/...webp`) pass
 through untouched on EVERY host — the platform/help rewrites would otherwise
 404 them.
 
+The session exchange and sign-out Route Handlers clear both the current
+`.storemink.com` session-cookie tuple and the legacy host-only tuple. Without
+that two-cookie cleanup, an older host-only `sm_session` can shadow every fresh
+shared-domain cookie because Next's cookie reader returns only the first value.
+Signup email verification also recognizes Firebase's `auth/user-not-found`
+for a still-signature-valid cookie, refreshes the browser session, and issues a
+new UID-bound OTP instead of leaving the wizard stuck behind a generic error.
+
 **★★ IT NO LONGER RESTRICTS `/dashboard/users` + `/dashboard/media` TO
 `superadmin`, and that gate was breaking Customers for every store owner.**
 It compared the SESSION COOKIE's `role` claim — but `createStore` writes

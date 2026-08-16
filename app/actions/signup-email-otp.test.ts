@@ -28,6 +28,10 @@ vi.mock("@/lib/auth/server-user", () => ({
 
 const updateAuthUser = vi.fn();
 vi.mock("@/lib/auth/firebase-users", () => ({
+  authErrorCode: (error: unknown) =>
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code)
+      : undefined,
   updateAuthUser: (...args: unknown[]) => updateAuthUser(...args),
 }));
 
@@ -167,5 +171,17 @@ describe("verifySignupEmailOtp", () => {
     const result = await verifySignupEmailOtp(sentCode);
     expect(result.error).toMatch(/No active code/);
     expect(updateAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("identifies a signature-valid session for a deleted Firebase user", async () => {
+    await requestSignupEmailOtp();
+    updateAuthUser.mockRejectedValueOnce({ code: "auth/user-not-found" });
+
+    expect(await verifySignupEmailOtp(sentCode)).toEqual({
+      ok: false,
+      staleSession: true,
+      error: "Your sign-in session is out of date. Please try again.",
+    });
+    expect(jar.has("sm_signup_email_otp")).toBe(false);
   });
 });

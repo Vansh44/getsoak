@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/auth/session-cookie", () => ({
   SESSION_COOKIE: "sm_session",
+  expiredHostOnlySessionCookieHeader: () =>
+    "sm_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
   mintSessionCookie: vi.fn(),
   sessionCookieOptions: vi.fn((host: string | null) => ({
     httpOnly: true,
@@ -105,6 +107,16 @@ describe("POST /api/auth/session", () => {
     expect(sessionCookieOptions).toHaveBeenCalledWith("acme.storemink.com");
   });
 
+  it("evicts a legacy host-only cookie when setting the shared-domain cookie", async () => {
+    const res = await POST(req({ idToken: "good" }, { host: "storemink.com" }));
+
+    const headers = res.headers.getSetCookie();
+    expect(headers).toHaveLength(2);
+    expect(headers[0]).toContain("Domain=.storemink.com");
+    expect(headers[1]).toContain("Max-Age=0");
+    expect(headers[1]).not.toContain("Domain=");
+  });
+
   it("prefers the forwarded host behind the load balancer", async () => {
     await POST(
       req(
@@ -129,6 +141,7 @@ describe("POST /api/auth/session", () => {
 
     expect(res.cookies.get("sm_session")?.domain).toBeUndefined();
     expect(res.cookies.get("sm_session")?.value).toBe("MINTED_COOKIE");
+    expect(res.headers.getSetCookie()).toHaveLength(1);
   });
 
   it("marks the cookie httpOnly so page scripts cannot read it", async () => {
