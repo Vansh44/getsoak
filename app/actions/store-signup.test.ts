@@ -5,7 +5,7 @@ import { makeDbMock, sqlParamValues } from "./_test-helpers";
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ updateTag: vi.fn() }));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
@@ -21,7 +21,7 @@ vi.mock("@/lib/themes/apply", () => ({
   applyTheme: vi.fn(async () => ({ success: true, errors: [] })),
 }));
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { getServerUser } from "@/lib/auth/server-user";
 import { emitEvent } from "@/lib/notifications/record";
@@ -395,7 +395,7 @@ describe("createStore provisioning", () => {
       slug: "acme-foods",
       storeId: "store-1",
     });
-    expect(revalidateTag).toHaveBeenCalledWith("stores", "max");
+    expect(updateTag).toHaveBeenCalledWith("stores");
   });
 
   it("records consent and emits separate merchant and operator events", async () => {

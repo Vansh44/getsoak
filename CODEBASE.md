@@ -88,7 +88,7 @@ permission sections, which read the database. Pinned by `proxy.test.ts`.
 ### Tenant resolution — `lib/store/`
 
 - `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `isPosHost`, `isThemesHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
-- `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome). **Call `revalidateTag(STORE_TAG)` after any store create/settings/domain change.**
+- `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). **Only positive host resolutions are cached**: an unknown/ineligible store host is an internal rejected cache read and becomes an uncached `null`, so a slug claimed moments later is visible on the next request even when that request reaches a different Cloud Run instance. Caching negative resolutions made a successful signup land on the legacy WholeSip fallback for up to five minutes, producing both a WholeSip tab title and a false "No access" screen. Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome). Use `updateTag(STORE_TAG)` after a user-facing Server Action that must immediately read its own store mutation (notably signup); use `revalidateTag(STORE_TAG, "max")` only where stale-while-revalidate is acceptable.
 - `brand.ts` — per-store branding (colors/logo) consumed by `app/(storefront)/components/brand-provider.tsx`.
 
 **Rule: every DB read/write for store data must be scoped by `store_id`** (RLS also enforces this — see `supabase/multitenant_03_rls.sql`).
@@ -2114,6 +2114,14 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     both delegate to the SAME `startPlanSubscriptionForStore` /
     `confirmSubscriptionForStore` cores the dashboard uses. An abandoned
     payment leaves a working Free store (upgrade later at `/dashboard/plans`).
+    **The post-payment handoff is read-your-own-writes.** `createStore` uses
+    Next 16 `updateTag(STORE_TAG)`, not stale-while-revalidate, and tenant
+    resolution never caches a missing store host. This prevents a successful
+    checkout from redirecting into a cached pre-creation miss, which used to
+    fall back to WholeSip and falsely render "No access to this dashboard".
+    Dashboard metadata is platform-owned (`StoreMink — Operations Centre`, with
+    child titles suffixed `— StoreMink`) and never reads merchant/fallback brand
+    data, so WholeSip cannot leak into the admin browser tab.
     Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
     `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
     Browser geolocation is followed by the keyless BigDataCloud client-side

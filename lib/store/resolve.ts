@@ -60,15 +60,25 @@ const STORE_COLUMNS = {
   settings: stores.settings,
 };
 
-// Cached store lookup by Host header. Returns null for platform hosts and for
-// hosts that don't map to an active store — those genuine nulls ARE cached
-// (cheap 404s). A DB error is deliberately NOT swallowed here: this fn is
+// Positive store lookups are cached by Host header. Missing store-host results
+// are deliberately NOT cached: a merchant can claim that slug moments later,
+// and Cloud Run instances do not share an in-memory Next data cache. Caching a
+// null made the first post-signup dashboard request on an instance that had
+// seen the unclaimed host resolve to the legacy WholeSip fallback for five
+// minutes. A DB error is likewise deliberately NOT swallowed here: this fn is
 // wrapped in unstable_cache and a returned null is cached for `revalidate`s, so
 // turning a transient DB outage into null would make a REAL store vanish
 // (storefront 404 / dashboard "no access") for the whole window even after the
 // DB recovers. A thrown/rejected promise is never cached, so we let the error
 // propagate and getCurrentStoreOrNull degrades it to an UNCACHED null → the next
 // request retries and self-heals.
+class StoreHostMiss extends Error {
+  constructor() {
+    super("STORE_HOST_MISS");
+    this.name = "StoreHostMiss";
+  }
+}
+
 const lookupStoreByHost = unstable_cache(
   async (host: string): Promise<Store | null> => {
     const kind = parseHost(host);
@@ -89,13 +99,15 @@ const lookupStoreByHost = unstable_cache(
         .limit(1),
     );
     const store = (rows[0] as Store | undefined) ?? null;
+    if (!store) throw new StoreHostMiss();
 
     // A custom domain must clear BOTH gates before we serve on it. Store
     // subdomains are inherently ours and need neither.
     if (store && kind.type === "custom-domain") {
       // (1) Proven owned. Otherwise a store could pre-claim a domain it does
       // not control, and we would serve its content on someone else's address.
-      if (store.settings?.custom_domain_verified !== true) return null;
+      if (store.settings?.custom_domain_verified !== true)
+        throw new StoreHostMiss();
 
       // (2) Still entitled. Custom domains are a Pro feature, and the plan can
       // lapse long after the domain was verified — effectivePlan() is what
@@ -103,11 +115,12 @@ const lookupStoreByHost = unstable_cache(
       // `plan` still says. Serving is the enforcement point ON PURPOSE: gating
       // only the dashboard would let a store connect on Pro, drop to free, and
       // keep the benefit forever.
-      if (!PLAN_LIMITS[effectivePlan(store)].customDomain) return null;
+      if (!PLAN_LIMITS[effectivePlan(store)].customDomain)
+        throw new StoreHostMiss();
     }
     return store;
   },
-  ["store-by-host"],
+  ["store-by-host-positive-v2"],
   { tags: [STORE_TAG], revalidate: 300 },
 );
 
@@ -138,6 +151,15 @@ export async function getCurrentStoreOrNull(): Promise<Store | null> {
   try {
     return await lookupStoreByHost(host ?? "");
   } catch (err) {
+    // Expected unknown/ineligible host. The throw is internal cache control:
+    // rejected unstable_cache calls are not persisted, so a slug created a
+    // moment later is visible on the next request, on every app instance.
+    if (
+      err instanceof StoreHostMiss ||
+      (err instanceof Error && err.message === "STORE_HOST_MISS")
+    )
+      return null;
+
     // Transient DB error → degrade to "no store" for THIS request only. Crucially
     // this null is NOT cached (the throw inside lookupStoreByHost bypasses
     // unstable_cache), so once the DB is back the very next request resolves the

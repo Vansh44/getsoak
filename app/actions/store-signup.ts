@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
@@ -447,8 +447,13 @@ export async function createStore(
     console.error("createStore (theme seed):", seeded.errors.join(" | "));
   }
 
-  // New store row is now resolvable — bust the cached store lookups.
-  revalidateTag(STORE_TAG, "max");
+  // New store row must be resolvable on the VERY NEXT request. `revalidateTag`
+  // with the `max` profile is stale-while-revalidate: the first dashboard load
+  // can therefore receive the cached "slug does not exist" result, fall back
+  // to the legacy WholeSip store, and tell the new owner they have no access.
+  // This is a Server Action and signup immediately redirects to the new host,
+  // so Next 16's read-your-own-writes primitive is the correct contract here.
+  updateTag(STORE_TAG);
 
   // NOTE: search engines are deliberately NOT notified here any more.
   //

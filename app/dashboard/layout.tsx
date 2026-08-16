@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
-import { getStoreBrand } from "@/lib/store/brand";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { effectivePlan, PLAN_META } from "@/lib/plans";
 import { DashboardTopbar } from "./dashboard-topbar";
@@ -36,16 +36,17 @@ const dashMono = JetBrains_Mono({
   variable: "--font-dash-mono",
 });
 
-export async function generateMetadata() {
-  const brand = await getStoreBrand();
-  return {
-    title: `${brand.name} — Operations Center`,
-    // The dashboard is StoreMink product chrome, not the merchant storefront.
-    // Legacy stores can still carry WholeSip's seeded logo in brand.logoUrl;
-    // using it here made an unrelated brand appear in the browser tab.
-    icons: { icon: "/brand/storemink-mark.png" },
-  };
-}
+// The dashboard is StoreMink product chrome, not the merchant storefront.
+// Keep this static and platform-owned: resolving a tenant brand here made a
+// transient/new-store lookup miss leak the legacy WholeSip fallback into the
+// browser tab before the dashboard had even established access.
+export const metadata: Metadata = {
+  title: {
+    default: "StoreMink — Operations Centre",
+    template: "%s — StoreMink",
+  },
+  icons: { icon: "/brand/storemink-mark.png" },
+};
 
 export default async function DashboardLayout({
   children,
