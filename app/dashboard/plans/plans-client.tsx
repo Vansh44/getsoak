@@ -953,7 +953,7 @@ function UpgradeModal({
       keyId: start.keyId,
       rzpOrderId: start.providerOrderId,
       amountPaise: start.amountPaise,
-      customerId: start.providerCustomerId ?? undefined,
+      customerId: start.providerCustomerId,
       name: "StoreMink",
       description: `${meta.name} plan — first ${selectedPeriod === "yearly" ? "year" : "month"}`,
       onSuccess: async (res) => {

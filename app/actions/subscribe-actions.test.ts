@@ -91,6 +91,7 @@ beforeEach(() => {
       keyId: "rzp_1",
       amountPaise: 5_000_00,
       suggestedMandateMaxPaise: 9_000_00,
+      providerCustomerId: "cust_1",
     },
   });
   enrol.confirmEnrolment.mockResolvedValue({

@@ -22,7 +22,7 @@ continue without automatic debits.
 | Collection routing                          | `collectionRoute` — mandate ceiling AND the AFA limit         |
 | Unknown-outcome handling                    | `collect.ts` + `lib/billing/reconcile.ts`                     |
 | Checkout token capture                      | `ensureRzpCustomer` + `readMandateFromPayment`                |
-| Checkout customer binding                   | `providerCustomerId` → Checkout `customer_id`                 |
+| Checkout recurring binding                  | `customer_id` + `recurring: true` on Standard Checkout        |
 | Authorised ceiling persistence              | `billing_payment_attempts.mandate_max_paise` → mandate        |
 | On-session capture verification             | HMAC + payment order/amount/currency/status cross-check       |
 
@@ -61,8 +61,7 @@ is the "promise a charge that never comes" failure again.
 ## How the mandate is captured
 
 `startEnrolment` creates a Razorpay customer and an AUTHORISATION order instead
-of a plain one, but only when all three of these hold — each is a way a merchant
-would otherwise be told autopay is on and then invoiced by hand forever:
+of a plain one. All three of these must hold:
 
 - `RECURRING_CHARGE_VERIFIED` is true (we can actually collect),
 - `mandateFitsGateway(size)` — above ₹99,999 the authorisation order itself is
@@ -70,7 +69,10 @@ would otherwise be told autopay is on and then invoiced by hand forever:
 - the owner has both an email and phone, since the authorisation customer and
   subsequent recurring debit require them.
 
-Fail any one and it stays an ordinary one-time checkout.
+Fail any one and enrolment stops **before Checkout opens**, with an explicit
+"No payment was taken" message. A paid subscription is an autopay product; it
+must never silently degrade to a one-time first cycle. Manual payments remain
+available for already-issued renewal invoices, and AI credits remain one-time.
 
 **★★ `confirmEnrolment` then reads the token from the PAYMENT, not from the
 browser.** Razorpay Checkout's success handler returns a payment id, an order id
@@ -79,10 +81,12 @@ value the browser chose, and attaching a mandate is standing permission to debit
 that merchant every cycle. `GET /payments/:id` returns `token_id` and
 `customer_id`, and we have just verified that payment's signature.
 
-The same server-created customer id is also supplied to Checkout for an
-authorisation order. Omitting it left the REST order associated with a customer
-while the browser window opened as an ordinary unbound checkout, which could
-complete the first charge without exposing the mandate registration flow.
+The same server-created customer id is supplied to Checkout **together with
+`recurring: true`**. Razorpay Standard Checkout defaults `recurring` to false;
+the 2026-08-16 signup flow supplied only `customer_id`, so Checkout legitimately
+collected the first invoice as a one-time payment. A regression test now pins
+both fields for mandate orders and their absence for AI-credit/other one-time
+orders. Resuming a dismissed authorisation checkout also restores both fields.
 
 Before an entitlement is granted, StoreMink fetches the returned payment id and
 requires its `order_id`, amount, currency and `captured` status to match the
@@ -113,6 +117,8 @@ store and confirm:
       same email returns the **same** id rather than an error.
 - [ ] `POST /orders` with a `token` block returns an order (not a 400 about
       unexpected fields).
+- [x] Standard Checkout receives the same `customer_id` and explicit
+      `recurring: true` for a mandate order (pinned by client regression test).
 - [ ] `POST /payments/create/recurring` against a confirmed token returns
       `razorpay_payment_id`.
 - [ ] Note the exact `status` values you see. If any is outside

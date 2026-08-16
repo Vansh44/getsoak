@@ -5343,9 +5343,15 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       drawer. Closed at `counted = expected` and attributed to the system — a
       variance invented by a billing event would read as a cashier being short.
     - **★ THE MERCHANT'S END IS WIRED (`/dashboard/plans`).** Subscribing goes
-      through `startSubscribe` → Razorpay ORDER → `confirmSubscribe`, not
-      `startPlanSubscription`, so the first cycle is a one-time payment on the
-      verified checkout and no amount lives in a provider-side plan. Two things
+      through `startSubscribe` → Razorpay mandate-authorisation ORDER →
+      `confirmSubscribe`, not `startPlanSubscription`, so the first cycle and
+      future debit permission are authorised in the same verified checkout and
+      no amount lives in a provider-side plan. Standard Checkout must receive
+      both the server-created `customer_id` and explicit `recurring: true` — its
+      default is false, and omitting that flag caused the 2026-08-16 signup to
+      collect only a one-time payment. New enrolment now fails before Checkout
+      when the rollout gate, mandate ceiling or billing contact cannot support
+      autopay; it never silently falls back to an ordinary first charge. Two things
       the flow says out loud rather than assuming: a confirm that fails is a
       `toast.info` carrying the server's own wording (money may have moved —
       §26's rule), and `autopay: false` is stated plainly whenever no mandate was

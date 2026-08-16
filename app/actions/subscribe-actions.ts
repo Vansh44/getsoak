@@ -313,11 +313,9 @@ export async function confirmSignupSubscribe(
 // ---------------------------------------------------------------------------
 // Manual payment — settling an invoice the merchant already owes.
 //
-// ★ Today this is the ONLY way a renewal gets paid, because automatic
-// collection is gated behind an unverified endpoint (lib/billing/gateway.ts).
-// Not a fallback: spec §18 makes it a first-class path, and it stays one after
-// the recurring charge lands, for amounts over the AFA limit and for merchants
-// with no live mandate.
+// A first-class fallback for renewals above the AFA limit, revoked/missing
+// mandates, and provider incidents. New enrolments no longer enter this path by
+// silently accepting a one-time first payment: they must authorise autopay.
 // ---------------------------------------------------------------------------
 
 export type PayInvoiceStart =

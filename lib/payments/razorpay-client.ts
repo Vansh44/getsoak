@@ -31,6 +31,9 @@ interface RazorpayOptions {
   /** Required by Razorpay Checkout when an order is also registering a
    * recurring mandate. Harmlessly omitted for ordinary one-time orders. */
   customer_id?: string;
+  /** Razorpay Standard Checkout defaults this to false. It must be true for
+   * an order-based recurring authorisation to display the mandate flow. */
+  recurring?: boolean;
   subscription_id?: string;
   prefill?: { name?: string; email?: string; contact?: string };
   handler: (response: RazorpaySuccess & RazorpaySubscriptionSuccess) => void;
@@ -96,7 +99,11 @@ export async function openRazorpayModal(
     name: params.name,
     description: params.description,
     order_id: params.rzpOrderId,
-    customer_id: params.customerId,
+    // An authorisation order alone is not enough: Checkout treats it as a
+    // one-time payment unless recurring is explicitly enabled in the browser.
+    ...(params.customerId
+      ? { customer_id: params.customerId, recurring: true }
+      : {}),
     prefill: params.prefill,
     handler: params.onSuccess,
     modal: { ondismiss: params.onDismiss },

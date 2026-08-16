@@ -35,7 +35,7 @@ const rzp = vi.hoisted(() => ({
   rzpCreateAuthorizationOrder: vi.fn(),
   rzpCreateCustomer: vi.fn(),
   // Read on every confirm to learn whether the checkout registered a mandate.
-  // Default: an ordinary one-time payment, which is what most of them are.
+  // Default deliberately has no token to cover the post-payment anomaly path.
   rzpFetchPayment: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({
     ok: true,
     data: { id: "pay_1" },
@@ -113,9 +113,8 @@ beforeEach(() => {
     ok: true,
     data: { id: "order_auth_1" },
   });
-  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — and this one has a
-  // default that matters: a payment with no token is an ordinary one-time
-  // payment, which is what most enrolments are.
+  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — and this default
+  // matters: a missing token after money moved must still grant the paid plan.
   rzp.rzpFetchPayment.mockResolvedValue({ ok: true, data: { id: "pay_1" } });
   rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
     ok: true,
@@ -175,7 +174,7 @@ describe("startEnrolment", () => {
     );
   });
 
-  it("★★ falls back to one-time checkout when the owner has no phone", async () => {
+  it("★★ refuses before checkout when the owner has no phone", async () => {
     mail.resolveBillingEmail.mockResolvedValue({
       email: "owner@acme.test",
       phone: null,
@@ -183,9 +182,13 @@ describe("startEnrolment", () => {
       slug: "acme",
     });
     const res = await startEnrolment(args);
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/autopay/i);
+    expect(res.error).toMatch(/no payment was taken/i);
+    expect(collect.beginAttempt).not.toHaveBeenCalled();
     expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
-    expect(rzp.rzpCreateOrder).toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
   });
 
   it("issues the first invoice and opens a Razorpay order", async () => {
@@ -197,6 +200,7 @@ describe("startEnrolment", () => {
       providerOrderId: "order_auth_1",
       keyId: "rzp_test_1",
       amountPaise: 5_000_00,
+      providerCustomerId: "cust_1",
     });
   });
 
@@ -305,6 +309,7 @@ describe("startEnrolment", () => {
       attemptId: "att-old",
       providerOrderId: "order_old",
       amountPaise: 5_000_00,
+      providerCustomerId: "cust_1",
     });
     // ★ And it must NOT open a second order at the gateway.
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
@@ -664,7 +669,7 @@ describe("confirmEnrolment", () => {
     );
   });
 
-  it("★ a payment with no token registers no mandate — the ordinary case", async () => {
+  it("★ a payment with no token still grants access after money moved", async () => {
     seedConfirm();
     const res = await confirmEnrolment({
       storeId: STORE,
@@ -673,6 +678,8 @@ describe("confirmEnrolment", () => {
       signature: "sig",
     });
     expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.mandateActivated).toBe(false);
   });
 
   it("★★ a FAILED lookup still activates the plan — the money is already in", async () => {
