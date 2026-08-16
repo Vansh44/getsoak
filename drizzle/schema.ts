@@ -341,7 +341,7 @@ export const billingInvoices = pgTable(
   {
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
-    /** 'subscription' | 'ai_credits' — never the same document (spec §1). */
+    /** 'subscription' | 'ai_credits' | 'addon' — never mixed (spec §1). */
     kind: text().notNull(),
     status: text().default("draft").notNull(),
     subtotalPaise: bigint("subtotal_paise", { mode: "number" })
@@ -357,7 +357,7 @@ export const billingInvoices = pgTable(
     invoiceNo: integer("invoice_no"),
     invoiceRef: text("invoice_ref"),
     fyLabel: text("fy_label"),
-    /** The renewal invoice's idempotency key. Null for ai_credits. */
+    /** The renewal invoice's idempotency key. Null for one-time documents. */
     cycleSeq: integer("cycle_seq"),
     addonTargetCount: integer("addon_target_count"),
     periodStart: timestamp("period_start", {
@@ -410,7 +410,7 @@ export const billingInvoices = pgTable(
     }).onDelete("cascade"),
     check(
       "billing_invoices_kind_check",
-      sql`kind = ANY (ARRAY['subscription'::text, 'ai_credits'::text])`,
+      sql`kind = ANY (ARRAY['subscription'::text, 'ai_credits'::text, 'addon'::text])`,
     ),
     check(
       "billing_invoices_status_check",
@@ -436,7 +436,11 @@ export const billingInvoices = pgTable(
     ),
     check(
       "billing_invoices_kind_shape",
-      sql`((kind = 'subscription'::text) AND (cycle_seq IS NOT NULL)) OR ((kind = 'ai_credits'::text) AND (cycle_seq IS NULL))`,
+      sql`((kind = 'subscription'::text) AND (cycle_seq IS NOT NULL)) OR ((kind = ANY (ARRAY['ai_credits'::text, 'addon'::text])) AND (cycle_seq IS NULL))`,
+    ),
+    check(
+      "billing_invoices_addon_target_shape",
+      sql`(addon_target_count IS NULL) OR ((kind = 'addon'::text) AND (addon_target_count >= 0) AND (addon_target_count <= 50))`,
     ),
   ],
 );

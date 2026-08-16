@@ -34,6 +34,7 @@ import {
   createAiCreditsInvoice,
   ensureRenewalInvoice,
   finalizeInvoice,
+  finalizePaidAiCreditsInvoice,
   getInvoice,
   loadTaxContext,
 } from "./invoice-store";
@@ -277,6 +278,46 @@ describe("finalizeInvoice", () => {
   it("returns null and logs on failure", async () => {
     brokenDb();
     expect(await finalizeInvoice(INVOICE)).toBeNull();
+    expect(logError).toHaveBeenCalled();
+  });
+});
+
+describe("finalizePaidAiCreditsInvoice", () => {
+  it("★★ issues a one-time credit receipt directly as paid", async () => {
+    seed({
+      selects: [
+        [
+          {
+            ...INVOICE_ROW,
+            kind: "ai_credits",
+            cycleSeq: null,
+            status: "paid",
+            invoiceRef: "SM/2026-27/00009",
+            finalizedAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+      ],
+    });
+
+    const row = await finalizePaidAiCreditsInvoice(
+      INVOICE,
+      new Date("2026-09-01T00:00:00.000Z"),
+    );
+
+    expect(row?.status).toBe("paid");
+    expect(dbHolder.current.calls.set[0]).toMatchObject({
+      status: "paid",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+    });
+    // Both timestamps are coalesced in the same UPDATE: a draft is issued and
+    // settled atomically, while retrying an older receipt preserves its dates.
+    expect(dbHolder.current.calls.set[0].finalizedAt).toBeDefined();
+    expect(dbHolder.current.calls.set[0].paidAt).toBeDefined();
+  });
+
+  it("returns null and logs when the paid transition cannot be recorded", async () => {
+    brokenDb();
+    expect(await finalizePaidAiCreditsInvoice(INVOICE)).toBeNull();
     expect(logError).toHaveBeenCalled();
   });
 });

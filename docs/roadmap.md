@@ -32,6 +32,7 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| —      | Signup recovery, full business address + live pricing          | —    | ✅ done |
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
@@ -761,19 +762,19 @@ UPI or e-mandate — every amount change (tier, period, locations) goes through
 dead for most Indian merchants, and add-ons are deprecated. StoreMink computes
 the amount; the gateway only collects it.
 
-| Phase                                                | State                                 |
-| ---------------------------------------------------- | ------------------------------------- |
-| 1 · Architecture + the 13 defects it replaces        | ✅ done                               |
-| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                 |
-| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                               |
-| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                               |
-| 4 · Signup enrolment on the new system               | ✅ done                               |
-| 5 · Buying an extra location on the new system       | ✅ done                               |
-| 6 · Webhook processor off the request path           | ⏳ reconciliation is rollout fallback |
-| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)         |
-| 8 · AI-credit invoicing                              | ✅ done                               |
-| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                    |
-| 10 · Autopay — mandate capture + recurring charge    | 🧪 **enabled for verification**       |
+| Phase                                                | State                                                                |
+| ---------------------------------------------------- | -------------------------------------------------------------------- |
+| 1 · Architecture + the 13 defects it replaces        | ✅ done                                                              |
+| 2 · Schema (`billing_01`…`06`) + 26-check verifier   | ✅ applied to staging                                                |
+| 3 · Cycle maths, invoices, collection, renewal cron  | ✅ done                                                              |
+| 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done — three-step purchase dialog + exact gateway cross-check     |
+| 4 · Signup enrolment on the new system               | ✅ done                                                              |
+| 5 · Buying an extra location on the new system       | ✅ done                                                              |
+| 6 · Webhook processor off the request path           | ⏳ reconciliation is rollout fallback                                |
+| 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)                                        |
+| 8 · AI-credit invoicing                              | ✅ done — one-time receipts finalize paid; legacy open rows repaired |
+| 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                                                   |
+| 10 · Autopay — mandate capture + recurring charge    | 🧪 **enabled for verification**                                      |
 
 **★ AUTOPAY IS ENABLED FOR VERIFICATION, AND THE MANUAL SYSTEM REMAINS.**
 `RECURRING_CHARGE_VERIFIED` is true as of 2026-08-16 for test-mode staging and
@@ -787,6 +788,14 @@ invoice payable on `/dashboard/plans`; none is misreported as a failed debit.
 from the browser; and `chargeMandateViaRazorpay` creates a provider order,
 persists that order id before debit, then calls the recurring endpoint. Unknown
 outcomes remain in flight for reconciliation instead of being retried.
+
+The enrolment window now passes the server-created Razorpay `customer_id` into
+Checkout when a mandate is being registered. Every on-session StoreMink payment
+also cross-checks the returned payment against Razorpay's read API for captured
+status, order, INR currency and exact server-computed amount before granting the
+plan, plan change, location or AI credits. A provider read outage retains the
+already-verified HMAC path so a captured payment is not stranded or invited to
+be paid twice.
 
 Production returns the charge function when platform credentials are present.
 The exact recurring request behaviour, provider-side idempotency support,

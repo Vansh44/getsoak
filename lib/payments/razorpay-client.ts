@@ -28,6 +28,9 @@ interface RazorpayOptions {
   name: string;
   description?: string;
   order_id?: string;
+  /** Required by Razorpay Checkout when an order is also registering a
+   * recurring mandate. Harmlessly omitted for ordinary one-time orders. */
+  customer_id?: string;
   subscription_id?: string;
   prefill?: { name?: string; email?: string; contact?: string };
   handler: (response: RazorpaySuccess & RazorpaySubscriptionSuccess) => void;
@@ -70,6 +73,7 @@ export interface OpenPaymentParams {
   keyId: string;
   rzpOrderId: string;
   amountPaise: number;
+  customerId?: string;
   name: string;
   description?: string;
   prefill?: { name?: string; email?: string; contact?: string };
@@ -92,6 +96,7 @@ export async function openRazorpayModal(
     name: params.name,
     description: params.description,
     order_id: params.rzpOrderId,
+    customer_id: params.customerId,
     prefill: params.prefill,
     handler: params.onSuccess,
     modal: { ondismiss: params.onDismiss },

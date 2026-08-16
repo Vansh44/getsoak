@@ -40,6 +40,7 @@ const rzp = vi.hoisted(() => ({
     ok: true,
     data: { id: "pay_1" },
   })),
+  verifyCapturedCheckoutPayment: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
@@ -116,6 +117,10 @@ beforeEach(() => {
   // default that matters: a payment with no token is an ordinary one-time
   // payment, which is what most enrolments are.
   rzp.rzpFetchPayment.mockResolvedValue({ ok: true, data: { id: "pay_1" } });
+  rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+    ok: true,
+    gatewayRead: true,
+  });
   seed();
   provider.getPlatformRazorpayCreds.mockReturnValue({
     keyId: "rzp_test_1",

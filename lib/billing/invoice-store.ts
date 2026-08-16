@@ -17,7 +17,7 @@ import "server-only";
  * asks for the right thing and reads the answer correctly.
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { withService, type Db } from "@/lib/db/client";
 import {
   billingAccounts,
@@ -32,7 +32,7 @@ import type { BuiltInvoice, TaxContext } from "./invoice";
 export interface InvoiceRow {
   id: string;
   storeId: string;
-  kind: "subscription" | "ai_credits";
+  kind: "subscription" | "ai_credits" | "addon";
   status: string;
   totalPaise: number;
   cycleSeq: number | null;
@@ -433,6 +433,49 @@ export async function finalizeInvoiceClaimed(
   }
 }
 
+/**
+ * Issue an AI-credit invoice after its one-time checkout has already settled.
+ *
+ * ★★ THIS IS NOT A COLLECTIBLE INVOICE. Razorpay already captured the purchase
+ * before `settlePurchase` calls us, so moving it through the subscription
+ * `open → processing → paid` collection state machine would present the same
+ * money as debt and could charge it a second time. Finalizing and marking paid
+ * happen in ONE update: a draft receives its gapless number and an older `open`
+ * row is repaired without changing the original issue time.
+ *
+ * The kind predicate is deliberate defence in depth. This shortcut must never
+ * be usable to mark a subscription paid without a captured billing attempt.
+ */
+export async function finalizePaidAiCreditsInvoice(
+  invoiceId: string,
+  now: Date = new Date(),
+): Promise<InvoiceRow | null> {
+  try {
+    return await withService(async (db) => {
+      const nowIso = now.toISOString();
+      await db
+        .update(billingInvoices)
+        .set({
+          finalizedAt: sql`coalesce(${billingInvoices.finalizedAt}, ${nowIso}::timestamptz)`,
+          paidAt: sql`coalesce(${billingInvoices.paidAt}, ${nowIso}::timestamptz)`,
+          status: "paid",
+          updatedAt: nowIso,
+        })
+        .where(
+          and(
+            eq(billingInvoices.id, invoiceId),
+            eq(billingInvoices.kind, "ai_credits"),
+            inArray(billingInvoices.status, ["draft", "open", "processing"]),
+          ),
+        );
+      return readInvoice(db, invoiceId);
+    });
+  } catch (err) {
+    logError("billing.finalize_paid_ai_credits_invoice", err, { invoiceId });
+    return null;
+  }
+}
+
 function selectInvoice(db: Db) {
   return db
     .select({
@@ -466,7 +509,13 @@ function toInvoiceRow(row: {
   invoiceRef: string | null;
   finalizedAt: string | null;
 }): InvoiceRow | null {
-  if (row.kind !== "subscription" && row.kind !== "ai_credits") return null;
+  if (
+    row.kind !== "subscription" &&
+    row.kind !== "ai_credits" &&
+    row.kind !== "addon"
+  ) {
+    return null;
+  }
   return { ...row, kind: row.kind };
 }
 

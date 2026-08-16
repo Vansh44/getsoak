@@ -12,7 +12,7 @@
 //   • paying during grace restores the plan AT ONCE, not at the next cron tick.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { makeDbMock } from "@/app/actions/_test-helpers";
+import { makeDbMock, sqlParamValues } from "@/app/actions/_test-helpers";
 
 vi.mock("@/lib/observability/logger", () => ({
   logError: vi.fn(),
@@ -30,6 +30,7 @@ vi.mock("@/lib/payments/provider", () => provider);
 
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
+  verifyCapturedCheckoutPayment: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
@@ -50,7 +51,11 @@ vi.mock("./collect", () => collect);
 const worker = vi.hoisted(() => ({ advanceAfterPayment: vi.fn() }));
 vi.mock("./renewal-worker", () => worker);
 
-import { confirmInvoicePayment, startInvoicePayment } from "./manual-pay";
+import {
+  confirmInvoicePayment,
+  listPayableInvoices,
+  startInvoicePayment,
+} from "./manual-pay";
 
 const STORE = "store-1";
 const INVOICE = "inv-1";
@@ -83,6 +88,10 @@ beforeEach(() => {
   });
   rzp.rzpCreateOrder.mockResolvedValue({ ok: true, data: { id: "order_1" } });
   rzp.verifyCheckoutSignature.mockReturnValue(true);
+  rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+    ok: true,
+    gatewayRead: true,
+  });
   invStore.getInvoice.mockResolvedValue(openInvoice());
   invStore.finalizeInvoice.mockResolvedValue(openInvoice());
   invStore.amountDueForInvoice.mockResolvedValue(5_000_00);
@@ -114,6 +123,19 @@ describe("startInvoicePayment", () => {
     invStore.getInvoice.mockResolvedValue(openInvoice({ storeId: "other" }));
     const res = await startInvoicePayment(args);
     expect(res.ok).toBe(false);
+    expect(collect.beginAttempt).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ refuses an AI-credit receipt before creating another order", async () => {
+    invStore.getInvoice.mockResolvedValue(
+      openInvoice({ kind: "ai_credits", cycleSeq: null }),
+    );
+    const res = await startInvoicePayment(args);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/one-time purchase.*settled/i);
+    expect(invStore.amountDueForInvoice).not.toHaveBeenCalled();
     expect(collect.beginAttempt).not.toHaveBeenCalled();
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
   });
@@ -215,6 +237,16 @@ describe("startInvoicePayment", () => {
   });
 });
 
+describe("listPayableInvoices", () => {
+  it("★★ queries subscription debt only, never one-time credit receipts", async () => {
+    seed([[]]);
+    await listPayableInvoices(STORE);
+    expect(sqlParamValues(dbHolder.current.calls.where[0])).toEqual(
+      expect.arrayContaining([STORE, "subscription", "open", "processing"]),
+    );
+  });
+});
+
 describe("confirmInvoicePayment", () => {
   const args = {
     storeId: STORE,
@@ -225,7 +257,9 @@ describe("confirmInvoicePayment", () => {
   };
 
   function seedAttempt() {
-    seed([[{ id: "att-1", providerOrderId: "order_1" }]]);
+    seed([
+      [{ id: "att-1", providerOrderId: "order_1", amountPaise: 5_000_00 }],
+    ]);
   }
 
   it("settles the payment and reports the plan restored", async () => {
@@ -238,6 +272,18 @@ describe("confirmInvoicePayment", () => {
 
   it("★★ REFUSES an unverified signature and settles nothing", async () => {
     rzp.verifyCheckoutSignature.mockReturnValue(false);
+    seedAttempt();
+    const res = await confirmInvoicePayment(args);
+    expect(res.ok).toBe(false);
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(worker.advanceAfterPayment).not.toHaveBeenCalled();
+  });
+
+  it("refuses a gateway record that contradicts the signed callback", async () => {
+    rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+      ok: false,
+      error: "The captured amount does not match the invoice.",
+    });
     seedAttempt();
     const res = await confirmInvoicePayment(args);
     expect(res.ok).toBe(false);

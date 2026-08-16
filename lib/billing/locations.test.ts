@@ -37,6 +37,7 @@ vi.mock("@/lib/plans/pricing", () => pricing);
 
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
+  verifyCapturedCheckoutPayment: vi.fn(),
   verifyCheckoutSignature: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", () => rzp);
@@ -117,6 +118,10 @@ beforeEach(() => {
   });
   rzp.rzpCreateOrder.mockResolvedValue({ ok: true, data: { id: "order_1" } });
   rzp.verifyCheckoutSignature.mockReturnValue(true);
+  rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
+    ok: true,
+    gatewayRead: true,
+  });
   store.loadTaxContext.mockResolvedValue({
     enabled: false,
     rateBps: 0,

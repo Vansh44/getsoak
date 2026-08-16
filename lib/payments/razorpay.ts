@@ -286,11 +286,62 @@ export async function rzpChargeMandate(
 
 export interface RzpPaymentDetail {
   id: string;
+  order_id?: string | null;
+  amount?: number;
+  currency?: string;
   status?: string;
   method?: string;
   /** Present once an authorisation payment has registered a mandate. */
   token_id?: string | null;
   customer_id?: string | null;
+}
+
+export type CapturedCheckoutVerification =
+  | { ok: true; gatewayRead: true }
+  | { ok: true; gatewayRead: false }
+  | { ok: false; error: string };
+
+/**
+ * Verify the browser callback against Razorpay's own payment record.
+ *
+ * The checkout HMAC remains mandatory at every caller. This is the second
+ * boundary: a valid callback must also name a CAPTURED INR payment for the
+ * exact order and amount StoreMink created. A temporary Razorpay read outage
+ * falls back to the HMAC (and is reconciled later); a contradictory gateway
+ * record fails closed and never grants an entitlement.
+ */
+export async function verifyCapturedCheckoutPayment(
+  creds: RazorpayCreds,
+  input: {
+    paymentId: string;
+    orderId: string;
+    amountPaise: number;
+  },
+): Promise<CapturedCheckoutVerification> {
+  const fetched = await rzpFetchPayment(creds, input.paymentId);
+  if (!fetched.ok) {
+    // The HMAC still proves association. Refusing to finish after a transient
+    // read outage strands a captured payment and can make the merchant retry.
+    return { ok: true, gatewayRead: false };
+  }
+  const payment = fetched.data;
+  if (payment.id !== input.paymentId || payment.order_id !== input.orderId) {
+    return { ok: false, error: "The payment belongs to a different order." };
+  }
+  if (payment.amount !== input.amountPaise || payment.currency !== "INR") {
+    return {
+      ok: false,
+      error: "The captured amount does not match the invoice.",
+    };
+  }
+  if (payment.status !== "captured") {
+    return {
+      ok: false,
+      error:
+        "The payment is still being confirmed. Don't pay again; check back shortly.",
+    };
+  }
+  return { ok: true, gatewayRead: true };
 }
 
 /**

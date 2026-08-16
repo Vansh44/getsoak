@@ -115,6 +115,22 @@
       "verify": {
         "columns": ["orders.pickup_prepared_at"]
       }
+    },
+    {
+      "id": "20260816_0004_ai_credit_invoice_paid_repair",
+      "description": "Mark paid one-time AI-credit invoices as paid instead of subscription debt",
+      "file": "sql/20260816_0004_ai_credit_invoice_paid_repair.sql",
+      "transaction": true,
+      "requires": ["20260816_0003_pos_pickup_prepared_at"],
+      "verify": {
+        "queries": [
+          {
+            "name": "paid AI-credit purchases have no collectible invoice",
+            "sql": "select count(*)::text from public.billing_invoices invoice join public.ai_credit_purchases purchase on purchase.invoice_id = invoice.id where purchase.status = 'paid' and invoice.kind = 'ai_credits' and invoice.status in ('draft', 'open', 'processing')",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

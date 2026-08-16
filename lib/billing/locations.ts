@@ -44,6 +44,7 @@ import { logError } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateOrder,
+  verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { effectivePlan, limitsFor, PLAN_META, type Plan } from "@/lib/plans";
@@ -523,6 +524,7 @@ export async function confirmLocationPurchase(input: {
   let found: {
     attemptId: string;
     providerOrderId: string | null;
+    amountPaise: number;
     target: number;
   } | null = null;
   try {
@@ -545,6 +547,7 @@ export async function confirmLocationPurchase(input: {
         .select({
           id: billingPaymentAttempts.id,
           providerOrderId: billingPaymentAttempts.providerOrderId,
+          amountPaise: billingPaymentAttempts.amountPaise,
         })
         .from(billingPaymentAttempts)
         .where(
@@ -559,6 +562,7 @@ export async function confirmLocationPurchase(input: {
       return {
         attemptId: att.id,
         providerOrderId: att.providerOrderId,
+        amountPaise: att.amountPaise,
         target: inv.target,
       };
     });
@@ -587,6 +591,20 @@ export async function confirmLocationPurchase(input: {
       { storeId: input.storeId, invoiceId: input.invoiceId },
     );
     return { ok: false, error: "We couldn't verify that payment." };
+  }
+
+  const observedPayment = await verifyCapturedCheckoutPayment(creds, {
+    paymentId: input.providerPaymentId,
+    orderId: found.providerOrderId,
+    amountPaise: found.amountPaise,
+  });
+  if (!observedPayment.ok) {
+    logError(
+      "billing.locations.gateway_mismatch",
+      new Error(observedPayment.error),
+      { storeId: input.storeId, invoiceId: input.invoiceId },
+    );
+    return { ok: false, error: observedPayment.error };
   }
 
   const settled = await settleAttempt(found.attemptId, "captured", {

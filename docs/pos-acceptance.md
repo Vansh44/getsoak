@@ -33,21 +33,60 @@ home, pricing, login, and signup deliberately navigate to `storemink.com`.
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                                                                                         | Why                                                                                               |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10`, and `20260816_0003_pos_pickup_prepared_at` as `postgres` | Column/function drift otherwise                                                                   |
-| Store on the **Pro** plan                                                                                                                            | POS and Locations are Pro-gated                                                                   |
-| `POS_SESSION_SECRET` set                                                                                                                             | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
-| `RESEND_*` configured                                                                                                                                | Staff invitations and pickup emails go nowhere otherwise                                          |
-| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                                                                       | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
-| `billing_09_attempt_mandate_ceiling.sql` applied before the autopay build                                                                            | Confirmation otherwise cannot retain the exact ceiling the merchant authorised                    |
+| Prerequisite                                                                                                                                                                                        | Why                                                                                               |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10`, `20260816_0003_pos_pickup_prepared_at`, and `20260816_0004_ai_credit_invoice_paid_repair` as `postgres` | Column/function/data drift otherwise                                                              |
+| Store on the **Pro** plan                                                                                                                                                                           | POS and Locations are Pro-gated                                                                   |
+| `POS_SESSION_SECRET` set                                                                                                                                                                            | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
+| `RESEND_*` configured                                                                                                                                                                               | Staff invitations and pickup emails go nowhere otherwise                                          |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                                                                                                                      | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
+| `billing_09_attempt_mandate_ceiling.sql` applied before the autopay build                                                                                                                           | Confirmation otherwise cannot retain the exact ceiling the merchant authorised                    |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
-are applied. `locations_10` and `20260816_0003_pos_pickup_prepared_at` are
-pending a `postgres` migration run; the three local theme-demo rows were
+are applied. `locations_10`, `20260816_0003_pos_pickup_prepared_at`, and
+`20260816_0004_ai_credit_invoice_paid_repair` are pending a `postgres` migration run; the three local theme-demo rows were
 repaired explicitly for smoke testing only.
 (`locations_07` added merchant postcode rules and `locations_08` removed them
 again; both ran.)
+
+---
+
+## 0.2 Signup origin, address and pricing
+
+**PS-0.3 — An expired signup session has an exit**
+Reach the email-code step, delete or invalidate the Identity Platform user, and
+submit the code.
+**Expect:** the error offers both **Start signup again** and **Go to login**.
+Start again clears the Firebase identity and the server cookie and returns to a
+clean account step. Every later signup screen also has **Start over** in the
+header. There is no dead-end instruction with no matching control.
+
+**PS-0.4 ★ — A new store has one complete business address**
+At **Where do you sell from?**, leave each of street/building, city,
+state/province, postal/PIN code and country empty in turn.
+**Expect:** Continue refuses each missing core field. Address line 2 remains
+optional because many valid addresses do not have a suite, floor or landmark.
+Complete signup, then inspect `stores.settings.business` and
+`store_billing_settings`: the former has the structured address and the latter
+has the same formatted invoice address, business name and verified contacts.
+The first invoice must print it without requiring a second settings visit.
+
+**PS-0.5 — Location autofill assists; it never owns the answer**
+Deny browser location, block the Maps script, and complete the plain form.
+Repeat with browser location allowed and then correct a geocoded field.
+**Expect:** both paths finish. Autofill may populate street, city, state, postal
+code and country when its provider resolves them, but every field remains
+editable and coordinates remain optional.
+
+**PS-0.6 ★★ — Signup shows and charges the operator price**
+In the platform Pricing console set Basic to ₹1,500/month and ₹15,000/year with
+₹2,000/₹20,000 "Was" prices; set Pro to ₹2,400/month and ₹24,000/year with
+₹5,000/₹50,000 "Was" prices. Open a fresh signup plan step.
+**Expect:** Basic shows ₹1,500 monthly or ₹1,250/month billed ₹15,000 yearly;
+Pro shows ₹2,400 monthly or ₹2,000/month billed ₹24,000 yearly; the matching
+"Was" figures are struck through. No deploy is required. If the live pricing
+read fails, paid cards do not quote code defaults and no paid checkout starts;
+Free remains available.
 
 ---
 
@@ -139,6 +178,15 @@ phone.
 plainly says autopay was not set up. The second offers the mandate and records
 its exact authorised ceiling. A phone-less mandate would enrol successfully but
 fail every subsequent debit before reaching Razorpay.
+
+**PS-1.18 ★★ — AI credits are a paid receipt, never subscription debt**
+Buy the ₹59 AI-credit pack, then open `/dashboard/plans` and invoice history.
+**Expect:** the credits arrive once; the invoice is issued with status `paid`;
+the amber “invoice to pay” banner does not list it and the store's plan is not
+at risk. Calling `startPayInvoice` with that invoice id is refused before a
+Razorpay order or billing attempt is created. For a pre-fix paid purchase whose
+linked invoice is `open`, apply migration `20260816_0004`: it becomes `paid`
+without changing its amount or original document number.
 
 **PS-1.13 ★ — The price comes from the operator console, not the code**
 As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There

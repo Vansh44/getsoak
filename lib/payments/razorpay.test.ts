@@ -29,6 +29,7 @@ import {
   rzpFetchPaymentRefunds,
   rzpRefund,
   validateCredentials,
+  verifyCapturedCheckoutPayment,
 } from "./razorpay";
 
 const CREDS = { keyId: "rzp_test_abc", keySecret: "s3cret" };
@@ -273,6 +274,59 @@ describe("rzpFetchOrderPayments", () => {
     expect(sent(fetchMock).url).toBe(
       "https://api.razorpay.com/v1/orders/order%2F..%2F..%2Fevil%3Fx%3D1/payments",
     );
+  });
+});
+
+describe("verifyCapturedCheckoutPayment", () => {
+  const expected = {
+    paymentId: "pay_1",
+    orderId: "order_1",
+    amountPaise: 50_000,
+  };
+
+  it("accepts only the captured INR payment for the exact order and amount", async () => {
+    respond({
+      json: {
+        id: "pay_1",
+        order_id: "order_1",
+        amount: 50_000,
+        currency: "INR",
+        status: "captured",
+      },
+    });
+    expect(await verifyCapturedCheckoutPayment(CREDS, expected)).toEqual({
+      ok: true,
+      gatewayRead: true,
+    });
+  });
+
+  it.each([
+    ["wrong order", { order_id: "order_other" }],
+    ["wrong amount", { amount: 49_900 }],
+    ["wrong currency", { currency: "USD" }],
+    ["not captured", { status: "authorized" }],
+  ])("refuses a contradictory gateway record: %s", async (_label, override) => {
+    respond({
+      json: {
+        id: "pay_1",
+        order_id: "order_1",
+        amount: 50_000,
+        currency: "INR",
+        status: "captured",
+        ...override,
+      },
+    });
+    expect((await verifyCapturedCheckoutPayment(CREDS, expected)).ok).toBe(
+      false,
+    );
+  });
+
+  it("falls back to the already-verified HMAC during a gateway read outage", async () => {
+    respond({ ok: false, status: 503, json: {} });
+    expect(await verifyCapturedCheckoutPayment(CREDS, expected)).toEqual({
+      ok: true,
+      gatewayRead: false,
+    });
   });
 });
 

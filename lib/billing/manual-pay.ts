@@ -28,6 +28,7 @@ import { logError, logWarn } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateOrder,
+  verifyCapturedCheckoutPayment,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { beginAttempt, settleAttempt } from "./collect";
@@ -71,6 +72,16 @@ export async function startInvoicePayment(input: {
   const invoice = await getInvoice(input.invoiceId);
   if (!invoice || invoice.storeId !== input.storeId) {
     return { ok: false, error: "We couldn't find that invoice." };
+  }
+
+  // ★★ AI credits were paid in their own one-time Razorpay checkout. They have
+  // an invoice for accounting, not an outstanding obligation. Even if a future
+  // UI/query regression displays one here, never create another order for it.
+  if (invoice.kind !== "subscription") {
+    return {
+      ok: false,
+      error: "That one-time purchase is already settled.",
+    };
   }
 
   if (invoice.status === "paid") {
@@ -196,13 +207,18 @@ export async function confirmInvoicePayment(input: {
   if (!creds)
     return { ok: false, error: "Payments aren't available right now." };
 
-  let attempt: { id: string; providerOrderId: string | null } | null = null;
+  let attempt: {
+    id: string;
+    providerOrderId: string | null;
+    amountPaise: number;
+  } | null = null;
   try {
     attempt = await withService(async (db) => {
       const [row] = await db
         .select({
           id: billingPaymentAttempts.id,
           providerOrderId: billingPaymentAttempts.providerOrderId,
+          amountPaise: billingPaymentAttempts.amountPaise,
         })
         .from(billingPaymentAttempts)
         .where(
@@ -241,6 +257,20 @@ export async function confirmInvoicePayment(input: {
     return { ok: false, error: "We couldn't verify that payment." };
   }
 
+  const observedPayment = await verifyCapturedCheckoutPayment(creds, {
+    paymentId: input.providerPaymentId,
+    orderId: attempt.providerOrderId,
+    amountPaise: attempt.amountPaise,
+  });
+  if (!observedPayment.ok) {
+    logWarn("billing.manual_gateway_mismatch", {
+      storeId: input.storeId,
+      invoiceId: input.invoiceId,
+      reason: observedPayment.error,
+    });
+    return { ok: false, error: observedPayment.error };
+  }
+
   const settled = await settleAttempt(attempt.id, "captured", {
     providerPaymentId: input.providerPaymentId,
     now,
@@ -259,7 +289,8 @@ export async function confirmInvoicePayment(input: {
 }
 
 /**
- * Invoices this store still owes, newest first — what a "pay now" surface lists.
+ * Subscription invoices this store still owes, newest first — what a "pay now"
+ * surface lists. One-time AI-credit invoices are receipts, never plan debt.
  *
  * Excludes `uncollectible` and `void`: both are closed decisions, and offering
  * to pay one would take money for a period the merchant never received.
@@ -284,6 +315,7 @@ export async function listPayableInvoices(
         .where(
           and(
             eq(billingInvoices.storeId, storeId),
+            eq(billingInvoices.kind, "subscription"),
             inArray(billingInvoices.status, ["open", "processing"]),
           ),
         )

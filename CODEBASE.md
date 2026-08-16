@@ -300,6 +300,10 @@ wholesip/
 │   │   │                      # pickup mappings and configure the tracking webhook
 │   │   ├── ai/                # ★ AI usage (§16): monthly bar + credit balance +
 │   │   │                      # ledger + buy-credit packs (platform Razorpay)
+│   │   ├── plans/             # ★ Plans & Billing (§34): subscription status,
+│   │   │                      # payable subscription invoices, AI usage/top-ups,
+│   │   │                      # invoice history and the accessible three-step
+│   │   │                      # plan → one-time AI credits → review/payment dialog
 │   │   ├── orders/[id]/invoice/  # ★ printable invoice for one order (§17)
 │   │   ├── activity/          # ★ THE LOGS HUB (§33). layout.tsx + logs-rail.tsx
 │   │   │                      # give every log one left rail (log-types.ts is the
@@ -842,7 +846,10 @@ wholesip/
 │   │                          # failure, because a blip must never invent a tax
 │   │                          # charge; amountDueForInvoice returns NULL rather
 │   │                          # than the full total, since guessing when credit
-│   │                          # may be applied would double-charge.
+│   │                          # may be applied would double-charge;
+│   │                          # finalizePaidAiCreditsInvoice atomically issues
+│   │                          # a one-time credit receipt AS PAID — it never
+│   │                          # enters subscription collection.
 │   │                          # ★★ manual-pay.ts (server-only): paying an open
 │   │                          # invoice on session — TODAY the only way a
 │   │                          # renewal is paid, since automatic collection is
@@ -851,7 +858,9 @@ wholesip/
 │   │                          # UNCOLLECTIBLE/VOID one: those belong to a cycle
 │   │                          # the merchant was already downgraded for, so
 │   │                          # taking money would charge for service never
-│   │                          # received. Paying during grace restores the plan
+│   │                          # received. The query and start guard both exclude
+│   │                          # AI-credit receipts, preventing a second charge
+│   │                          # even if one layer regresses. Paying during grace restores the plan
 │   │                          # AT ONCE via advanceAfterPayment — the SAME
 │   │                          # advance the worker uses, never a second copy.
 │   │                          # ★★ enrol.ts (server-only): a merchant's FIRST
@@ -862,8 +871,11 @@ wholesip/
 │   │                          # registered opportunistically for later cycles.
 │   │                          # The plan is NOT granted until the payment is
 │   │                          # captured (grace is for renewals, where
-│   │                          # something has already been paid for). The HMAC
-│   │                          # signature is the trust boundary. BOTH stores.plan
+│   │                          # something has already been paid for). Checkout
+│   │                          # requires BOTH the order HMAC and, when Razorpay's
+│   │                          # read API is available, a captured INR payment whose
+│   │                          # order and amount exactly match the durable attempt.
+│   │                          # BOTH stores.plan
 │   │                          # (the entitlement every gate reads) and
 │   │                          # billing_subscriptions move, and the comp floor
 │   │                          # holds — the old confirmSubscription wrote
@@ -1143,7 +1155,9 @@ wholesip/
 │                              # legal serials beyond 9,999) and canonicalizes the
 │                              # scheduled-plan constraint in both environments;
 │                              # 0003 adds orders.pickup_prepared_at so actual
-│                              # packing is distinct from the checkout promise.
+│                              # packing is distinct from the checkout promise;
+│                              # 0004 repairs paid AI-credit invoices left open
+│                              # and therefore falsely presented as plan debt.
 ├── scripts/
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
@@ -1876,7 +1890,15 @@ running subscription is how you get chargebacks.
       (env `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`; totally separate from a
       store's BYO gateway) → `confirmCreditPurchase` (HMAC verify → paid →
       `add_ai_credits`); dropped callbacks self-heal via reconcile-on-read on
-      page load (no webhook in v1). Operators grant free credits from the
+      page load (no webhook in v1). The linked accounting invoice is finalized
+      directly as `paid` after capture: it is a receipt for the same one-time
+      checkout, never a collectible subscription invoice. The Plans debt query
+      filters `kind = 'subscription'`, and the payment starter repeats that
+      guard so a display regression cannot double-charge a credit pack. Migration
+      `20260816_0004_ai_credit_invoice_paid_repair` corrects already-paid packs
+      whose invoices were historically left `open`; repeated payment confirmation
+      retries this idempotent receipt transition, so a transient document write
+      self-heals without granting credits twice. Operators grant free credits from the
       stores console (`grantAiCredits`, superadmin-only, audited with the
       operator's email as the ledger ref) and see per-store AI used / credit
       balance / gateway state (batch-enriched `listAllStores`) plus a History
@@ -2012,10 +2034,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     client wizard, one focused screen per step, with a progress stepper. Step
     order: **email → password (+ Continue with Google) → email OTP → phone OTP
     → name → store → location → theme → plan**. Data model: names go to
-    `admins.first_name`/`last_name`; the selling **location** (country + city)
-    goes to `stores.settings.business` (anon-readable jsonb — non-secret, prints
-    on invoices; convention #9). Country list in `lib/countries.ts` (pure,
-    client-safe, India-first). - **Auth (Identity Platform, Phase 6)**: email/password via
+    `admins.first_name`/`last_name`; the selling **business address** is a
+    structured country + street/building + optional second line + city +
+    state/province + postal/PIN code. The server requires every core field,
+    normalizes it into `stores.settings.business` (anon-readable jsonb —
+    non-secret), and seeds the same display-ready value into
+    `store_billing_settings.business_address`; that second write is what the
+    invoice renderer actually reads. If it fails, signup deletes the partial
+    store and owner so a retry is clean. Country list in `lib/countries.ts`
+    (pure, client-safe, India-first). - **Auth (Identity Platform, Phase 6)**: email/password via
     `createUserWithEmailAndPassword` (falls back to `signInWithEmailAndPassword`
     on `auth/email-already-in-use`). Password users then pass a six-digit email
     OTP (`app/actions/signup-email-otp.ts`): the server derives identity from the
@@ -2033,6 +2060,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     redacted; RFC-reserved example domains and `.test`/`.invalid`/`.localhost`
     dummy domains skip Resend and put the code in that operator-gated log under
     the separate `signup_test_otp` mailer.
+    A stale/deleted Identity Platform user is not a dead-end screen: if the
+    browser identity cannot refresh, the email-code alert contains working
+    **Start signup again** and **Go to login** actions, and every authenticated
+    wizard screen keeps **Start over** in the header. Starting over clears both
+    Firebase client auth and the shared-domain server session before returning
+    to the account step.
     **★ WITH NO `RESEND_API_KEY` THE STEP WAS AN UNPASSABLE DEAD END.**
     `sendEmail` skips when the key is absent, so the delivery reported
     `sent: false` and the action refused — and the code cookie is only set on a
@@ -2060,10 +2093,21 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     from the session cookie. **Google users have NO password**, so the store-host
     login (`app/auth/login/login-form.tsx`) ALSO offers "Continue with Google"
     (signInWithPopup); a Google owner can set a password via "Forgot password?". - **Plan + payment**: the plan step reuses the existing merchant subscription
-    flow (§ subscription-actions). Free finishes immediately; a paid plan
+    flow (§ subscription-actions). The client does NOT import `PLAN_META` prices:
+    it fetches uncached operator-managed prices from
+    **`GET /api/plans/pricing`**, a Route Handler rather than a read-only Server
+    Action. A failed database read answers 503 and paid checkout stays disabled
+    (Free remains available) instead of silently quoting compiled defaults.
+    Monthly cards show the live charged price and optional operator "Was" price;
+    yearly cards show the comparable monthly equivalent plus the exact annual
+    debit, and their savings label is derived from the current values rather
+    than hard-coded. A paid-plan tap re-reads once more before opening checkout;
+    if the amount changed while the wizard was open, the merchant must review
+    the new card before continuing. Live billing price readers fail closed on database errors,
+    so a money action never charges a fallback amount. Free finishes immediately; a paid plan
     (Basic/Pro, monthly/yearly) creates the store first (on free), then opens
-    the Razorpay **autopay mandate** via `startSignupSubscription` /
-    `confirmSignupSubscription` (`app/actions/subscription-actions.ts`). Those
+    the Razorpay **autopay mandate** via `startSignupSubscribe` /
+    `confirmSignupSubscribe` (`app/actions/subscribe-actions.ts`). Those
     are signup-context wrappers: the store was just created on the PLATFORM
     host, so `getActingStoreId` can't resolve it — the caller passes the new
     store id and `assertStoreOwner` authorises them as its superadmin, then
@@ -2073,8 +2117,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
     `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
     Browser geolocation is followed by the keyless BigDataCloud client-side
-    reverse-geocode endpoint, so country/city fill even when the optional Google
-    Maps key/script is missing; Google remains the richer street/map enhancement.
+    reverse-geocode endpoint, so country/city/state/postal code fill when the
+    provider has them even if the optional Google Maps key/script is missing;
+    Google additionally fills street/building components and remains the richer
+    draggable-map enhancement. Autofill never locks a field, and a map or
+    geocoder failure never blocks the complete plain address form.
 
 20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
     is a WIDGET the merchant can remove, re-order, or add back — Shopify's
@@ -5622,9 +5669,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         sweep. Hooking only the confirm path would leave every reconciled purchase
         without a document, which is exactly the case where the merchant is
         already unsure what happened. Pinned by a mutation.
-      - **★ DRAFT AT PURCHASE, FINALIZED ON PAYMENT** — the enrolment rule, so an
-        abandoned checkout never burns a number. And the draft is raised AFTER the
-        gateway order, so a purchase that died there leaves no document at all.
+      - **★ DRAFT AT PURCHASE, FINALIZED DIRECTLY AS PAID ON PAYMENT** — the
+        enrolment issue-number rule, but not its collection state: Razorpay already
+        captured this one-time checkout, so `open` would falsely expose the same
+        money as debt. The draft is raised AFTER the gateway order, so a purchase
+        that died there leaves no document at all. Repeat confirmation retries this
+        transition idempotently if the first best-effort document write failed.
       - **★ The link lives on the PURCHASE** (`ai_credit_purchases.invoice_id`,
         UNIQUE where not null), not on the invoice: `billing_invoices` is the
         generic document table and already carries one product-specific column, so
@@ -6420,14 +6470,15 @@ npm run format      # prettier --write
   (it ships to the browser), so restrict it by HTTP referrer to the app's hosts
   and enable only Maps JavaScript + Geocoding. **Entirely optional at runtime**:
   `app/platform/signup/location-picker.tsx` renders the map only when the key is
-  set and falls back to the plain country/city form when it is missing, blocked,
+  set and falls back to the plain full-address form when it is missing, blocked,
   or rejected — location is a REQUIRED signup step, so the map must never be
   able to stop someone signing up. "Use my current location" is the browser's
   own Geolocation API: free, keyless, and works with the map switched off. The
   resulting current-device coordinates are reverse-geocoded client-side through
-  BigDataCloud's keyless `reverse-geocode-client` endpoint to fill city/country;
-  this is deliberately a same-browser call (the provider's fair-use contract)
-  and Google remains the optional street-address + draggable-map enhancement.
+  BigDataCloud's keyless `reverse-geocode-client` endpoint to fill the locality,
+  state and postal code it can resolve; this is deliberately a same-browser call
+  (the provider's fair-use contract), while Google remains the optional
+  street-address + draggable-map enhancement.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&
