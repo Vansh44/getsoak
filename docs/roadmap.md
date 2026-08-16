@@ -32,6 +32,7 @@ sequence AND the spec for everything still to build.
 | —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
 | —      | Store credit                                                   | —    | ✅ done |
 | —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
+| —      | Signup recovery, full business address + live pricing          | —    | ✅ done |
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |

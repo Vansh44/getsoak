@@ -129,20 +129,24 @@ export function resolveExtraLocationPricing(
  * defaults for a few minutes. The table is an override, so its absence is a
  * valid state, not an error.
  */
+async function queryPriceRows(): Promise<PriceRow[]> {
+  const rows = await withService((db) =>
+    db
+      .select({
+        plan: planPrices.plan,
+        monthly_inr: planPrices.monthlyInr,
+        yearly_inr: planPrices.yearlyInr,
+        base_monthly_inr: planPrices.baseMonthlyInr,
+        base_yearly_inr: planPrices.baseYearlyInr,
+      })
+      .from(planPrices),
+  );
+  return rows as PriceRow[];
+}
+
 async function readPriceRows(): Promise<PriceRow[]> {
   try {
-    const rows = await withService((db) =>
-      db
-        .select({
-          plan: planPrices.plan,
-          monthly_inr: planPrices.monthlyInr,
-          yearly_inr: planPrices.yearlyInr,
-          base_monthly_inr: planPrices.baseMonthlyInr,
-          base_yearly_inr: planPrices.baseYearlyInr,
-        })
-        .from(planPrices),
-    );
-    return rows as PriceRow[];
+    return await queryPriceRows();
   } catch (error) {
     logError("plan pricing: read failed, using code defaults", error);
     return [];
@@ -155,6 +159,14 @@ async function readPricing(): Promise<PlanPricing> {
 
 async function readExtraLocationPricing(): Promise<ExtraLocationPricing> {
   return resolveExtraLocationPricing(await readPriceRows());
+}
+
+async function readPricingStrict(): Promise<PlanPricing> {
+  return resolvePricing(await queryPriceRows());
+}
+
+async function readExtraLocationPricingStrict(): Promise<ExtraLocationPricing> {
+  return resolveExtraLocationPricing(await queryPriceRows());
 }
 
 /**
@@ -170,7 +182,7 @@ export const getPlanPricing = unstable_cache(readPricing, ["plan-pricing"], {
  * Uncached. Use where the number decides what someone is CHARGED — billing
  * must never quote a price from a cache that a reprice has not yet reached.
  */
-export const getPlanPricingLive = readPricing;
+export const getPlanPricingLive = readPricingStrict;
 
 /** Cached, for anywhere the add-on price is only being DISPLAYED. */
 export const getExtraLocationPricing = unstable_cache(
@@ -185,7 +197,7 @@ export const getExtraLocationPricing = unstable_cache(
  * bought against a live mandate, so quoting from a cache a reprice has not
  * reached would debit the old amount.
  */
-export const getExtraLocationPricingLive = readExtraLocationPricing;
+export const getExtraLocationPricingLive = readExtraLocationPricingStrict;
 
 export function bustPlanPricing() {
   // Next 16 requires the cache profile — `revalidateTag(tag)` alone no longer

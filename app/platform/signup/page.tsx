@@ -14,6 +14,7 @@ import {
 import {
   getFirebaseAuth,
   establishSession,
+  endSession,
   firebaseAuthErrorMessage,
   phoneLinkErrorMessage,
 } from "@/lib/auth/firebase-client";
@@ -43,6 +44,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  RotateCcw,
 } from "lucide-react";
 import {
   THEME_META,
@@ -53,6 +55,7 @@ import {
   type ThemeIndustry,
 } from "@/lib/themes/meta";
 import { PLAN_META, PLAN_LIMITS, type Plan } from "@/lib/plans";
+import type { PlanPrice, PlanPricing } from "@/lib/plans/pricing";
 import { COUNTRIES, DEFAULT_COUNTRY } from "@/lib/countries";
 import PhoneInput, { isValidPhoneNumber } from "react-phone-number-input";
 import "react-phone-number-input/style.css";
@@ -70,6 +73,53 @@ const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type BillingPeriod = "monthly" | "yearly";
+
+const FREE_PRICE: PlanPrice = {
+  monthlyInr: 0,
+  yearlyInr: 0,
+  baseMonthlyInr: null,
+  baseYearlyInr: null,
+};
+
+function isPlanPricing(value: unknown): value is PlanPricing {
+  if (!value || typeof value !== "object") return false;
+  return (["free", "basic", "pro"] as Plan[]).every((plan) => {
+    const row = (value as Record<string, unknown>)[plan];
+    if (!row || typeof row !== "object") return false;
+    const p = row as Record<string, unknown>;
+    return (
+      typeof p.monthlyInr === "number" &&
+      p.monthlyInr >= 0 &&
+      typeof p.yearlyInr === "number" &&
+      p.yearlyInr >= 0 &&
+      (p.baseMonthlyInr === null || typeof p.baseMonthlyInr === "number") &&
+      (p.baseYearlyInr === null || typeof p.baseYearlyInr === "number")
+    );
+  });
+}
+
+function annualOfferLabel(pricing: PlanPricing): string | null {
+  const paid = (["basic", "pro"] as Plan[])
+    .map((plan) => pricing[plan])
+    .filter((row) => row.monthlyInr > 0);
+  const months = paid.map(
+    (row) => (row.monthlyInr * 12 - row.yearlyInr) / row.monthlyInr,
+  );
+  if (
+    months.length > 0 &&
+    months.every((value) => value > 0 && Number.isInteger(value)) &&
+    months.every((value) => value === months[0])
+  ) {
+    return `${months[0]} ${months[0] === 1 ? "month" : "months"} free`;
+  }
+  return paid.some((row) => row.yearlyInr < row.monthlyInr * 12)
+    ? "Save with yearly"
+    : null;
+}
+
+function inr(value: number): string {
+  return `₹${value.toLocaleString("en-IN")}`;
+}
 
 // Steps in flow order. "password" is the second screen of the Account stage.
 type Step =
@@ -190,6 +240,7 @@ export default function SignupPage() {
   const [step, setStepRaw] = useState<Step>("email");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
 
   // ★★ AN ERROR BELONGS TO THE STEP THAT RAISED IT.
   //
@@ -205,6 +256,7 @@ export default function SignupPage() {
   // transition (nothing does today), set it after the call.
   const setStep = useCallback((next: Step) => {
     setError("");
+    setRecoveryRequired(false);
     setStepRaw(next);
   }, []);
 
@@ -230,7 +282,11 @@ export default function SignupPage() {
   // Store + location
   const [name, setName] = useState("");
   const [country, setCountry] = useState(DEFAULT_COUNTRY);
+  const [addressLine1, setAddressLine1] = useState("");
+  const [addressLine2, setAddressLine2] = useState("");
   const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+  const [postalCode, setPostalCode] = useState("");
   // Consent. `agreed` gates BOTH signup paths (email and Google) because both
   // start from the same screen; `marketing` is the optional box beneath it and
   // gates nothing.
@@ -242,7 +298,10 @@ export default function SignupPage() {
     lat: null,
     lng: null,
     address: "",
+    addressLine1: "",
     city: "",
+    state: "",
+    postalCode: "",
     countryCode: "",
   });
   const [check, setCheck] = useState<CheckState>({ status: "idle" });
@@ -256,11 +315,50 @@ export default function SignupPage() {
   // Plan
   const [period, setPeriod] = useState<BillingPeriod>("monthly");
   const [selectedPlan, setSelectedPlan] = useState<Plan>("free");
+  const [pricing, setPricing] = useState<PlanPricing | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingError, setPricingError] = useState("");
 
   // The store, once provisioned (a paid plan creates it before payment, so an
   // abandoned payment doesn't recreate/duplicate the store on retry).
   const [createdStoreId, setCreatedStoreId] = useState<string | null>(null);
   const [createdSlug, setCreatedSlug] = useState<string | null>(null);
+
+  const loadPricing = useCallback(async (): Promise<PlanPricing | null> => {
+    setPricingLoading(true);
+    setPricingError("");
+    try {
+      const response = await fetch("/api/plans/pricing", { cache: "no-store" });
+      const payload: unknown = await response.json();
+      if (!response.ok || !isPlanPricing(payload)) {
+        throw new Error("pricing unavailable");
+      }
+      setPricing(payload);
+      return payload;
+    } catch {
+      setPricingError(
+        "Paid plan pricing is temporarily unavailable. You can retry or create your store on Free.",
+      );
+      setSelectedPlan("free");
+      return null;
+    } finally {
+      setPricingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (step === "plan" && !pricing && !pricingLoading && !pricingError) {
+      void loadPricing();
+    }
+  }, [loadPricing, pricing, pricingError, pricingLoading, step]);
+
+  async function restartSignup() {
+    setBusy(true);
+    setError("");
+    setRecoveryRequired(false);
+    await endSession();
+    window.location.assign("/signup");
+  }
 
   // Place the wizard at the right step for the current session: an account that
   // already owns a store goes to its dashboard; one with a session but no store
@@ -447,6 +545,7 @@ export default function SignupPage() {
   async function handleVerifyEmailOtp() {
     setBusy(true);
     setError("");
+    setRecoveryRequired(false);
     const result = await verifySignupEmailOtp(emailCode);
     if (!result.ok) {
       if (result.staleSession) {
@@ -457,7 +556,10 @@ export default function SignupPage() {
         const sessionError = await establishSession(true);
         if (sessionError) {
           setBusy(false);
-          setError("Your session expired. Log in again to continue.");
+          setRecoveryRequired(true);
+          setError(
+            "Your session expired. Start again with this email, or log in if you already finished creating the account.",
+          );
           return;
         }
         const otp = await requestSignupEmailOtp();
@@ -564,8 +666,11 @@ export default function SignupPage() {
       firstName,
       lastName,
       country,
+      addressLine1,
+      addressLine2,
       city,
-      address: place.address,
+      state,
+      postalCode,
       lat: place.lat ?? undefined,
       lng: place.lng ?? undefined,
     });
@@ -581,6 +686,39 @@ export default function SignupPage() {
   async function finalize() {
     setBusy(true);
     setError("");
+
+    if (selectedPlan !== "free" && !pricing) {
+      setBusy(false);
+      setError("Load the current plan price before starting payment.");
+      return;
+    }
+
+    // The wizard can sit open while an operator reprices. Re-read immediately
+    // before a paid checkout and make the merchant review any changed number;
+    // never let the Razorpay modal be the first place they see the new amount.
+    if (selectedPlan !== "free" && pricing) {
+      const quoted =
+        period === "yearly"
+          ? pricing[selectedPlan].yearlyInr
+          : pricing[selectedPlan].monthlyInr;
+      const latest = await loadPricing();
+      if (!latest) {
+        setBusy(false);
+        setError("We couldn't confirm the current price. Retry before paying.");
+        return;
+      }
+      const current =
+        period === "yearly"
+          ? latest[selectedPlan].yearlyInr
+          : latest[selectedPlan].monthlyInr;
+      if (current !== quoted) {
+        setBusy(false);
+        setError(
+          "Pricing changed while you were signing up. Review the updated plan price, then continue.",
+        );
+        return;
+      }
+    }
 
     if (selectedPlan === "free") {
       setStep("creating");
@@ -669,7 +807,12 @@ export default function SignupPage() {
     plan: "theme",
   };
 
-  const wide = step === "theme" || step === "plan";
+  const width =
+    step === "theme" || step === "plan"
+      ? "max-w-5xl"
+      : step === "location"
+        ? "max-w-2xl"
+        : "max-w-md";
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -682,12 +825,27 @@ export default function SignupPage() {
         >
           Store<span className="text-primary">Mink</span>
         </Link>
-        <p className="text-sm text-gray-500 font-medium">
-          Already selling?{" "}
-          <Link href="/platform/login" className="text-primary hover:underline">
-            Log in
-          </Link>
-        </p>
+        <div className="flex items-center gap-4 text-sm font-medium">
+          {step !== "email" && step !== "password" && step !== "creating" && (
+            <button
+              type="button"
+              onClick={restartSignup}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 text-gray-500 hover:text-gray-900 disabled:opacity-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Start over
+            </button>
+          )}
+          <p className="text-gray-500">
+            Already selling?{" "}
+            <Link
+              href="/platform/login"
+              className="text-primary hover:underline"
+            >
+              Log in
+            </Link>
+          </p>
+        </div>
       </header>
 
       <main className="flex-1 flex flex-col items-center px-4 pt-8 pb-20">
@@ -711,10 +869,37 @@ export default function SignupPage() {
           </div>
         )}
 
-        <div className={`w-full ${wide ? "max-w-5xl" : "max-w-md"}`}>
+        <div className={`w-full ${width}`}>
           {error && (
-            <div className="mb-6 p-3 rounded-md bg-red-50 text-red-600 text-sm font-medium border border-red-100">
-              {error}
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700"
+            >
+              <p>{error}</p>
+              {recoveryRequired && (
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={restartSignup}
+                    disabled={busy}
+                    className="stq-btn stq-btn-primary inline-flex h-10 items-center gap-2 px-4"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    Start signup again
+                  </button>
+                  <Link
+                    href="/platform/login"
+                    className="stq-btn stq-btn-ghost inline-flex h-10 items-center px-4"
+                  >
+                    Go to login
+                  </Link>
+                </div>
+              )}
             </div>
           )}
 
@@ -1223,8 +1408,20 @@ export default function SignupPage() {
                     setError("Please choose the country you sell from.");
                     return;
                   }
+                  if (!addressLine1.trim()) {
+                    setError("Please enter your street and building address.");
+                    return;
+                  }
                   if (!city.trim()) {
                     setError("Please enter the city you sell from.");
+                    return;
+                  }
+                  if (!state.trim()) {
+                    setError("Please enter your state or province.");
+                    return;
+                  }
+                  if (!postalCode.trim()) {
+                    setError("Please enter your postal or PIN code.");
                     return;
                   }
                   setError("");
@@ -1239,7 +1436,10 @@ export default function SignupPage() {
                     // The pin fills the fields, it doesn't lock them — a
                     // reverse-geocode is often a suburb off and the merchant
                     // gets the final word.
+                    if (next.addressLine1) setAddressLine1(next.addressLine1);
                     if (next.city) setCity(next.city);
+                    if (next.state) setState(next.state);
+                    if (next.postalCode) setPostalCode(next.postalCode);
                     if (
                       next.countryCode &&
                       COUNTRIES.some((c) => c.code === next.countryCode)
@@ -1249,15 +1449,116 @@ export default function SignupPage() {
                   }}
                 />
 
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="business-address-1"
+                    className="text-sm font-semibold text-gray-700"
+                  >
+                    Address line 1
+                  </label>
+                  <input
+                    id="business-address-1"
+                    className="stq-input h-12"
+                    placeholder="Building number and street"
+                    value={addressLine1}
+                    onChange={(e) => setAddressLine1(e.target.value)}
+                    maxLength={160}
+                    autoComplete="address-line1"
+                    autoFocus
+                    required
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="business-address-2"
+                    className="text-sm font-semibold text-gray-700"
+                  >
+                    Address line 2{" "}
+                    <span className="font-normal text-gray-400">
+                      (optional)
+                    </span>
+                  </label>
+                  <input
+                    id="business-address-2"
+                    className="stq-input h-12"
+                    placeholder="Floor, suite, area or landmark"
+                    value={addressLine2}
+                    onChange={(e) => setAddressLine2(e.target.value)}
+                    maxLength={160}
+                    autoComplete="address-line2"
+                  />
+                </div>
+
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
+                    <label
+                      htmlFor="business-city"
+                      className="text-sm font-semibold text-gray-700"
+                    >
+                      City
+                    </label>
+                    <input
+                      id="business-city"
+                      className="stq-input h-12"
+                      placeholder="E.g., Mumbai"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      maxLength={80}
+                      autoComplete="address-level2"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="business-state"
+                      className="text-sm font-semibold text-gray-700"
+                    >
+                      State / province
+                    </label>
+                    <input
+                      id="business-state"
+                      className="stq-input h-12"
+                      placeholder="E.g., Maharashtra"
+                      value={state}
+                      onChange={(e) => setState(e.target.value)}
+                      maxLength={80}
+                      autoComplete="address-level1"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="business-postal-code"
+                      className="text-sm font-semibold text-gray-700"
+                    >
+                      Postal / PIN code
+                    </label>
+                    <input
+                      id="business-postal-code"
+                      className="stq-input h-12"
+                      placeholder="E.g., 400001"
+                      value={postalCode}
+                      onChange={(e) => setPostalCode(e.target.value)}
+                      maxLength={20}
+                      autoComplete="postal-code"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label
+                      htmlFor="business-country"
+                      className="text-sm font-semibold text-gray-700"
+                    >
                       Country
                     </label>
                     <select
+                      id="business-country"
                       className="stq-input h-12 bg-white"
                       value={country}
                       onChange={(e) => setCountry(e.target.value)}
+                      autoComplete="country"
+                      required
                     >
                       {COUNTRIES.map((c) => (
                         <option key={c.code} value={c.code}>
@@ -1266,20 +1567,12 @@ export default function SignupPage() {
                       ))}
                     </select>
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-sm font-semibold text-gray-700">
-                      City
-                    </label>
-                    <input
-                      className="stq-input h-12"
-                      placeholder="E.g., Mumbai"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      maxLength={80}
-                      autoFocus
-                    />
-                  </div>
                 </div>
+
+                <p className="text-xs leading-relaxed text-gray-500">
+                  Required fields are used for invoices and tax calculations.
+                  The map is only an autofill aid—you can correct every field.
+                </p>
 
                 <button
                   type="submit"
@@ -1425,42 +1718,99 @@ export default function SignupPage() {
                 and online payments.
               </p>
 
-              {/* Billing period toggle */}
-              <div className="mb-6 inline-flex rounded-lg border border-gray-200 bg-white p-1">
-                {(["monthly", "yearly"] as BillingPeriod[]).map((p) => (
+              {/* Billing period toggle. The offer label is derived from the
+                  operator's live prices; it is never a hard-coded promise. */}
+              {pricing && (
+                <div
+                  className="mb-6 inline-flex rounded-lg border border-gray-200 bg-white p-1"
+                  role="group"
+                  aria-label="Billing period"
+                >
+                  {(["monthly", "yearly"] as BillingPeriod[]).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPeriod(p)}
+                      aria-pressed={period === p}
+                      className={`rounded-md px-4 py-1.5 text-sm font-semibold capitalize transition-colors ${
+                        period === p
+                          ? "bg-primary text-white"
+                          : "text-gray-600 hover:text-gray-900"
+                      }`}
+                    >
+                      {p}
+                      {p === "yearly" && annualOfferLabel(pricing) && (
+                        <span
+                          className={`ml-1.5 text-[11px] ${period === "yearly" ? "text-white/80" : "text-emerald-600"}`}
+                        >
+                          {annualOfferLabel(pricing)}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {pricingLoading && !pricing && (
+                <div className="mb-6 flex h-24 items-center justify-center rounded-xl border border-gray-200 bg-white text-sm text-gray-500">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading
+                  current pricing…
+                </div>
+              )}
+
+              {pricingError && !pricing && (
+                <div
+                  role="status"
+                  className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+                >
+                  <p>{pricingError}</p>
                   <button
-                    key={p}
                     type="button"
-                    onClick={() => setPeriod(p)}
-                    className={`rounded-md px-4 py-1.5 text-sm font-semibold capitalize transition-colors ${
-                      period === p
-                        ? "bg-primary text-white"
-                        : "text-gray-600 hover:text-gray-900"
-                    }`}
+                    onClick={loadPricing}
+                    disabled={pricingLoading}
+                    className="mt-3 font-semibold text-primary hover:underline disabled:opacity-50"
                   >
-                    {p}
-                    {p === "yearly" && (
-                      <span
-                        className={`ml-1.5 text-[11px] ${period === "yearly" ? "text-white/80" : "text-emerald-600"}`}
-                      >
-                        2 months free
-                      </span>
-                    )}
+                    Retry pricing
                   </button>
-                ))}
-              </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                {(["free", "basic", "pro"] as Plan[]).map((planId) => {
+                {(pricing
+                  ? (["free", "basic", "pro"] as Plan[])
+                  : (["free"] as Plan[])
+                ).map((planId) => {
                   const meta = PLAN_META[planId];
                   const limits = PLAN_LIMITS[planId];
                   const selected = selectedPlan === planId;
+                  const price = pricing?.[planId] ?? FREE_PRICE;
                   const priceInr =
-                    period === "yearly" ? meta.yearlyInr : meta.monthlyInr;
+                    period === "yearly"
+                      ? Math.round(price.yearlyInr / 12)
+                      : price.monthlyInr;
+                  const baseTotal =
+                    period === "yearly"
+                      ? price.baseYearlyInr
+                      : price.baseMonthlyInr;
+                  const baseInr =
+                    baseTotal === null
+                      ? null
+                      : period === "yearly"
+                        ? Math.round(baseTotal / 12)
+                        : baseTotal;
                   return (
                     <div
                       key={planId}
                       onClick={() => setSelectedPlan(planId)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedPlan(planId);
+                        }
+                      }}
+                      role="radio"
+                      aria-checked={selected}
+                      tabIndex={0}
                       className={`relative cursor-pointer rounded-xl border-2 bg-white p-5 shadow-sm transition-all ${
                         selected
                           ? "border-primary ring-2 ring-primary ring-offset-2"
@@ -1487,15 +1837,25 @@ export default function SignupPage() {
                           </span>
                         ) : (
                           <>
+                            {baseInr !== null && baseInr > priceInr && (
+                              <span className="mr-2 text-sm text-gray-400 line-through">
+                                {inr(baseInr)}
+                              </span>
+                            )}
                             <span className="text-2xl font-extrabold text-gray-900">
-                              ₹{priceInr.toLocaleString("en-IN")}
+                              {inr(priceInr)}
                             </span>
-                            <span className="text-sm text-gray-500">
-                              /{period === "yearly" ? "yr" : "mo"}
-                            </span>
+                            <span className="text-sm text-gray-500">/mo</span>
                           </>
                         )}
                       </div>
+                      <p className="mb-3 min-h-5 text-xs font-medium text-gray-500">
+                        {priceInr === 0
+                          ? "Free forever. No card needed."
+                          : period === "yearly"
+                            ? `${inr(price.yearlyInr)} billed once a year`
+                            : `${inr(price.monthlyInr)} billed every month`}
+                      </p>
                       <p className="mb-4 h-8 text-xs text-gray-500">
                         {meta.tagline}
                       </p>

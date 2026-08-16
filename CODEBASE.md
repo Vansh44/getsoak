@@ -2012,10 +2012,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     client wizard, one focused screen per step, with a progress stepper. Step
     order: **email → password (+ Continue with Google) → email OTP → phone OTP
     → name → store → location → theme → plan**. Data model: names go to
-    `admins.first_name`/`last_name`; the selling **location** (country + city)
-    goes to `stores.settings.business` (anon-readable jsonb — non-secret, prints
-    on invoices; convention #9). Country list in `lib/countries.ts` (pure,
-    client-safe, India-first). - **Auth (Identity Platform, Phase 6)**: email/password via
+    `admins.first_name`/`last_name`; the selling **business address** is a
+    structured country + street/building + optional second line + city +
+    state/province + postal/PIN code. The server requires every core field,
+    normalizes it into `stores.settings.business` (anon-readable jsonb —
+    non-secret), and seeds the same display-ready value into
+    `store_billing_settings.business_address`; that second write is what the
+    invoice renderer actually reads. If it fails, signup deletes the partial
+    store and owner so a retry is clean. Country list in `lib/countries.ts`
+    (pure, client-safe, India-first). - **Auth (Identity Platform, Phase 6)**: email/password via
     `createUserWithEmailAndPassword` (falls back to `signInWithEmailAndPassword`
     on `auth/email-already-in-use`). Password users then pass a six-digit email
     OTP (`app/actions/signup-email-otp.ts`): the server derives identity from the
@@ -2033,6 +2038,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     redacted; RFC-reserved example domains and `.test`/`.invalid`/`.localhost`
     dummy domains skip Resend and put the code in that operator-gated log under
     the separate `signup_test_otp` mailer.
+    A stale/deleted Identity Platform user is not a dead-end screen: if the
+    browser identity cannot refresh, the email-code alert contains working
+    **Start signup again** and **Go to login** actions, and every authenticated
+    wizard screen keeps **Start over** in the header. Starting over clears both
+    Firebase client auth and the shared-domain server session before returning
+    to the account step.
     **★ WITH NO `RESEND_API_KEY` THE STEP WAS AN UNPASSABLE DEAD END.**
     `sendEmail` skips when the key is absent, so the delivery reported
     `sent: false` and the action refused — and the code cookie is only set on a
@@ -2060,10 +2071,21 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     from the session cookie. **Google users have NO password**, so the store-host
     login (`app/auth/login/login-form.tsx`) ALSO offers "Continue with Google"
     (signInWithPopup); a Google owner can set a password via "Forgot password?". - **Plan + payment**: the plan step reuses the existing merchant subscription
-    flow (§ subscription-actions). Free finishes immediately; a paid plan
+    flow (§ subscription-actions). The client does NOT import `PLAN_META` prices:
+    it fetches uncached operator-managed prices from
+    **`GET /api/plans/pricing`**, a Route Handler rather than a read-only Server
+    Action. A failed database read answers 503 and paid checkout stays disabled
+    (Free remains available) instead of silently quoting compiled defaults.
+    Monthly cards show the live charged price and optional operator "Was" price;
+    yearly cards show the comparable monthly equivalent plus the exact annual
+    debit, and their savings label is derived from the current values rather
+    than hard-coded. A paid-plan tap re-reads once more before opening checkout;
+    if the amount changed while the wizard was open, the merchant must review
+    the new card before continuing. Live billing price readers fail closed on database errors,
+    so a money action never charges a fallback amount. Free finishes immediately; a paid plan
     (Basic/Pro, monthly/yearly) creates the store first (on free), then opens
-    the Razorpay **autopay mandate** via `startSignupSubscription` /
-    `confirmSignupSubscription` (`app/actions/subscription-actions.ts`). Those
+    the Razorpay **autopay mandate** via `startSignupSubscribe` /
+    `confirmSignupSubscribe` (`app/actions/subscribe-actions.ts`). Those
     are signup-context wrappers: the store was just created on the PLATFORM
     host, so `getActingStoreId` can't resolve it — the caller passes the new
     store id and `assertStoreOwner` authorises them as its superadmin, then
@@ -2073,8 +2095,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     Runs on the PLATFORM's Razorpay account (env `RAZORPAY_KEY_ID` /
     `RAZORPAY_KEY_SECRET`). - **Location autofill is independent of the map.**
     Browser geolocation is followed by the keyless BigDataCloud client-side
-    reverse-geocode endpoint, so country/city fill even when the optional Google
-    Maps key/script is missing; Google remains the richer street/map enhancement.
+    reverse-geocode endpoint, so country/city/state/postal code fill when the
+    provider has them even if the optional Google Maps key/script is missing;
+    Google additionally fills street/building components and remains the richer
+    draggable-map enhancement. Autofill never locks a field, and a map or
+    geocoder failure never blocks the complete plain address form.
 
 20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
     is a WIDGET the merchant can remove, re-order, or add back — Shopify's
@@ -6420,14 +6445,15 @@ npm run format      # prettier --write
   (it ships to the browser), so restrict it by HTTP referrer to the app's hosts
   and enable only Maps JavaScript + Geocoding. **Entirely optional at runtime**:
   `app/platform/signup/location-picker.tsx` renders the map only when the key is
-  set and falls back to the plain country/city form when it is missing, blocked,
+  set and falls back to the plain full-address form when it is missing, blocked,
   or rejected — location is a REQUIRED signup step, so the map must never be
   able to stop someone signing up. "Use my current location" is the browser's
   own Geolocation API: free, keyless, and works with the map switched off. The
   resulting current-device coordinates are reverse-geocoded client-side through
-  BigDataCloud's keyless `reverse-geocode-client` endpoint to fill city/country;
-  this is deliberately a same-browser call (the provider's fair-use contract)
-  and Google remains the optional street-address + draggable-map enhancement.
+  BigDataCloud's keyless `reverse-geocode-client` endpoint to fill the locality,
+  state and postal code it can resolve; this is deliberately a same-browser call
+  (the provider's fair-use contract), while Google remains the optional
+  street-address + draggable-map enhancement.
 - **Search-engine indexing** (`lib/seo/search-engines.ts`; full runbook in
   `docs/seo-indexing.md`): only the **production apex** is indexable —
   `SEARCH_INDEXABLE` in `lib/store/host.ts` (`ROOT_DOMAIN === "storemink.com" &&

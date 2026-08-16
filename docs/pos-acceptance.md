@@ -51,6 +51,45 @@ again; both ran.)
 
 ---
 
+## 0.2 Signup origin, address and pricing
+
+**PS-0.3 — An expired signup session has an exit**
+Reach the email-code step, delete or invalidate the Identity Platform user, and
+submit the code.
+**Expect:** the error offers both **Start signup again** and **Go to login**.
+Start again clears the Firebase identity and the server cookie and returns to a
+clean account step. Every later signup screen also has **Start over** in the
+header. There is no dead-end instruction with no matching control.
+
+**PS-0.4 ★ — A new store has one complete business address**
+At **Where do you sell from?**, leave each of street/building, city,
+state/province, postal/PIN code and country empty in turn.
+**Expect:** Continue refuses each missing core field. Address line 2 remains
+optional because many valid addresses do not have a suite, floor or landmark.
+Complete signup, then inspect `stores.settings.business` and
+`store_billing_settings`: the former has the structured address and the latter
+has the same formatted invoice address, business name and verified contacts.
+The first invoice must print it without requiring a second settings visit.
+
+**PS-0.5 — Location autofill assists; it never owns the answer**
+Deny browser location, block the Maps script, and complete the plain form.
+Repeat with browser location allowed and then correct a geocoded field.
+**Expect:** both paths finish. Autofill may populate street, city, state, postal
+code and country when its provider resolves them, but every field remains
+editable and coordinates remain optional.
+
+**PS-0.6 ★★ — Signup shows and charges the operator price**
+In the platform Pricing console set Basic to ₹1,500/month and ₹15,000/year with
+₹2,000/₹20,000 "Was" prices; set Pro to ₹2,400/month and ₹24,000/year with
+₹5,000/₹50,000 "Was" prices. Open a fresh signup plan step.
+**Expect:** Basic shows ₹1,500 monthly or ₹1,250/month billed ₹15,000 yearly;
+Pro shows ₹2,400 monthly or ₹2,000/month billed ₹24,000 yearly; the matching
+"Was" figures are struck through. No deploy is required. If the live pricing
+read fails, paid cards do not quote code defaults and no paid checkout starts;
+Free remains available.
+
+---
+
 ## 1. Plan gating & enabling POS
 
 **PS-1.1 — A free store is told, not blocked from seeing it**

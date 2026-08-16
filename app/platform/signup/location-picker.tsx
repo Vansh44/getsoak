@@ -7,7 +7,7 @@
 //
 //  1. IT MUST WORK WITHOUT A MAP. Location is a REQUIRED step, so the map can
 //     never be load-bearing: a missing/rejected API key, a blocked script, or
-//     an offline merchant must still be able to type a country and city and
+//     an offline merchant must still be able to type a complete address and
 //     finish signing up. Everything Google-shaped here is progressive
 //     enhancement layered on top of a plain form that already works.
 //
@@ -33,8 +33,14 @@ export interface PickedLocation {
   lng: number | null;
   /** Formatted address from the geocoder, when one was resolved. */
   address: string;
+  /** Street/building resolved by Google. Keyless geocoding leaves it blank. */
+  addressLine1: string;
   /** Locality, used to fill the City field. */
   city: string;
+  /** State, province or region. */
+  state: string;
+  /** Postal/PIN code, when the geocoder returned one. */
+  postalCode: string;
   /** ISO-2, used to fill the Country select. */
   countryCode: string;
 }
@@ -45,6 +51,7 @@ interface ClientGeocodeResult {
   principalSubdivision?: string;
   countryCode?: string;
   countryName?: string;
+  postcode?: string;
 }
 
 /**
@@ -56,7 +63,12 @@ interface ClientGeocodeResult {
 async function describeCurrentLocation(
   lat: number,
   lng: number,
-): Promise<Pick<PickedLocation, "address" | "city" | "countryCode">> {
+): Promise<
+  Pick<
+    PickedLocation,
+    "address" | "addressLine1" | "city" | "state" | "postalCode" | "countryCode"
+  >
+> {
   const params = new URLSearchParams({
     latitude: String(lat),
     longitude: String(lng),
@@ -75,6 +87,9 @@ async function describeCurrentLocation(
   return {
     city,
     address,
+    addressLine1: "",
+    state: result.principalSubdivision ?? "",
+    postalCode: result.postcode ?? "",
     countryCode: result.countryCode?.toUpperCase() ?? "",
   };
 }
@@ -146,7 +161,10 @@ export function LocationPicker({
           lat,
           lng,
           address: "",
+          addressLine1: "",
           city: "",
+          state: "",
+          postalCode: "",
           countryCode: "",
         });
         setGeoError(
@@ -169,7 +187,10 @@ export function LocationPicker({
                 lat,
                 lng,
                 address: "",
+                addressLine1: "",
                 city: "",
+                state: "",
+                postalCode: "",
                 countryCode: "",
               });
             }
@@ -180,10 +201,20 @@ export function LocationPicker({
           const parts: any[] = best.address_components ?? [];
           const find = (type: string) =>
             parts.find((c) => c.types?.includes(type));
+          const street = [
+            find("street_number")?.long_name,
+            find("route")?.long_name,
+          ]
+            .filter(Boolean)
+            .join(" ");
+          const premise = String(
+            find("premise")?.long_name ?? find("subpremise")?.long_name ?? "",
+          );
           onChangeRef.current({
             lat,
             lng,
             address: String(best.formatted_address ?? ""),
+            addressLine1: [premise, street].filter(Boolean).join(", "),
             city: String(
               find("locality")?.long_name ??
                 find("postal_town")?.long_name ??
@@ -191,6 +222,8 @@ export function LocationPicker({
                 find("administrative_area_level_1")?.long_name ??
                 "",
             ),
+            state: String(find("administrative_area_level_1")?.long_name ?? ""),
+            postalCode: String(find("postal_code")?.long_name ?? ""),
             countryCode: String(find("country")?.short_name ?? ""),
           });
           setGeoError("");
@@ -276,8 +309,8 @@ export function LocationPicker({
         setLocating(false);
         setGeoError(
           err.code === err.PERMISSION_DENIED
-            ? "Location permission was denied. You can still type your city below."
-            : "Couldn't get your location. You can still type your city below.",
+            ? "Location permission was denied. You can still type your address below."
+            : "Couldn't get your location. You can still type your address below.",
         );
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },

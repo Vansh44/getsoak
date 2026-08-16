@@ -4,7 +4,7 @@ import { revalidateTag } from "next/cache";
 import { eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
-import { admins, stores } from "@/drizzle/schema";
+import { admins, storeBillingSettings, stores } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { STORE_TAG } from "@/lib/store/resolve";
 import { ROOT_DOMAIN } from "@/lib/store/host";
@@ -17,6 +17,7 @@ import {
   THEME_META,
   isThemeSelectable,
 } from "@/lib/themes/meta";
+import { COUNTRIES } from "@/lib/countries";
 
 // Subdomains we can never hand out (platform-reserved or operational).
 const RESERVED = new Set([
@@ -200,10 +201,16 @@ export interface CreateStoreInput {
   lastName?: string;
   /** ISO country code the merchant sells from (settings.business.country). */
   country?: string;
+  /** Street/building line for the invoice address. Required. */
+  addressLine1?: string;
+  /** Suite, floor, landmark, etc. Optional because many addresses have none. */
+  addressLine2?: string;
   /** City the merchant sells from (settings.business.city). Required. */
   city?: string;
-  /** Free-text address line, when the merchant confirmed a map pin. */
-  address?: string;
+  /** State, province or region. Required. */
+  state?: string;
+  /** Postal or PIN code. Required. */
+  postalCode?: string;
   /** Pin coordinates, when captured. Stored as numbers, not strings, so the
    *  eventual "stores near you" query doesn't have to parse them back. */
   lat?: number;
@@ -275,16 +282,43 @@ export async function createStore(
   // invoices later), so it lives in the anon-readable stores.settings jsonb
   // under `business` (never a secret — convention #9).
   const country = (input.country || "").trim().slice(0, 2).toUpperCase();
+  const addressLine1 = (input.addressLine1 || "").trim().slice(0, 160);
+  const addressLine2 = (input.addressLine2 || "").trim().slice(0, 160);
   const city = (input.city || "").trim().slice(0, 80);
-  const address = (input.address || "").trim().slice(0, 300);
+  const state = (input.state || "").trim().slice(0, 80);
+  const postalCode = (input.postalCode || "").trim().slice(0, 20);
 
   // Required server-side, not just in the wizard: a client can post whatever it
   // likes, and every invoice this store ever prints carries this address.
   if (!country) return { error: "Please choose the country you sell from." };
+  if (!addressLine1)
+    return { error: "Please enter your street and building address." };
   if (!city) return { error: "Please enter the city you sell from." };
+  if (!state) return { error: "Please enter your state or province." };
+  if (!postalCode) return { error: "Please enter your postal or PIN code." };
 
-  const business: Record<string, string | number> = { country, city };
-  if (address) business.address = address;
+  const countryName =
+    COUNTRIES.find((candidate) => candidate.code === country)?.name ?? country;
+  const formattedAddress = [
+    addressLine1,
+    addressLine2,
+    `${city}, ${state} ${postalCode}`,
+    countryName,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const business: Record<string, string | number> = {
+    country,
+    addressLine1,
+    city,
+    state,
+    postalCode,
+    // Keep one display-ready form for existing readers while the structured
+    // fields remain the canonical, editable source.
+    address: formattedAddress,
+  };
+  if (addressLine2) business.addressLine2 = addressLine2;
 
   // Coordinates are optional — they come from the map pin or the browser's
   // geolocation, and a merchant who declines the permission prompt must still
@@ -371,6 +405,33 @@ export async function createStore(
       err instanceof Error ? err.message : err,
     );
     return { error: "Could not set up your store account. Please try again." };
+  }
+
+  // The invoice renderer reads store_billing_settings, not stores.settings.
+  // Seed both from the one validated signup address so the first invoice does
+  // not silently omit the identity the wizard promised would appear on it.
+  try {
+    await withService((db) =>
+      db.insert(storeBillingSettings).values({
+        storeId: store.id,
+        businessName: rawName.trim(),
+        businessAddress: formattedAddress,
+        contactEmail: user.email ?? null,
+        contactPhone: user.phone ?? null,
+        updatedBy: user.id,
+      }),
+    );
+  } catch (err) {
+    // This is required signup data, not an optional enhancement. The store FK
+    // cascades the owner + partial billing row, leaving a clean retry.
+    await withService((db) =>
+      db.delete(stores).where(eq(stores.id, store.id)),
+    ).catch(() => {});
+    console.error(
+      "createStore (billing profile insert):",
+      err instanceof Error ? err.message : err,
+    );
+    return { error: "Could not save your business address. Please try again." };
   }
 
   // Seed the chosen theme: homepage + content pages (published), menus, brand

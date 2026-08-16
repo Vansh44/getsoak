@@ -28,7 +28,7 @@ import { emitEvent } from "@/lib/notifications/record";
 import { recordSignupConsent } from "@/lib/legal/store";
 import { applyTheme } from "@/lib/themes/apply";
 import { DEFAULT_THEME_ID } from "@/lib/themes/meta";
-import { admins, stores } from "@/drizzle/schema";
+import { admins, storeBillingSettings, stores } from "@/drizzle/schema";
 import {
   checkStoreSlugAvailability,
   createStore,
@@ -40,6 +40,7 @@ const USER = {
   email: "owner@example.com",
   emailConfirmed: true,
   phoneConfirmed: true,
+  phone: "+919876543210",
   metadata: {},
 } as any;
 
@@ -49,8 +50,11 @@ const INPUT = {
   firstName: " Asha ",
   lastName: " Shah ",
   country: " in ",
+  addressLine1: " 12 Radial Road ",
+  addressLine2: " Floor 2 ",
   city: " New Delhi ",
-  address: " 12 Radial Road ",
+  state: " Delhi ",
+  postalCode: " 110001 ",
   lat: 28.6139,
   lng: 77.209,
 };
@@ -227,14 +231,29 @@ describe("createStore gates", () => {
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
-  it("requires the invoice country and city server-side", async () => {
+  it("requires every core invoice-address field server-side", async () => {
     expect((await createStore({ ...INPUT, country: "" })).error).toMatch(
       /choose the country/i,
     );
 
     dbHolder.current = makeDbMock({ selectQueue: [[], []] });
+    expect((await createStore({ ...INPUT, addressLine1: "" })).error).toMatch(
+      /street and building/i,
+    );
+
+    dbHolder.current = makeDbMock({ selectQueue: [[], []] });
     expect((await createStore({ ...INPUT, city: "" })).error).toMatch(
       /enter the city/i,
+    );
+
+    dbHolder.current = makeDbMock({ selectQueue: [[], []] });
+    expect((await createStore({ ...INPUT, state: "" })).error).toMatch(
+      /state or province/i,
+    );
+
+    dbHolder.current = makeDbMock({ selectQueue: [[], []] });
+    expect((await createStore({ ...INPUT, postalCode: "" })).error).toMatch(
+      /postal or PIN/i,
     );
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
@@ -257,8 +276,12 @@ describe("createStore provisioning", () => {
         launched: false,
         business: {
           country: "IN",
+          addressLine1: "12 Radial Road",
+          addressLine2: "Floor 2",
           city: "New Delhi",
-          address: "12 Radial Road",
+          state: "Delhi",
+          postalCode: "110001",
+          address: "12 Radial Road\nFloor 2\nNew Delhi, Delhi 110001\nIndia",
           lat: 28.6139,
           lng: 77.209,
         },
@@ -270,8 +293,26 @@ describe("createStore provisioning", () => {
     await createStore({ ...INPUT, lat: 91, lng: 181 });
     expect(dbHolder.current.calls.values[0].settings.business).toEqual({
       country: "IN",
+      addressLine1: "12 Radial Road",
+      addressLine2: "Floor 2",
       city: "New Delhi",
-      address: "12 Radial Road",
+      state: "Delhi",
+      postalCode: "110001",
+      address: "12 Radial Road\nFloor 2\nNew Delhi, Delhi 110001\nIndia",
+    });
+  });
+
+  it("seeds the invoice profile from the same validated business address", async () => {
+    await createStore(INPUT);
+    expect(dbHolder.current.calls.insert[2]).toBe(storeBillingSettings);
+    expect(dbHolder.current.calls.values[2]).toEqual({
+      storeId: "store-1",
+      businessName: "Acme Foods",
+      businessAddress:
+        "12 Radial Road\nFloor 2\nNew Delhi, Delhi 110001\nIndia",
+      contactEmail: "owner@example.com",
+      contactPhone: "+919876543210",
+      updatedBy: "user-1",
     });
   });
 
@@ -328,6 +369,20 @@ describe("createStore provisioning", () => {
     expect(sqlParamValues(dbHolder.current.calls.where.at(-1))).toContain(
       "store-1",
     );
+    expect(applyTheme).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the store if its required invoice profile cannot be saved", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[], []],
+      returning: [{ id: "store-1", slug: "acme-foods" }],
+      failInsertFor: [storeBillingSettings],
+    });
+
+    expect(await createStore(INPUT)).toEqual({
+      error: "Could not save your business address. Please try again.",
+    });
+    expect(dbHolder.current.calls.delete[0]).toBe(stores);
     expect(applyTheme).not.toHaveBeenCalled();
   });
 
