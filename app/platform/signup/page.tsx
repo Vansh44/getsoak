@@ -449,6 +449,34 @@ export default function SignupPage() {
     setError("");
     const result = await verifySignupEmailOtp(emailCode);
     if (!result.ok) {
+      if (result.staleSession) {
+        // A deleted Firebase user can leave a signature-valid 14-day server
+        // cookie behind. Re-exchange the browser's current user; the session
+        // route also evicts any legacy host-only cookie shadowing the fresh
+        // shared-domain cookie. The old OTP was UID-bound, so issue a new one.
+        const sessionError = await establishSession(true);
+        if (sessionError) {
+          setBusy(false);
+          setError("Your session expired. Log in again to continue.");
+          return;
+        }
+        const otp = await requestSignupEmailOtp();
+        setBusy(false);
+        if (!otp.ok) {
+          setError(otp.error ?? "We couldn't send a new verification code.");
+          return;
+        }
+        if (otp.alreadyVerified) {
+          setStep("phone");
+          return;
+        }
+        setEmailCode("");
+        setEmailCodeSent(true);
+        setOperatorLogOnly(otp.operatorLogOnly === true);
+        setDevConsoleOnly(otp.devConsoleOnly === true);
+        setError("Your session was refreshed. Enter the new code we sent.");
+        return;
+      }
       setBusy(false);
       setError(result.error ?? "That code couldn't be verified.");
       return;

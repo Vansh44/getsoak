@@ -10,7 +10,8 @@ import type { RazorpayCreds } from "./razorpay";
 // Loaders for payment credentials. Two entirely separate accounts:
 //   • a STORE's BYO Razorpay gateway (store_payment_providers — order money
 //     settles with the merchant), and
-//   • the PLATFORM's own Razorpay account (env — AI-credit purchases only).
+//   • the PLATFORM's own Razorpay account (env — StoreMink billing and AI
+//     credit purchases).
 // Neither ever reaches a client component; secrets stay server-side.
 
 export interface StoreGateway {

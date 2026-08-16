@@ -50,6 +50,7 @@ import {
 } from "@/lib/pos/tenders";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import { handoverGate } from "@/lib/pos/collection-state";
 
 /**
  * The shop an order is waiting at, returned alongside the claim itself.
@@ -196,7 +197,16 @@ export async function markCollected(
   /** What the customer handed over at the counter. Empty for an order already
    *  paid online, which is most of them. */
   tenders: PosTender[] = [],
-): Promise<{ success?: boolean; error?: string; changeDue?: number }> {
+  /** The cashier's attestation that an unprepared order is actually packed. */
+  opts: { acknowledgeUnprepared?: boolean } = {},
+): Promise<{
+  success?: boolean;
+  error?: string;
+  changeDue?: number;
+  /** The order was never marked ready and needs an explicit confirmation. The
+   *  counter turns this into a dialog rather than a dead error. */
+  needsPreparedAck?: boolean;
+}> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
@@ -213,6 +223,7 @@ export async function markCollected(
         total: unknown;
         payment_method: string | null;
         payment_status: string | null;
+        pickup_status: string | null;
       }
     | undefined;
   try {
@@ -222,6 +233,7 @@ export async function markCollected(
           total: orders.total,
           payment_method: orders.paymentMethod,
           payment_status: orders.paymentStatus,
+          pickup_status: orders.pickupStatus,
         })
         .from(orders)
         .where(
@@ -242,6 +254,23 @@ export async function markCollected(
     return { error: dbErrorMessage(err, "Couldn't read the order.") };
   }
   if (!owed) return { error: NOT_WAITING };
+
+  // ── Was this order ever prepared? ────────────────────────────────────────
+  // BEFORE the tenders, for the reason the money read is before the claim: a
+  // refusal has to land while the goods are still on the shelf and nothing has
+  // been taken. See `handoverGate` for why an unprepared collection is confirmed
+  // rather than forbidden — a customer who arrives before the shop has packed is
+  // ordinary, and a cashier alone at the counter must still be able to serve
+  // them.
+  const gate = handoverGate({
+    status: owed.pickup_status,
+    acknowledged: opts.acknowledgeUnprepared === true,
+  });
+  if (!gate.allowed) {
+    // `needsPreparedAck` is what turns the refusal into a dialog rather than a
+    // dead error — the counter asks the one thing only the operator can answer.
+    return { error: gate.reason, needsPreparedAck: true };
+  }
 
   const due = amountDueAtCollection({
     paymentMethod: owed.payment_method,
@@ -317,6 +346,14 @@ export async function markCollected(
           collectedAt: sql`now()`,
           collectedBy: op.staffId ?? op.name,
           status: "completed",
+          // ★ THE AUDIT TRAIL. `pickup_ready_at` is the date promised at
+          // checkout and is already non-null on every new pickup, so it cannot
+          // double as evidence of actual preparation. When the cashier confirms
+          // an awaiting order is physically packed, stamp the dedicated actual
+          // time in the SAME statement as collected_at. Equality therefore
+          // answers "collected without a prior Mark ready" exactly, without
+          // destroying the customer promise.
+          ...(gate.unprepared ? { pickupPreparedAt: sql`now()` } : {}),
           // "Pay at store" means the money changes hands at the counter — so
           // handing the order over IS the payment. Only that method is
           // settled here: an order already paid online must not be touched,
@@ -429,17 +466,13 @@ export async function markReadyForPickup(
 ): Promise<{ success?: boolean; error?: string }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
-  // ★ MANAGER AND ABOVE (roadmap Step 3). Marking an order ready is what tells
-  // a customer to travel, so it should be someone who has actually seen the
-  // box — not anyone who happens to be on the till. Handing it over stays
-  // `sell`: that is a cashier's job, with the customer standing there.
-  //
-  // Safe to tighten because no store had pickup enabled when this shipped
-  // (owner confirmed 2026-08-09) — there is no live behaviour to preserve
-  // (invariant 1).
+  // Every current POS role has this named capability, cashier included: in
+  // most shops the person on the till is also the person packing the order.
+  // Keep the capability check distinct from `sell` so a future restricted role
+  // can take payment without being allowed to send a ready notification.
   if (!posCan(op.role, "fulfil_pickup")) {
     return {
-      error: "Only a manager can mark a collection order ready.",
+      error: "You are not allowed to mark a collection order ready.",
     };
   }
 
@@ -447,7 +480,12 @@ export async function markReadyForPickup(
     const rows = await withService((db) =>
       db
         .update(orders)
-        .set({ pickupStatus: "ready" })
+        .set({
+          pickupStatus: "ready",
+          // Actual physical preparation, separate from pickup_ready_at (the
+          // checkout promise). The hand-over path preserves this earlier value.
+          pickupPreparedAt: sql`now()`,
+        })
         .where(
           and(
             eq(orders.id, orderId),

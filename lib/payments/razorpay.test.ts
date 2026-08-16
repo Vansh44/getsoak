@@ -97,10 +97,11 @@ describe("★ every request", () => {
     await rzpRefund(CREDS, {
       paymentId: "pay_1",
       amountPaise: 50000,
-      idempotencyKey: "k1",
+      idempotencyKey: "refund-key-1",
     });
     const { init } = sent(fetchMock);
-    expect(init.headers["X-Razorpay-Idempotency-Key"]).toBe("k1");
+    expect(init.headers["X-Refund-Idempotency"]).toBe("refund-key-1");
+    expect(init.headers["X-Razorpay-Idempotency-Key"]).toBeUndefined();
     expect(init.headers.Authorization).toContain("Basic ");
     expect(init.headers["Content-Type"]).toBe("application/json");
   });
@@ -114,7 +115,7 @@ describe("★ a failure is classified, not just reported", () => {
       const res = await rzpRefund(CREDS, {
         paymentId: "pay_1",
         amountPaise: 50000,
-        idempotencyKey: "k",
+        idempotencyKey: "refund-test-key",
       });
       expect(res).toMatchObject({ ok: false, outcome: "rejected" });
     },
@@ -127,7 +128,7 @@ describe("★ a failure is classified, not just reported", () => {
       const res = await rzpRefund(CREDS, {
         paymentId: "pay_1",
         amountPaise: 50000,
-        idempotencyKey: "k",
+        idempotencyKey: "refund-test-key",
       });
       expect(res).toMatchObject({ ok: false, outcome: "unknown" });
     },
@@ -138,7 +139,7 @@ describe("★ a failure is classified, not just reported", () => {
     const res = await rzpRefund(CREDS, {
       paymentId: "pay_1",
       amountPaise: 50000,
-      idempotencyKey: "k",
+      idempotencyKey: "refund-test-key",
     });
     expect(res).toEqual({
       ok: false,
@@ -290,16 +291,17 @@ describe("rzpRefund", () => {
     await rzpRefund(CREDS, {
       paymentId: "pay_1",
       amountPaise: 25000,
-      idempotencyKey: "key-abc",
+      idempotencyKey: "refund-key-abc",
       notes: { sm_order_ref: "ORD1" },
     });
     const { url, init, body } = sent(fetchMock);
     expect(url).toBe("https://api.razorpay.com/v1/payments/pay_1/refund");
     expect(init.method).toBe("POST");
-    expect(init.headers["X-Razorpay-Idempotency-Key"]).toBe("key-abc");
+    expect(init.headers["X-Refund-Idempotency"]).toBe("refund-key-abc");
+    expect(init.headers["X-Razorpay-Idempotency-Key"]).toBeUndefined();
     expect(body).toEqual({
       amount: 25000,
-      notes: { sm_order_ref: "ORD1", sm_refund_key: "key-abc" },
+      notes: { sm_order_ref: "ORD1", sm_refund_key: "refund-key-abc" },
     });
   });
 
@@ -311,10 +313,10 @@ describe("rzpRefund", () => {
     await rzpRefund(CREDS, {
       paymentId: "pay_1",
       amountPaise: 25000,
-      idempotencyKey: "real-key",
+      idempotencyKey: "refund-real-key",
       notes: { sm_refund_key: "spoofed" } as any,
     });
-    expect(sent(fetchMock).body.notes.sm_refund_key).toBe("real-key");
+    expect(sent(fetchMock).body.notes.sm_refund_key).toBe("refund-real-key");
   });
 
   it("works with no caller notes at all", async () => {
@@ -322,9 +324,11 @@ describe("rzpRefund", () => {
     await rzpRefund(CREDS, {
       paymentId: "pay_1",
       amountPaise: 25000,
-      idempotencyKey: "k",
+      idempotencyKey: "refund-test-key",
     });
-    expect(sent(fetchMock).body.notes).toEqual({ sm_refund_key: "k" });
+    expect(sent(fetchMock).body.notes).toEqual({
+      sm_refund_key: "refund-test-key",
+    });
   });
 
   it("★ refuses an empty payment id as REJECTED, not unknown", async () => {
@@ -335,7 +339,7 @@ describe("rzpRefund", () => {
     const res = await rzpRefund(CREDS, {
       paymentId: "",
       amountPaise: 25000,
-      idempotencyKey: "k",
+      idempotencyKey: "refund-test-key",
     });
     expect(res).toEqual({
       ok: false,
@@ -352,7 +356,7 @@ describe("rzpRefund", () => {
       const res = await rzpRefund(CREDS, {
         paymentId: "pay_1",
         amountPaise,
-        idempotencyKey: "k",
+        idempotencyKey: "refund-test-key",
       });
       expect(res).toEqual({
         ok: false,
@@ -368,10 +372,28 @@ describe("rzpRefund", () => {
     await rzpRefund(CREDS, {
       paymentId: "pay/1",
       amountPaise: 25000,
-      idempotencyKey: "k",
+      idempotencyKey: "refund-test-key",
     });
     expect(sent(fetchMock).url).toContain("/payments/pay%2F1/refund");
   });
+
+  it.each(["", "too-short", "refund key with spaces", "refund.key.bad"])(
+    "rejects an invalid idempotency key (%j) before it reaches the wire",
+    async (idempotencyKey) => {
+      const fetchMock = respond({ json: {} });
+      const res = await rzpRefund(CREDS, {
+        paymentId: "pay_1",
+        amountPaise: 25000,
+        idempotencyKey,
+      });
+      expect(res).toEqual({
+        ok: false,
+        error: "Invalid refund idempotency key.",
+        outcome: "rejected",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("rzpFetchPaymentRefunds", () => {

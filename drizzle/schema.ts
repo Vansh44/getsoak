@@ -18,7 +18,7 @@ import {
   bigint,
   pgSequence,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 export const storeNoSeq = pgSequence("store_no_seq", {
   startWith: "1000",
@@ -452,7 +452,8 @@ export const billingMandates = pgTable(
     /** card | upi | emandate | nach | unknown. `unknown` means VERIFY (§17). */
     method: text().default("unknown").notNull(),
     status: text().default("pending").notNull(),
-    /** Read back from the token, never computed by us. */
+    /** Exact ceiling sent in the verified authorisation order. Copied from the
+     *  durable attempt, never accepted from the browser or recomputed later. */
     maxAmountPaise: bigint("max_amount_paise", { mode: "number" }),
     authenticatedAt: timestamp("authenticated_at", {
       withTimezone: true,
@@ -528,6 +529,10 @@ export const billingPaymentAttempts = pgTable(
     providerOrderId: text("provider_order_id"),
     providerPaymentId: text("provider_payment_id"),
     providerTokenId: text("provider_token_id"),
+    /** Exact max_amount sent when this attempt created a mandate. Null for
+     *  ordinary/manual payments. Persisted before checkout so confirmation can
+     *  activate the token with the ceiling the merchant actually authorised. */
+    mandateMaxPaise: bigint("mandate_max_paise", { mode: "number" }),
     failureCode: text("failure_code"),
     failureReason: text("failure_reason"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -591,6 +596,10 @@ export const billingPaymentAttempts = pgTable(
     check(
       "billing_payment_attempts_state_check",
       sql`state = ANY (ARRAY['created'::text, 'processing'::text, 'authorized'::text, 'captured'::text, 'failed'::text, 'cancelled'::text, 'refunded'::text, 'unknown'::text])`,
+    ),
+    check(
+      "billing_payment_attempts_mandate_max_check",
+      sql`(mandate_max_paise IS NULL) OR (mandate_max_paise > 0)`,
     ),
     check(
       "billing_payment_attempts_currency_check",
@@ -1929,11 +1938,21 @@ export const orders = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // When staff actually confirmed the goods were packed. Distinct from
+    // pickup_ready_at, which is the promise made at checkout and must remain an
+    // immutable customer-facing date.
+    pickupPreparedAt: timestamp("pickup_prepared_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     pickupWarnedAt: timestamp("pickup_warned_at", {
       withTimezone: true,
       mode: "string",
     }),
     stockStatus: text("stock_status").default("none").notNull(),
+    // NOT NULL because the DATABASE always has them: a BEFORE INSERT trigger
+    // (identifiers_04_triggers.sql) allocates both. No caller supplies them —
+    // see `OrderInsert` below for why that distinction has teeth.
     orderNo: integer("order_no").notNull(),
     orderRef: text("order_ref").notNull(),
     taxInclusive: boolean("tax_inclusive").default(false).notNull(),
@@ -2006,6 +2025,38 @@ export const orders = pgTable(
     ),
   ],
 );
+
+/**
+ * An `orders` row as APPLICATION CODE may write it.
+ *
+ * `order_no` and `order_ref` are NOT NULL but trigger-allocated, so
+ * `$inferInsert` demands two fields no caller can supply. Every insert site
+ * worked around that by casting the whole object —
+ * `.values({ … } as typeof orders.$inferInsert)` — which switched type
+ * checking OFF for all fifty-odd other columns.
+ *
+ * ★★ THAT IS HOW A TILL OUTAGE SHIPPED. `store_credit_used` is
+ * `NOT NULL DEFAULT 0`, and an explicit NULL does not fall back to a DEFAULT —
+ * it violates the constraint. `placePosSale` wrote null whenever a sale used no
+ * store credit, so every POS sale on the platform failed on insert with a
+ * message that never mentioned credit. The compiler knew: the column is
+ * declared `.notNull()` right here, and the blanket cast is the only reason it
+ * stayed quiet.
+ *
+ * Use it with `satisfies`, so the gap stays exactly two columns wide:
+ *
+ *   .values({ … } satisfies OrderInsert as typeof orders.$inferInsert)
+ *
+ * Every field also accepts `SQL`, because Drizzle's real `.values()` does — a
+ * pickup's `pickup_expires_at` is written as `now() + make_interval(…)` so the
+ * deadline is measured by the database's clock rather than the container's.
+ * That escape stays visible (you have to write `sql`…``); it is the silent
+ * blanket cast that let a bare `null` through.
+ */
+type OrderInsertRow = Omit<typeof orders.$inferInsert, "orderNo" | "orderRef">;
+export type OrderInsert = {
+  [K in keyof OrderInsertRow]: OrderInsertRow[K] | SQL;
+};
 
 export const planEvents = pgTable(
   "plan_events",

@@ -124,3 +124,22 @@ export function sessionCookieOptions(host: string | null | undefined): {
     ...(domain ? { domain } : {}),
   };
 }
+
+/**
+ * Expire a legacy host-only session cookie without touching the current
+ * `.storemink.com` cookie.  A host-only cookie and a Domain cookie may share
+ * the same name; browsers then send both and `cookies().get()` returns only
+ * the first.  NextResponse.cookies cannot emit both variants because it
+ * de-duplicates by name, so session/sign-out Route Handlers append this
+ * explicit second Set-Cookie header after setting the Domain cookie.
+ */
+export function expiredHostOnlySessionCookieHeader(): string {
+  return [
+    `${SESSION_COOKIE}=`,
+    "Path=/",
+    "Max-Age=0",
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(process.env.NODE_ENV === "production" ? ["Secure"] : []),
+  ].join("; ");
+}

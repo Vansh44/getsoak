@@ -13,6 +13,7 @@ import {
   stores,
   taxClasses,
 } from "@/drizzle/schema";
+import type { OrderInsert } from "@/drizzle/schema";
 import { getCurrentStore, getCurrentStoreId } from "@/lib/store/resolve";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
@@ -1367,7 +1368,7 @@ export async function placeOrder(
         // holds instead of restocking, so it must not claim the
         // reserved→released restock path (order-actions).
         stockStatus: pickupAt ? "none" : "reserved",
-      } as typeof orders.$inferInsert)
+      } satisfies OrderInsert as typeof orders.$inferInsert)
       .returning({ id: orders.id, order_ref: orders.orderRef }),
   ).catch((err) => {
     console.error("Order creation error:", errMsg(err));

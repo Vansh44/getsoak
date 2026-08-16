@@ -466,8 +466,11 @@ load-bearing (§8 below).
 `authenticated_at`, `expires_at`, `revoked_at`, `provider_metadata jsonb`.
 **No card data, ever.**
 
-`max_amount_paise` is read back from the token, not computed by us — which is
-what replaces `mandateMaxPaise()`'s invented ₹1,30,000 ceiling.
+`max_amount_paise` is copied from the exact server-computed `token.max_amount`
+persisted on the payment attempt before Checkout (`billing_09`). Razorpay's
+payment response returns the token id but not its ceiling; recomputing after a
+reprice or accepting a browser value would record something other than what the
+merchant authorised.
 
 ### `invoices`
 
@@ -511,6 +514,7 @@ mode             text not null check (mode in ('automatic','manual')),
 state            text not null,
 amount_paise     bigint not null,
 provider_order_id, provider_payment_id, provider_token_id  text,
+mandate_max_paise bigint,              -- exact token.max_amount at checkout
 failure_code, failure_reason  text,
 
 create unique index one_attempt_in_flight on payment_attempts (invoice_id)
@@ -525,12 +529,12 @@ the second INSERT fails at the database.
 That module is the only path in the codebase that already handles "we never
 learned the outcome" correctly, and every element transfers:
 
-| `issue-refund.ts`                                                                                           | Here                                                                                        |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| INSERT `order_refunds` `pending` with our `idempotencyKey`, inside one transaction with the amount check    | INSERT `payment_attempts` `created` before any gateway call                                 |
-| Key sent as **both** `X-Razorpay-Idempotency-Key` and `notes.sm_refund_key`                                 | Same — the `notes` copy is what reconciliation matches on if the header is ever unsupported |
-| Settlement is `UPDATE … WHERE status = 'pending'`, and a lost claim reports `pending` rather than asserting | Identical claim on `payment_attempts`                                                       |
-| `outcome: "unknown"` → **do not fail, do not retry**, return `pendingReconcile`                             | Identical — this is Rule 6's primitive                                                      |
+| `issue-refund.ts`                                                                                           | Here                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| INSERT `order_refunds` `pending` with our `idempotencyKey`, inside one transaction with the amount check    | INSERT `payment_attempts` `created` before any gateway call                                                                 |
+| Key sent as **both** `X-Refund-Idempotency` and `notes.sm_refund_key`                                       | The recurring API documents no equivalent header: persist its provider order **before debit** and copy the key into `notes` |
+| Settlement is `UPDATE … WHERE status = 'pending'`, and a lost claim reports `pending` rather than asserting | Identical claim on `payment_attempts`                                                                                       |
+| `outcome: "unknown"` → **do not fail, do not retry**, return `pendingReconcile`                             | Identical — this is Rule 6's primitive                                                                                      |
 
 And `RzpResult` **already** carries the distinction the spec asks for
 (`lib/payments/razorpay.ts:47`): `status >= 500 → "unknown"`, a network throw →

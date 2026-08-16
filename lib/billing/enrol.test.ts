@@ -48,8 +48,16 @@ vi.mock("@/lib/payments/razorpay", () => rzp);
 // autopay branch is actually REACHABLE in tests — without it ensureRzpCustomer
 // always returns null and the gate below would pass no matter what it did.
 const mail = vi.hoisted(() => ({
-  resolveBillingEmail: vi.fn(async () => ({
+  resolveBillingEmail: vi.fn<
+    () => Promise<{
+      email: string;
+      phone: string | null;
+      storeName: string;
+      slug: string;
+    }>
+  >(async () => ({
     email: "owner@acme.test",
+    phone: "9876543210",
     storeName: "Acme",
     slug: "acme",
   })),
@@ -95,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mail.resolveBillingEmail.mockResolvedValue({
     email: "owner@acme.test",
+    phone: "9876543210",
     storeName: "Acme",
     slug: "acme",
   });
@@ -150,18 +159,28 @@ describe("startEnrolment", () => {
     now: NOW,
   };
 
-  it("★★ no mandate is registered while autopay is OFF", async () => {
-    // The gate that stops a merchant authorising a standing debit we have no
-    // verified way to collect. Written for BOTH states so it never becomes a
-    // false failure: flipping RECURRING_CHARGE_VERIFIED inverts which order
-    // call is expected rather than breaking the suite.
+  it("★★ offers a mandate while the autopay rollout is enabled", async () => {
     await startEnrolment(args);
-    if (!RECURRING_CHARGE_VERIFIED) {
-      expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
-      expect(rzp.rzpCreateOrder).toHaveBeenCalled();
-    } else {
-      expect(rzp.rzpCreateCustomer).toHaveBeenCalled();
-    }
+    expect(RECURRING_CHARGE_VERIFIED).toBe(true);
+    expect(rzp.rzpCreateCustomer).toHaveBeenCalled();
+    expect(rzp.rzpCreateAuthorizationOrder).toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+    expect(collect.beginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ mandateMaxPaise: 9_000_00 }),
+    );
+  });
+
+  it("★★ falls back to one-time checkout when the owner has no phone", async () => {
+    mail.resolveBillingEmail.mockResolvedValue({
+      email: "owner@acme.test",
+      phone: null,
+      storeName: "Acme",
+      slug: "acme",
+    });
+    const res = await startEnrolment(args);
+    expect(res.ok).toBe(true);
+    expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).toHaveBeenCalled();
   });
 
   it("issues the first invoice and opens a Razorpay order", async () => {
@@ -170,7 +189,7 @@ describe("startEnrolment", () => {
     if (!res.ok) return;
     expect(res.data).toMatchObject({
       invoiceId: INVOICE,
-      providerOrderId: "order_1",
+      providerOrderId: "order_auth_1",
       keyId: "rzp_test_1",
       amountPaise: 5_000_00,
     });
@@ -298,7 +317,7 @@ describe("startEnrolment", () => {
 
   it("★ plants the idempotency key in the order notes", async () => {
     await startEnrolment(args);
-    const notes = rzp.rzpCreateOrder.mock.calls[0][1].notes;
+    const notes = rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].notes;
     expect(notes.sm_billing_key).toBe("key-1");
     expect(notes.invoice_id).toBe(INVOICE);
     expect(notes.store_id).toBe(STORE);
@@ -333,7 +352,7 @@ describe("startEnrolment", () => {
   });
 
   it("★ a REJECTED order fails the attempt — nothing was created at the gateway", async () => {
-    rzp.rzpCreateOrder.mockResolvedValue({
+    rzp.rzpCreateAuthorizationOrder.mockResolvedValue({
       ok: false,
       error: "bad",
       outcome: "rejected",
@@ -349,7 +368,7 @@ describe("startEnrolment", () => {
 
   it("★★ an UNKNOWN order outcome leaves the attempt in flight, not failed", async () => {
     // The order may exist. Marking it failed would let a second attempt open.
-    rzp.rzpCreateOrder.mockResolvedValue({
+    rzp.rzpCreateAuthorizationOrder.mockResolvedValue({
       ok: false,
       error: "timeout",
       outcome: "unknown",
@@ -384,7 +403,14 @@ describe("confirmEnrolment", () => {
     opts: { storePlan?: string; storeSource?: string } = {},
   ) {
     seed([
-      [{ id: "att-1", state: "processing", providerOrderId: "order_1" }],
+      [
+        {
+          id: "att-1",
+          state: "processing",
+          providerOrderId: "order_1",
+          mandateMaxPaise: 9_000_00,
+        },
+      ],
       [
         {
           plan: "pro",

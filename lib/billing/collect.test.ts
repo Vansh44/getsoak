@@ -117,6 +117,17 @@ describe("beginAttempt", () => {
     expect(begun?.idempotencyKey).toBe(values.idempotencyKey);
   });
 
+  it("★★ persists the exact mandate ceiling before authorization checkout", async () => {
+    await beginAttempt({
+      invoiceId: INVOICE,
+      storeId: STORE,
+      amountPaise: 5_000_00,
+      mode: "manual",
+      mandateMaxPaise: 12_000_00,
+    });
+    expect(dbHolder.current.calls.values[0].mandateMaxPaise).toBe(12_000_00);
+  });
+
   it("★ reads a conflict as 'already collecting', not as an error", async () => {
     seed({ returning: [] });
     expect(
@@ -421,6 +432,31 @@ describe("collectInvoice — ordering and outcomes", () => {
       dbHolder.current.calls.values[0].idempotencyKey,
     );
     expect(arg.providerTokenId).toBe("tok_live_1");
+  });
+
+  it("★★ gives the provider a write-once order recorder before debit", async () => {
+    let recorded = false;
+    const charge = vi.fn(async (input: Parameters<ChargeFn>[0]) => {
+      recorded = await input.recordProviderOrderId("order_recurring_1");
+      return {
+        ok: true as const,
+        data: { providerPaymentId: "pay_1", status: "captured" },
+      };
+    }) as unknown as ChargeFn;
+    seed({
+      selects: [
+        [{ id: ATTEMPT, state: "created", invoiceId: INVOICE }],
+        [{ state: "captured" }],
+      ],
+      returning: [{ id: ATTEMPT }],
+    });
+
+    await collectInvoice({ ...base, charge });
+
+    expect(recorded).toBe(true);
+    expect(dbHolder.current.calls.set).toContainEqual(
+      expect.objectContaining({ providerOrderId: "order_recurring_1" }),
+    );
   });
 
   it("reports paid on a capture", async () => {

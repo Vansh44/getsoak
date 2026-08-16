@@ -18,6 +18,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PosScreen } from "../pos-screen";
+import { usePoll } from "@/lib/pos/use-poll";
+import { fetchStock } from "@/lib/pos/live";
 import {
   adjustPosStock,
   countPosStock,
@@ -72,6 +74,36 @@ export function InventoryClient({
     const t = setTimeout(() => void refresh(query.trim(), lowOnly), 250);
     return () => clearTimeout(t);
   }, [query, lowOnly, refresh]);
+
+  // ── Stock, kept live ──────────────────────────────────────────────────────
+  // Numbers here move for reasons that have nothing to do with this screen: a
+  // sale on the till next to you, a transfer in, a correction someone made on
+  // the dashboard. Without this the list was a snapshot from whenever the page
+  // last loaded — and stock is the one figure people act on assuming it is now.
+  //
+  // ★ QUIET, AND SUSPENDED WHILE SOMETHING IS OPEN. It skips `setLoading` so
+  // the spinner never blinks unasked, drops errors (the next real action still
+  // reports them), and holds off entirely while an adjustment sheet is open —
+  // re-sorting rows under a half-filled form is how someone counts one product
+  // and submits against another.
+  const adjusting = openKey !== null;
+  usePoll(
+    useCallback(
+      async (run) => {
+        const res = await fetchStock(query.trim(), lowOnly, run.signal);
+        if (!res || res.error || !run.isCurrent()) return undefined;
+        let moved = false;
+        setItems((cur) => {
+          if (!run.isCurrent()) return cur;
+          moved = !sameStock(cur, res.items);
+          return moved ? res.items : cur;
+        });
+        return moved;
+      },
+      [query, lowOnly],
+    ),
+    { enabled: !adjusting, backOff: true },
+  );
 
   const done = (msg: string) => {
     setNotice(msg);
@@ -150,6 +182,24 @@ export function InventoryClient({
         )}
       </div>
     </PosScreen>
+  );
+}
+
+/**
+ * Did any stock number move?
+ *
+ * Keeps the previous array identity when nothing changed, so a poll does not
+ * re-render (and re-sort) a list nobody is looking away from — and tells
+ * `usePoll` to back off, which is what stops a shelf nobody is touching costing
+ * the same as one being counted.
+ */
+function sameStock(a: PosInventoryItem[], b: PosInventoryItem[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (it, i) =>
+      it.productId === b[i].productId &&
+      it.variantId === b[i].variantId &&
+      it.onHand === b[i].onHand,
   );
 }
 

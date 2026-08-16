@@ -7,6 +7,7 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import {
+  expiredHostOnlySessionCookieHeader,
   SESSION_COOKIE,
   mintSessionCookie,
   sessionCookieOptions,
@@ -38,6 +39,14 @@ export async function POST(request: NextRequest) {
   const host =
     request.headers.get("x-forwarded-host") || request.headers.get("host");
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, cookie, sessionCookieOptions(host));
+  const options = sessionCookieOptions(host);
+  res.cookies.set(SESSION_COOKIE, cookie, options);
+  // Before sessions were shared across subdomains, `storemink.com` could leave
+  // a host-only sm_session behind. It can shadow this fresh Domain cookie
+  // forever because Set-Cookie only replaces an exact name/domain/path tuple.
+  // ResponseCookies de-duplicates by name, so append the second tuple raw.
+  if (options.domain) {
+    res.headers.append("Set-Cookie", expiredHostOnlySessionCookieHeader());
+  }
   return res;
 }

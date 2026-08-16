@@ -4,7 +4,7 @@ import "server-only";
 import { createHash, createHmac, randomInt, timingSafeEqual } from "crypto";
 import { cookies, headers } from "next/headers";
 import { getServerUser } from "@/lib/auth/server-user";
-import { updateAuthUser } from "@/lib/auth/firebase-users";
+import { authErrorCode, updateAuthUser } from "@/lib/auth/firebase-users";
 import { sendSignupOtpEmail } from "@/lib/email/signup-otp";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
@@ -156,6 +156,7 @@ export async function requestSignupEmailOtp(): Promise<{
 
 export async function verifySignupEmailOtp(rawCode: string): Promise<{
   ok: boolean;
+  staleSession?: boolean;
   error?: string;
 }> {
   const code = String(rawCode ?? "").trim();
@@ -221,6 +222,17 @@ export async function verifySignupEmailOtp(rawCode: string): Promise<{
     return { ok: true };
   } catch (error) {
     console.error("verifySignupEmailOtp:", error);
+    if (authErrorCode(error) === "auth/user-not-found") {
+      // Firebase session cookies are signature-valid until expiry even if the
+      // underlying user was deleted. Tell the client to exchange its current
+      // ID token again instead of trapping the person behind a generic error.
+      jar.delete(OTP_COOKIE);
+      return {
+        ok: false,
+        staleSession: true,
+        error: "Your sign-in session is out of date. Please try again.",
+      };
+    }
     return {
       ok: false,
       error: "We couldn't verify the email. Please try again.",

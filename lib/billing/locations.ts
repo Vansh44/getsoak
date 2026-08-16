@@ -46,7 +46,8 @@ import {
   rzpCreateOrder,
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
-import { effectivePlan, limitsFor, type Plan } from "@/lib/plans";
+import { effectivePlan, limitsFor, PLAN_META, type Plan } from "@/lib/plans";
+import { getPlanPricingLive } from "@/lib/plans/pricing";
 import {
   extraLocationPaise,
   locationAllowance,
@@ -59,7 +60,12 @@ import {
 } from "@/lib/plans/location-billing";
 import type { LocationBillingState } from "./invoice-types";
 import { PERIOD_DAYS } from "./cycle";
-import { buildAddonInvoice, prorationPaise } from "./invoice";
+import {
+  buildAddonInvoice,
+  buildSubscriptionInvoice,
+  prorationPaise,
+  type TaxContext,
+} from "./invoice";
 import {
   amountDueForInvoice,
   createAddonInvoice,
@@ -325,16 +331,20 @@ export async function startLocationPurchase(input: {
   // automatically against a ceiling fixed when the merchant authorised autopay,
   // and it cannot be raised without them re-authorising. Selling a location that
   // makes the next renewal undebitable is how a paying merchant is downgraded.
+  // Reuse this exact tax snapshot for both the future-renewal ceiling and the
+  // part-period invoice. Otherwise a configuration change between two reads
+  // could approve one total and charge another.
+  const tax = await loadTaxContext(input.storeId);
   const ceiling = await mandateCeilingRefusal({
     mandateId: sub.mandateId,
     plan: plan as Plan,
     period,
     targetCount: check.count,
     locationPrice: input.locationPrice,
+    tax,
   });
   if (ceiling) return { ok: false, error: ceiling };
 
-  const tax = await loadTaxContext(input.storeId);
   const built = buildAddonInvoice({
     description: `Extra ${check.count - current === 1 ? "location" : "locations"} · part period to ${new Date(sub.currentPeriodEnd).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}`,
     amountPaise,
@@ -422,6 +432,7 @@ async function mandateCeilingRefusal(input: {
   period: BillingPeriod;
   targetCount: number;
   locationPrice: LocationPrice;
+  tax: TaxContext;
 }): Promise<string | null> {
   if (!input.mandateId) return null;
   let maxPaise: number | null = null;
@@ -441,19 +452,51 @@ async function mandateCeilingRefusal(input: {
     });
   } catch (err) {
     logError("billing.locations.mandate", err, { mandateId: input.mandateId });
-    // Unknown ceiling: do not block a sale on a read we could not make. The
-    // renewal path re-checks and routes to manual payment if it overflows.
-    return null;
+    // This purchase changes a future automatic debit. Unable to read its
+    // ceiling means unable to prove the merchant can renew, so fail closed.
+    return "Couldn't verify your autopay limit. Try again.";
   }
-  if (!maxPaise || maxPaise <= 0) return null;
+  if (!maxPaise || maxPaise <= 0) {
+    return "Your autopay limit is unavailable. Re-authorise autopay before adding a location.";
+  }
 
-  const planPaise = 0; // The plan amount is unchanged; only locations grow.
-  const target = subscriptionTotalPaise(
+  let pricing: Awaited<ReturnType<typeof getPlanPricingLive>>;
+  try {
+    pricing = await getPlanPricingLive();
+  } catch (err) {
+    logError("billing.locations.plan_price", err, { plan: input.plan });
+    return "Couldn't verify your next renewal amount. Try again.";
+  }
+  const plan = pricing[input.plan];
+  const planPaise = Math.round(
+    (input.period === "yearly" ? plan.yearlyInr : plan.monthlyInr) * 100,
+  );
+  if (!Number.isInteger(planPaise) || planPaise <= 0) {
+    return "Couldn't verify your next renewal amount. Try again.";
+  }
+  const listed = subscriptionTotalPaise(
     planPaise,
     input.targetCount,
     input.period,
     input.locationPrice,
   );
+  const target = buildSubscriptionInvoice({
+    planLabel: PLAN_META[input.plan].name,
+    period: input.period,
+    planPaise,
+    locations: {
+      count: input.targetCount,
+      unitPaise: extraLocationPaise(input.period, input.locationPrice),
+    },
+    tax: input.tax,
+  }).totalPaise;
+
+  // Keep this assertion close to the money calculation. If invoice assembly
+  // ever gains a non-tax adjustment, the explicit listed total makes that
+  // drift visible in tests instead of silently changing the ceiling rule.
+  if (target < listed) {
+    return "Couldn't verify your next renewal amount. Try again.";
+  }
   if (target <= maxPaise) return null;
   return "That's more than your autopay limit allows. Cancel autopay and subscribe again to authorise a higher amount.";
 }

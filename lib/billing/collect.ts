@@ -28,7 +28,7 @@ import "server-only";
  */
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { withService, type Db } from "@/lib/db/client";
 import { billingInvoices, billingPaymentAttempts } from "@/drizzle/schema";
 import { logError, logWarn } from "@/lib/observability/logger";
@@ -50,10 +50,12 @@ export interface ChargeResponse {
 }
 
 /**
- * The seam. An implementation MUST send `idempotencyKey` to the provider both
- * as its idempotency header AND inside the payment's `notes` — the notes copy
- * is what reconciliation matches on if the header is ever unsupported or
- * renamed, which is exactly what `issue-refund.ts` does for refunds.
+ * The seam. An implementation MUST put `idempotencyKey` in provider-visible
+ * metadata and MUST persist the provider order through
+ * `recordProviderOrderId` before it attempts the debit. Razorpay's published
+ * recurring-payment reference does not promise an idempotency header, so the
+ * durable attempt + provider order are the duplicate guard and reconciliation
+ * handle here; do not copy the refund API's endpoint-specific header.
  */
 export type ChargeFn = (input: {
   amountPaise: number;
@@ -64,6 +66,8 @@ export type ChargeFn = (input: {
   /** Which store is being billed — the implementation resolves its contact. */
   storeId: string;
   description: string;
+  /** Persist the gateway order before any debit is attempted. */
+  recordProviderOrderId: (providerOrderId: string) => Promise<boolean>;
 }) => Promise<RzpResult<ChargeResponse>>;
 
 export type CollectResult =
@@ -113,6 +117,8 @@ export interface BeginAttemptInput {
   mode: "automatic" | "manual";
   mandateId?: string | null;
   providerTokenId?: string | null;
+  /** Exact ceiling offered during a mandate-authorisation checkout. */
+  mandateMaxPaise?: number | null;
 }
 
 export interface BeganAttempt {
@@ -146,6 +152,7 @@ export async function beginAttempt(
           amountPaise: input.amountPaise,
           mandateId: input.mandateId ?? null,
           providerTokenId: input.providerTokenId ?? null,
+          mandateMaxPaise: input.mandateMaxPaise ?? null,
         })
         // The partial unique index is on the IN-FLIGHT states, so a conflict
         // means "already collecting", not "duplicate row".
@@ -158,6 +165,43 @@ export async function beginAttempt(
   } catch (err) {
     logError("billing.begin_attempt", err, { invoiceId: input.invoiceId });
     return null;
+  }
+}
+
+/**
+ * Attach the gateway order before money is asked to move.
+ *
+ * Write-once: an accidentally repeated provider call must not replace the
+ * first reconciliation handle with a second order id.
+ */
+async function recordAttemptProviderOrder(
+  attemptId: string,
+  providerOrderId: string,
+): Promise<boolean> {
+  try {
+    return await withService(async (db) => {
+      const rows = await db
+        .update(billingPaymentAttempts)
+        .set({
+          providerOrderId,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(billingPaymentAttempts.id, attemptId),
+            eq(billingPaymentAttempts.state, "created"),
+            isNull(billingPaymentAttempts.providerOrderId),
+          ),
+        )
+        .returning({ id: billingPaymentAttempts.id });
+      return rows.length === 1;
+    });
+  } catch (err) {
+    logError("billing.record_provider_order", err, {
+      attemptId,
+      providerOrderId,
+    });
+    return false;
   }
 }
 
@@ -399,6 +443,8 @@ export async function collectInvoice(
       providerCustomerId: input.mandate?.providerCustomerId ?? null,
       storeId: input.storeId,
       description: input.description,
+      recordProviderOrderId: (providerOrderId) =>
+        recordAttemptProviderOrder(begun.attemptId, providerOrderId),
     });
   } catch (err) {
     // ★ A THROW IS AN UNKNOWN, not a failure. The request may well have reached

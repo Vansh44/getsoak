@@ -32,23 +32,7 @@ export async function countPickupsWaiting(
   locationId: string,
 ): Promise<number> {
   try {
-    const rows = await withService((db) =>
-      db
-        .select({ n: count() })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            eq(orders.fulfilmentType, "pickup"),
-            eq(orders.pickupLocationId, locationId),
-            or(
-              eq(orders.pickupStatus, "awaiting"),
-              eq(orders.pickupStatus, "ready"),
-            ),
-          ),
-        ),
-    );
-    return Number(rows[0]?.n) || 0;
+    return await readPickupsWaiting(storeId, locationId);
   } catch (err) {
     // ★ FAIL TO ZERO — never throw into the layout. This decorates a rail entry
     // that is present either way; a DB blip must cost the merchant a badge, not
@@ -62,4 +46,35 @@ export async function countPickupsWaiting(
     });
     return 0;
   }
+}
+
+/**
+ * The same count with failure preserved for live polling.
+ *
+ * The server-rendered layout intentionally degrades a failed decorative badge
+ * to zero. A live poll cannot do that: zero means "the work disappeared" and
+ * would overwrite a trustworthy last-known count. The Route Handler uses this
+ * strict form and translates a rejection to 503.
+ */
+export async function readPickupsWaiting(
+  storeId: string,
+  locationId: string,
+): Promise<number> {
+  const rows = await withService((db) =>
+    db
+      .select({ n: count() })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          eq(orders.fulfilmentType, "pickup"),
+          eq(orders.pickupLocationId, locationId),
+          or(
+            eq(orders.pickupStatus, "awaiting"),
+            eq(orders.pickupStatus, "ready"),
+          ),
+        ),
+      ),
+  );
+  return Number(rows[0]?.n) || 0;
 }

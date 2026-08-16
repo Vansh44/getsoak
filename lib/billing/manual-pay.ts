@@ -4,16 +4,15 @@ import "server-only";
  * Manual payment — paying an open invoice on session.
  *
  * Design: docs/billing-architecture.md §7. Spec §18: manual payment is a
- * FIRST-CLASS path, not a fallback bolted on. It is the only way to settle an
- * invoice when automatic collection cannot run, and today that is every renewal,
- * because the recurring endpoint is still unverified.
+ * FIRST-CLASS path, not a fallback bolted on. It is how an invoice is settled
+ * whenever automatic collection cannot or must not run.
  *
  * It is needed in five situations the spec names, and one it does not:
  *   • no mandate, or a revoked or expired one
  *   • the amount is over the ₹15,000 AFA-exempt limit (every yearly plan)
  *   • automatic collection failed and the merchant wants to fix it now
  *   • during the 48-hour grace window
- *   • ★ and while `RECURRING_CHARGE_VERIFIED` is false — which is now
+ *   • ★ while automatic collection is unavailable during an incident
  *
  * ★★ PAYING DURING GRACE RESTORES THE PLAN IMMEDIATELY. Settling the invoice and
  * leaving the cycle to the hourly worker would keep a merchant who has just paid

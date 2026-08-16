@@ -59,6 +59,14 @@ Paths with a file extension (public/ assets like `/themes/...webp`) pass
 through untouched on EVERY host — the platform/help rewrites would otherwise
 404 them.
 
+The session exchange and sign-out Route Handlers clear both the current
+`.storemink.com` session-cookie tuple and the legacy host-only tuple. Without
+that two-cookie cleanup, an older host-only `sm_session` can shadow every fresh
+shared-domain cookie because Next's cookie reader returns only the first value.
+Signup email verification also recognizes Firebase's `auth/user-not-found`
+for a still-signature-valid cookie, refreshes the browser session, and issues a
+new UID-bound OTP instead of leaving the wizard stuck behind a generic error.
+
 **★★ IT NO LONGER RESTRICTS `/dashboard/users` + `/dashboard/media` TO
 `superadmin`, and that gate was breaking Customers for every store owner.**
 It compared the SESSION COOKIE's `role` claim — but `createStore` writes
@@ -459,6 +467,10 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── pos/live/          # ★ Authenticated no-store GET transport for every
+│       │                      # background POS read (badge, queue, stock, paged
+│       │                      # catalogue). Server Actions are client-serialized,
+│       │                      # so a poll must never queue ahead of a money action.
 │       ├── webhooks/logistics/[connectionId]/ # ★ §35 authenticated carrier events;
 │       │                      # provider-neutral URL accepted by Shiprocket; duplicate and
 │       │                      # out-of-order safe, raw payload service-only
@@ -486,10 +498,10 @@ wholesip/
 │       │                      # two intervals. Auth FAILS CLOSED (it charges
 │       │                      # merchants and removes plans). A declined
 │       │                      # payment or a downgrade is 200, not an outage;
-│       │                      # only a thrown pass is 503. ⚠ While the Razorpay
-│       │                      # charge endpoint is unverified `collectionSkipped`
-│       │                      # is set — AUTOPAY is off, but pass 1 still ISSUES
-│       │                      # every invoice, payable by hand on /dashboard/plans
+│       │                      # only a thrown pass is 503. Automatic collection
+│       │                      # runs for eligible mandates when credentials exist;
+│       │                      # otherwise `collectionSkipped` is set and pass 1
+│       │                      # still ISSUES invoices payable on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
 │       │                      # activity_events 365d, email_logs 90d — windows
@@ -870,8 +882,8 @@ wholesip/
 │   │                          # Eligibility is checked BEFORE anything is
 │   │                          # written, so an over-AFA amount routes to manual
 │   │                          # rather than becoming a failed attempt. The
-│   │                          # gateway call is INJECTED, because the Razorpay
-│   │                          # subsequent-charge signature is still unverified.
+│   │                          # gateway call is INJECTED so provider behaviour
+│   │                          # remains isolated and directly testable.
 │   │                          # ★ renewal-worker.ts (server-only): three passes.
 │   │                          # COLLECT at T−4d (the X+3 rule), EVALUATE at T0,
 │   │                          # DOWNGRADE at T0+48h. ★★ A PROCESSING invoice at
@@ -1003,7 +1015,8 @@ wholesip/
 │   ├── billing_01_foundation.sql   # ★ §34 platform_billing_settings (operator GST
 │   │                          # singleton; tax OFF until a GSTIN exists) +
 │   │                          # billing_accounts + billing_mandates (one ACTIVE
-│   │                          # per store, max_amount read from the token)
+│   │                          # per store; max_amount copied from billing_09's
+│   │                          # durable authorisation attempt)
 │   ├── billing_02_subscriptions.sql # ★ §34 billing_subscriptions (OUR state
 │   │                          # machine, not Razorpay's) + billing_claim_downgrade()
 │   │                          # — ONE statement that re-checks state, deadline,
@@ -1042,6 +1055,10 @@ wholesip/
 │   │                          # invoice, partial unique) + billing_credits +
 │   │                          # billing_reconciliation_items + the additive
 │   │                          # billing_webhook_events extension
+│   ├── billing_09_attempt_mandate_ceiling.sql # ★ §34 exact token.max_amount
+│   │                          # persisted on the attempt BEFORE authorisation;
+│   │                          # copied into the mandate after verified payment,
+│   │                          # never browser-supplied or recomputed after drift
 │   ├── plans_02_basic_and_expiry.sql # ★ starter→basic rename + plan_expires_at — §15
 │   ├── ai_credits.sql         # ★ credit balances/ledger/purchases + add_ai_credits/
 │   │                          # try_spend_ai_credit RPCs (service-role only) — §16
@@ -1124,7 +1141,9 @@ wholesip/
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
-│                              # scheduled-plan constraint in both environments.
+│                              # scheduled-plan constraint in both environments;
+│                              # 0003 adds orders.pickup_prepared_at so actual
+│                              # packing is distinct from the checkout promise.
 ├── scripts/
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
@@ -1205,6 +1224,23 @@ wholesip/
      Adding a class is safe because no rule in the file is a bare element
      selector — they are all `.dash-*`, so scoping an overlay cannot restyle its
      internals by accident. Keep it that way.
+   - **★★ `100vh` IS THE WRONG UNIT ON iOS — use `dvh` for anything full-height.**
+     Safari resolves `100vh` to the LARGE viewport (the height the page would
+     have with the toolbars hidden), so with the address bar on screen the
+     element is TALLER than what is visible. `html, body { min-height }` in
+     `globals.css` had it, and the POS shell is `h-dvh` — so on an iPad the two
+     disagreed by exactly the toolbar's height and the register broke four ways
+     at once: the page became scrollable, the nav rail lost its top, the product
+     grid lost its bottom row, and the leftover strip of body below the shell
+     rendered in the near-white `--background`. One cause, four symptoms, which
+     is why it read as "the layout is broken" rather than as a height bug.
+     `min-height: 100vh` stays FIRST as the fallback, with `100dvh` after it.
+     ⚠ **Chrome on desktop cannot reproduce this** — `vh` and `dvh` are equal
+     there — so a full-height change is only really tested on a device.
+     The POS shell additionally sets `overscroll-behavior: none` so an iOS
+     rubber-band bounce cannot reveal that near-white body behind a dark
+     full-screen till. Scoped to that element, NOT html/body: globally it would
+     also disable pull-to-refresh on the storefront.
    - **⚠ `dashboard.css` IS UNLAYERED, so it beats every Tailwind utility**
      regardless of specificity (utilities live in `@layer utilities`). That is
      fine for rules that predate the utilities at a call site, but a NEW base
@@ -2225,6 +2261,32 @@ group, span}` (span = columns of the 4-wide desktop grid),
         control, but silently overwriting the credential of what may be their
         SHOPPER account elsewhere on the platform is more than this flow is
         entitled to.
+      - **★★ DELETING STAFF NO LONGER LEAVES AN ORPHAN SILENTLY.** The auth
+        cleanup was `deleteAuthUser(uid).catch(() => {})`, and that silence is
+        what produced a live Firebase account carrying a stale `role: manager`
+        claim with nothing in the database pointing at it — found in production
+        (`manager1.storemink@gmail.com`, 2026-08-16). Two consequences, neither
+        visible to anyone: the claim keeps bouncing that account out of
+        `/dashboard` (proxy.ts routes cashier/manager to `/pos`), and the
+        account blocks its own re-invitation. The failure is now LOGGED and
+        RETURNED as a `warning` the staff screen shows — a warning, not an
+        error, because the thing the operator asked for did happen.
+        - **★ THE ROW GOES FIRST, and that ordering is the security decision.**
+          `resolvePosOperator` re-reads `pos_staff` on EVERY request, so
+          deleting the row IS the revocation — an auth account alone cannot
+          sell, open a drawer or touch stock. Deleting the account first and
+          then failing the row delete is the harmful order: someone who still
+          looks active but can no longer sign in, with nothing saying why.
+        - **★ THE CLAIM IS STRIPPED WHEN THE ACCOUNT CANNOT BE.** Best-effort
+          `setUserClaims(uid, { role: null })`, so the worst outcome is an
+          orphaned login rather than one permanently locked out of every
+          dashboard it touches.
+        - **⚠ ONLY BY UID, NEVER BY EMAIL.** It is tempting to look the account
+          up by the invited address when `user_id` is null (someone deleted
+          mid-registration leaves an account the row never recorded). Don't:
+          that address may be the person's SHOPPER account, which predates the
+          invite and has orders behind it. The uid came from the staff row, so
+          it is the only id known to belong to this staff member.
       - **★★ AND A DASHBOARD ADMIN MAY NOT COMPLETE IT.** Finishing sets a
         `cashier`/`manager` claim, and `proxy.ts` sends those from `/dashboard`
         to `/pos` — so an owner who invited themselves "to try the till" would
@@ -2539,9 +2601,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
         per **store+location** (stock is per-location and a browser can be
         shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
-        the full catalog in the background via `getCatalogSnapshot` (keyset
-        paging over `products.id`, 300 products/page — pages stay stable while
-        the catalog is edited, and a product's variants can't split at a seam).
+        the full catalog in the background via the `catalog` branch of
+        `GET /api/pos/live` (it delegates to `getCatalogSnapshot`; keyset paging
+        over `products.id`, 300 products/page — pages stay stable while the
+        catalog is edited, and a product's variants can't split at a seam).
         Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
         keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
         search is a plain linear scan rather than an inverted index that would
@@ -2587,6 +2650,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         customer audience" (right: they leave holding a receipt). NOTE the
         coverage guard can't catch this class of gap — it asserts a key is
         emitted SOMEWHERE, not that every path which should emit it does.
+      - **★★ AN EXPLICIT `null` IS NOT A DEFAULT, AND IT TOOK EVERY TILL DOWN**
+        (found in prod 2026-08-16). `orders.store_credit_used` is
+        `NOT NULL DEFAULT 0`; `placePosSale` wrote
+        `creditAsked > 0 ? creditAsked : null`, and a NULL sent explicitly does
+        not fall back to a DEFAULT — it violates the constraint. So every POS
+        sale that used no store credit, which is nearly all of them, failed on
+        INSERT from the moment `147fe24` deployed. Exactly one POS order exists
+        on production, rung minutes before that deploy. Three things made it
+        expensive to find: the cashier saw only "Couldn't record the sale.
+        Please try again.", which never mentions credit and reads as transient;
+        `errMsg` logs a Drizzle error's `message`, which is only
+        "Failed query: …" with the reason on `cause` (the §15b lesson,
+        unlearned); and online checkout was fine throughout, because it writes
+        the column through a later UPDATE with a real number.
+      - **★★ THE COMPILER KNEW. A BLANKET `as` CAST SILENCED IT.**
+        `drizzle/schema.ts` declares the column `.notNull()`, so
+        `storeCreditUsed: null` should never have compiled. It did because all
+        three `orders` insert sites ended
+        `.values({ … } as typeof orders.$inferInsert)` — a cast that exists to
+        paper over TWO trigger-allocated columns (`order_no`, `order_ref`,
+        NOT NULL with no default) and in doing so switched checking off for the
+        other fifty. `OrderInsert` (exported from `drizzle/schema.ts`) is that
+        type minus those two, and every site now reads
+        `} satisfies OrderInsert as typeof orders.$inferInsert)`, so the gap is
+        exactly two columns wide. Applying it immediately surfaced two more
+        untyped values in `placeOrder`; each field therefore also accepts `SQL`,
+        matching Drizzle's real `.values()` signature — a pickup's
+        `pickup_expires_at` is `now() + make_interval(…)` so the deadline is the
+        DATABASE's clock, not the container's. That escape is visible (you have
+        to write ``sql`…` ``), which is the whole difference from a blanket cast.
       - **CANCELLING A POS SALE RESTOCKS AT ITS OWN LOCATION.**
         `updateOrderStatus` returns `orders.location_id` with the
         reserved→released claim and calls `release_stock_at` when it's set. The
@@ -2737,10 +2830,25 @@ group, span}` (span = columns of the 4-wide desktop grid),
         five screens had a back arrow to `/pos` and nothing else, in three
         different hand-rolled forms; Stock → Drawer was three taps through a
         page whose entire content was "You're signed in".
-      - **★ RAIL ON WIDE, DRAWER ON NARROW.** A hidden menu costs a tap on every
-        switch and till work is muscle memory, so above `lg` the destinations
-        stay on screen (76px rail); below it the same list is the hamburger
-        drawer, because a portrait tablet cannot spare the product grid.
+      - **★★ ONE HAMBURGER, EVERY WIDTH** (owner's call, 2026-08-16). It shipped
+        as a 76px rail above `lg` and a drawer below it, reasoning that a hidden
+        menu costs a tap on every switch and till work is muscle memory. In use
+        that traded wrong: the register is HORIZONTALLY constrained — the product
+        grid and the cart split the width — so on an iPad the rail was costing a
+        COLUMN OF PRODUCTS on the one screen a cashier spends all day in, while
+        the tap it saved was for screens visited a few times a shift. The rail is
+        gone; the drawer serves both, which also leaves ONE navigation to reason
+        about instead of two that could drift.
+      - **★ THE TOP BAR NOW OWNS THE TITLE**, at every width rather than below
+        `lg`, and carries the location plus who is signed in (which used to live
+        in the rail's footer — on a shared till that is not decoration). So
+        `PosScreen` stopped drawing its own `lg` title: it would have been a
+        second bar stacked directly under this one saying the same word, since
+        every `title` passed in IS its nav label. It keeps the SUBTITLE, the part
+        the nav cannot know, and the title survives as an `sr-only` h1 — the
+        visible one is outside that landmark, and a page with no heading is one a
+        screen-reader user cannot orient in. `PosScreen`'s header now renders
+        only when a screen passes `actions`, which none currently do.
       - **★ `lib/pos/nav.ts` IS THE REGISTRY** — pure and icon-free (icons live
         in the client component, keyed by `key`, the `lib/logs/failure-types.ts`
         split) so a server component and a test can import it. `posNavFor(role)`
@@ -2786,6 +2894,14 @@ group, span}` (span = columns of the 4-wide desktop grid),
         door is handing collections over, which IS a cashier's job.
       - **★★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON** — "To prepare"
         (`awaiting`) above "Ready to collect" (`ready`), each with its count.
+        **BOTH RENDER AT ZERO**, coloured by who is outstanding: amber for work
+        the SHOP owes, emerald for a parcel waiting on a CUSTOMER. They used to
+        hide when empty, so a queue holding only packed parcels showed one faint
+        heading and read as a flat list again — the division existed in the data
+        and vanished from the screen exactly when there was least to compare it
+        against. As permanent structure, "nothing to pack" is itself the answer.
+        (Not the badge rule in reverse: a heading is furniture you read past, a
+        badge is a number that demands action.)
         One flat list hid two opposite states behind a small badge: orders
         nobody has packed, which are work for STAFF right now, and packed
         parcels waiting on a CUSTOMER to walk in. A shop had to sort them by
@@ -2809,15 +2925,145 @@ group, span}` (span = columns of the 4-wide desktop grid),
         It is drawn by the layout, so it runs on EVERY POS page load including
         `/pos/sell`, whose whole design goal is a register that opens without
         waiting on the network — one indexed COUNT, not two queries and 100 rows
-        with their line-item counts. It **fails to zero rather than throwing**: a
-        blip must cost a badge, not the ability to serve a customer. NOT a
+        with their line-item counts. The SERVER-RENDERED layout intentionally
+        **fails to zero rather than throwing**: a blip must cost initial badge
+        decoration, not the ability to serve a customer. The LIVE route calls
+        `readPickupsWaiting`, which preserves failure as 503 so a trustworthy
+        last-known count is never overwritten with a fake zero. NOT a
         `"use server"` file — it takes a store and a location as arguments, the
         exact shape that must never be publicly callable. `pickup-count.test.ts`
         pins its predicate to `getPickupQueue`'s, because a badge that disagrees
         with the list under it is worse than no badge.
+      - **★★ AND IT IS POLLED, BECAUSE NOTHING AT THE COUNTER CREATES ONE**
+        (`lib/pos/use-poll.ts`, 30s). A collection is placed on the STOREFRONT,
+        so no action on the till makes it appear — the queue and the badge only
+        moved when a human reloaded the page, which is what a shop actually hit.
+        `/api/pos/live?need=pickups` re-resolves the operator (ids never come
+        from the client) and returns the same single indexed COUNT.
+        Four rules keep it from being a nuisance: it **only ticks while the tab
+        is VISIBLE** — a till is left open all night and background timers keep
+        running, so without that every closed shop spends the small hours making
+        requests nobody reads — and it fires once on becoming visible again;
+        `null` from a lapsed session means **keep the last number** rather than
+        flicker to zero, which reads as work vanishing; the queue's own poll is
+        **quiet** (no `useTransition`, so it never flashes the search spinner,
+        and its errors are swallowed — a toast nobody triggered on a repeating
+        timer teaches people to dismiss toasts unread); and it is **suspended
+        while the cashier is mid-action**. Disabling also ABORTS the active GET,
+        and every consumer checks its run identity before committing state;
+        clearing only the next timer is insufficient because a response already
+        in flight could otherwise land after `settle()` and put a completed row
+        back under the cashier's finger. A poll rather than a socket on purpose:
+        one COUNT that changes a few times an hour does not justify a held
+        connection per till, a reconnect story, and a server that tracks which
+        locations are watching. That is the seam to replace if it ever does.
+      - **★★ THE POLLS ARE A ROUTE HANDLER, NOT SERVER ACTIONS**
+        (`app/api/pos/live`, `lib/pos/live.ts`). They shipped as actions and that
+        was wrong: Next.js "dispatches Server Actions one at a time per client"
+        (its own docs, `02-guides/server-actions.md`) — a queue in the CLIENT
+        dispatcher — so a background refresh in flight sat IN FRONT OF the
+        cashier's next tap. Tender a sale while the badge is polling and
+        `placePosSale` waited for the poll before it was even dispatched: a
+        visible stall on a money action, caused by a refresh nobody asked for,
+        and invisible in testing because it only shows under a slow network. The
+        same docs prescribe the fix — "use a Route Handler for non-mutation
+        requests". One route with a `need` param, so the gate, the `no-store`
+        headers and the failure shape cannot drift across four copies; the
+        OPERATOR always selects the scope. It delegates to the existing actions
+        for the queue, stock and paged catalogue rather than re-querying, because
+        a second copy of the queue's predicate is how a badge ends up disagreeing
+        with its list. Those action-backed branches do NOT add an outer operator
+        resolve: React `cache()` does not memoize outside Server Component
+        rendering, so that would pay the security lookup twice. The count branch
+        owns its one explicit gate because its strict reader accepts scope ids.
+        ⚠ `/api` bypasses `proxy.ts` (its matcher excludes it), so every branch
+        must own exactly one gate.
+      - **★★ `lib/pos/use-poll.ts` IS THE ONE REFRESH MECHANISM**, used by the
+        pickup badge, the pickup queue, `/pos/inventory` and the catalog sync.
+        Stock moves for reasons that have nothing to do with the screen showing
+        it — a sale on the next till, a transfer in, a dashboard correction — so
+        the stock list was a snapshot from whenever the page last loaded, and
+        the catalog's re-sync was a bare `setInterval`. Two gates make it
+        dependable rather than merely periodic: **VISIBILITY** (a till is left
+        open all night and browsers keep background timers running) and
+        **ONLINE** (shop wifi drops; a bare interval keeps firing into a dead
+        network, each call failing silently, and the first attempt after it
+        returns is up to a full interval away). Either recovering fires a
+        **catch-up immediately**, which is when staleness is actually noticed —
+        somebody walks back to the till and expects the screen to be true now.
+        `navigator.onLine` is used only to STOP and to trigger a catch-up, never
+        to predict success. ⚠ Its two `onLine` gates are pinned by tests that
+        MOUNT offline / go visible while offline — "stops while offline" passes
+        either way, because the `offline` event clears the timer directly, so
+        without those the gate could be deleted and the suite would stay green.
+        The catalog keeps its 5-minute interval and every page now uses the GET
+        transport too — leaving its old Server Action would still occasionally
+        queue ahead of a sale. A sync is keyset-paged at 300
+        products a page, and nothing cached is authoritative (`placePosSale`
+        re-reads price and re-reserves), so staleness there is a wrong label at
+        worst, never a wrong charge or an oversell.
+      - **★★ THE CATCH-UP IS THROTTLED BY THE INTERVAL ITSELF**, and that is a
+        bug fix rather than a tuning knob. `visibilitychange` fires on EVERY tab
+        switch, window minimise and app switch, so the first version let somebody
+        flipping between two tabs kick off a full catalogue re-sync — several
+        requests over hundreds of products — on every flip. The rule: if we
+        already ran within one interval the data is exactly as fresh as the
+        schedule promises, so a catch-up adds nothing. Away longer than an
+        interval and it fires at once, which is the case that matters.
+      - **★ IT CHAINS `setTimeout`; IT IS NOT A `setInterval`.** The next run is
+        armed after the previous one SETTLES, so a slow response delays the next
+        request instead of stacking one on top of it — which is what stops a till
+        on bad wifi building a queue of overlapping polls. ⚠ Consequence for
+        tests: the re-arm happens in a microtask, so anything spanning more than
+        one tick needs `advanceTimersByTimeAsync`, not the sync form.
+      - **★★ A QUIET SHOP DOES NOT PAY WHAT A BUSY ONE DOES** (`backOff`). A
+        store taking two collections a day was making ~2,880 requests to learn
+        "still nothing" 2,878 times. A poll whose callback RETURNS `false`
+        (nothing moved) doubles its interval up to `POS_POLL_BACKOFF_MAX_MS`
+        (2 min); any change — or any catch-up — resets it to the base at once, so
+        the busy case is untouched. Opt-in, because a caller that cannot tell
+        (the catalog sync, which does not diff) would otherwise slow itself down
+        on no evidence: `undefined` counts as "changed". A failed/aborted poll
+        also returns `undefined`, never `false`, so an outage remains on the base
+        retry interval rather than being mistaken for a quiet shop. `sameQueue` /
+        `sameStock` are what answer it, and they also keep the previous array
+        IDENTITY so an unchanged poll does not re-render the list.
+      - **★ ±15% JITTER, because tills start together.** A deploy restarts every
+        one at once and a shop opens its registers within a minute of each other;
+        on a fixed interval they stay in step forever, turning steady traffic
+        into a spike against one Cloud SQL instance every interval.
+      - **★★ THE BADGE AND THE QUEUE NO LONGER BOTH ASK**
+        (`lib/pos/pickup-badge.ts`). The queue read already CONTAINS the count,
+        so `/pos/pickups` was making a second request for a fact the first one
+        carried — and worse, the two disagreed: the list dropped a row on
+        hand-over while the rail kept the old number for up to an interval. A
+        module-level store (`useSyncExternalStore`, stable snapshot identity)
+        is the ONE count: the counter, the nav poll and a newer server layout
+        all publish into it. This matters after release — keeping a second nav
+        state let the non-null queue value shadow successful poll results forever.
+        The counter CLAIMS the badge and the nav stops polling while claimed.
+        ⚠ The claim is tied to the counter's poll
+        being LIVE, not to the screen being mounted: that poll suspends while the
+        cashier is mid-action or searching, and a claim held across it would
+        freeze the badge for as long as somebody left a search box full.
+      - **★ WHAT WAS DELIBERATELY NOT OPTIMISED.** `resolvePosOperator` costs ~2
+        queries for staff (device + `pos_staff`) and ~4 for an owner, which is
+        two thirds of a badge poll's cost — and it is NOT cached across requests,
+        because re-reading `pos_staff` every time is what makes deactivating a
+        cashier immediate (§22 invariant 1). Trading that for query count would
+        be trading a security property for a number. The lever pulled instead was
+        FREQUENCY.
+      - **⚠ THE LOAD IS O(TILLS), NOT O(EVENTS)**, and stays so. At 10,000 tills
+        the quiet steady state is ~83 req/s and ~250 DB qps of "nothing
+        happened". SSE would make it O(events) but costs one HELD connection per
+        till — ~125 Cloud Run instances at the default concurrency of 80 — plus a
+        reconnect story and per-location subscription tracking. Polling is right
+        until sub-5s latency is needed, which a collection queue does not need.
+        If it ever must go further, the next step is NOT SSE but a cheap cacheable
+        watermark per location, with the expensive read only on a change.
       - `app/pos/pos-screen.tsx` is the shared chrome for every screen that is
-        not the register (title, subtitle, scroll body). **No back button**, by
-        design — the rail goes anywhere in one tap, and back-to-`/pos` was what
+        not the register (subtitle, scroll body). **No back button**, by
+        design — the hamburger goes anywhere in one tap, and back-to-`/pos` was what
         made every switch a three-tap trip. The ONE exception is the return
         detail: that is a step in a flow, not a destination. Three screens also
         stopped painting `bg-neutral-950` over the shell's `bg-[#0b0f14]`, and
@@ -3195,15 +3441,64 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `isCollectionCode` is a cheap shape check, so a scanner pointed at a
         milk carton never becomes a database lookup, and a code belonging to a
         sister branch names THAT branch rather than returning "not found".
-      - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
-        Marking ready is what tells a customer to travel, so it belongs to
-        someone who has seen the box; handing it over is a cashier's job with
-        the customer standing there, so `markCollected` stays on `sell`.
-        Tightening this was only safe because no store had pickup enabled when
-        it shipped (owner confirmed 2026-08-09) — invariant 1 is satisfied by
-        there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
-        **no test coverage at all** before this; it does now, in both
-        directions.
+      - **★★ EVERY POS ROLE MARKS READY, CASHIER INCLUDED** (`fulfil_pickup`;
+        owner's call, 2026-08-16). It was manager-and-above for a day, on the
+        reasoning that marking ready TELLS A CUSTOMER TO TRAVEL so it should be
+        someone who has seen the box. True of the promise, wrong about who
+        packs: in most shops the person at the counter IS the person picking the
+        order off the shelf, so withholding the button meant the "To prepare"
+        queue could only be worked by someone who might not be in the building.
+        It stays a NAMED capability rather than collapsing into `sell`, so a
+        future till-only or restricted role can sell without it. ⚠
+        `markReadyForPickup` had **no test coverage at all** before any of this;
+        it does now, in both directions.
+      - **★★ BUT THE READY STEP WAS SKIPPABLE, SILENTLY** (`handoverGate`,
+        `lib/pos/collection-state.ts`; found 2026-08-16). `markCollected`
+        claimed `awaiting|ready` alike and the row drew ONE green button for
+        either, so a cashier could close an order out of the "To prepare"
+        queue that nobody had packed, in a single tap. The queue's two sections
+        exist to separate work the SHOP owes from parcels waiting on a
+        CUSTOMER, and this let the first vanish without being done.
+      - **★ REFUSING OUTRIGHT WOULD HAVE BEEN THE WRONG FIX**, and it is worth
+        being precise about why, because it is the obvious move. Someone who
+        ordered online and walked in before the shop got to it is an ORDINARY
+        collection, not an error. And every current role can Mark ready, so a
+        hard gate is decorative: the same cashier can produce the identical
+        outcome in two taps.
+      - **★ SO: POSSIBLE, DELIBERATE, RECORDED.** "Mark ready" conflates two
+        acts — _the goods are packed_ (a physical fact) and _tell the customer
+        to travel_ (a promise). When the customer is already at the counter the
+        second is moot, and the person holding the box is the best witness there
+        is to the first. So a hand-over from `awaiting` needs an ACKNOWLEDGEMENT,
+        not an impossible permission distinction:
+        `needsPreparedAck` turns the server's refusal into a dialog asking the
+        one thing only the cashier can answer. It is never what a mis-tap does,
+        and the refusal lands BEFORE the money read and the claim, so nothing
+        has moved when it fires.
+      - **★ THE AUDIT TRAIL NEEDS TWO DIFFERENT CLOCKS.** `pickup_ready_at` is
+        the immutable date PROMISED at checkout; it is already populated before
+        anyone packs the order, so it cannot answer whether packing happened.
+        `pickup_prepared_at` (migration `20260816_0003`) is the ACTUAL physical
+        confirmation: Mark ready stamps it, while an acknowledged direct
+        hand-over stamps it in the SAME statement as `collected_at`. Equality
+        therefore means "collected without an earlier Mark ready" exactly, and
+        the original customer promise is preserved.
+      - **★ THE SETTINGS READ IS SKIPPED ON THE ORDINARY PATH.** A prepared
+        order is allowed whatever the policy says, so consulting it would be a
+        round trip that cannot change the outcome — the shape of thing that
+        makes a till feel slow. Pinned by a test.
+      - **★★ AND IT IS NOT A PERMISSION QUESTION.** There was briefly a
+        `fulfilment.collectUnprepared` setting whose `manager_only` value made a
+        cashier fetch someone. It is GONE, because granting `fulfil_pickup` to
+        cashiers made it bypassable: the same person could tap **Mark ready**
+        and then **Hand over** — identical outcome, two taps, no manager. A rule
+        anyone can walk around in two taps is worse than no rule, because it
+        reads as a control and is only a speed bump. What remains is the half
+        that was always doing the work: making the skip deliberate and visible.
+      - **Shopify's flow is the same two steps** — prepare → _Mark as ready for
+        pickup_ (which sends the customer notification) → _Mark as picked up_ —
+        though it puts no manager/cashier split on either.
+        ([Shopify Help Center](https://help.shopify.com/en/manual/sell-in-person/shopify-pos/order-management/local-pickup-for-online-orders))
       - **★ THE SHOPPER'S PAGES SPEAK COLLECTION**
         (`(pages)/orders/order-status.tsx` — pure helpers + tests). A pickup is
         not a delivery with a different address, and these pages used one
@@ -3769,7 +4064,8 @@ group, span}` (span = columns of the 4-wide desktop grid),
       returns, and **a timeout is indistinguishable from a success you never
       read**. So `refundOrder` inserts `order_refunds` as `pending` carrying an
       `idempotency_key` WE generated, sends that key to Razorpay as both the
-      idempotency header AND inside the refund's `notes`, and only then claims
+      endpoint-specific `X-Refund-Idempotency` header AND inside the refund's
+      `notes`, and only then claims
       `pending → completed|failed`. The `notes` copy is the load-bearing half:
       it still works if the header is ever unsupported or renamed, and it is
       what reconciliation looks the refund up by.
@@ -3831,8 +4127,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
     - **A refund is NOT a restock** (roadmap invariant 8): returned goods may be
       damaged, and a cancellation has no goods at all. `pos_12_returns.sql`
       keeps `order_returns` and `order_refunds` apart; keep them apart.
-    - **⚠ Never exercised against a live Razorpay account**, and the exact
-      idempotency header name should be re-checked against their current docs.
+    - **⚠ Never exercised against a Razorpay test account.** The implementation
+      now matches the current refund API's `X-Refund-Idempotency` contract and
+      locally enforces its minimum 10 characters plus alphanumeric / `_` / `-`
+      alphabet. The notes key remains the reconciliation backstop.
 
 27. **Cancellation — a REQUEST, then a decision** (roadmap Step 2, rebuilt
     2026-08-09). Design: `docs/roadmap.md` Step 2.
@@ -3850,6 +4148,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
       customer path under automatic approval. Claim the status conditionally →
       release stock (`lib/orders/cancel.ts`) → move the money → notify, in that
       order and for stated reasons.
+    - **★★ “DON'T RESTOCK” MEANS PHYSICAL STOCK ONLY.** Cancellation cleanup
+      always runs: store credit is reinstated and pickup holds are released even
+      when `restock` is false. The old guard skipped the whole helper, silently
+      stranding money and reservations when a merchant marked goods damaged.
     - **★ BOTH REFUND DESTINATIONS GO THROUGH `issueRefund`.** It already knows
       `store_credit` as a method, so using it for both gives an `order_refunds`
       row either way (keeping `refundDueForOrder` and `payment_status` correct),
@@ -4991,14 +5293,13 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       verified checkout and no amount lives in a provider-side plan. Two things
       the flow says out loud rather than assuming: a confirm that fails is a
       `toast.info` carrying the server's own wording (money may have moved —
-      §26's rule), and `autopay: false` is stated plainly, because a merchant who
-      assumes autopay is simply downgraded at the next cycle.
-    - **★★ `OpenInvoices` IS NOT A NICETY — IT IS THE ONLY WAY A RENEWAL GETS
-      PAID.** Automatic collection is gated behind `RECURRING_CHARGE_VERIFIED`,
-      so every invoice the worker writes is settled by hand or not at all; with
-      no surface for it, a merchant is downgraded 48 hours later for a bill they
-      never saw. It renders ABOVE everything on the page and renders NOTHING when
-      nothing is owed. A `processing` invoice shows "payment in progress" instead
+      §26's rule), and `autopay: false` is stated plainly whenever no mandate was
+      captured, because assuming otherwise becomes a downgrade next cycle.
+    - **★★ `OpenInvoices` REMAINS FIRST-CLASS.** Automatic collection handles
+      only eligible active mandates below both ceilings; no mandate, yearly/AFA,
+      a revoked mandate or an incident rollback still needs manual payment. It
+      renders ABOVE everything on the page and renders NOTHING when nothing is
+      owed. A `processing` invoice shows "payment in progress" instead
       of a Pay button — offering one would open a second payment against the same
       money, which the partial unique index would refuse anyway.
     - **★★ `startEnrolment` REFUSES A STORE ALREADY ON A PAID CYCLE.**
@@ -5133,7 +5434,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         on-session and unaffected by it, but every future cycle is debited
         automatically against a ceiling fixed when autopay was authorised. Selling
         a location that makes the next renewal undebitable is how a paying
-        merchant gets downgraded.
+        merchant gets downgraded. The comparison is against the **full next
+        invoice** — live base-plan price + every billed location + applicable
+        tax — not merely the new add-on count. An active mandate whose ceiling or
+        plan price cannot be read fails closed before checkout.
       - **★ A ZERO PART PERIOD GRANTS IT INSTEAD OF CHARGING ₹0** — at the end of
         a cycle the proration rounds to nothing and Razorpay refuses a ₹0 order.
         The merchant gains a few hours; the next renewal bills it in full.
@@ -5397,6 +5701,9 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the wrong order succeeds and then fails at runtime. `billing_06` was a
       no-op: `store_subscriptions` was empty in production, so there was nothing
       to migrate.
+      **⚠ `billing_09_attempt_mandate_ceiling.sql` MUST BE APPLIED before this
+      autopay build** on both databases. It adds the durable authorisation
+      ceiling; deploying code first makes enrolment attempt inserts fail.
     - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
       `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
       in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
@@ -5417,13 +5724,32 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         was on — the same "promise a charge that never comes" failure the
         activation email was fixed for. The existing invariant test caught the
         clamp, which is why it isn't one.
-        **⚠ STILL OFF, and one piece is genuinely missing: the checkout never
-        captures a token**, so no mandate is ever registered and `activateMandate`
-        remains dead code. `RECURRING_CHARGE_VERIFIED` gates the rest.
-    - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
-      not the system. Every path (enrolment, manual payment, plan change, location
-      purchase) confirms ON SESSION against a verified one-time checkout, and the
-      renewal worker issues invoices the merchant pays by hand. What is unverified:
+        **🧪 ENABLED FOR VERIFICATION (2026-08-16).** Enrolment creates the
+        authorisation order and reads the token back from the verified payment;
+        `RECURRING_CHARGE_VERIFIED` now exposes the subsequent-charge function
+        when credentials exist. Roll back the flag on any provider-shape mismatch.
+      - **★★ THE PROVIDER ORDER IS DURABLE BEFORE THE DEBIT.** Razorpay's
+        published recurring API does not promise a provider-side idempotency
+        header. `collectInvoice` therefore gives the provider seam a write-once
+        recorder; `chargeMandateViaRazorpay` persists `provider_order_id` before
+        calling `/payments/create/recurring`. A timeout can then be reconciled by
+        asking for payments on that order, and failure to persist the handle
+        refuses the debit. An order-creation timeout is a known non-charge
+        because the debit endpoint was never called.
+      - **★★ THE AUTHORISED CEILING IS DURABLE BEFORE CHECKOUT**
+        (`billing_09`). Razorpay's payment response supplies the token but not
+        the `token.max_amount` shown to the merchant. The exact server-computed
+        value is stored on the attempt before Checkout and copied into the
+        active mandate after signature verification. It is never browser-supplied
+        or recomputed after a price/tax change. Enrolment also requires owner
+        email AND phone before offering a mandate, because subsequent debit
+        requires both; otherwise checkout safely remains one-time and says
+        autopay is absent.
+    - **⚠ Six Razorpay facts are in rollout verification**, affecting AUTOPAY
+      ONLY — not the manual system. Every path (enrolment, manual payment, plan
+      change, location purchase) confirms ON SESSION against a verified checkout,
+      and the renewal worker still issues invoices payable by hand. What remains
+      to observe before onboarding a real merchant:
       exact subsequent-charge
       endpoint signature, recurring webhook event names, retry and
       payment-failure behaviour, e-mandate specifics, MCC restrictions. Listed

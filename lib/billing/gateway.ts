@@ -4,13 +4,12 @@ import "server-only";
  * Where the collection seam is wired to the real gateway.
  *
  * `lib/billing/collect.ts` takes a `ChargeFn` rather than importing Razorpay,
- * so everything above it is provable today. This module is the ONE place that
- * has to change when the provider call is settled — deliberately small, so
- * finishing it is obvious rather than archaeological.
+ * so everything above it is provable independently. This is the ONE
+ * provider-specific seam.
  *
- * ★★ IT RETURNS NULL TODAY, AND THAT IS THE SAFE ANSWER. Six Razorpay facts are
- * still unverified (docs/billing-architecture.md §10), the exact
- * subsequent-charge endpoint among them. The alternatives are both worse:
+ * ★★ AUTOMATIC COLLECTION IS ENABLED for the staging / empty-production
+ * verification rollout. `getRecurringCharge` still returns null when platform
+ * credentials are absent, so invoice issuance always retains its manual path.
  *
  *   • Guessing the signature would bake an unverified call into the money path
  *     and make it look tested.
@@ -19,28 +18,25 @@ import "server-only";
  *     outcome, not a decline — every one of them would sit in reconciliation
  *     forever, indistinguishable from a real outage.
  *
- * Returning null instead means the renewal worker ISSUES each invoice and does
- * not charge it: no attempt rows, no phantom state, and the cron reports plainly
- * that collection is not configured. The merchant pays on /dashboard/plans,
- * which is a complete billing path on its own.
+ * Returning null when credentials are unavailable means the renewal worker
+ * ISSUES each invoice and does not charge it: no attempt rows, no phantom state,
+ * and the merchant pays on /dashboard/plans, a complete billing path on its own.
  *
  * ★ NULL MUST NOT STOP ISSUANCE. It did until 2026-08-13 — the whole pass was
  * skipped — so no invoice was ever written, nobody was ever downgraded, every
  * subscriber got free service past their cycle end, and the manual payment
  * surface had nothing to list. Issuing a document is not taking money.
  *
- * ── To finish this ────────────────────────────────────────────────────────
+ * ── Verification rollout ─────────────────────────────────────────────────
  *  1. Confirm the subsequent-charge endpoint and request body against a
  *     Razorpay TEST-MODE account (not the docs alone — the API reference does
  *     not reproduce the signature).
  *  2. Confirm the recurring webhook event names, and the retry and
  *     payment-failure behaviour.
- *  3. Implement the call in `rzpChargeRecurring` below, sending
- *     `idempotencyKey` BOTH as the provider's idempotency header AND inside the
- *     payment's `notes` — the notes copy is what reconciliation matches on if
- *     the header is ever unsupported or renamed, exactly as
- *     `lib/payments/issue-refund.ts` does for refunds.
- *  4. Map the provider's status through `mapGatewayStatus`, which already
+ *  3. Confirm whether the recurring endpoint offers provider-side idempotency.
+ *     Its published reference does not promise a header, so today the durable
+ *     attempt, write-once provider order id and payment `notes` are the guard.
+ *  4. Confirm the provider's status vocabulary through `mapGatewayStatus`, which
  *     resolves anything unrecognised to `unknown` rather than to a failure.
  */
 
@@ -54,11 +50,12 @@ import type { ChargeFn } from "./collect";
 /**
  * Has the provider call been implemented and verified?
  *
- * ⚠ Flip this ONLY once step 1 above is done against a test-mode account. It
- * gates whether any merchant is charged automatically, so it is a deliberate
- * switch rather than something that becomes true by accident.
+ * Enabled 2026-08-16 at the owner's request for test-mode staging and an empty
+ * production account. Keep the verification runbook open while exercising the
+ * first mandate and debit; set this back to false immediately if an observed
+ * provider shape differs from the contract tests.
  */
-export const RECURRING_CHARGE_VERIFIED = false;
+export const RECURRING_CHARGE_VERIFIED = true;
 
 /**
  * The production charge function, or null when automatic collection cannot
@@ -95,9 +92,10 @@ export function chargeUnavailableReason(): string | null {
  * indistinguishable from a charge that succeeded. Every failure below is
  * therefore mapped deliberately, and the DEFAULT is `unknown` — never `failed`.
  *
- * ★ The idempotency key rides in `notes` as well as the header, because the
- * notes copy is what `lib/billing/reconcile.ts` can match on if the header is
- * ever unsupported or renamed. Same rule `issue-refund.ts` follows for refunds.
+ * ★ The attempt's idempotency key rides in `notes`. Unlike refunds, Razorpay's
+ * published recurring-payment reference does not specify an idempotency header.
+ * The write-once provider order id is persisted BEFORE the debit call so an
+ * unknown outcome can be reconciled without sending the charge again.
  *
  * ⚠ Razorpay documents that for some banks the payment stays `created` rather
  * than reaching `captured` immediately. `mapGatewayStatus` resolves that to a
@@ -144,10 +142,21 @@ export const chargeMandateViaRazorpay: ChargeFn = async (input) => {
     notes: { idempotency_key: input.idempotencyKey, kind: "subscription" },
   });
   if (!order.ok) {
-    // Carries its own outcome — a 4xx is a decision, a 5xx or timeout is not.
-    // No payment was attempted either way, but an UNKNOWN order creation could
-    // have produced an order we then never charged, which is harmless.
-    return order;
+    // No debit was attempted: the recurring endpoint needs the order id, which
+    // we did not receive. Even if Razorpay created an orphan order, money cannot
+    // move on it, so this is a known non-charge and a later attempt is safe.
+    return { ok: false, error: order.error, outcome: "rejected" };
+  }
+
+  // ★★ DURABLE BEFORE DEBIT. If the charge times out after this point,
+  // reconciliation can ask Razorpay for payments on this exact order. Charging
+  // first and trying to save the id afterwards creates an unrecoverable gap.
+  if (!(await input.recordProviderOrderId(order.data.id))) {
+    return {
+      ok: false,
+      error: "Couldn't record the Razorpay order before charging it.",
+      outcome: "rejected",
+    };
   }
 
   // ── 2. The charge ────────────────────────────────────────────────────────
@@ -205,8 +214,8 @@ async function resolveBillingContact(
         .where(and(eq(admins.storeId, storeId), eq(admins.role, "superadmin")))
         .limit(1),
     );
-    if (!row?.email) return null;
-    return { email: row.email, phone: row.phone ?? "" };
+    if (!row?.email || !row.phone) return null;
+    return { email: row.email, phone: row.phone };
   } catch {
     return null;
   }

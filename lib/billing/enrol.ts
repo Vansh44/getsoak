@@ -5,13 +5,10 @@ import "server-only";
  *
  * Design: docs/billing-architecture.md §7.
  *
- * ★★ THIS WORKS WITHOUT THE UNVERIFIED RECURRING ENDPOINT, and that is the
- * point. The first cycle is collected ON SESSION, with the merchant watching, by
- * the same one-time Razorpay checkout the AI-credit purchase already uses
- * (`rzpCreateOrder` + `verifyCheckoutSignature` — both verified and live). Only
- * the SUBSEQUENT charge needs the endpoint that is still unconfirmed, so a
- * merchant can subscribe and pay today; what they cannot yet get is automatic
- * renewal, which falls back to manual payment.
+ * ★★ THE FIRST CYCLE IS ALWAYS ON SESSION, with the merchant watching. When the
+ * rollout gate, mandate ceiling and billing-contact checks pass, the same
+ * verified payment also registers the mandate used by later automatic renewal;
+ * otherwise it stays an ordinary one-time checkout and renewal remains manual.
  *
  * ★★ THE PLAN IS NOT GRANTED UNTIL THE PAYMENT IS CAPTURED. There is no grace on
  * the first cycle — grace exists for RENEWALS, where the merchant has already
@@ -264,11 +261,22 @@ export async function startEnrolment(input: {
     return { ok: false, error: "Couldn't work out what's due." };
   }
 
+  const mandateMax = mandateSizePaise({
+    planPaise: price.planPaise,
+    taxInclusive: tax.inclusive,
+  });
+
   const attempt = await beginAttempt({
     invoiceId: invoice.id,
     storeId: input.storeId,
     amountPaise: amountDue,
     mode: "manual",
+    // Durable before checkout. Confirmation copies this exact value into the
+    // mandate rather than trusting the browser or recomputing after a reprice.
+    mandateMaxPaise:
+      RECURRING_CHARGE_VERIFIED && mandateFitsGateway(mandateMax)
+        ? mandateMax
+        : null,
   });
 
   // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
@@ -291,10 +299,7 @@ export async function startEnrolment(input: {
           providerOrderId: resumable.providerOrderId,
           keyId: creds.keyId,
           amountPaise: resumable.amountPaise,
-          suggestedMandateMaxPaise: mandateSizePaise({
-            planPaise: price.planPaise,
-            taxInclusive: tax.inclusive,
-          }),
+          suggestedMandateMaxPaise: resumable.mandateMaxPaise ?? mandateMax,
           // ★ A resumed order was created with whatever terms it had; the
           // customer is already baked into it at the gateway. Re-attaching one
           // here would be a second, different answer for the same order.
@@ -309,11 +314,6 @@ export async function startEnrolment(input: {
       error: "A payment is already in progress. Give it a moment.",
     };
   }
-
-  const mandateMax = mandateSizePaise({
-    planPaise: price.planPaise,
-    taxInclusive: tax.inclusive,
-  });
 
   // ★★ AUTOPAY IS OFFERED ONLY WHEN WE COULD ACTUALLY COLLECT.
   //
@@ -424,6 +424,7 @@ async function resumableAttempt(
   id: string;
   providerOrderId: string;
   amountPaise: number;
+  mandateMaxPaise: number | null;
 } | null> {
   try {
     return await withService(async (db) => {
@@ -432,6 +433,7 @@ async function resumableAttempt(
           id: billingPaymentAttempts.id,
           providerOrderId: billingPaymentAttempts.providerOrderId,
           amountPaise: billingPaymentAttempts.amountPaise,
+          mandateMaxPaise: billingPaymentAttempts.mandateMaxPaise,
         })
         .from(billingPaymentAttempts)
         .where(
@@ -450,6 +452,7 @@ async function resumableAttempt(
         id: row.id,
         providerOrderId: row.providerOrderId,
         amountPaise: row.amountPaise,
+        mandateMaxPaise: row.mandateMaxPaise,
       };
     });
   } catch (err) {
@@ -560,6 +563,7 @@ export async function confirmEnrolment(input: {
     id: string;
     state: string;
     providerOrderId: string | null;
+    mandateMaxPaise: number | null;
   } | null = null;
   try {
     attempt = await withService(async (db) => {
@@ -568,6 +572,7 @@ export async function confirmEnrolment(input: {
           id: billingPaymentAttempts.id,
           state: billingPaymentAttempts.state,
           providerOrderId: billingPaymentAttempts.providerOrderId,
+          mandateMaxPaise: billingPaymentAttempts.mandateMaxPaise,
         })
         .from(billingPaymentAttempts)
         .where(
@@ -638,9 +643,19 @@ export async function confirmEnrolment(input: {
   // `input.mandate` is still honoured when passed (it is what the tests drive,
   // and it keeps the older call shape working), but nothing in the product
   // supplies it any more.
-  const observed =
+  const observedFromGateway =
     input.mandate ??
     (await readMandateFromPayment(creds, input.providerPaymentId));
+  // The browser never names the ceiling, and a catalog reprice between start
+  // and confirm must not change what was authorised. The attempt was written
+  // before checkout with the exact token.max_amount sent to Razorpay.
+  const observed =
+    observedFromGateway && attempt.mandateMaxPaise
+      ? {
+          ...observedFromGateway,
+          maxAmountPaise: attempt.mandateMaxPaise,
+        }
+      : null;
   const mandateId = observed
     ? await activateMandate({ storeId: input.storeId, ...observed, now })
     : null;
@@ -788,10 +803,14 @@ async function ensureRzpCustomer(
   storeId: string,
 ): Promise<string | null> {
   const to = await resolveBillingEmail(storeId).catch(() => null);
-  if (!to?.email) return null;
+  // The subsequent recurring endpoint requires BOTH. Offering a mandate with
+  // email only would make enrolment say autopay is ready and every renewal fail
+  // locally before Razorpay is called.
+  if (!to?.email || !to.phone) return null;
   const res = await rzpCreateCustomer(creds, {
     name: to.storeName,
     email: to.email,
+    contact: to.phone,
   });
   if (!res.ok) {
     logError("billing.enrol.customer", new Error(res.error), { storeId });

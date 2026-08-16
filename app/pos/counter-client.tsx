@@ -26,11 +26,12 @@
 // ★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON — see the split below.
 //
 // ★ THE ROW OFFERS WHAT THE ORDER CAN DO, AND WHAT THIS OPERATOR MAY DO. Both
-// halves matter. "Mark ready" is `fulfil_pickup` (manager and above: it is the
-// step that tells a customer to travel), handing over is `sell`, taking a
-// return is `refund` — every one of them re-checked in the action. Hiding what
-// would be refused is not the security boundary, it is not making someone fail
-// in front of a customer.
+// halves matter. "Mark ready" is `fulfil_pickup` and handing over is `sell` —
+// every POS role holds both, so in practice the row's buttons follow the ORDER's
+// state — while taking a return is `refund`, which a cashier does not have.
+// Every one of them is re-checked in the action. Hiding what would be refused is
+// not the security boundary, it is not making someone fail in front of a
+// customer.
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -59,6 +60,9 @@ import {
 import type { PosTender } from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { PosScreen } from "./pos-screen";
+import { usePoll } from "@/lib/pos/use-poll";
+import { fetchPickupQueue } from "@/lib/pos/live";
+import { claimPickupBadge, publishPickupCount } from "@/lib/pos/pickup-badge";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -126,7 +130,8 @@ export function CounterClient({
   /** Taking a return is a manager capability — a cashier hands collections
    *  over and reprints, but does not give money back. */
   canRefund: boolean;
-  /** Marking a box packed and ready. Manager and above. */
+  /** Marking a box packed and ready. Every POS role holds this today; the prop
+   *  stays so a future restricted role does not silently get the button. */
   canFulfilPickup: boolean;
 }) {
   const [queue, setQueue] = useState(initial);
@@ -134,7 +139,15 @@ export function CounterClient({
   const [results, setResults] = useState<CounterRow[] | null>(null);
   const [lastSearched, setLastSearched] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [tendering, setTendering] = useState<PickupOrder | null>(null);
+  // `acked` rides along so the attestation survives the tender pad — otherwise
+  // confirming an unprepared order, then paying, would be refused by the server
+  // after the cashier had already keyed the cash in.
+  const [tendering, setTendering] = useState<{
+    order: PickupOrder;
+    acked: boolean;
+  } | null>(null);
+  const [confirmUnprepared, setConfirmUnprepared] =
+    useState<PickupOrder | null>(null);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
 
@@ -155,6 +168,64 @@ export function CounterClient({
       else setQueue(res.orders);
     });
   }, []);
+
+  // ── The queue, kept live ──────────────────────────────────────────────────
+  // A collection is created by a SHOPPER, so nothing on this screen makes one
+  // appear — without this the counter only learns about an order when somebody
+  // reloads the page, which is what a shop actually hit.
+  //
+  // ★ QUIET, AND NOT A TRANSITION. `start()` sets `pending`, which draws the
+  // spinner in the search box — a background re-read that flashes "searching…"
+  // every thirty seconds is worse than no refresh, because it looks like the
+  // till is doing something the cashier didn't ask for. Errors are swallowed
+  // for the same reason: a toast nobody triggered, on a repeating timer, is how
+  // a shop learns to dismiss toasts without reading them. The next explicit
+  // action still surfaces the failure.
+  //
+  // ★ SUSPENDED WHILE THE CASHIER IS MID-ACTION. `settle()` removes a row
+  // optimistically, so a poll landing between the tap and the server's answer
+  // would put it back — under the finger of someone who has just handed the
+  // goods over. Searching pauses it too: the queue isn't on screen, so re-reading
+  // it is a request for nothing.
+  const idle =
+    !busy && !tendering && !confirmUnprepared && !searching && !pending;
+
+  // ★ THE QUEUE ALREADY CARRIES THE COUNT, so publishing it stops the rail
+  // making a second request for the same fact — and, more importantly, keeps
+  // the badge exactly in step with the list. Before this the row vanished on
+  // hand-over while the badge kept the old number for up to an interval.
+  //
+  // The claim is tied to `idle`, not to being mounted: this poll suspends while
+  // the cashier is mid-action or searching, and a claim held across that would
+  // freeze the badge for as long as somebody left a search box full. Released,
+  // the nav picks polling straight back up.
+  useEffect(() => {
+    if (!idle) return;
+    return claimPickupBadge();
+  }, [idle]);
+
+  useEffect(() => {
+    // Includes the server-rendered first paint, so the badge agrees with the
+    // list before any poll has run.
+    if (!searching) publishPickupCount(queue.length);
+  }, [queue.length, searching]);
+
+  usePoll(
+    useCallback(async (run) => {
+      const res = await fetchPickupQueue(run.signal);
+      // Failure is not "unchanged". Returning undefined keeps retries at the
+      // base interval instead of backing an outage off to two minutes.
+      if (!res || res.error || !run.isCurrent()) return undefined;
+      let moved = false;
+      setQueue((cur) => {
+        if (!run.isCurrent()) return cur;
+        moved = !sameQueue(cur, res.orders);
+        return moved ? res.orders : cur;
+      });
+      return moved;
+    }, []),
+    { enabled: idle, backOff: true },
+  );
 
   /**
    * One query, resolved against everything this operator may look at.
@@ -246,19 +317,35 @@ export function CounterClient({
     settle(id, message);
   };
 
-  /** Nothing owed hands over straight away; money due opens the tender pad. */
-  const handOver = (o: PickupOrder) => {
-    if (o.amountDue > 0) {
-      setTendering(o);
+  /**
+   * Nothing owed hands over straight away; money due opens the tender pad.
+   *
+   * An order nobody marked ready is confirmed first (`handoverGate`): the shop
+   * may genuinely be packing it while the customer waits, so this is a question,
+   * not a refusal — but it must never be the thing a mis-tap does.
+   */
+  const handOver = (o: PickupOrder, acked = false) => {
+    if (!acked && o.status !== "ready") {
+      setConfirmUnprepared(o);
       return;
     }
-    void act(o.id, markCollected, "Handed over.");
+    if (o.amountDue > 0) {
+      setTendering({ order: o, acked });
+      return;
+    }
+    void act(
+      o.id,
+      (id) => markCollected(id, [], { acknowledgeUnprepared: acked }),
+      "Handed over.",
+    );
   };
 
   const takePayment = async (tenders: PosTender[]) => {
-    const o = tendering;
-    if (!o) return {};
-    const res = await markCollected(o.id, tenders);
+    if (!tendering) return {};
+    const { order: o, acked } = tendering;
+    const res = await markCollected(o.id, tenders, {
+      acknowledgeUnprepared: acked,
+    });
     if (res.error) {
       // The panel stays open — the customer is standing there and the cashier
       // needs to see why, and to retry, without re-entering the tender. But the
@@ -407,17 +494,27 @@ export function CounterClient({
                 type="button"
                 disabled={busy === o.id}
                 onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
-                className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
               >
                 <PackageCheck className="h-4 w-4" />
                 Mark ready
               </button>
             )}
+            {/* ★ WHICH ONE IS LOUD FOLLOWS WHICH ONE IS EXPECTED. On an
+              unprepared order the next step is packing it, so hand-over drops
+              to secondary while "Mark ready" takes the green. Every POS role
+              holds `fulfil_pickup` now, but the check stays: a future role that
+              may sell without it would otherwise be left with its one available
+              action greyed into the background. */}
             <button
               type="button"
               disabled={busy === o.id}
               onClick={() => handOver(o)}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 ${
+                o.status === "awaiting" && canFulfilPickup
+                  ? "bg-white/10 font-medium hover:bg-white/20"
+                  : "bg-emerald-600 font-semibold hover:bg-emerald-500"
+              }`}
             >
               {busy === o.id ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -586,19 +683,29 @@ export function CounterClient({
         </Section>
       ) : (
         <>
+          {/* ★★ BOTH SEGMENTS ALWAYS RENDER, even at zero. They used to hide
+              when empty, so a queue holding only packed parcels showed ONE faint
+              heading and read as a flat list again — the division existed in the
+              data and disappeared from the screen exactly when there was least
+              to compare it against. As permanent structure, "nothing to pack" is
+              itself the answer to the question the shop is asking. (Rendering a
+              zero here is not the badge rule in reverse: a heading is furniture
+              you read past, a badge is a number that demands action.) */}
           <Section
             title="To prepare"
             count={toPrepare.length}
-            show={toPrepare.length > 0}
-            hint="Packed and ready? Mark it, and the customer is told to come in."
+            tone="work"
+            hint="Yours to pack. Mark one ready and the customer is told to come in."
+            empty="Nothing waiting to be packed."
           >
             {toPrepare.map(renderPickup)}
           </Section>
           <Section
             title="Ready to collect"
             count={readyToCollect.length}
-            show={readyToCollect.length > 0}
-            hint="On the shelf, waiting for the customer."
+            tone="waiting"
+            hint="On the shelf, waiting for the customer to walk in."
+            empty="Nothing on the shelf."
           >
             {readyToCollect.map(renderPickup)}
           </Section>
@@ -620,15 +727,70 @@ export function CounterClient({
 
       {tendering && (
         <TenderPanel
-          total={tendering.amountDue}
-          title={`Collect ${tendering.orderRef}`}
+          total={tendering.order.amountDue}
+          title={`Collect ${tendering.order.orderRef}`}
           confirmLabel="Take payment & hand over"
           onCancel={() => setTendering(null)}
           onComplete={takePayment}
         />
       )}
+
+      {/* ★ A QUESTION, NOT A WARNING. The shop may well be packing this while
+        the customer waits, so the cashier is asked the one thing only they can
+        answer — is the box actually in your hands — rather than being told off.
+        It exists so that closing an unprepared order is never what a mis-tap
+        does. */}
+      {confirmUnprepared && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 p-5 ring-1 ring-white/10">
+            <h2 className="text-lg font-semibold">Not marked ready yet</h2>
+            <p className="mt-2 text-sm text-white/65">
+              Nobody has checked {confirmUnprepared.orderRef} off as packed. Do
+              you have the goods to hand over now?
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmUnprepared(null)}
+                className="flex-1 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
+              >
+                Not yet
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const o = confirmUnprepared;
+                  setConfirmUnprepared(null);
+                  handOver(o, true);
+                }}
+                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500"
+              >
+                Yes, hand over
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </PosScreen>
   );
+}
+
+/**
+ * Did the queue actually change?
+ *
+ * ★ IT DECIDES TWO THINGS. It keeps the previous array IDENTITY when nothing
+ * moved, so a poll every thirty seconds does not re-render the list (and reset
+ * anything keyed off it) for no reason — and it tells `usePoll` whether to back
+ * off, which is what stops a quiet shop paying a busy shop\'s request rate.
+ *
+ * Id + status is enough: those are the only fields a row\'s CONTROLS depend on.
+ * Money and expiry are rendered but do not change without one of them changing
+ * too, and comparing every field would make this a deep-equality helper nobody
+ * can reason about.
+ */
+function sameQueue(a: PickupOrder[], b: PickupOrder[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((o, i) => o.id === b[i].id && o.status === b[i].status);
 }
 
 function rowId(row: CounterRow): string {
@@ -641,30 +803,80 @@ function rowId(row: CounterRow): string {
  *  must draw NOTHING — not a heading over blank space — and putting that rule
  *  here means each of the four call sites cannot forget it. The count is in the
  *  heading because "To prepare 3" is the whole answer a shop opens this for. */
+/**
+ * ★ THE TWO SEGMENTS ARE COLOURED BY WHO IS BEING WAITED ON, not by severity.
+ * Amber = the SHOP owes something; emerald = the shop has done its part and the
+ * CUSTOMER is the one outstanding. That is the whole distinction the split
+ * exists to make, so it reads before the words do. Neutral is for the
+ * exceptional sections (Other, Returns, Search) which are not part of the pair
+ * and should not compete with it.
+ */
+const TONES = {
+  work: {
+    bar: "bg-amber-400",
+    title: "text-amber-200/90",
+    pill: "bg-amber-400/20 text-amber-200",
+  },
+  waiting: {
+    bar: "bg-emerald-400",
+    title: "text-emerald-200/90",
+    pill: "bg-emerald-400/20 text-emerald-200",
+  },
+  neutral: {
+    bar: "bg-white/20",
+    title: "text-white/40",
+    pill: "bg-white/10 text-white/60",
+  },
+} as const;
+
 function Section({
   title,
   count,
-  show,
+  show = true,
+  tone = "neutral",
   hint,
+  empty,
   children,
 }: {
   title: string;
   count: number;
-  show: boolean;
+  /** Omit for the two pickup segments: they are permanent structure. */
+  show?: boolean;
+  tone?: keyof typeof TONES;
   hint?: string;
+  /** What to say when the section is empty. Required for a section that renders
+   *  at zero, or it would be a heading over nothing. */
+  empty?: string;
   children: React.ReactNode;
 }) {
   if (!show) return null;
+  const t = TONES[tone];
   return (
-    <section className="mb-6 last:mb-0">
-      <h2 className="mb-1 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wide text-white/35">
-        {title}
-        <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px] tabular-nums text-white/60">
-          {count}
-        </span>
-      </h2>
-      {hint && <p className="mb-2 text-xs text-white/30">{hint}</p>}
-      <ul className="space-y-3">{children}</ul>
+    <section className="mb-7 last:mb-0">
+      <div className="mb-2 flex items-center gap-2.5">
+        {/* A short coloured rule, not a full divider: it ties the heading to the
+            rows under it without drawing a line across a screen that already has
+            plenty. */}
+        <span className={`h-4 w-1 shrink-0 rounded-full ${t.bar}`} />
+        <h2
+          className={`flex items-center gap-2 text-sm font-semibold tracking-wide ${t.title}`}
+        >
+          {title}
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${t.pill}`}
+          >
+            {count}
+          </span>
+        </h2>
+      </div>
+      {hint && count > 0 && (
+        <p className="mb-2 pl-3.5 text-xs text-white/35">{hint}</p>
+      )}
+      {count === 0 && empty ? (
+        <p className="pl-3.5 text-sm text-white/25">{empty}</p>
+      ) : (
+        <ul className="space-y-3 pl-3.5">{children}</ul>
+      )}
     </section>
   );
 }

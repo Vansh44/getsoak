@@ -2,21 +2,31 @@
 
 // The register's one navigation, mounted once in app/pos/layout.tsx.
 //
-// ★ IT IS THE SHELL, NOT A WIDGET — it takes `children`. The rail and the
-// small-screen top bar sit at different points in the tree (a column beside the
-// content, and a row above it), so a component that rendered only one of them
-// would leave each screen to place the other. That is per-page opt-in, which is
-// exactly how the idle lock ended up missing from five of seven screens.
+// ★ IT IS THE SHELL, NOT A WIDGET — it takes `children`. The top bar and the
+// drawer sit at different points in the tree, so a component that rendered only
+// one of them would leave each screen to place the other. That is per-page
+// opt-in, which is exactly how the idle lock ended up missing from five of seven
+// screens.
 //
-// ★ RAIL ON WIDE, DRAWER ON NARROW. A hidden menu costs a tap on every switch,
-// and till work is muscle memory — so where there is room the destinations stay
-// on screen. Below `lg` the same list becomes the hamburger drawer: a portrait
-// tablet cannot spare 76px of the product grid.
+// ★ ONE HAMBURGER, EVERY WIDTH (owner's call, 2026-08-16). This shipped as a
+// 76px rail above `lg` and a drawer below it, on the reasoning that a hidden
+// menu costs a tap on every switch and till work is muscle memory. In use that
+// traded wrong: the register is HORIZONTALLY constrained — the product grid and
+// the cart split the width, and on an iPad the rail was costing a column of
+// products on the one screen a cashier spends all day in — while the tap it
+// saved was for screens visited a few times a shift. So the rail is gone and
+// the drawer serves both, which also means ONE navigation to reason about
+// rather than two that could drift.
+//
+// ★ THE TOP BAR NOW OWNS THE TITLE, at every width rather than below `lg`.
+// PosScreen used to draw its own on `lg`, which would have been a second bar
+// stacked under this one — and its title was the nav label in every case
+// anyway. It keeps the subtitle, which is the part this cannot know.
 //
 // The destinations and their gating come from lib/pos/nav.ts. Nothing here
 // decides who may go where; this file only draws it.
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -40,6 +50,9 @@ import {
   type PosNavKey,
 } from "@/lib/pos/nav";
 import type { PosActorRole } from "@/lib/pos/permissions";
+import { usePoll } from "@/lib/pos/use-poll";
+import { fetchPickupCount } from "@/lib/pos/live";
+import { publishPickupCount, usePickupBadge } from "@/lib/pos/pickup-badge";
 
 /** Icons live here, not in the registry, so lib/pos/nav.ts stays free of a
  *  client dependency and can be imported by a server component or a test. */
@@ -90,6 +103,43 @@ export function PosNav({
   const active = activePosNavKey(pathname);
   const [pending, start] = useTransition();
 
+  // ── The badge, kept live ──────────────────────────────────────────────────
+  // A collection arrives from the storefront, so nothing the cashier does makes
+  // it appear. This is mounted in the layout, so the count follows them onto
+  // /pos/sell — the screen they are on when one lands.
+  //
+  // A screen that reads the queue publishes the count it already has, and says
+  // so — see lib/pos/pickup-badge.ts. While one is, this stops asking for a fact
+  // it would be fetching twice, and the badge tracks the list exactly instead of
+  // lagging it by up to an interval.
+  const shared = usePickupBadge();
+  const waiting = shared.count ?? ordersWaiting;
+
+  // A navigation can re-render the layout with a newer server count. Publish it
+  // into the same store the queue and nav poll use; two competing state slots
+  // are what let a released queue value permanently shadow later poll results.
+  useEffect(() => publishPickupCount(ordersWaiting), [ordersWaiting]);
+
+  usePoll(
+    useCallback(
+      async (run) => {
+        const res = await fetchPickupCount(run.signal);
+        // null = we could not tell (lapsed session, blip, offline). Keeping the
+        // last known number beats flickering to zero, which reads as work
+        // vanishing off a queue.
+        if (!res || !run.isCurrent()) return undefined;
+        const moved = shared.count !== res.count;
+        publishPickupCount(res.count);
+        return moved;
+      },
+      [shared.count],
+    ),
+    // ★ Backs off while the count is unchanged: a shop taking two collections a
+    // day should not pay what a busy one does. Any change — or coming back to
+    // the tab — resets it to the base interval at once.
+    { enabled: !shared.owned, backOff: true },
+  );
+
   // ★ THE DRAWER IS DERIVED FROM THE ROUTE IT WAS OPENED ON, not a boolean
   // synced back to the route by an effect. Navigating away therefore closes it
   // on the SAME render — including via the browser's back button, which a
@@ -123,88 +173,21 @@ export function PosNav({
     });
 
   const activeItem = items.find((i) => i.key === active);
-  const badgeFor = (key: PosNavKey) => (key === "pickups" ? ordersWaiting : 0);
+  const badgeFor = (key: PosNavKey) => (key === "pickups" ? waiting : 0);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white">
-      {/* ── The rail (lg and up) ─────────────────────────────────────────── */}
-      <nav
-        aria-label="Register"
-        className="hidden w-[76px] shrink-0 flex-col border-r border-white/10 bg-black/30 lg:flex"
-      >
-        <div className="flex h-14 shrink-0 items-center justify-center border-b border-white/10">
-          <ScanLine className="h-5 w-5" strokeWidth={2} />
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {items.map((item) => {
-            const Icon = ICONS[item.key];
-            const isActive = item.key === active;
-            const badge = badgeFor(item.key);
-            return (
-              <Link
-                key={item.key}
-                href={item.href}
-                aria-current={isActive ? "page" : undefined}
-                title={item.hint}
-                className={`relative flex flex-col items-center gap-1 rounded-xl px-1 py-2.5 text-[11px] font-medium transition-colors ${
-                  isActive
-                    ? "bg-white/15 text-white"
-                    : "text-white/55 hover:bg-white/10 hover:text-white"
-                }`}
-              >
-                <Icon className="h-[22px] w-[22px]" strokeWidth={2} />
-                {item.label}
-                {badge > 0 && (
-                  <span className="absolute right-1.5 top-1.5 min-w-[18px] rounded-full bg-emerald-500 px-1 text-center text-[10px] font-bold leading-[18px] text-black">
-                    {badge > 99 ? "99+" : badge}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </div>
-
-        <div className="shrink-0 border-t border-white/10 p-2 text-center">
-          <div
-            title={locationName}
-            className="mb-1 truncate text-[10px] leading-tight text-white/40"
-          >
-            {locationName}
-          </div>
-          <div
-            title={`${operatorName} · ${ROLE_LABEL[role] ?? role}`}
-            className="mb-2 truncate text-[11px] font-medium leading-tight text-white/70"
-          >
-            {operatorName}
-          </div>
-          {source === "operator" ? (
-            <button
-              type="button"
-              onClick={lock}
-              disabled={pending}
-              title="Lock the register"
-              className="flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2 text-[11px] font-medium text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
-            >
-              <LogOut className="h-[18px] w-[18px]" strokeWidth={2} />
-              Lock
-            </button>
-          ) : (
-            <Link
-              href="/dashboard"
-              title="Back to the dashboard"
-              className="flex w-full flex-col items-center gap-1 rounded-xl px-1 py-2 text-[11px] font-medium text-white/55 transition-colors hover:bg-white/10 hover:text-white"
-            >
-              <LayoutDashboard className="h-[18px] w-[18px]" strokeWidth={2} />
-              Exit
-            </Link>
-          )}
-        </div>
-      </nav>
-
-      {/* ── Content, with the small-screen top bar above it ───────────────── */}
+    <div
+      className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white"
+      // ★ Stops iOS rubber-band overscroll from revealing the page behind the
+      // register. The body is near-white (globals.css), so a bounce on a till
+      // flashes a white band under a dark full-screen app. Scoped to this
+      // element rather than html/body: globally it would also kill
+      // pull-to-refresh on the storefront, which shoppers do use.
+      style={{ overscrollBehavior: "none" }}
+    >
+      {/* ── Content, under the one top bar ───────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-white/10 px-2 lg:hidden">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-white/10 px-2">
           <button
             type="button"
             onClick={() => setOpen(true)}
@@ -213,18 +196,34 @@ export function PosNav({
             className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white/80 transition-colors hover:bg-white/10 hover:text-white"
           >
             <Menu className="h-6 w-6" strokeWidth={2} />
-            {/* The badge rides the hamburger too: with the list collapsed, a
+            {/* ★ THE COUNT, NOT A DOT. With the rail gone this is the only place
+                the number appears, and "some collections are waiting" is a much
+                weaker prompt than "3 are". It sits on the closed menu because a
                 queue nobody can see is a queue nobody works. */}
-            {ordersWaiting > 0 && (
-              <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-emerald-500" />
+            {waiting > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 min-w-[18px] rounded-full bg-emerald-500 px-1 text-center text-[10px] font-bold leading-[18px] text-black">
+                {waiting > 99 ? "99+" : waiting}
+              </span>
             )}
           </button>
           <span className="truncate text-base font-semibold">
             {activeItem?.label ?? "Register"}
           </span>
-          <span className="ml-auto flex min-w-0 items-center gap-1.5 truncate pr-1 text-xs text-white/50">
-            <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-            <span className="truncate">{locationName}</span>
+          <span className="ml-auto flex min-w-0 items-center gap-3 truncate pr-1 text-xs text-white/50">
+            <span className="flex min-w-0 items-center gap-1.5 truncate">
+              <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+              <span className="truncate">{locationName}</span>
+            </span>
+            {/* Who is signed in used to live in the rail's footer. It is not
+                decoration on a shared till: a cashier who walks up to a machine
+                someone else left unlocked should be able to see that at a
+                glance. Dropped on a phone, where the width is not there. */}
+            <span
+              className="hidden min-w-0 truncate border-l border-white/10 pl-3 sm:block"
+              title={`${operatorName} · ${ROLE_LABEL[role] ?? role}`}
+            >
+              {operatorName}
+            </span>
           </span>
         </header>
 
@@ -233,9 +232,9 @@ export function PosNav({
         </div>
       </div>
 
-      {/* ── The drawer (below lg) ─────────────────────────────────────────── */}
+      {/* ── The drawer ───────────────────────────────────────────────────── */}
       {open && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="fixed inset-0 z-50">
           <button
             type="button"
             aria-label="Close the menu"

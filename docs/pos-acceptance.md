@@ -33,17 +33,19 @@ home, pricing, login, and signup deliberately navigate to `storemink.com`.
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                                             | Why                                                                                               |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                                   |
-| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                                   |
-| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
-| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                          |
-| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
+| Prerequisite                                                                                                                                         | Why                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10`, and `20260816_0003_pos_pickup_prepared_at` as `postgres` | Column/function drift otherwise                                                                   |
+| Store on the **Pro** plan                                                                                                                            | POS and Locations are Pro-gated                                                                   |
+| `POS_SESSION_SECRET` set                                                                                                                             | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
+| `RESEND_*` configured                                                                                                                                | Staff invitations and pickup emails go nowhere otherwise                                          |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                                                                       | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
+| `billing_09_attempt_mandate_ceiling.sql` applied before the autopay build                                                                            | Confirmation otherwise cannot retain the exact ceiling the merchant authorised                    |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
-are applied. `locations_10` is pending a `postgres` migration run; the three
-local theme-demo rows were repaired explicitly for smoke testing only.
+are applied. `locations_10` and `20260816_0003_pos_pickup_prepared_at` are
+pending a `postgres` migration run; the three local theme-demo rows were
+repaired explicitly for smoke testing only.
 (`locations_07` added merchant postcode rules and `locations_08` removed them
 again; both ran.)
 
@@ -86,10 +88,10 @@ disabled button — the only item on the roadmap actively refusing money.
 **PS-1.6 ★ — Buying charges now and lifts the cap in the same breath**
 Press it and confirm.
 **Expect:** the toast says you'll be charged the difference for the rest of the
-cycle; the card reads "2 of 3"; **Add location** is enabled; the Razorpay
-subscription moves to a plan at ₹5,000 + ₹1,000. Create the third location — it
-saves. A merchant charged for a location the cap still refuses is the failure
-this whole step exists to avoid.
+cycle; the card reads "2 of 3"; **Add location** is enabled; and the next
+StoreMink renewal invoice includes ₹5,000 + ₹1,000 (plus any applicable tax).
+Create the third location — it saves. A merchant charged for a location the cap
+still refuses is the failure this whole step exists to avoid.
 
 **PS-1.7 ★ — Releasing waits for the cycle end**
 With 3 locations paid for and only 2 in use, press **Release 1 unused**.
@@ -106,7 +108,7 @@ card.
 
 **PS-1.9 ★★ — A plan change keeps billing for the shops they keep**
 On a store paying for 1 extra location, switch monthly → yearly.
-**Expect:** the new subscription amount is ₹50,000 + ₹10,000, not ₹50,000. The
+**Expect:** the next yearly invoice is ₹50,000 + ₹10,000, not ₹50,000. The
 location is priced at the YEARLY rate. **Watch for:** dropping to the bare plan
 price while the merchant keeps every shop — a revenue leak invisible from both
 sides, and the reason `changePlan` threads the count through.
@@ -121,6 +123,23 @@ Call `createLocation` directly while at the allowance.
 **Expect:** refused. A count the client could name would be a free location
 (invariant 5 — a disabled control is not a permission).
 
+**PS-1.16 ★★ — A location must fit the full next autopay invoice**
+Use a Pro monthly store whose active mandate ceiling is above the location
+add-ons alone but below **base plan + all extra locations + GST**. Try to buy the
+location.
+**Expect:** refused before Razorpay checkout with the autopay-limit message. Now
+remove `max_amount_paise` from that active mandate and retry: also refused. A
+missing ceiling cannot fail open because the part-period payment could succeed
+today while the next automatic renewal is impossible.
+
+**PS-1.17 ★★ — Autopay needs a chargeable billing contact**
+Subscribe once with an owner email but no owner phone, then again after adding a
+phone.
+**Expect:** the first checkout is an ordinary one-time payment and activation
+plainly says autopay was not set up. The second offers the mandate and records
+its exact authorised ceiling. A phone-less mandate would enrol successfully but
+fail every subsequent debit before reaching Razorpay.
+
 **PS-1.13 ★ — The price comes from the operator console, not the code**
 As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There
 is an **Extra POS location** row with Charged/month and Charged/year (the "Was"
@@ -132,10 +151,10 @@ location · ₹1,500/month", and buying one charges ₹1,500. Nothing needs a de
 **PS-1.14 ★★ — Repricing never touches a live subscription**
 With a merchant already paying for one extra location at ₹1,000, change the
 console price to ₹1,500.
-**Expect:** their subscription still bills the old amount. `razorpay_plans` is
-keyed on (plan, period, amount), so a new price mints a NEW Razorpay plan and
-grandfathers everyone already on the old one — the same rule tier repricing
-follows. They move to the new price only when they next change something.
+**Expect:** the current paid cycle and any already-finalized invoice stay
+unchanged; the next invoice built after the change uses ₹1,500. StoreMink owns
+the renewal amount now—there is no Razorpay plan mutation—and finalized GST
+documents remain immutable.
 
 **PS-1.15 ★ — The add-on never becomes a pricing card**
 After setting a price, open the public pricing page.
@@ -761,6 +780,13 @@ Look at every screen in this flow.
 **Expect:** no per-item cancel, approve, decline or refund anywhere. Whole-order
 only, by design — it needs partial fulfilment, which this system does not have.
 
+**PS-D.14 ★★ — “Don't restock” suppresses stock only**
+Approve a cancellation with **Restock OFF** for an order that used store credit
+and has pickup holds.
+**Expect:** physical stock is not added, but the spent store credit is
+reinstated exactly once and every pickup hold is released. “Damaged—don't put
+it back on sale” must not strand money or a reservation.
+
 ---
 
 ## 7d. Collection codes & the role split (roadmap Step 3)
@@ -794,13 +820,12 @@ Scan a code belonging to a sister branch.
 **Expect:** "That order is waiting at Bandra." Not "not found" — the customer is
 standing there and needs to know where to go.
 
-**PS-E.6 ★★ — Manager marks ready, cashier hands over**
-As a **cashier**, try to mark a collection ready.
-**Expect:** refused — "Only a manager can mark a collection order ready."
-Nothing moves, and no "your order is ready" email goes out.
-As a **manager**: it works, and the ready email carries the code.
-Then as a **cashier**, hand it over: that still works. Tightening the wrong one
-would stop a shop serving customers.
+**PS-E.6 ★★ — Cashier can prepare and hand over**
+As a **cashier**, mark a collection ready.
+**Expect:** it works and the ready email carries the code. Then hand it over:
+that works too. The person at the till is commonly the person packing the box;
+`fulfil_pickup` remains a named capability so a future restricted role can sell
+without sending ready notifications.
 
 **PS-E.7 — Pickup alerts reach the right shop**
 On a store with two locations, place a pickup order at one of them.
@@ -1073,6 +1098,54 @@ and the payment is recorded **unattributed**, exactly where a counter sale's
 money goes under the same setting. A **prepaid** collection is unaffected either
 way — no money changes hands, so blocking it would refuse a customer their own
 paid-for goods.
+
+**PS-8.33 ★★ — Handing over an unpacked order is possible, not silent**
+As a cashier, find a collection still in "To prepare" and tap **Hand over**.
+**Expect:** a dialog — "Nobody has checked ORD… off as packed. Do you have the
+goods to hand over now?" — with **Not yet** and **Yes, hand over**. "Not yet"
+changes nothing. "Yes" completes the collection.
+**Was:** it completed on the FIRST tap, silently, so an order nobody had packed
+could leave the "To prepare" queue without being done.
+**Why it is not simply refused:** a customer who ordered online then walked in
+early is an ordinary collection, not an error. The acknowledgement makes the
+skip deliberate and records it; a hard gate would still be bypassable by the
+same cashier tapping Mark ready and then Hand over.
+
+**PS-8.34 ★ — A prepared order is never nagged**
+Hand over an order already marked ready.
+**Expect:** no dialog, straight through — and with a money-due order, straight to
+the tender pad. A confirmation on the ordinary path is one people learn to
+dismiss unread, which would make it useless on the path that needs it.
+
+**PS-8.35 ★ — The skip leaves an honest preparation trace**
+Hand over an unprepared order, then read the row in `orders`.
+**Expect:** `pickup_prepared_at` equals `collected_at` exactly — both written by
+the same statement. On an order that WAS marked ready first,
+`pickup_prepared_at` keeps its earlier actual timestamp. In both cases
+`pickup_ready_at` remains the date promised to the customer at checkout; it is
+never overwritten to manufacture an audit marker.
+
+**PS-8.36 ★★ — A cashier can mark ready**
+Sign in as a cashier and open a collection in "To prepare".
+**Expect: Mark ready** is there and works — the customer gets the "ready to
+collect" notification, and the row moves to "Ready to collect".
+**Why:** it was manager-only for a day. In most shops the person at the counter
+IS the person picking the order off the shelf, so withholding the button meant
+the "To prepare" queue could only be worked by someone who might not be in the
+building.
+**Consequence, deliberately accepted:** there is no longer any way to _require_ a
+manager for an unprepared hand-over — a cashier could tap Mark ready then Hand
+over for the same result in two taps. The acknowledgement in PS-8.33 is what
+remains, and it is the part that was doing the work.
+
+**PS-8.37 ★ — The two segments are always both there**
+Open `/pos/pickups` with orders in only ONE of the two states.
+**Expect:** both headings render — "To prepare 0 / Nothing waiting to be packed."
+above "Ready to collect 2" — with an amber rule on the first and emerald on the
+second.
+**Was:** an empty section was hidden, so a queue of only-packed parcels showed
+one faint heading and read as a flat list again — the division disappeared
+exactly when there was least to compare against.
 
 **PS-8.18 ★ — The hold starts when it's READY**
 Set ready = 3 days, hold = 5 days, place a pickup order.
@@ -1880,6 +1953,102 @@ read "0 items" and offered **Hand over** — the server refused correctly, so no
 money was ever lost, but the cashier tapped expecting to hand goods over and got
 an error about payment.
 
+**PS-19.21 ★★ — One hamburger, every width**
+Open any POS screen on a desktop, a landscape iPad and a phone.
+**Expect:** no 76px rail at any size. A 3-line button top-left opens a slide-over
+holding every destination this operator may reach, with the collections count on
+the rows AND on the closed button. Esc closes it; so does navigating, including
+via the browser's back button. The top bar names the screen and shows the shop
+and who is signed in (the name drops on a phone).
+**Why:** the register is HORIZONTALLY constrained — the product grid and the cart
+split the width — so on an iPad the rail cost a column of products on the one
+screen a cashier is in all day, to save a tap on screens visited a few times a
+shift.
+**Also check:** the screens that are not the register no longer draw their own
+title bar under the top bar; their subtitle ("3 shown", a location name) now sits
+above the content.
+
+**PS-19.22 ★★ — A new collection appears without a refresh**
+Sit on `/pos/sell` with the tab focused. Place a pickup order on the storefront.
+**Expect:** within ~30 seconds the hamburger's green count goes up, with no
+reload. Open `/pos/pickups` and the row is in "To prepare" without a refresh.
+**Then:** switch to another browser tab for a few minutes and come back — the
+count is right immediately on return, not after another wait.
+**Was:** a collection is created by a SHOPPER, so nothing on the till caused a
+re-render; the queue and badge only moved when someone reloaded.
+**Must NOT happen:** the search-box spinner flashing on its own every 30s; an
+error toast nobody triggered; a row you just tapped reappearing under your finger
+mid-hand-over; requests continuing while the tab is hidden.
+
+**PS-19.23 ★★ — Stock updates without a refresh, and survives the wifi**
+Open `/pos/inventory` on one till. On another (or the dashboard) adjust a
+product's stock.
+**Expect:** the number changes within ~30 seconds, with no reload and no spinner
+blink. Open an adjustment sheet and it stops re-reading until you close it —
+rows must never re-sort under a half-filled form.
+**Then pull the network** (airplane mode, or DevTools offline) for a minute and
+restore it.
+**Expect:** nothing is attempted while offline, and the list refreshes
+IMMEDIATELY on reconnect — not up to 30 seconds later. Same on returning to a
+backgrounded tab.
+**Also:** the register's own catalog (the stock shown on `/pos/sell` tiles) syncs
+on the same rules. Its interval stays 5 minutes — a sync is several requests on a
+big catalogue, and nothing cached is authoritative — but the catch-up on
+return/reconnect is instant, which is when staleness is actually noticed.
+
+**PS-19.24 ★★ — A poll never delays a sale**
+Throttle the network to Slow 3G. Sit on `/pos/sell` with a full cart and tap
+**Charge** at the moment a background refresh is in flight.
+**Expect:** the tender panel responds immediately; the sale is not waiting behind
+the refresh.
+**Was:** the polls were Server Actions, and Next dispatches those one at a time
+per client — so `placePosSale` sat in a client-side queue behind a badge refresh
+nobody asked for. Check the Network panel: polls are now `GET /api/pos/live`,
+not POSTs to the action endpoint, and they overlap freely with actions. Leave
+the page open through a five-minute catalogue refresh too: every keyset page is
+also a GET, so the heaviest background reader has no action-dispatch exception.
+
+**PS-19.25 ★★ — Tab-switching does not storm the catalogue**
+On `/pos/sell`, with the Network panel open, switch to another tab and back ten
+times quickly.
+**Expect:** no catalogue sync fires (the last one was well inside its 5-minute
+interval). Leave the tab for six minutes and come back: exactly ONE sync.
+**Was:** every single switch triggered a full keyset-paged re-read.
+
+**PS-19.26 ★ — A quiet till goes quiet**
+Leave `/pos/pickups` open with nothing changing and watch the Network panel for
+five minutes.
+**Expect:** the gap between polls grows 30s → 60s → 120s and stops there. Place a
+collection order: the next poll picks it up and the interval snaps back to 30s.
+**Also:** two tills opened together must not fire in lockstep — the ±15% jitter
+should visibly separate them within a few minutes.
+
+**PS-19.27 ★★ — The badge agrees with the list, always**
+On `/pos/pickups` with three collections waiting, hand one over.
+**Expect:** the hamburger's count drops to 2 in the same frame the row leaves —
+not up to 30 seconds later.
+**Also check the Network panel:** while the queue is polling, there is NO second
+request for the count. Type into the search box (which suspends the queue poll)
+and the nav resumes its own polling rather than freezing the badge.
+Then leave Pickups for `/pos/sell`, create another collection, and wait for the
+nav poll. **Expect:** the published queue count is replaced by the new poll
+result; visiting Pickups once must not freeze the badge forever.
+
+**PS-19.28 ★★ — An old response cannot undo a cashier action**
+Throttle `/api/pos/live?need=queue`, wait until a queue poll is in flight, then
+hand an order over before that response finishes.
+**Expect:** the GET is aborted or its result is discarded. The completed row
+never reappears after `settle()` removes it. Repeat on Stock with an in-flight
+poll and a count/adjustment: an older response must not overwrite the confirmed
+quantity.
+
+**PS-19.29 ★★ — Poll failure preserves truth and retries promptly**
+With a non-zero pickup badge, make the count query return a transient 503.
+**Expect:** the badge keeps its last number; it does not become zero. Restore the
+database and expect another attempt at the base interval — failures must not be
+classified as "unchanged" and backed off to two minutes. Queue and Stock follow
+the same retry rule.
+
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
 **Expect:** no Returns entry in the rail (it is gated on `refund`, the only
@@ -2206,31 +2375,43 @@ Tap Hold with nothing scanned.
 
 Real and deliberate, so nobody files them as bugs:
 
-| Gap                                                                | Status                                                                                                                                                                                                                                                 |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Cancel doesn't offer a refund**                                  | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                     |
-| ~~**The success page says nothing about collection**~~             | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                           |
-| ~~**The dashboard is blind to pickups**~~                          | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                          |
-| ~~**The invoice shows a shipping address for a collected order**~~ | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                  |
-| ~~**Counter payments were invisible to the drawer**~~              | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                       |
-| ~~**The idle lock covered only 2 of the 7 POS screens**~~          | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second   |
-| ~~**A 0% discount cap silently became 10%**~~                      | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                                 |
-| ~~**Collections were unreachable with an empty queue**~~           | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                    |
-| ~~**Two search screens for one counter moment**~~                  | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/pickups`, old paths 307                                                                                                                  |
-| ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The rail/drawer is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                           |
-| **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                 |
-| **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                          |
-| ~~**`pos-pickup-actions.ts` has no test file**~~                   | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                                 |
-| **A collection can't be part-paid or discounted**                  | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                            |
-| **A walk-in with NO record can't get an emailed receipt**          | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
-| **The customer claim has never been run in a browser**             | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
-| **Store credit can't be spent at a COLLECTION**                    | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so `COUNTER_TENDER_METHODS` deliberately excludes it rather than marking a collection paid against a balance nothing deducted                                                 |
-| **A held sale has no auto-expiry**                                 | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                       |
-| **Analytics has no location filter**                               | Store-wide figures only                                                                                                                                                                                                                                |
-| **`order.pickup_expiring` email only**                             | No in-app pre-expiry banner                                                                                                                                                                                                                            |
-| **Offline selling**                                                | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |
-| ~~**Live delivery rates at checkout**~~                            | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                          |
-| **Split fulfilment / multiple parcels**                            | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                           |
-| **Return shipping labels**                                         | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                                |
-| **Weight disputes and COD remittance reconciliation**              | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                         |
-| **Shiprocket browser/API smoke test pending**                      | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                              |
+| Gap                                                                 | Status                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Cancel doesn't offer a refund**                                   | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                     |
+| ~~**The success page says nothing about collection**~~              | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                           |
+| ~~**The dashboard is blind to pickups**~~                           | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                          |
+| ~~**The invoice shows a shipping address for a collected order**~~  | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                  |
+| ~~**Counter payments were invisible to the drawer**~~               | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                       |
+| ~~**The idle lock covered only 2 of the 7 POS screens**~~           | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second   |
+| ~~**A 0% discount cap silently became 10%**~~                       | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                                 |
+| ~~**Collections were unreachable with an empty queue**~~            | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                    |
+| ~~**Two search screens for one counter moment**~~                   | **FIXED** (PS-19.4). `/pos/pickups` and `/pos/returns` each found what the other could not; merged into `/pos/pickups`, old paths 307                                                                                                                  |
+| ~~**Navigation was per-screen**~~                                   | **FIXED** (PS-19.1–19.2). The nav is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                                   |
+| ~~**The rail cost a column of products on an iPad**~~               | **FIXED** (PS-19.21). The 76px `lg` rail is gone — one hamburger drawer at every width. The register is horizontally constrained, so the tap it saved was the wrong thing to optimise                                                                  |
+| ~~**A new collection needed a manual page refresh**~~               | **FIXED** (PS-19.22). A collection is created on the storefront, so nothing at the counter made it appear. The badge and the queue poll every 30s, visible-tab only, suspended mid-action                                                              |
+| ~~**A cashier could hand over an order nobody packed**~~            | **FIXED** (PS-8.33–8.37). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement — refusing outright would strand a cashier alone at the counter, and a manager gate is bypassable in two taps            |
+| ~~**A background poll delayed the cashier's next tap**~~            | **FIXED** (PS-19.24). All background reads, including every paged catalogue sync, use the GET route; none enters Next's client Server Action queue                                                                                                     |
+| ~~**Tab-switching kicked off a full catalogue re-sync each time**~~ | **FIXED** (PS-19.25). `visibilitychange` fires on every switch; the catch-up is now skipped if a run happened inside one interval                                                                                                                      |
+| ~~**A quiet till cost the same as a busy one**~~                    | **FIXED** (PS-19.26). An unchanged poll backs off 30s → 2min and resets on any change; ±15% jitter stops a fleet phase-locking                                                                                                                         |
+| ~~**The badge and the queue polled the same fact, and disagreed**~~ | **FIXED** (PS-19.27). Queue, nav poll and newer server props publish into one count; the nav stops asking while claimed and can replace the value after release                                                                                        |
+| ~~**An in-flight poll could restore stale state after an action**~~ | **FIXED** (PS-19.28). Disabling aborts the active GET and each consumer rejects superseded runs before committing queue/stock/catalog state                                                                                                            |
+| ~~**A failed poll looked like zero or "unchanged"**~~               | **FIXED** (PS-19.29). Live count failures are 503 and preserve the badge; failed/aborted callbacks return no verdict, keeping retries at the base interval                                                                                             |
+| **Polling is O(tills), not O(events)**                              | By design, and measured: ~83 req/s and ~250 DB qps at 10,000 quiet tills. SSE would be O(events) but needs a held connection per till (~125 Cloud Run instances). Revisit only if sub-5s latency is ever needed                                        |
+| ~~**Stock on a POS screen was a snapshot from page load**~~         | **FIXED** (PS-19.23). `/pos/inventory` never re-read on its own and the catalog's re-sync was a bare interval, blind to a hidden tab or a dead network. One `usePoll` now serves badge, queue, stock list and catalog                                  |
+| ~~**Every POS sale failed on insert**~~                             | **FIXED**. `placePosSale` wrote `store_credit_used: null` into a `NOT NULL DEFAULT 0` column, so every sale using no credit failed from the moment `147fe24` deployed. `OrderInsert` + `satisfies` makes it a compile error                            |
+| **The shell is browser-verified, the flows are not**                | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                 |
+| **Pickup has never been run end to end**                            | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                          |
+| ~~**`pos-pickup-actions.ts` has no test file**~~                    | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                                 |
+| **A collection can't be part-paid or discounted**                   | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                            |
+| **A walk-in with NO record can't get an emailed receipt**           | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt |
+| **The customer claim has never been run in a browser**              | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                             |
+| **Store credit can't be spent at a COLLECTION**                     | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so `COUNTER_TENDER_METHODS` deliberately excludes it rather than marking a collection paid against a balance nothing deducted                                                 |
+| **A held sale has no auto-expiry**                                  | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                       |
+| **Analytics has no location filter**                                | Store-wide figures only                                                                                                                                                                                                                                |
+| **`order.pickup_expiring` email only**                              | No in-app pre-expiry banner                                                                                                                                                                                                                            |
+| **Offline selling**                                                 | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                            |
+| ~~**Live delivery rates at checkout**~~                             | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                          |
+| **Split fulfilment / multiple parcels**                             | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                           |
+| **Return shipping labels**                                          | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                                |
+| **Weight disputes and COD remittance reconciliation**               | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                         |
+| **Shiprocket browser/API smoke test pending**                       | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                              |

@@ -47,10 +47,12 @@ const INPUT = {
   providerCustomerId: "cust_1",
   storeId: "store-1",
   description: "Pro monthly",
+  recordProviderOrderId: vi.fn(async () => true),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  INPUT.recordProviderOrderId.mockResolvedValue(true);
   // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS.
   vi.mocked(getPlatformRazorpayCreds).mockReturnValue(CREDS as any);
   vi.mocked(rzpCreateOrder).mockResolvedValue({
@@ -66,26 +68,23 @@ beforeEach(() => {
 });
 
 describe("the release gate", () => {
-  it("★★ autopay is OFF until the endpoint is verified against test mode", () => {
-    // Flipping this charges real merchants, so it is a deliberate switch rather
-    // than something that becomes true by accident. See
-    // docs/autopay-verification.md.
-    expect(RECURRING_CHARGE_VERIFIED).toBe(false);
-    expect(getRecurringCharge()).toBeNull();
-    expect(chargeUnavailableReason()).toMatch(/not yet verified/i);
+  it("★★ autopay is enabled for the verification rollout", () => {
+    expect(RECURRING_CHARGE_VERIFIED).toBe(true);
+    expect(getRecurringCharge()).toBe(chargeMandateViaRazorpay);
+    expect(chargeUnavailableReason()).toBeNull();
   });
 
-  it("★ reports MISSING CREDENTIALS separately from an unverified endpoint", () => {
-    // Two different problems with two different fixes; one message for both
-    // sends whoever is on call to the wrong place.
+  it("★ still fails safe when platform credentials are missing", () => {
     vi.mocked(getPlatformRazorpayCreds).mockReturnValue(null as any);
-    expect(chargeUnavailableReason()).toMatch(/not yet verified/i);
+    expect(getRecurringCharge()).toBeNull();
+    expect(chargeUnavailableReason()).toMatch(
+      /credentials are not configured/i,
+    );
   });
 });
 
-// The implementation is unreachable through getRecurringCharge while the flag
-// is false, so these drive it directly — the flag is a release decision, not a
-// reason to ship an untested charge path.
+// Drive the provider seam directly so each outcome remains deterministic even
+// while the public release gate is enabled.
 describe("charging a mandate", () => {
   const impl = chargeMandateViaRazorpay;
 
@@ -105,11 +104,16 @@ describe("charging a mandate", () => {
       ok: true,
       data: { providerPaymentId: "pay_1", status: "captured" },
     });
+    expect(INPUT.recordProviderOrderId).toHaveBeenCalledWith("order_1");
+    expect(
+      INPUT.recordProviderOrderId.mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(rzpChargeMandate).mock.invocationCallOrder[0]);
   });
 
-  it("★★ carries the idempotency key in NOTES, not just a header", async () => {
-    // The notes copy is what reconciliation matches on if the header is ever
-    // unsupported or renamed — the rule issue-refund.ts follows for refunds.
+  it("★★ carries the attempt key in both provider objects' NOTES", async () => {
+    // The recurring API documents no provider-side idempotency header. The
+    // notes copy connects the Razorpay objects to our durable attempt; the
+    // provider order id is the actual reconciliation handle.
     await impl(INPUT);
     expect(vi.mocked(rzpCreateOrder).mock.calls[0][1].notes).toMatchObject({
       idempotency_key: "idem-1",
@@ -155,11 +159,18 @@ describe("charging a mandate", () => {
     expect(res.outcome).toBe("unknown");
   });
 
-  it("★ a rejected order creation never becomes a charge", async () => {
+  it("★★ refuses to debit when the provider order could not be recorded", async () => {
+    INPUT.recordProviderOrderId.mockResolvedValue(false);
+    const res = (await impl(INPUT)) as any;
+    expect(res).toMatchObject({ ok: false, outcome: "rejected" });
+    expect(rzpChargeMandate).not.toHaveBeenCalled();
+  });
+
+  it("★ an unsuccessful order creation is a known NON-CHARGE", async () => {
     vi.mocked(rzpCreateOrder).mockResolvedValue({
       ok: false,
-      error: "bad amount",
-      outcome: "rejected",
+      error: "gateway timed out",
+      outcome: "unknown",
     } as any);
     const res = (await impl(INPUT)) as any;
     expect(res.outcome).toBe("rejected");
@@ -178,6 +189,13 @@ describe("charging a mandate", () => {
     dbHolder.rows = [];
     const res = (await impl(INPUT)) as any;
     expect(res.outcome).toBe("rejected");
+    expect(rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ a missing phone refuses the recurring debit before Razorpay", async () => {
+    dbHolder.rows = [{ email: "owner@acme.test", phone: null }];
+    const res = (await impl(INPUT)) as any;
+    expect(res).toMatchObject({ ok: false, outcome: "rejected" });
     expect(rzpCreateOrder).not.toHaveBeenCalled();
   });
 

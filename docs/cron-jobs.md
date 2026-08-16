@@ -333,15 +333,16 @@ re-confirms the shared `CRON_SECRET`. Safe to probe because
 It was deliberately withheld until then, on the reasoning that it "would report
 green hourly while charging nobody" — true while the whole collection pass was
 skipped for a missing gateway. Since the issuance/charging split it always
-**issues** each renewal invoice, which the merchant pays by hand, so it does real
-work with autopay still off. Verifying the Razorpay subsequent-charge endpoint
-was never a precondition for the JOB; it only decides whether an issued invoice
-is also debited automatically.
+**issues** each renewal invoice, which the merchant can pay by hand, so it does
+real work independently of autopay. Automatic collection was enabled for
+verification on 2026-08-16; the same job now attempts eligible mandate debits
+when platform credentials exist.
 
 ⚠ **Watch its first real run**, which is the first hour after a merchant
-subscribes — that is when pass 1 stops being a no-op. Expect
-`collectionSkipped` set, `collect.manualRequired` counting the invoices issued,
-and a renewal email in the store's log.
+subscribes — that is when pass 1 stops being a no-op. For an eligible active
+mandate expect an automatic attempt; otherwise expect `collect.manualRequired`
+and a renewal email. `collectionSkipped` should appear only when credentials or
+the charge function are unavailable.
 
 ## Staging
 

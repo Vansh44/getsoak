@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/auth/session-cookie", () => ({
   SESSION_COOKIE: "sm_session",
+  expiredHostOnlySessionCookieHeader: () =>
+    "sm_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
   sessionCookieOptions: vi.fn((host: string | null) => ({
     httpOnly: true,
     secure: true,
@@ -51,11 +53,22 @@ describe("POST /api/auth/signout", () => {
     expect(res.cookies.get("sm_session")?.domain).toBe(".storemink.com");
   });
 
+  it("also deletes a legacy host-only cookie on StoreMink hosts", async () => {
+    const res = await POST(req({ host: "storemink.com" }));
+
+    const headers = res.headers.getSetCookie();
+    expect(headers).toHaveLength(2);
+    expect(headers[0]).toContain("Domain=.storemink.com");
+    expect(headers[1]).toContain("Max-Age=0");
+    expect(headers[1]).not.toContain("Domain=");
+  });
+
   it("deletes host-only on a merchant's custom domain", async () => {
     const res = await POST(req({ host: "acme.com" }));
 
     expect(res.cookies.get("sm_session")?.domain).toBeUndefined();
     expect(res.cookies.get("sm_session")?.maxAge).toBe(0);
+    expect(res.headers.getSetCookie()).toHaveLength(1);
   });
 
   it("prefers the forwarded host behind the load balancer", async () => {
