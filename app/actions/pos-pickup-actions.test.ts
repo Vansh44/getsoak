@@ -391,25 +391,30 @@ describe("getPickupQueue", () => {
 // ---------------------------------------------------------------------------
 // Who may mark an order ready (roadmap Step 3)
 //
-// ★ THE SPLIT IS THE POINT. Marking ready is what tells a customer to travel,
-// so it belongs to someone who has actually seen the box. Handing over stays a
-// cashier's job — they are the one standing in front of the customer.
+// ★★ EVERY POS ROLE MAY MARK READY, cashier included (2026-08-16). It was
+// manager-and-above on the reasoning that this is the step that TELLS A CUSTOMER
+// TO TRAVEL, so it should be someone who has seen the box. True of the promise,
+// wrong about who packs: in most shops the person at the counter IS the person
+// picking the order off the shelf, so withholding the button meant the "To
+// prepare" queue could only be worked by someone who might not be in the
+// building.
 //
-// Safe to tighten because no store had pickup enabled when this shipped, so
-// there was no live behaviour to take away (invariant 1).
+// It stays a NAMED capability rather than collapsing into `sell`, so a future
+// till-only or restricted role can sell without it.
 // ---------------------------------------------------------------------------
 
 const MANAGER = { ...CASHIER, role: "manager" as const, name: "Asha" };
 
 describe("markReadyForPickup — the capability split", () => {
-  it("★ refuses a cashier", async () => {
+  it("★ allows a cashier — they are the one holding the box", async () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     dbHolder.current = makeDbMock({ returning: CLAIMED });
     const res = await markReadyForPickup("ord-1");
-    expect(res.error).toMatch(/only a manager/i);
-    // Nothing moved, and nobody was told a box was waiting for them.
-    expect(dbHolder.current.calls.update).toHaveLength(0);
-    expect(emitEvent).not.toHaveBeenCalled();
+    expect(res.success).toBe(true);
+    // And the customer is told, which is the whole point of the step.
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "order.ready_for_pickup" }),
+    );
   });
 
   it("allows a manager", async () => {
@@ -514,34 +519,10 @@ describe("markCollected — an order that was never marked ready", () => {
     expect(sqlText(set.pickupReadyAt)).toMatch(/coalesce/i);
   });
 
-  it("under manager_only a cashier is refused, and offered no dialog", async () => {
-    vi.mocked(getStoreSettings).mockResolvedValue({
-      "fulfilment.collectUnprepared": "manager_only",
-    } as any);
-    dbHolder.current = seed(AWAITING);
-    const res = await markCollected("ord-1", [], {
-      acknowledgeUnprepared: true,
-    });
-    expect(res.error).toMatch(/ask a manager/i);
-    // A prompt this cashier could never satisfy is worse than the reason.
-    expect(res.needsPreparedAck).toBeUndefined();
-    expect(dbHolder.current.calls.update).toHaveLength(0);
-  });
-
-  it("under manager_only a manager may still confirm", async () => {
-    vi.mocked(getStoreSettings).mockResolvedValue({
-      "fulfilment.collectUnprepared": "manager_only",
-    } as any);
-    vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
-    dbHolder.current = seed(AWAITING);
-    const res = await markCollected("ord-1", [], {
-      acknowledgeUnprepared: true,
-    });
-    expect(res.success).toBe(true);
-  });
-
-  // A settings outage must not stop a shop handing over paid-for goods.
-  it("falls back to allowing when settings cannot be read", async () => {
+  // ★ NO SETTINGS READ AT ALL. The preparation question is answered from the
+  // order's own status; there is no policy to consult since `fulfil_pickup`
+  // reaches every POS role, which is what retired the `manager_only` option.
+  it("does not consult settings to decide the preparation question", async () => {
     vi.mocked(getStoreSettings).mockRejectedValue(new Error("down"));
     dbHolder.current = seed(AWAITING);
     const res = await markCollected("ord-1", [], {

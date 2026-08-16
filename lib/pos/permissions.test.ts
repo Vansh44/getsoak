@@ -24,12 +24,19 @@ describe("pos permissions", () => {
     expect(posCan("owner", "authorize_device")).toBe(false);
   });
 
-  it("cashier can only sell", () => {
+  it("cashier sells and fulfils pickups, and nothing else", () => {
     expect(posCan("cashier", "sell")).toBe(true);
+    // ★ Marking a collection ready is a statement of physical fact by whoever
+    // is holding the goods — in most shops that IS the person at the counter.
+    // Withholding it meant the "To prepare" queue could only be worked by
+    // someone who might not be in the building.
+    expect(posCan("cashier", "fulfil_pickup")).toBe(true);
     expect(posCan("cashier", "refund")).toBe(false);
     expect(posCan("cashier", "adjust_inventory")).toBe(false);
     expect(posCan("cashier", "discount_over_cap")).toBe(false);
     expect(posCan("cashier", "open_close_shift")).toBe(false);
+    expect(posCan("cashier", "edit_layout")).toBe(false);
+    expect(posCan("cashier", "cash_drop")).toBe(false);
   });
 
   it("manager can sell/refund/adjust/shift but not manage staff", () => {

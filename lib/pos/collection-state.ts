@@ -71,32 +71,27 @@ export function isCollectable(state: CollectionState): boolean {
 // from parcels waiting on a CUSTOMER, and this let the first vanish without
 // being done.
 //
-// ★★ BUT REFUSING OUTRIGHT IS THE WRONG FIX, and it is worth being precise
-// about why. Marking ready is `fulfil_pickup` (manager+), so a hard gate leaves
-// a cashier alone at the counter, with the customer in front of them, unable to
-// serve an order the shop can see — and the goods may well be packed already.
-// Someone who ordered online and walked in before the shop got to it is an
-// ORDINARY collection, not an error.
+// ★★ BUT REFUSING OUTRIGHT IS THE WRONG FIX. Someone who ordered online and
+// walked in before the shop got to it is an ORDINARY collection, not an error,
+// and the goods may well be packed already — the shop just hasn't tapped the
+// button. Refusing puts a cashier in front of a customer, holding their order,
+// unable to complete it.
 //
-// ★ SO THE RULE IS: POSSIBLE, DELIBERATE, RECORDED. "Mark ready" conflates two
-// acts — *the goods are packed* (a physical fact) and *tell the customer to
-// travel* (a promise, and the reason the manager gate exists). When the customer
-// is already at the counter the second is moot, and the person holding the box
-// is the best witness there is to the first. So a hand-over from 'awaiting'
-// needs an explicit acknowledgement rather than a manager, and it is never what
-// a mis-tap lands on. It leaves its own audit trail with no new column:
-// `pickup_ready_at` and `collected_at` are written by the SAME statement, so
-// `pickup_ready_at = collected_at` means exactly "collected without being
-// prepared".
+// ★ SO THE RULE IS: POSSIBLE, DELIBERATE, RECORDED. It needs an explicit
+// acknowledgement, so it is never what a mis-tap lands on, and it leaves an
+// audit trail with no new column: `pickup_ready_at` and `collected_at` are
+// written by the SAME statement, so `pickup_ready_at = collected_at` means
+// exactly "collected without being prepared".
+//
+// ★★ AND IT IS NOT A PERMISSION QUESTION — deliberately, after being one for a
+// day. There WAS a `fulfilment.collectUnprepared` setting whose `manager_only`
+// value made a cashier fetch someone. It is gone, because `fulfil_pickup` is now
+// held by every POS role (permissions.ts): a cashier told "no" here could tap
+// **Mark ready** and then **Hand over** — the same outcome, two taps, no manager
+// involved. A rule anyone can walk around in two taps is worse than no rule,
+// because it reads as a control and is only a speed bump. What remains is the
+// part that was always doing the work: making the skip DELIBERATE and VISIBLE.
 // ---------------------------------------------------------------------------
-
-/** Who may hand over an order that was never marked ready (`fulfilment.collectUnprepared`). */
-export type UnpreparedPolicy = "anyone" | "manager_only";
-
-/** Anything the merchant has not chosen resolves to today's behaviour. */
-export function normalizeUnpreparedPolicy(v: unknown): UnpreparedPolicy {
-  return v === "manager_only" ? "manager_only" : "anyone";
-}
 
 /** Has someone packed this order and set it aside? */
 export function isPrepared(status: string | null | undefined): boolean {
@@ -104,11 +99,11 @@ export function isPrepared(status: string | null | undefined): boolean {
 }
 
 export type HandoverGate =
-  /** Go ahead. `unprepared` ⇒ the cashier must confirm the goods are in hand. */
+  /** Go ahead. `unprepared` ⇒ the operator confirmed the goods are in hand. */
   { allowed: true; unprepared: boolean } | { allowed: false; reason: string };
 
 /**
- * May this operator hand this order over, and does it need an acknowledgement?
+ * May this order be handed over, and does it need an acknowledgement first?
  *
  * The ONE answer, so the button on the row and the claim in the action cannot
  * disagree — the rule `collectionState` already exists to enforce, applied to
@@ -116,21 +111,10 @@ export type HandoverGate =
  */
 export function handoverGate(input: {
   status: string | null | undefined;
-  /** Does the operator hold `fulfil_pickup`? */
-  canFulfilPickup: boolean;
-  policy: UnpreparedPolicy;
-  /** Has the cashier confirmed the goods are packed? Ignored when prepared. */
+  /** Has the operator confirmed the goods are packed? Ignored when prepared. */
   acknowledged?: boolean;
 }): HandoverGate {
   if (isPrepared(input.status)) return { allowed: true, unprepared: false };
-
-  if (input.policy === "manager_only" && !input.canFulfilPickup) {
-    return {
-      allowed: false,
-      reason:
-        "This order hasn't been marked ready. Ask a manager to check it off before handing it over.",
-    };
-  }
   if (!input.acknowledged) {
     return {
       allowed: false,

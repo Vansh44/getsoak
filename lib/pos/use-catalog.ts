@@ -23,9 +23,22 @@ import {
   type CatalogItem,
 } from "./catalog-index";
 import { catalogKey, readCatalog, writeCatalog } from "./catalog-store";
+import { usePoll } from "./use-poll";
 
-/** Stock drifts all day on a register left open; re-sync often enough that the
- *  grid isn't lying, rarely enough that it's invisible on a shop's wifi. */
+/**
+ * Stock drifts all day on a register left open; re-sync often enough that the
+ * grid isn't lying, rarely enough that it's invisible on a shop's wifi.
+ *
+ * ★ WHY THIS STAYS MINUTES, NOT SECONDS. A sync is keyset-paged at 300 products
+ * a page, so a large catalogue is several requests — running that on a short
+ * timer, on every till, to keep a DISPLAY number fresh is the wrong trade.
+ * Nothing cached is authoritative: `placePosSale` re-reads price and re-reserves
+ * stock, so staleness here is a wrong label at worst, never a wrong charge or an
+ * oversell. What actually made it feel stale was the timer being blind — it kept
+ * ticking in a hidden tab and into a dead network, and the first sync after
+ * someone came back was up to five minutes away. `usePoll` fixes that end: the
+ * catch-up is immediate, which is the moment staleness is noticed.
+ */
 const RESYNC_MS = 5 * 60 * 1000;
 
 /** Bounds memory and sync time on a pathological catalog. Past this the
@@ -162,13 +175,22 @@ export function useCatalog(
       if (!cancelled) void sync();
     })();
 
-    const t = setInterval(() => void sync(), RESYNC_MS);
     return () => {
       cancelled = true;
       aliveRef.current = false;
-      clearInterval(t);
     };
   }, [key, sync, setIndex]);
+
+  // ★ THE RE-SYNC IS A `usePoll`, NOT A BARE setInterval. It used to be one, and
+  // a bare interval is blind in the two ways that matter on a till: it keeps
+  // firing in a hidden tab and into a dead network (each attempt failing
+  // silently and setting the "Catalog sync failed" state nobody is looking at),
+  // and after the shop's wifi comes back the next attempt is up to five minutes
+  // away. Now it pauses on both and catches up the instant either recovers —
+  // which is exactly when a cashier returns to the screen and expects the
+  // numbers to be true. `syncingRef` inside `sync` already makes an overlapping
+  // call a no-op, so a catch-up landing on top of a slow sync is harmless.
+  usePoll(sync, RESYNC_MS);
 
   const search = useCallback(
     (query: string, limit = 24) => searchLocal(indexRef.current, query, limit),

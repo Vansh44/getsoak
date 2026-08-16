@@ -2,11 +2,11 @@
 
 // The register's one navigation, mounted once in app/pos/layout.tsx.
 //
-// ★ IT IS THE SHELL, NOT A WIDGET — it takes `children`. The rail and the
-// small-screen top bar sit at different points in the tree (a column beside the
-// content, and a row above it), so a component that rendered only one of them
-// would leave each screen to place the other. That is per-page opt-in, which is
-// exactly how the idle lock ended up missing from five of seven screens.
+// ★ IT IS THE SHELL, NOT A WIDGET — it takes `children`. The top bar and the
+// drawer sit at different points in the tree, so a component that rendered only
+// one of them would leave each screen to place the other. That is per-page
+// opt-in, which is exactly how the idle lock ended up missing from five of seven
+// screens.
 //
 // ★ ONE HAMBURGER, EVERY WIDTH (owner's call, 2026-08-16). This shipped as a
 // 76px rail above `lg` and a drawer below it, on the reasoning that a hidden
@@ -51,7 +51,7 @@ import {
   type PosNavKey,
 } from "@/lib/pos/nav";
 import type { PosActorRole } from "@/lib/pos/permissions";
-import { usePoll } from "./use-poll";
+import { usePoll } from "@/lib/pos/use-poll";
 
 /** Icons live here, not in the registry, so lib/pos/nav.ts stays free of a
  *  client dependency and can be imported by a server component or a test. */

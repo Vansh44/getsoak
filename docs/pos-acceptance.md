@@ -1100,13 +1100,27 @@ its earlier value. That equality is how "collected without being prepared" is
 answerable afterwards, and it stops the shopper's tracker showing a collection
 that skipped a step it claims to have.
 
-**PS-8.36 ★ — `fulfilment.collectUnprepared` = manager_only**
-Set it to "Only a manager" and repeat PS-8.33 as a cashier.
-**Expect:** refused with "Ask a manager to check it off before handing it over" —
-and **no dialog at all**, because a prompt this cashier could never satisfy is
-worse than a plain refusal. As a manager the dialog appears and works.
-**Default is "Anyone at the till"**, which is both today's behaviour and the
-right answer for a shop where one person serves and packs.
+**PS-8.36 ★★ — A cashier can mark ready**
+Sign in as a cashier and open a collection in "To prepare".
+**Expect: Mark ready** is there and works — the customer gets the "ready to
+collect" notification, and the row moves to "Ready to collect".
+**Why:** it was manager-only for a day. In most shops the person at the counter
+IS the person picking the order off the shelf, so withholding the button meant
+the "To prepare" queue could only be worked by someone who might not be in the
+building.
+**Consequence, deliberately accepted:** there is no longer any way to _require_ a
+manager for an unprepared hand-over — a cashier could tap Mark ready then Hand
+over for the same result in two taps. The acknowledgement in PS-8.33 is what
+remains, and it is the part that was doing the work.
+
+**PS-8.37 ★ — The two segments are always both there**
+Open `/pos/pickups` with orders in only ONE of the two states.
+**Expect:** both headings render — "To prepare 0 / Nothing waiting to be packed."
+above "Ready to collect 2" — with an amber rule on the first and emerald on the
+second.
+**Was:** an empty section was hidden, so a queue of only-packed parcels showed
+one faint heading and read as a flat list again — the division disappeared
+exactly when there was least to compare against.
 
 **PS-8.18 ★ — The hold starts when it's READY**
 Set ready = 3 days, hold = 5 days, place a pickup order.
@@ -1941,6 +1955,22 @@ re-render; the queue and badge only moved when someone reloaded.
 error toast nobody triggered; a row you just tapped reappearing under your finger
 mid-hand-over; requests continuing while the tab is hidden.
 
+**PS-19.23 ★★ — Stock updates without a refresh, and survives the wifi**
+Open `/pos/inventory` on one till. On another (or the dashboard) adjust a
+product's stock.
+**Expect:** the number changes within ~30 seconds, with no reload and no spinner
+blink. Open an adjustment sheet and it stops re-reading until you close it —
+rows must never re-sort under a half-filled form.
+**Then pull the network** (airplane mode, or DevTools offline) for a minute and
+restore it.
+**Expect:** nothing is attempted while offline, and the list refreshes
+IMMEDIATELY on reconnect — not up to 30 seconds later. Same on returning to a
+backgrounded tab.
+**Also:** the register's own catalog (the stock shown on `/pos/sell` tiles) syncs
+on the same rules. Its interval stays 5 minutes — a sync is several requests on a
+big catalogue, and nothing cached is authoritative — but the catch-up on
+return/reconnect is instant, which is when staleness is actually noticed.
+
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
 **Expect:** no Returns entry in the rail (it is gated on `refund`, the only
@@ -2281,7 +2311,8 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**Navigation was per-screen**~~                                  | **FIXED** (PS-19.1–19.2). The nav is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                                   |
 | ~~**The rail cost a column of products on an iPad**~~              | **FIXED** (PS-19.21). The 76px `lg` rail is gone — one hamburger drawer at every width. The register is horizontally constrained, so the tap it saved was the wrong thing to optimise                                                                  |
 | ~~**A new collection needed a manual page refresh**~~              | **FIXED** (PS-19.22). A collection is created on the storefront, so nothing at the counter made it appear. The badge and the queue poll every 30s, visible-tab only, suspended mid-action                                                              |
-| ~~**A cashier could hand over an order nobody packed**~~           | **FIXED** (PS-8.33–8.36). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement, gated by `fulfilment.collectUnprepared` — refusing outright would strand a cashier alone at the counter                 |
+| ~~**A cashier could hand over an order nobody packed**~~           | **FIXED** (PS-8.33–8.37). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement — refusing outright would strand a cashier alone at the counter, and a manager gate is bypassable in two taps            |
+| ~~**Stock on a POS screen was a snapshot from page load**~~        | **FIXED** (PS-19.23). `/pos/inventory` never re-read on its own and the catalog's re-sync was a bare interval, blind to a hidden tab or a dead network. One `usePoll` now serves badge, queue, stock list and catalog                                  |
 | ~~**Every POS sale failed on insert**~~                            | **FIXED**. `placePosSale` wrote `store_credit_used: null` into a `NOT NULL DEFAULT 0` column, so every sale using no credit failed from the moment `147fe24` deployed. `OrderInsert` + `satisfies` makes it a compile error                            |
 | **The shell is browser-verified, the flows are not**               | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                 |
 | **Pickup has never been run end to end**                           | No browser verification of PS-8.1–PS-8.31. Nothing blocks it now — the migrations are applied                                                                                                                                                          |

@@ -40,10 +40,23 @@ export type PosCapability =
   | "authorize_device"
   /** Arrange which products appear on the register grid, and in what order. */
   | "edit_layout"
-  /** Mark a collection order packed and ready. Manager and above: it is the
-   *  step that tells a customer to travel, and it should be someone who has
-   *  actually seen the box. Handing it over stays `sell` — that is a cashier's
-   *  job with the customer standing there. */
+  /**
+   * Mark a collection order packed and ready.
+   *
+   * ★ EVERY POS ROLE HOLDS THIS, cashier included (owner's call, 2026-08-16).
+   * It was manager-and-above on the reasoning that marking ready TELLS A
+   * CUSTOMER TO TRAVEL, so it should be someone who has seen the box. True of
+   * the promise, wrong about who packs: in most shops the person at the counter
+   * IS the person who picks the order off the shelf, and withholding the button
+   * from them meant the queue's "To prepare" section could only be worked by
+   * someone who might not be in the building. It is a statement of physical
+   * fact by whoever is holding the goods.
+   *
+   * It stays a NAMED capability rather than collapsing into `sell`, because it
+   * is a distinct act and a future role (a till-only account, a restricted
+   * delegate) is exactly the kind of thing that should be able to sell without
+   * it. Deleting the vocabulary would mean re-inventing it.
+   */
   | "fulfil_pickup";
 
 /**
@@ -70,7 +83,9 @@ const SUPERADMIN_ONLY: readonly PosCapability[] = [
 // that omission IS the grant, so a role added here later can't inherit them by
 // resembling a manager.
 const CAPS: Record<PosRole, PosCapability[]> = {
-  cashier: ["sell"],
+  // `fulfil_pickup` is the one capability a cashier shares with a manager: see
+  // its declaration above. Everything else here is still withheld.
+  cashier: ["sell", "fulfil_pickup"],
   manager: [
     "sell",
     "discount_over_cap",

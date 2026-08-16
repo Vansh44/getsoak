@@ -18,6 +18,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PosScreen } from "../pos-screen";
+import { POS_POLL_MS, usePoll } from "@/lib/pos/use-poll";
 import {
   adjustPosStock,
   countPosStock,
@@ -72,6 +73,28 @@ export function InventoryClient({
     const t = setTimeout(() => void refresh(query.trim(), lowOnly), 250);
     return () => clearTimeout(t);
   }, [query, lowOnly, refresh]);
+
+  // ── Stock, kept live ──────────────────────────────────────────────────────
+  // Numbers here move for reasons that have nothing to do with this screen: a
+  // sale on the till next to you, a transfer in, a correction someone made on
+  // the dashboard. Without this the list was a snapshot from whenever the page
+  // last loaded — and stock is the one figure people act on assuming it is now.
+  //
+  // ★ QUIET, AND SUSPENDED WHILE SOMETHING IS OPEN. It skips `setLoading` so
+  // the spinner never blinks unasked, drops errors (the next real action still
+  // reports them), and holds off entirely while an adjustment sheet is open —
+  // re-sorting rows under a half-filled form is how someone counts one product
+  // and submits against another.
+  const adjusting = openKey !== null;
+  usePoll(
+    useCallback(() => {
+      void getPosInventory({ query: query.trim(), lowOnly }).then((res) => {
+        if (!res.error) setItems(res.items);
+      });
+    }, [query, lowOnly]),
+    POS_POLL_MS,
+    !adjusting,
+  );
 
   const done = (msg: string) => {
     setNotice(msg);

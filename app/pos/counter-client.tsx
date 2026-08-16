@@ -26,11 +26,12 @@
 // ★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON — see the split below.
 //
 // ★ THE ROW OFFERS WHAT THE ORDER CAN DO, AND WHAT THIS OPERATOR MAY DO. Both
-// halves matter. "Mark ready" is `fulfil_pickup` (manager and above: it is the
-// step that tells a customer to travel), handing over is `sell`, taking a
-// return is `refund` — every one of them re-checked in the action. Hiding what
-// would be refused is not the security boundary, it is not making someone fail
-// in front of a customer.
+// halves matter. "Mark ready" is `fulfil_pickup` and handing over is `sell` —
+// every POS role holds both, so in practice the row's buttons follow the ORDER's
+// state — while taking a return is `refund`, which a cashier does not have.
+// Every one of them is re-checked in the action. Hiding what would be refused is
+// not the security boundary, it is not making someone fail in front of a
+// customer.
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
@@ -59,7 +60,7 @@ import {
 import type { PosTender } from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { PosScreen } from "./pos-screen";
-import { POS_POLL_MS, usePoll } from "./use-poll";
+import { POS_POLL_MS, usePoll } from "@/lib/pos/use-poll";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -127,7 +128,8 @@ export function CounterClient({
   /** Taking a return is a manager capability — a cashier hands collections
    *  over and reprints, but does not give money back. */
   canRefund: boolean;
-  /** Marking a box packed and ready. Manager and above. */
+  /** Marking a box packed and ready. Every POS role holds this today; the prop
+   *  stays so a future restricted role does not silently get the button. */
   canFulfilPickup: boolean;
 }) {
   const [queue, setQueue] = useState(initial);
@@ -470,9 +472,10 @@ export function CounterClient({
             )}
             {/* ★ WHICH ONE IS LOUD FOLLOWS WHICH ONE IS EXPECTED. On an
               unprepared order the next step is packing it, so hand-over drops
-              to secondary while "Mark ready" takes the green — for a cashier
-              with no `fulfil_pickup` there is no other button, so it stays
-              primary and their one action is not greyed into the background. */}
+              to secondary while "Mark ready" takes the green. Every POS role
+              holds `fulfil_pickup` now, but the check stays: a future role that
+              may sell without it would otherwise be left with its one available
+              action greyed into the background. */}
             <button
               type="button"
               disabled={busy === o.id}
@@ -650,19 +653,29 @@ export function CounterClient({
         </Section>
       ) : (
         <>
+          {/* ★★ BOTH SEGMENTS ALWAYS RENDER, even at zero. They used to hide
+              when empty, so a queue holding only packed parcels showed ONE faint
+              heading and read as a flat list again — the division existed in the
+              data and disappeared from the screen exactly when there was least
+              to compare it against. As permanent structure, "nothing to pack" is
+              itself the answer to the question the shop is asking. (Rendering a
+              zero here is not the badge rule in reverse: a heading is furniture
+              you read past, a badge is a number that demands action.) */}
           <Section
             title="To prepare"
             count={toPrepare.length}
-            show={toPrepare.length > 0}
-            hint="Packed and ready? Mark it, and the customer is told to come in."
+            tone="work"
+            hint="Yours to pack. Mark one ready and the customer is told to come in."
+            empty="Nothing waiting to be packed."
           >
             {toPrepare.map(renderPickup)}
           </Section>
           <Section
             title="Ready to collect"
             count={readyToCollect.length}
-            show={readyToCollect.length > 0}
-            hint="On the shelf, waiting for the customer."
+            tone="waiting"
+            hint="On the shelf, waiting for the customer to walk in."
+            empty="Nothing on the shelf."
           >
             {readyToCollect.map(renderPickup)}
           </Section>
@@ -742,30 +755,80 @@ function rowId(row: CounterRow): string {
  *  must draw NOTHING — not a heading over blank space — and putting that rule
  *  here means each of the four call sites cannot forget it. The count is in the
  *  heading because "To prepare 3" is the whole answer a shop opens this for. */
+/**
+ * ★ THE TWO SEGMENTS ARE COLOURED BY WHO IS BEING WAITED ON, not by severity.
+ * Amber = the SHOP owes something; emerald = the shop has done its part and the
+ * CUSTOMER is the one outstanding. That is the whole distinction the split
+ * exists to make, so it reads before the words do. Neutral is for the
+ * exceptional sections (Other, Returns, Search) which are not part of the pair
+ * and should not compete with it.
+ */
+const TONES = {
+  work: {
+    bar: "bg-amber-400",
+    title: "text-amber-200/90",
+    pill: "bg-amber-400/20 text-amber-200",
+  },
+  waiting: {
+    bar: "bg-emerald-400",
+    title: "text-emerald-200/90",
+    pill: "bg-emerald-400/20 text-emerald-200",
+  },
+  neutral: {
+    bar: "bg-white/20",
+    title: "text-white/40",
+    pill: "bg-white/10 text-white/60",
+  },
+} as const;
+
 function Section({
   title,
   count,
-  show,
+  show = true,
+  tone = "neutral",
   hint,
+  empty,
   children,
 }: {
   title: string;
   count: number;
-  show: boolean;
+  /** Omit for the two pickup segments: they are permanent structure. */
+  show?: boolean;
+  tone?: keyof typeof TONES;
   hint?: string;
+  /** What to say when the section is empty. Required for a section that renders
+   *  at zero, or it would be a heading over nothing. */
+  empty?: string;
   children: React.ReactNode;
 }) {
   if (!show) return null;
+  const t = TONES[tone];
   return (
-    <section className="mb-6 last:mb-0">
-      <h2 className="mb-1 flex items-baseline gap-2 text-xs font-semibold uppercase tracking-wide text-white/35">
-        {title}
-        <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px] tabular-nums text-white/60">
-          {count}
-        </span>
-      </h2>
-      {hint && <p className="mb-2 text-xs text-white/30">{hint}</p>}
-      <ul className="space-y-3">{children}</ul>
+    <section className="mb-7 last:mb-0">
+      <div className="mb-2 flex items-center gap-2.5">
+        {/* A short coloured rule, not a full divider: it ties the heading to the
+            rows under it without drawing a line across a screen that already has
+            plenty. */}
+        <span className={`h-4 w-1 shrink-0 rounded-full ${t.bar}`} />
+        <h2
+          className={`flex items-center gap-2 text-sm font-semibold tracking-wide ${t.title}`}
+        >
+          {title}
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${t.pill}`}
+          >
+            {count}
+          </span>
+        </h2>
+      </div>
+      {hint && count > 0 && (
+        <p className="mb-2 pl-3.5 text-xs text-white/35">{hint}</p>
+      )}
+      {count === 0 && empty ? (
+        <p className="pl-3.5 text-sm text-white/25">{empty}</p>
+      ) : (
+        <ul className="space-y-3 pl-3.5">{children}</ul>
+      )}
     </section>
   );
 }

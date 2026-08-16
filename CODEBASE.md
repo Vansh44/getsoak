@@ -2874,6 +2874,14 @@ group, span}` (span = columns of the 4-wide desktop grid),
         door is handing collections over, which IS a cashier's job.
       - **★★ THE QUEUE IS SECTIONED BY WHO IT IS WAITING ON** — "To prepare"
         (`awaiting`) above "Ready to collect" (`ready`), each with its count.
+        **BOTH RENDER AT ZERO**, coloured by who is outstanding: amber for work
+        the SHOP owes, emerald for a parcel waiting on a CUSTOMER. They used to
+        hide when empty, so a queue holding only packed parcels showed one faint
+        heading and read as a flat list again — the division existed in the data
+        and vanished from the screen exactly when there was least to compare it
+        against. As permanent structure, "nothing to pack" is itself the answer.
+        (Not the badge rule in reverse: a heading is furniture you read past, a
+        badge is a number that demands action.)
         One flat list hid two opposite states behind a small badge: orders
         nobody has packed, which are work for STAFF right now, and packed
         parcels waiting on a CUSTOMER to walk in. A shop had to sort them by
@@ -2924,6 +2932,28 @@ group, span}` (span = columns of the 4-wide desktop grid),
         one COUNT that changes a few times an hour does not justify a held
         connection per till, a reconnect story, and a server that tracks which
         locations are watching. That is the seam to replace if it ever does.
+      - **★★ `lib/pos/use-poll.ts` IS THE ONE REFRESH MECHANISM**, used by the
+        pickup badge, the pickup queue, `/pos/inventory` and the catalog sync.
+        Stock moves for reasons that have nothing to do with the screen showing
+        it — a sale on the next till, a transfer in, a dashboard correction — so
+        the stock list was a snapshot from whenever the page last loaded, and
+        the catalog's re-sync was a bare `setInterval`. Two gates make it
+        dependable rather than merely periodic: **VISIBILITY** (a till is left
+        open all night and browsers keep background timers running) and
+        **ONLINE** (shop wifi drops; a bare interval keeps firing into a dead
+        network, each call failing silently, and the first attempt after it
+        returns is up to a full interval away). Either recovering fires a
+        **catch-up immediately**, which is when staleness is actually noticed —
+        somebody walks back to the till and expects the screen to be true now.
+        `navigator.onLine` is used only to STOP and to trigger a catch-up, never
+        to predict success. ⚠ Its two `onLine` gates are pinned by tests that
+        MOUNT offline / go visible while offline — "stops while offline" passes
+        either way, because the `offline` event clears the timer directly, so
+        without those the gate could be deleted and the suite would stay green.
+        The catalog keeps its 5-minute interval: a sync is keyset-paged at 300
+        products a page, and nothing cached is authoritative (`placePosSale`
+        re-reads price and re-reserves), so staleness there is a wrong label at
+        worst, never a wrong charge or an oversell.
       - `app/pos/pos-screen.tsx` is the shared chrome for every screen that is
         not the register (subtitle, scroll body). **No back button**, by
         design — the hamburger goes anywhere in one tap, and back-to-`/pos` was what
@@ -3304,15 +3334,17 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `isCollectionCode` is a cheap shape check, so a scanner pointed at a
         milk carton never becomes a database lookup, and a code belonging to a
         sister branch names THAT branch rather than returning "not found".
-      - **★ MANAGER MARKS READY; CASHIER HANDS OVER** (`fulfil_pickup`).
-        Marking ready is what tells a customer to travel, so it belongs to
-        someone who has seen the box; handing it over is a cashier's job with
-        the customer standing there, so `markCollected` stays on `sell`.
-        Tightening this was only safe because no store had pickup enabled when
-        it shipped (owner confirmed 2026-08-09) — invariant 1 is satisfied by
-        there being no live behaviour to preserve. ⚠ `markReadyForPickup` had
-        **no test coverage at all** before this; it does now, in both
-        directions.
+      - **★★ EVERY POS ROLE MARKS READY, CASHIER INCLUDED** (`fulfil_pickup`;
+        owner's call, 2026-08-16). It was manager-and-above for a day, on the
+        reasoning that marking ready TELLS A CUSTOMER TO TRAVEL so it should be
+        someone who has seen the box. True of the promise, wrong about who
+        packs: in most shops the person at the counter IS the person picking the
+        order off the shelf, so withholding the button meant the "To prepare"
+        queue could only be worked by someone who might not be in the building.
+        It stays a NAMED capability rather than collapsing into `sell`, so a
+        future till-only or restricted role can sell without it. ⚠
+        `markReadyForPickup` had **no test coverage at all** before any of this;
+        it does now, in both directions.
       - **★★ BUT THE READY STEP WAS SKIPPABLE, SILENTLY** (`handoverGate`,
         `lib/pos/collection-state.ts`; found 2026-08-16). `markCollected`
         claimed `awaiting|ready` alike and the row drew ONE green button for
@@ -3346,12 +3378,14 @@ group, span}` (span = columns of the 4-wide desktop grid),
         order is allowed whatever the policy says, so consulting it would be a
         round trip that cannot change the outcome — the shape of thing that
         makes a till feel slow. Pinned by a test.
-      - **`fulfilment.collectUnprepared`** (`anyone` | `manager_only`, section
-        `locations`, Pro, `dependsOn: fulfilment.offerPickup`) lets a shop where
-        picking is a separate job from serving demand the manager. `anyone` is
-        both today's behaviour (invariant 1) and the right default. Under
-        `manager_only` a cashier gets the REASON and no dialog — a prompt they
-        could never satisfy is worse than a plain refusal.
+      - **★★ AND IT IS NOT A PERMISSION QUESTION.** There was briefly a
+        `fulfilment.collectUnprepared` setting whose `manager_only` value made a
+        cashier fetch someone. It is GONE, because granting `fulfil_pickup` to
+        cashiers made it bypassable: the same person could tap **Mark ready**
+        and then **Hand over** — identical outcome, two taps, no manager. A rule
+        anyone can walk around in two taps is worse than no rule, because it
+        reads as a control and is only a speed bump. What remains is the half
+        that was always doing the work: making the skip deliberate and visible.
       - **Shopify's flow is the same two steps** — prepare → _Mark as ready for
         pickup_ (which sends the customer notification) → _Mark as picked up_ —
         though it puts no manager/cashier split on either.

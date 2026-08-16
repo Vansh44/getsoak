@@ -51,12 +51,7 @@ import {
 } from "@/lib/pos/tenders";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import {
-  handoverGate,
-  isPrepared,
-  normalizeUnpreparedPolicy,
-  type UnpreparedPolicy,
-} from "@/lib/pos/collection-state";
+import { handoverGate } from "@/lib/pos/collection-state";
 
 /**
  * The shop an order is waiting at, returned alongside the claim itself.
@@ -289,40 +284,14 @@ export async function markCollected(
   // rather than forbidden — a customer who arrives before the shop has packed is
   // ordinary, and a cashier alone at the counter must still be able to serve
   // them.
-  // The settings read is skipped entirely for an order that WAS marked ready —
-  // the ordinary case, and `handoverGate` allows it whatever the policy says. A
-  // round trip on the common path to answer a question that cannot change the
-  // outcome is the shape of thing that makes a till feel slow.
-  if (!isPrepared(owed.pickup_status)) {
-    let policy: UnpreparedPolicy = "anyone";
-    try {
-      policy = normalizeUnpreparedPolicy(
-        (await getStoreSettings())["fulfilment.collectUnprepared"],
-      );
-    } catch {
-      // A settings blip must not refuse a customer standing at the counter —
-      // the same posture the shift lookup below takes.
-      policy = "anyone";
-    }
-    const canFulfilPickup = posCan(op.role, "fulfil_pickup");
-    const gate = handoverGate({
-      status: owed.pickup_status,
-      canFulfilPickup,
-      policy,
-      acknowledged: opts.acknowledgeUnprepared === true,
-    });
-    if (!gate.allowed) {
-      return {
-        error: gate.reason,
-        // Only an acknowledgeable refusal offers the dialog. Under
-        // `manager_only` there is nothing for this cashier to confirm, so the
-        // counter shows the reason and stops rather than popping a prompt that
-        // cannot succeed.
-        ...(policy === "anyone" || canFulfilPickup
-          ? { needsPreparedAck: true }
-          : {}),
-      };
-    }
+  const gate = handoverGate({
+    status: owed.pickup_status,
+    acknowledged: opts.acknowledgeUnprepared === true,
+  });
+  if (!gate.allowed) {
+    // `needsPreparedAck` is what turns the refusal into a dialog rather than a
+    // dead error — the counter asks the one thing only the operator can answer.
+    return { error: gate.reason, needsPreparedAck: true };
   }
 
   const due = amountDueAtCollection({
