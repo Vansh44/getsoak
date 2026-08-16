@@ -10,6 +10,7 @@
 
 import type { PickupOrder } from "@/app/actions/pos-pickup-actions";
 import type { PosInventoryItem } from "@/app/actions/pos-inventory-actions";
+import type { CatalogPage } from "@/app/actions/pos-sale-actions";
 
 /** `null` means "we could not tell" — never "there is nothing". */
 export type LiveResult<T> = T | null;
@@ -17,6 +18,7 @@ export type LiveResult<T> = T | null;
 async function poll<T>(
   need: string,
   params: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<LiveResult<T>> {
   const qs = new URLSearchParams({ need, ...params });
   try {
@@ -28,6 +30,7 @@ async function poll<T>(
       // from the till's own origin — which is the intent.
       credentials: "same-origin",
       headers: { accept: "application/json" },
+      signal,
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
@@ -39,24 +42,39 @@ async function poll<T>(
 }
 
 /** Collections waiting on this shop's shelf. */
-export function fetchPickupCount(): Promise<LiveResult<{ count: number }>> {
-  return poll<{ count: number }>("pickups");
+export function fetchPickupCount(
+  signal?: AbortSignal,
+): Promise<LiveResult<{ count: number }>> {
+  return poll<{ count: number }>("pickups", {}, signal);
 }
 
 /** The full collection queue for this counter. */
-export function fetchPickupQueue(): Promise<
-  LiveResult<{ orders: PickupOrder[]; error?: string }>
-> {
-  return poll<{ orders: PickupOrder[]; error?: string }>("queue");
+export function fetchPickupQueue(
+  signal?: AbortSignal,
+): Promise<LiveResult<{ orders: PickupOrder[]; error?: string }>> {
+  return poll<{ orders: PickupOrder[]; error?: string }>("queue", {}, signal);
 }
 
 /** Stock rows at this location, matching the screen's current filters. */
 export function fetchStock(
   query: string,
   lowOnly: boolean,
+  signal?: AbortSignal,
 ): Promise<LiveResult<{ items: PosInventoryItem[]; error?: string }>> {
-  return poll<{ items: PosInventoryItem[]; error?: string }>("stock", {
-    q: query,
-    low: lowOnly ? "1" : "0",
-  });
+  return poll<{ items: PosInventoryItem[]; error?: string }>(
+    "stock",
+    {
+      q: query,
+      low: lowOnly ? "1" : "0",
+    },
+    signal,
+  );
+}
+
+/** One keyset page of the register catalogue. */
+export function fetchCatalogPage(
+  cursor: string | null,
+  signal?: AbortSignal,
+): Promise<LiveResult<CatalogPage>> {
+  return poll<CatalogPage>("catalog", cursor ? { cursor } : {}, signal);
 }

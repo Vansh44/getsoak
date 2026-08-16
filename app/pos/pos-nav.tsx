@@ -52,7 +52,7 @@ import {
 import type { PosActorRole } from "@/lib/pos/permissions";
 import { usePoll } from "@/lib/pos/use-poll";
 import { fetchPickupCount } from "@/lib/pos/live";
-import { usePickupBadge } from "@/lib/pos/pickup-badge";
+import { publishPickupCount, usePickupBadge } from "@/lib/pos/pickup-badge";
 
 /** Icons live here, not in the registry, so lib/pos/nav.ts stays free of a
  *  client dependency and can be imported by a server component or a test. */
@@ -108,38 +108,32 @@ export function PosNav({
   // it appear. This is mounted in the layout, so the count follows them onto
   // /pos/sell — the screen they are on when one lands.
   //
-  // Seeded from the server's number and re-synced when it changes, which is the
-  // supported way to adjust state to a prop: the layout re-renders with a fresh
-  // count on every navigation, and without this the badge would freeze at
-  // whatever it was when this component first mounted.
-  const [polled, setPolled] = useState<number | null>(null);
-  const [lastFromServer, setLastFromServer] = useState(ordersWaiting);
-  if (ordersWaiting !== lastFromServer) {
-    setLastFromServer(ordersWaiting);
-    setPolled(null); // The server's number is newer than anything polled.
-  }
-
   // A screen that reads the queue publishes the count it already has, and says
   // so — see lib/pos/pickup-badge.ts. While one is, this stops asking for a fact
   // it would be fetching twice, and the badge tracks the list exactly instead of
   // lagging it by up to an interval.
   const shared = usePickupBadge();
-  const waiting = shared.count ?? polled ?? ordersWaiting;
+  const waiting = shared.count ?? ordersWaiting;
+
+  // A navigation can re-render the layout with a newer server count. Publish it
+  // into the same store the queue and nav poll use; two competing state slots
+  // are what let a released queue value permanently shadow later poll results.
+  useEffect(() => publishPickupCount(ordersWaiting), [ordersWaiting]);
 
   usePoll(
-    useCallback(async () => {
-      const res = await fetchPickupCount();
-      // null = we could not tell (lapsed session, blip, offline). Keeping the
-      // last known number beats flickering to zero, which reads as work
-      // vanishing off a queue.
-      if (!res) return false;
-      let moved = false;
-      setPolled((cur) => {
-        moved = cur !== res.count;
-        return res.count;
-      });
-      return moved;
-    }, []),
+    useCallback(
+      async (run) => {
+        const res = await fetchPickupCount(run.signal);
+        // null = we could not tell (lapsed session, blip, offline). Keeping the
+        // last known number beats flickering to zero, which reads as work
+        // vanishing off a queue.
+        if (!res || !run.isCurrent()) return undefined;
+        const moved = shared.count !== res.count;
+        publishPickupCount(res.count);
+        return moved;
+      },
+      [shared.count],
+    ),
     // ★ Backs off while the count is unchanged: a shop taking two collections a
     // day should not pay what a busy one does. Any change — or coming back to
     // the tab — resets it to the base interval at once.

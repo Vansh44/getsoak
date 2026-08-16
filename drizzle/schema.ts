@@ -1929,6 +1929,13 @@ export const orders = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    // When staff actually confirmed the goods were packed. Distinct from
+    // pickup_ready_at, which is the promise made at checkout and must remain an
+    // immutable customer-facing date.
+    pickupPreparedAt: timestamp("pickup_prepared_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
     pickupWarnedAt: timestamp("pickup_warned_at", {
       withTimezone: true,
       mode: "string",

@@ -12,7 +12,6 @@
 //      worst — never a wrong charge or an oversell.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCatalogSnapshot } from "@/app/actions/pos-sale-actions";
 import {
   EMPTY_INDEX,
   applyStockDeltas,
@@ -24,6 +23,8 @@ import {
 } from "./catalog-index";
 import { catalogKey, readCatalog, writeCatalog } from "./catalog-store";
 import { usePoll } from "./use-poll";
+import type { PollRun } from "./use-poll";
+import { fetchCatalogPage } from "./live";
 
 /**
  * Stock drifts all day on a register left open; re-sync often enough that the
@@ -107,53 +108,60 @@ export function useCatalog(
   const syncingRef = useRef(false);
   const aliveRef = useRef(true);
 
-  const sync = useCallback(async () => {
-    if (syncingRef.current) return;
-    syncingRef.current = true;
-    setState((s) => ({ ...s, syncing: true, error: null }));
+  const sync = useCallback(
+    async (run?: PollRun) => {
+      if (syncingRef.current) return;
+      syncingRef.current = true;
+      setState((s) => ({ ...s, syncing: true, error: null }));
 
-    try {
-      const items: CatalogItem[] = [];
-      let cursor: string | null = null;
-      for (let page = 0; page < MAX_PAGES; page++) {
-        const res = await getCatalogSnapshot(cursor);
-        if (res.error) {
-          // Keep whatever cache we already have — a failed refresh must never
-          // empty a working register.
-          if (aliveRef.current)
-            setState((s) => ({ ...s, syncing: false, error: res.error! }));
-          return;
+      try {
+        const items: CatalogItem[] = [];
+        let cursor: string | null = null;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const res = await fetchCatalogPage(cursor, run?.signal);
+          if (!res || res.error) {
+            // Keep whatever cache we already have — a failed refresh must never
+            // empty a working register.
+            if (aliveRef.current && (!run || run.isCurrent()))
+              setState((s) => ({
+                ...s,
+                syncing: false,
+                error: res?.error ?? "Catalog sync failed.",
+              }));
+            return;
+          }
+          items.push(...res.items);
+          cursor = res.nextCursor;
+          if (!cursor || items.length >= MAX_ITEMS) break;
         }
-        items.push(...res.items);
-        cursor = res.nextCursor;
-        if (!cursor || items.length >= MAX_ITEMS) break;
-      }
 
-      if (!aliveRef.current) return;
-      const capped = items.slice(0, MAX_ITEMS);
-      const syncedAt = Date.now();
-      setIndex(capped);
-      setState((s) => ({
-        ...s,
-        ready: true,
-        syncing: false,
-        syncedAt,
-        count: capped.length,
-        error: null,
-      }));
-      // Persist last: a failed write costs the next cold start, not this session.
-      void writeCatalog(key, capped, syncedAt);
-    } catch {
-      if (aliveRef.current)
+        if (!aliveRef.current || (run && !run.isCurrent())) return;
+        const capped = items.slice(0, MAX_ITEMS);
+        const syncedAt = Date.now();
+        setIndex(capped);
         setState((s) => ({
           ...s,
+          ready: true,
           syncing: false,
-          error: "Catalog sync failed.",
+          syncedAt,
+          count: capped.length,
+          error: null,
         }));
-    } finally {
-      syncingRef.current = false;
-    }
-  }, [key, setIndex]);
+        // Persist last: a failed write costs the next cold start, not this session.
+        void writeCatalog(key, capped, syncedAt);
+      } catch {
+        if (aliveRef.current)
+          setState((s) => ({
+            ...s,
+            syncing: false,
+            error: "Catalog sync failed.",
+          }));
+      } finally {
+        syncingRef.current = false;
+      }
+    },
+    [key, setIndex],
+  );
 
   // Hydrate from IndexedDB, then sync. The cached index is live within a frame
   // or two of mount, so the first scan of the day doesn't wait on the network.

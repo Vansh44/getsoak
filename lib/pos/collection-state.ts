@@ -79,9 +79,11 @@ export function isCollectable(state: CollectionState): boolean {
 //
 // ★ SO THE RULE IS: POSSIBLE, DELIBERATE, RECORDED. It needs an explicit
 // acknowledgement, so it is never what a mis-tap lands on, and it leaves an
-// audit trail with no new column: `pickup_ready_at` and `collected_at` are
-// written by the SAME statement, so `pickup_ready_at = collected_at` means
-// exactly "collected without being prepared".
+// audit trail in `pickup_prepared_at`: a normal preparation records when the
+// parcel was actually set aside; the confirmed unprepared hand-over writes it
+// in the SAME statement as `collected_at`, so equal timestamps mean exactly
+// "collected without a separate preparation step". `pickup_ready_at` cannot do
+// this job because it is the checkout-time promise shown to the customer.
 //
 // ★★ AND IT IS NOT A PERMISSION QUESTION — deliberately, after being one for a
 // day. There WAS a `fulfilment.collectUnprepared` setting whose `manager_only`

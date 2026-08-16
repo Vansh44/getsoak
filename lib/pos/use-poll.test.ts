@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook } from "@testing-library/react";
-import { usePoll, POS_POLL_MS } from "./use-poll";
+import { act, renderHook } from "@testing-library/react";
+import { usePoll, POS_POLL_MS, type PollRun } from "./use-poll";
 
 // ---------------------------------------------------------------------------
 // The register's refresh mechanism, used by four screens (the pickup badge, the
@@ -199,6 +199,34 @@ describe("usePoll", () => {
     unmount();
     vi.advanceTimersByTime(5000);
     expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a run already in flight when disabled", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let committed = false;
+    let aborted = false;
+    const fn = vi.fn(async (run: PollRun) => {
+      run.signal.addEventListener("abort", () => {
+        aborted = true;
+      });
+      await pending;
+      if (run.isCurrent()) committed = true;
+    });
+    const { rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => usePoll(fn, { ms: 1000, enabled }),
+      { initialProps: { enabled: true } },
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    rerender({ enabled: false });
+    expect(aborted).toBe(true);
+
+    await act(async () => finish());
+    expect(committed).toBe(false);
   });
 
   // ★ The latest callback runs WITHOUT restarting the timer. A poll that resets

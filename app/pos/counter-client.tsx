@@ -211,11 +211,14 @@ export function CounterClient({
   }, [queue.length, searching]);
 
   usePoll(
-    useCallback(async () => {
-      const res = await fetchPickupQueue();
-      if (!res || res.error) return false;
+    useCallback(async (run) => {
+      const res = await fetchPickupQueue(run.signal);
+      // Failure is not "unchanged". Returning undefined keeps retries at the
+      // base interval instead of backing an outage off to two minutes.
+      if (!res || res.error || !run.isCurrent()) return undefined;
       let moved = false;
       setQueue((cur) => {
+        if (!run.isCurrent()) return cur;
         moved = !sameQueue(cur, res.orders);
         return moved ? res.orders : cur;
       });

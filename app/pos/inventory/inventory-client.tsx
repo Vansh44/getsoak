@@ -88,16 +88,20 @@ export function InventoryClient({
   // and submits against another.
   const adjusting = openKey !== null;
   usePoll(
-    useCallback(async () => {
-      const res = await fetchStock(query.trim(), lowOnly);
-      if (!res || res.error) return false;
-      let moved = false;
-      setItems((cur) => {
-        moved = !sameStock(cur, res.items);
-        return moved ? res.items : cur;
-      });
-      return moved;
-    }, [query, lowOnly]),
+    useCallback(
+      async (run) => {
+        const res = await fetchStock(query.trim(), lowOnly, run.signal);
+        if (!res || res.error || !run.isCurrent()) return undefined;
+        let moved = false;
+        setItems((cur) => {
+          if (!run.isCurrent()) return cur;
+          moved = !sameStock(cur, res.items);
+          return moved ? res.items : cur;
+        });
+        return moved;
+      },
+      [query, lowOnly],
+    ),
     { enabled: !adjusting, backOff: true },
   );
 

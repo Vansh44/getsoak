@@ -411,6 +411,9 @@ describe("markReadyForPickup — the capability split", () => {
     dbHolder.current = makeDbMock({ returning: CLAIMED });
     const res = await markReadyForPickup("ord-1");
     expect(res.success).toBe(true);
+    expect(sqlText(dbHolder.current.calls.set[0].pickupPreparedAt)).toMatch(
+      /now\(\)/i,
+    );
     // And the customer is told, which is the whole point of the step.
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "order.ready_for_pickup" }),
@@ -432,8 +435,8 @@ describe("markReadyForPickup — the capability split", () => {
     expect((await markReadyForPickup("ord-1")).error).toMatch(/signed in/i);
   });
 
-  // ★ HANDING OVER IS STILL A CASHIER'S JOB. Tightening mark-ready must not
-  // quietly tighten this too — that would stop a shop serving customers.
+  // ★ HANDING OVER IS ALSO A CASHIER'S JOB. The named preparation capability
+  // must not accidentally narrow this separate, ordinary counter action.
   it("★ leaves markCollected open to a cashier", async () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     dbHolder.current = makeDbMock({
@@ -508,15 +511,22 @@ describe("markCollected — an order that was never marked ready", () => {
     expect(res.success).toBe(true);
   });
 
-  // ★ THE AUDIT TRAIL WITH NO NEW COLUMN: pickup_ready_at is written by the
-  // same statement as collected_at, so the two match exactly when nobody
-  // prepared it — and coalesce keeps a genuine earlier one.
-  it("stamps a ready time so the shopper's tracker is coherent", async () => {
+  // ★ THE AUDIT TRAIL USES THE ACTUAL PREPARATION TIME, not pickup_ready_at:
+  // that older column is the date promised at checkout and is already populated
+  // before anyone packs the order.
+  it("stamps actual preparation beside collection without changing the promise", async () => {
     dbHolder.current = seed(AWAITING);
     await markCollected("ord-1", [], { acknowledgeUnprepared: true });
     const set = dbHolder.current.calls.set[0];
-    expect(set.pickupReadyAt).toBeDefined();
-    expect(sqlText(set.pickupReadyAt)).toMatch(/coalesce/i);
+    expect(sqlText(set.pickupPreparedAt)).toMatch(/now\(\)/i);
+    expect(set.pickupReadyAt).toBeUndefined();
+  });
+
+  it("preserves the earlier preparation stamp on the ordinary ready path", async () => {
+    dbHolder.current = seed(PREPAID);
+    await markCollected("ord-1");
+    const set = dbHolder.current.calls.set[0];
+    expect(set.pickupPreparedAt).toBeUndefined();
   });
 
   // ★ NO SETTINGS READ AT ALL. The preparation question is answered from the

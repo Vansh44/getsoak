@@ -66,6 +66,20 @@ export interface PollOptions {
   backOff?: boolean;
 }
 
+/**
+ * Identity and cancellation for one scheduled run.
+ *
+ * A timer can be disabled while its request is already in flight (the cashier
+ * starts handing over an order, opens a stock editor, or leaves the page).
+ * Clearing the NEXT timer does not stop that old response from
+ * landing. Consumers must check `isCurrent()` before committing data; GET-backed
+ * consumers also pass `signal` to fetch so the browser can stop the work early.
+ */
+export interface PollRun {
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+}
+
 /** What a polled callback may report so back-off knows what happened. */
 export type PollResult = boolean | void | Promise<boolean | void>;
 
@@ -102,7 +116,7 @@ function withJitter(ms: number): number {
  * connection cannot leave two running against one screen.
  */
 export function usePoll(
-  fn: () => PollResult,
+  fn: (run: PollRun) => PollResult,
   msOrOptions: number | PollOptions = POS_POLL_MS,
   enabledArg = true,
 ) {
@@ -128,6 +142,7 @@ export function usePoll(
   useEffect(() => {
     if (!enabled) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let active: AbortController | null = null;
     let cancelled = false;
 
     // `navigator.onLine` is a weak signal — true means "there is an interface",
@@ -157,20 +172,35 @@ export function usePoll(
     const disarm = () => {
       if (timer !== null) clearTimeout(timer);
       timer = null;
+      active?.abort();
+      active = null;
     };
 
     async function run() {
       timer = null;
       if (cancelled || !awake()) return;
+      const controller = new AbortController();
+      active?.abort();
+      active = controller;
+      const current = () =>
+        !cancelled && active === controller && !controller.signal.aborted;
       lastRunAt.current = Date.now();
       let changed: boolean | void;
       try {
-        changed = await saved.current();
+        changed = await saved.current({
+          signal: controller.signal,
+          isCurrent: current,
+        });
       } catch {
         // A failed poll is not an event. The screen keeps what it had and the
         // next tick tries again; surfacing it would be a toast nobody asked for.
         changed = undefined;
       }
+      // Disabled, hidden, offline, superseded or unmounted while the callback
+      // was awaiting. Its consumer has already refused any stale state commit;
+      // do not let it alter back-off or arm another timer either.
+      if (!current()) return;
+      active = null;
       // `undefined` means the caller does not report — treat that as "changed"
       // so an uninstrumented poll never silently slows itself down.
       idleRuns.current = changed === false ? idleRuns.current + 1 : 0;

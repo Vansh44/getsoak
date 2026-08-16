@@ -91,5 +91,11 @@ describe("pickup badge store", () => {
     // The nav resumes polling, but until its first tick lands the last known
     // number is still the best one available.
     expect(result.current.count).toBe(5);
+
+    // The nav poll is now another publisher into this one store. Its first
+    // successful result must replace the released queue value; keeping two
+    // state slots made the old shared value shadow nav results forever.
+    act(() => publishPickupCount(6));
+    expect(result.current.count).toBe(6);
   });
 });

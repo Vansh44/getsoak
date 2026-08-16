@@ -346,14 +346,14 @@ export async function markCollected(
           collectedAt: sql`now()`,
           collectedBy: op.staffId ?? op.name,
           status: "completed",
-          // ★ THE AUDIT TRAIL, WITH NO NEW COLUMN. An order handed over straight
-          // from 'awaiting' never had a ready timestamp, which would leave the
-          // shopper's tracker showing a collection that jumped a step it says it
-          // has. This is written by the SAME statement as `collected_at`, so the
-          // two are byte-identical exactly when nobody prepared it — and `coalesce`
-          // keeps a genuine earlier one, which is what makes the difference
-          // readable afterwards.
-          pickupReadyAt: sql`coalesce(${orders.pickupReadyAt}, now())`,
+          // ★ THE AUDIT TRAIL. `pickup_ready_at` is the date promised at
+          // checkout and is already non-null on every new pickup, so it cannot
+          // double as evidence of actual preparation. When the cashier confirms
+          // an awaiting order is physically packed, stamp the dedicated actual
+          // time in the SAME statement as collected_at. Equality therefore
+          // answers "collected without a prior Mark ready" exactly, without
+          // destroying the customer promise.
+          ...(gate.unprepared ? { pickupPreparedAt: sql`now()` } : {}),
           // "Pay at store" means the money changes hands at the counter — so
           // handing the order over IS the payment. Only that method is
           // settled here: an order already paid online must not be touched,
@@ -466,17 +466,13 @@ export async function markReadyForPickup(
 ): Promise<{ success?: boolean; error?: string }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
-  // ★ MANAGER AND ABOVE (roadmap Step 3). Marking an order ready is what tells
-  // a customer to travel, so it should be someone who has actually seen the
-  // box — not anyone who happens to be on the till. Handing it over stays
-  // `sell`: that is a cashier's job, with the customer standing there.
-  //
-  // Safe to tighten because no store had pickup enabled when this shipped
-  // (owner confirmed 2026-08-09) — there is no live behaviour to preserve
-  // (invariant 1).
+  // Every current POS role has this named capability, cashier included: in
+  // most shops the person on the till is also the person packing the order.
+  // Keep the capability check distinct from `sell` so a future restricted role
+  // can take payment without being allowed to send a ready notification.
   if (!posCan(op.role, "fulfil_pickup")) {
     return {
-      error: "Only a manager can mark a collection order ready.",
+      error: "You are not allowed to mark a collection order ready.",
     };
   }
 
@@ -484,7 +480,12 @@ export async function markReadyForPickup(
     const rows = await withService((db) =>
       db
         .update(orders)
-        .set({ pickupStatus: "ready" })
+        .set({
+          pickupStatus: "ready",
+          // Actual physical preparation, separate from pickup_ready_at (the
+          // checkout promise). The hand-over path preserves this earlier value.
+          pickupPreparedAt: sql`now()`,
+        })
         .where(
           and(
             eq(orders.id, orderId),

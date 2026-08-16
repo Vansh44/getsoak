@@ -33,17 +33,18 @@ home, pricing, login, and signup deliberately navigate to `storemink.com`.
 
 ## 0. Before you can test anything
 
-| Prerequisite                                                                                             | Why                                                                                               |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10` as `postgres` | Column/function drift otherwise                                                                   |
-| Store on the **Pro** plan                                                                                | POS and Locations are Pro-gated                                                                   |
-| `POS_SESSION_SECRET` set                                                                                 | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
-| `RESEND_*` configured                                                                                    | Staff invitations and pickup emails go nowhere otherwise                                          |
-| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                           | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
+| Prerequisite                                                                                                                                         | Why                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Migrations `pos_00`–`pos_11`, `locations_01`–`locations_06`, `locations_08`–`locations_10`, and `20260816_0003_pos_pickup_prepared_at` as `postgres` | Column/function drift otherwise                                                                   |
+| Store on the **Pro** plan                                                                                                                            | POS and Locations are Pro-gated                                                                   |
+| `POS_SESSION_SECRET` set                                                                                                                             | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
+| `RESEND_*` configured                                                                                                                                | Staff invitations and pickup emails go nowhere otherwise                                          |
+| `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                                                                       | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
-are applied. `locations_10` is pending a `postgres` migration run; the three
-local theme-demo rows were repaired explicitly for smoke testing only.
+are applied. `locations_10` and `20260816_0003_pos_pickup_prepared_at` are
+pending a `postgres` migration run; the three local theme-demo rows were
+repaired explicitly for smoke testing only.
 (`locations_07` added merchant postcode rules and `locations_08` removed them
 again; both ran.)
 
@@ -794,13 +795,12 @@ Scan a code belonging to a sister branch.
 **Expect:** "That order is waiting at Bandra." Not "not found" — the customer is
 standing there and needs to know where to go.
 
-**PS-E.6 ★★ — Manager marks ready, cashier hands over**
-As a **cashier**, try to mark a collection ready.
-**Expect:** refused — "Only a manager can mark a collection order ready."
-Nothing moves, and no "your order is ready" email goes out.
-As a **manager**: it works, and the ready email carries the code.
-Then as a **cashier**, hand it over: that still works. Tightening the wrong one
-would stop a shop serving customers.
+**PS-E.6 ★★ — Cashier can prepare and hand over**
+As a **cashier**, mark a collection ready.
+**Expect:** it works and the ready email carries the code. Then hand it over:
+that works too. The person at the till is commonly the person packing the box;
+`fulfil_pickup` remains a named capability so a future restricted role can sell
+without sending ready notifications.
 
 **PS-E.7 — Pickup alerts reach the right shop**
 On a store with two locations, place a pickup order at one of them.
@@ -1081,10 +1081,10 @@ goods to hand over now?" — with **Not yet** and **Yes, hand over**. "Not yet"
 changes nothing. "Yes" completes the collection.
 **Was:** it completed on the FIRST tap, silently, so an order nobody had packed
 could leave the "To prepare" queue without being done.
-**Why it is not simply refused:** marking ready is manager-only, so a hard gate
-strands a cashier alone at the counter, unable to serve a customer standing in
-front of them — and someone who ordered online then walked in early is an
-ordinary collection, not an error.
+**Why it is not simply refused:** a customer who ordered online then walked in
+early is an ordinary collection, not an error. The acknowledgement makes the
+skip deliberate and records it; a hard gate would still be bypassable by the
+same cashier tapping Mark ready and then Hand over.
 
 **PS-8.34 ★ — A prepared order is never nagged**
 Hand over an order already marked ready.
@@ -1092,13 +1092,13 @@ Hand over an order already marked ready.
 the tender pad. A confirmation on the ordinary path is one people learn to
 dismiss unread, which would make it useless on the path that needs it.
 
-**PS-8.35 ★ — The skip leaves a trace with no new column**
+**PS-8.35 ★ — The skip leaves an honest preparation trace**
 Hand over an unprepared order, then read the row in `orders`.
-**Expect:** `pickup_ready_at` equals `collected_at` exactly — both written by the
-same statement. On an order that WAS marked ready first, `pickup_ready_at` keeps
-its earlier value. That equality is how "collected without being prepared" is
-answerable afterwards, and it stops the shopper's tracker showing a collection
-that skipped a step it claims to have.
+**Expect:** `pickup_prepared_at` equals `collected_at` exactly — both written by
+the same statement. On an order that WAS marked ready first,
+`pickup_prepared_at` keeps its earlier actual timestamp. In both cases
+`pickup_ready_at` remains the date promised to the customer at checkout; it is
+never overwritten to manufacture an audit marker.
 
 **PS-8.36 ★★ — A cashier can mark ready**
 Sign in as a cashier and open a collection in "To prepare".
@@ -1979,7 +1979,9 @@ the refresh.
 **Was:** the polls were Server Actions, and Next dispatches those one at a time
 per client — so `placePosSale` sat in a client-side queue behind a badge refresh
 nobody asked for. Check the Network panel: polls are now `GET /api/pos/live`,
-not POSTs to the action endpoint, and they overlap freely with actions.
+not POSTs to the action endpoint, and they overlap freely with actions. Leave
+the page open through a five-minute catalogue refresh too: every keyset page is
+also a GET, so the heaviest background reader has no action-dispatch exception.
 
 **PS-19.25 ★★ — Tab-switching does not storm the catalogue**
 On `/pos/sell`, with the Network panel open, switch to another tab and back ten
@@ -2003,6 +2005,24 @@ not up to 30 seconds later.
 **Also check the Network panel:** while the queue is polling, there is NO second
 request for the count. Type into the search box (which suspends the queue poll)
 and the nav resumes its own polling rather than freezing the badge.
+Then leave Pickups for `/pos/sell`, create another collection, and wait for the
+nav poll. **Expect:** the published queue count is replaced by the new poll
+result; visiting Pickups once must not freeze the badge forever.
+
+**PS-19.28 ★★ — An old response cannot undo a cashier action**
+Throttle `/api/pos/live?need=queue`, wait until a queue poll is in flight, then
+hand an order over before that response finishes.
+**Expect:** the GET is aborted or its result is discarded. The completed row
+never reappears after `settle()` removes it. Repeat on Stock with an in-flight
+poll and a count/adjustment: an older response must not overwrite the confirmed
+quantity.
+
+**PS-19.29 ★★ — Poll failure preserves truth and retries promptly**
+With a non-zero pickup badge, make the count query return a transient 503.
+**Expect:** the badge keeps its last number; it does not become zero. Restore the
+database and expect another attempt at the base interval — failures must not be
+classified as "unchanged" and backed off to two minutes. Queue and Stock follow
+the same retry rule.
 
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
@@ -2345,10 +2365,12 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**The rail cost a column of products on an iPad**~~               | **FIXED** (PS-19.21). The 76px `lg` rail is gone — one hamburger drawer at every width. The register is horizontally constrained, so the tap it saved was the wrong thing to optimise                                                                  |
 | ~~**A new collection needed a manual page refresh**~~               | **FIXED** (PS-19.22). A collection is created on the storefront, so nothing at the counter made it appear. The badge and the queue poll every 30s, visible-tab only, suspended mid-action                                                              |
 | ~~**A cashier could hand over an order nobody packed**~~            | **FIXED** (PS-8.33–8.37). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement — refusing outright would strand a cashier alone at the counter, and a manager gate is bypassable in two taps            |
-| ~~**A background poll delayed the cashier's next tap**~~            | **FIXED** (PS-19.24). The polls were Server Actions, and Next dispatches those one at a time per client — so a refresh in flight queued ahead of `placePosSale`. They are a GET route now                                                              |
+| ~~**A background poll delayed the cashier's next tap**~~            | **FIXED** (PS-19.24). All background reads, including every paged catalogue sync, use the GET route; none enters Next's client Server Action queue                                                                                                     |
 | ~~**Tab-switching kicked off a full catalogue re-sync each time**~~ | **FIXED** (PS-19.25). `visibilitychange` fires on every switch; the catch-up is now skipped if a run happened inside one interval                                                                                                                      |
 | ~~**A quiet till cost the same as a busy one**~~                    | **FIXED** (PS-19.26). An unchanged poll backs off 30s → 2min and resets on any change; ±15% jitter stops a fleet phase-locking                                                                                                                         |
-| ~~**The badge and the queue polled the same fact, and disagreed**~~ | **FIXED** (PS-19.27). The counter publishes the count it already has and claims the badge; the nav stops asking while claimed                                                                                                                          |
+| ~~**The badge and the queue polled the same fact, and disagreed**~~ | **FIXED** (PS-19.27). Queue, nav poll and newer server props publish into one count; the nav stops asking while claimed and can replace the value after release                                                                                        |
+| ~~**An in-flight poll could restore stale state after an action**~~ | **FIXED** (PS-19.28). Disabling aborts the active GET and each consumer rejects superseded runs before committing queue/stock/catalog state                                                                                                            |
+| ~~**A failed poll looked like zero or "unchanged"**~~               | **FIXED** (PS-19.29). Live count failures are 503 and preserve the badge; failed/aborted callbacks return no verdict, keeping retries at the base interval                                                                                             |
 | **Polling is O(tills), not O(events)**                              | By design, and measured: ~83 req/s and ~250 DB qps at 10,000 quiet tills. SSE would be O(events) but needs a held connection per till (~125 Cloud Run instances). Revisit only if sub-5s latency is ever needed                                        |
 | ~~**Stock on a POS screen was a snapshot from page load**~~         | **FIXED** (PS-19.23). `/pos/inventory` never re-read on its own and the catalog's re-sync was a bare interval, blind to a hidden tab or a dead network. One `usePoll` now serves badge, queue, stock list and catalog                                  |
 | ~~**Every POS sale failed on insert**~~                             | **FIXED**. `placePosSale` wrote `store_credit_used: null` into a `NOT NULL DEFAULT 0` column, so every sale using no credit failed from the moment `147fe24` deployed. `OrderInsert` + `satisfies` makes it a compile error                            |

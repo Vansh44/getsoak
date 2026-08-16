@@ -459,6 +459,10 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── pos/live/          # ★ Authenticated no-store GET transport for every
+│       │                      # background POS read (badge, queue, stock, paged
+│       │                      # catalogue). Server Actions are client-serialized,
+│       │                      # so a poll must never queue ahead of a money action.
 │       ├── webhooks/logistics/[connectionId]/ # ★ §35 authenticated carrier events;
 │       │                      # provider-neutral URL accepted by Shiprocket; duplicate and
 │       │                      # out-of-order safe, raw payload service-only
@@ -1124,7 +1128,9 @@ wholesip/
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
-│                              # scheduled-plan constraint in both environments.
+│                              # scheduled-plan constraint in both environments;
+│                              # 0003 adds orders.pickup_prepared_at so actual
+│                              # packing is distinct from the checkout promise.
 ├── scripts/
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
@@ -2582,9 +2588,10 @@ group, span}` (span = columns of the 4-wide desktop grid),
         `applyStockDeltas`); `catalog-store.ts` persists it to IndexedDB, keyed
         per **store+location** (stock is per-location and a browser can be
         shared); `use-catalog.ts` hydrates from that cache on mount, then syncs
-        the full catalog in the background via `getCatalogSnapshot` (keyset
-        paging over `products.id`, 300 products/page — pages stay stable while
-        the catalog is edited, and a product's variants can't split at a seam).
+        the full catalog in the background via the `catalog` branch of
+        `GET /api/pos/live` (it delegates to `getCatalogSnapshot`; keyset paging
+        over `products.id`, 300 products/page — pages stay stable while the
+        catalog is edited, and a product's variants can't split at a seam).
         Measured in-browser: a scan resolves in **~0.001 ms** (Map hit) and a
         keystroke search in **1.4–5.3 ms** across 1k–20k SKUs, which is why the
         search is a plain linear scan rather than an inverted index that would
@@ -2905,18 +2912,21 @@ group, span}` (span = columns of the 4-wide desktop grid),
         It is drawn by the layout, so it runs on EVERY POS page load including
         `/pos/sell`, whose whole design goal is a register that opens without
         waiting on the network — one indexed COUNT, not two queries and 100 rows
-        with their line-item counts. It **fails to zero rather than throwing**: a
-        blip must cost a badge, not the ability to serve a customer. NOT a
+        with their line-item counts. The SERVER-RENDERED layout intentionally
+        **fails to zero rather than throwing**: a blip must cost initial badge
+        decoration, not the ability to serve a customer. The LIVE route calls
+        `readPickupsWaiting`, which preserves failure as 503 so a trustworthy
+        last-known count is never overwritten with a fake zero. NOT a
         `"use server"` file — it takes a store and a location as arguments, the
         exact shape that must never be publicly callable. `pickup-count.test.ts`
         pins its predicate to `getPickupQueue`'s, because a badge that disagrees
         with the list under it is worse than no badge.
       - **★★ AND IT IS POLLED, BECAUSE NOTHING AT THE COUNTER CREATES ONE**
-        (`app/pos/use-poll.ts`, 30s). A collection is placed on the STOREFRONT,
+        (`lib/pos/use-poll.ts`, 30s). A collection is placed on the STOREFRONT,
         so no action on the till makes it appear — the queue and the badge only
         moved when a human reloaded the page, which is what a shop actually hit.
-        `getPickupCount` is the polled action: it re-resolves the operator (ids
-        never come from the client) and returns the same single indexed COUNT.
+        `/api/pos/live?need=pickups` re-resolves the operator (ids never come
+        from the client) and returns the same single indexed COUNT.
         Four rules keep it from being a nuisance: it **only ticks while the tab
         is VISIBLE** — a till is left open all night and background timers keep
         running, so without that every closed shop spends the small hours making
@@ -2926,9 +2936,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
         **quiet** (no `useTransition`, so it never flashes the search spinner,
         and its errors are swallowed — a toast nobody triggered on a repeating
         timer teaches people to dismiss toasts unread); and it is **suspended
-        while the cashier is mid-action**, because `settle()` removes a row
-        optimistically and a poll landing between the tap and the answer would
-        put it back under their finger. A poll rather than a socket on purpose:
+        while the cashier is mid-action**. Disabling also ABORTS the active GET,
+        and every consumer checks its run identity before committing state;
+        clearing only the next timer is insufficient because a response already
+        in flight could otherwise land after `settle()` and put a completed row
+        back under the cashier's finger. A poll rather than a socket on purpose:
         one COUNT that changes a few times an hour does not justify a held
         connection per till, a reconnect story, and a server that tracks which
         locations are watching. That is the seam to replace if it ever does.
@@ -2943,12 +2955,16 @@ group, span}` (span = columns of the 4-wide desktop grid),
         and invisible in testing because it only shows under a slow network. The
         same docs prescribe the fix — "use a Route Handler for non-mutation
         requests". One route with a `need` param, so the gate, the `no-store`
-        headers and the failure shape cannot drift across three copies; the
+        headers and the failure shape cannot drift across four copies; the
         OPERATOR always selects the scope. It delegates to the existing actions
-        for the queue and stock rather than re-querying, because a second copy of
-        the queue's predicate is how a badge ends up disagreeing with its list.
-        ⚠ `/api` bypasses `proxy.ts` (its matcher excludes it), so the route's
-        own `resolvePosOperator` IS the gate.
+        for the queue, stock and paged catalogue rather than re-querying, because
+        a second copy of the queue's predicate is how a badge ends up disagreeing
+        with its list. Those action-backed branches do NOT add an outer operator
+        resolve: React `cache()` does not memoize outside Server Component
+        rendering, so that would pay the security lookup twice. The count branch
+        owns its one explicit gate because its strict reader accepts scope ids.
+        ⚠ `/api` bypasses `proxy.ts` (its matcher excludes it), so every branch
+        must own exactly one gate.
       - **★★ `lib/pos/use-poll.ts` IS THE ONE REFRESH MECHANISM**, used by the
         pickup badge, the pickup queue, `/pos/inventory` and the catalog sync.
         Stock moves for reasons that have nothing to do with the screen showing
@@ -2967,7 +2983,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
         MOUNT offline / go visible while offline — "stops while offline" passes
         either way, because the `offline` event clears the timer directly, so
         without those the gate could be deleted and the suite would stay green.
-        The catalog keeps its 5-minute interval: a sync is keyset-paged at 300
+        The catalog keeps its 5-minute interval and every page now uses the GET
+        transport too — leaving its old Server Action would still occasionally
+        queue ahead of a sale. A sync is keyset-paged at 300
         products a page, and nothing cached is authoritative (`placePosSale`
         re-reads price and re-reserves), so staleness there is a wrong label at
         worst, never a wrong charge or an oversell.
@@ -2992,7 +3010,9 @@ group, span}` (span = columns of the 4-wide desktop grid),
         (2 min); any change — or any catch-up — resets it to the base at once, so
         the busy case is untouched. Opt-in, because a caller that cannot tell
         (the catalog sync, which does not diff) would otherwise slow itself down
-        on no evidence: `undefined` counts as "changed". `sameQueue` /
+        on no evidence: `undefined` counts as "changed". A failed/aborted poll
+        also returns `undefined`, never `false`, so an outage remains on the base
+        retry interval rather than being mistaken for a quiet shop. `sameQueue` /
         `sameStock` are what answer it, and they also keep the previous array
         IDENTITY so an unchanged poll does not re-render the list.
       - **★ ±15% JITTER, because tills start together.** A deploy restarts every
@@ -3005,8 +3025,11 @@ group, span}` (span = columns of the 4-wide desktop grid),
         carried — and worse, the two disagreed: the list dropped a row on
         hand-over while the rail kept the old number for up to an interval. A
         module-level store (`useSyncExternalStore`, stable snapshot identity)
-        lets the counter publish what it has and CLAIM the badge, and the nav
-        stops polling while claimed. ⚠ The claim is tied to the counter's poll
+        is the ONE count: the counter, the nav poll and a newer server layout
+        all publish into it. This matters after release — keeping a second nav
+        state let the non-null queue value shadow successful poll results forever.
+        The counter CLAIMS the badge and the nav stops polling while claimed.
+        ⚠ The claim is tied to the counter's poll
         being LIVE, not to the screen being mounted: that poll suspends while the
         cashier is mid-action or searching, and a claim held across it would
         freeze the badge for as long as somebody left a search box full.
@@ -3424,27 +3447,29 @@ group, span}` (span = columns of the 4-wide desktop grid),
         exist to separate work the SHOP owes from parcels waiting on a
         CUSTOMER, and this let the first vanish without being done.
       - **★ REFUSING OUTRIGHT WOULD HAVE BEEN THE WRONG FIX**, and it is worth
-        being precise about why, because it is the obvious move. Marking ready
-        is manager-only, so a hard gate strands a cashier alone at the counter
-        with the customer in front of them, unable to serve an order the shop
-        can see — and someone who ordered online and walked in before the shop
-        got to it is an ORDINARY collection, not an error.
+        being precise about why, because it is the obvious move. Someone who
+        ordered online and walked in before the shop got to it is an ORDINARY
+        collection, not an error. And every current role can Mark ready, so a
+        hard gate is decorative: the same cashier can produce the identical
+        outcome in two taps.
       - **★ SO: POSSIBLE, DELIBERATE, RECORDED.** "Mark ready" conflates two
         acts — _the goods are packed_ (a physical fact) and _tell the customer
-        to travel_ (a promise, and the entire reason for the manager gate).
-        When the customer is already at the counter the second is moot, and the
-        person holding the box is the best witness there is to the first. So a
-        hand-over from `awaiting` needs an ACKNOWLEDGEMENT, not a manager:
+        to travel_ (a promise). When the customer is already at the counter the
+        second is moot, and the person holding the box is the best witness there
+        is to the first. So a hand-over from `awaiting` needs an ACKNOWLEDGEMENT,
+        not an impossible permission distinction:
         `needsPreparedAck` turns the server's refusal into a dialog asking the
         one thing only the cashier can answer. It is never what a mis-tap does,
         and the refusal lands BEFORE the money read and the claim, so nothing
         has moved when it fires.
-      - **★ THE AUDIT TRAIL NEEDS NO NEW COLUMN.** The claim writes
-        `pickup_ready_at = coalesce(pickup_ready_at, now())` in the SAME
-        statement as `collected_at`, so the two are byte-identical exactly when
-        nobody prepared it, and a genuine earlier ready time is preserved. It
-        also stops the shopper's tracker showing a collection that skipped a
-        step it claims to have.
+      - **★ THE AUDIT TRAIL NEEDS TWO DIFFERENT CLOCKS.** `pickup_ready_at` is
+        the immutable date PROMISED at checkout; it is already populated before
+        anyone packs the order, so it cannot answer whether packing happened.
+        `pickup_prepared_at` (migration `20260816_0003`) is the ACTUAL physical
+        confirmation: Mark ready stamps it, while an acknowledged direct
+        hand-over stamps it in the SAME statement as `collected_at`. Equality
+        therefore means "collected without an earlier Mark ready" exactly, and
+        the original customer promise is preserved.
       - **★ THE SETTINGS READ IS SKIPPED ON THE ORDINARY PATH.** A prepared
         order is allowed whatever the policy says, so consulting it would be a
         round trip that cannot change the outcome — the shape of thing that

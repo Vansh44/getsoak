@@ -105,6 +105,16 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260816_0003_pos_pickup_prepared_at",
+      "description": "Record actual pickup preparation separately from the checkout promise",
+      "file": "sql/20260816_0003_pos_pickup_prepared_at.sql",
+      "transaction": true,
+      "requires": ["20260814_0002_schema_drift_repair"],
+      "verify": {
+        "columns": ["orders.pickup_prepared_at"]
+      }
     }
   ]
 }
