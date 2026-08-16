@@ -22,6 +22,7 @@ import { getAuthorizedDevice } from "@/lib/pos/devices";
 import { hashPin, isValidPinFormat } from "@/lib/pos/pin";
 import { isPosRole, type PosRole } from "@/lib/pos/permissions";
 import { setUserClaims } from "@/lib/auth/firebase-claims";
+import { logError } from "@/lib/observability/logger";
 import { deleteAuthUser } from "@/lib/auth/firebase-users";
 import {
   emailButton,
@@ -33,6 +34,9 @@ import {
 export interface ActionResult {
   success?: boolean;
   error?: string;
+  /** Succeeded, but something the operator should know about didn't. Distinct
+   *  from `error`: the thing they asked for HAPPENED. */
+  warning?: string;
 }
 
 export interface PosStaffRow {
@@ -364,10 +368,60 @@ export async function deleteStaff(id: string): Promise<ActionResult> {
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't remove the staff member.") };
   }
-  // No cross-system cascade (auth vs DB) — delete the Firebase account too.
-  if (uid) await deleteAuthUser(uid).catch(() => {});
+  // ── Cleaning up the sign-in account ───────────────────────────────────────
+  // There is no cascade between Identity Platform and the database, so the
+  // Firebase user has to be removed explicitly.
+  //
+  // ★ THE DATABASE ROW GOES FIRST, and that ordering is the security decision.
+  // `resolvePosOperator` re-reads `pos_staff` on EVERY request, so deleting the
+  // row IS the revocation — an auth account on its own cannot sell, open a
+  // drawer or touch stock. Deleting the account first and then failing the row
+  // delete would be the harmful order: a staff member who still looks active
+  // but can no longer sign in, with nothing saying why.
+  //
+  // ⚠ ONLY BY UID, NEVER BY EMAIL. It is tempting to look the account up by the
+  // invited address when `user_id` is null (someone deleted mid-registration
+  // leaves a Firebase account the row never recorded). Don't: that address may
+  // be the person's SHOPPER account on this platform, which predates the
+  // invite and has orders behind it. The uid came from the staff row, so it is
+  // the only id we know belongs to this staff member.
+  let authCleanup: "done" | "not-needed" | "failed" = "not-needed";
+  if (uid) {
+    try {
+      await deleteAuthUser(uid);
+      authCleanup = "done";
+    } catch (err) {
+      authCleanup = "failed";
+      // ★★ NOT SWALLOWED. This used to be `.catch(() => {})`, and the silence
+      // is what produced a live Firebase account carrying a stale
+      // `role: manager` claim with nothing in the database pointing at it —
+      // found in production. Two consequences, neither visible to anyone: the
+      // claim keeps bouncing that account out of /dashboard (proxy.ts routes
+      // cashier/manager to /pos), and the account blocks its own re-invitation.
+      logError("deleteStaff: auth cleanup failed", err, { storeId, uid });
+
+      // Best-effort fallback: if the account cannot be removed, at least strip
+      // the role claim, so the worst outcome is an orphaned login rather than
+      // one permanently locked out of every dashboard it touches.
+      await setUserClaims(uid, { role: null }).catch((e) =>
+        logError("deleteStaff: claim strip failed", e, { storeId, uid }),
+      );
+    }
+  }
 
   revalidatePath("/dashboard/pos/staff");
+
+  // ★ REPORTED, not hidden. The staff member IS removed — that part succeeded
+  // and is what matters — but an operator who is never told about the leftover
+  // account cannot clean it up, and will meet it again as "this email already
+  // has an account" the next time they invite the same person.
+  if (authCleanup === "failed") {
+    return {
+      success: true,
+      warning:
+        "Staff member removed, but their sign-in account couldn't be deleted. They can no longer use the register. Remove the account in Identity Platform before inviting this email again.",
+    };
+  }
   return { success: true };
 }
 

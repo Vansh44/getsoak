@@ -135,7 +135,15 @@ export function StaffClient({
         toast.error(res.error);
         return;
       }
-      toast.success("Staff removed");
+      // ★ A warning is not an error: the staff member IS removed and can no
+      // longer use the register. But an operator never told about a leftover
+      // sign-in account cannot clean it up, and meets it again as "this email
+      // already has an account" next time they invite the same person.
+      if (res.warning) {
+        toast.warning(res.warning, { duration: 12000 });
+      } else {
+        toast.success("Staff removed");
+      }
       router.refresh();
     });
   };

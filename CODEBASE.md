@@ -2225,6 +2225,32 @@ group, span}` (span = columns of the 4-wide desktop grid),
         control, but silently overwriting the credential of what may be their
         SHOPPER account elsewhere on the platform is more than this flow is
         entitled to.
+      - **★★ DELETING STAFF NO LONGER LEAVES AN ORPHAN SILENTLY.** The auth
+        cleanup was `deleteAuthUser(uid).catch(() => {})`, and that silence is
+        what produced a live Firebase account carrying a stale `role: manager`
+        claim with nothing in the database pointing at it — found in production
+        (`manager1.storemink@gmail.com`, 2026-08-16). Two consequences, neither
+        visible to anyone: the claim keeps bouncing that account out of
+        `/dashboard` (proxy.ts routes cashier/manager to `/pos`), and the
+        account blocks its own re-invitation. The failure is now LOGGED and
+        RETURNED as a `warning` the staff screen shows — a warning, not an
+        error, because the thing the operator asked for did happen.
+        - **★ THE ROW GOES FIRST, and that ordering is the security decision.**
+          `resolvePosOperator` re-reads `pos_staff` on EVERY request, so
+          deleting the row IS the revocation — an auth account alone cannot
+          sell, open a drawer or touch stock. Deleting the account first and
+          then failing the row delete is the harmful order: someone who still
+          looks active but can no longer sign in, with nothing saying why.
+        - **★ THE CLAIM IS STRIPPED WHEN THE ACCOUNT CANNOT BE.** Best-effort
+          `setUserClaims(uid, { role: null })`, so the worst outcome is an
+          orphaned login rather than one permanently locked out of every
+          dashboard it touches.
+        - **⚠ ONLY BY UID, NEVER BY EMAIL.** It is tempting to look the account
+          up by the invited address when `user_id` is null (someone deleted
+          mid-registration leaves an account the row never recorded). Don't:
+          that address may be the person's SHOPPER account, which predates the
+          invite and has orders behind it. The uid came from the staff row, so
+          it is the only id known to belong to this staff member.
       - **★★ AND A DASHBOARD ADMIN MAY NOT COMPLETE IT.** Finishing sets a
         `cashier`/`manager` claim, and `proxy.ts` sends those from `/dashboard`
         to `/pos` — so an owner who invited themselves "to try the till" would

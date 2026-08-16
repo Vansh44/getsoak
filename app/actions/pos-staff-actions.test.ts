@@ -64,6 +64,7 @@ vi.mock("@/lib/db/client", () => ({
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
 import { getServerUser } from "@/lib/auth/server-user";
 import { setUserClaims } from "@/lib/auth/firebase-claims";
+import { deleteAuthUser } from "@/lib/auth/firebase-users";
 import { getAuthorizedDevice } from "@/lib/pos/devices";
 import {
   listStaff,
@@ -85,6 +86,10 @@ describe("pos-staff-actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getManagerIdentity).mockResolvedValue(ID as any);
+    // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — a mockRejectedValue
+    // set in one test would otherwise fail every later delete.
+    vi.mocked(deleteAuthUser).mockResolvedValue(undefined);
+    vi.mocked(setUserClaims).mockResolvedValue(undefined);
     useSelects([]);
   });
 
@@ -205,6 +210,60 @@ describe("pos-staff-actions", () => {
       const r = await deleteStaff("s1");
       expect(r.success).toBe(true);
       expect(dbHolder.current.calls.delete).toHaveLength(1);
+    });
+
+    it("removes the sign-in account too", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ user_id: "fb1" }] });
+      const r = await deleteStaff("s1");
+      expect(r.success).toBe(true);
+      expect(deleteAuthUser).toHaveBeenCalledWith("fb1");
+      expect(r.warning).toBeUndefined();
+    });
+
+    // ★ The row goes first, and that ordering is the security decision:
+    // resolvePosOperator re-reads pos_staff on every request, so deleting the
+    // row IS the revocation. An auth account on its own cannot sell.
+    it("still removes the staff member when the auth delete fails", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ user_id: "fb1" }] });
+      vi.mocked(deleteAuthUser).mockRejectedValue(new Error("auth down"));
+      const r = await deleteStaff("s1");
+      expect(r.success).toBe(true);
+      expect(dbHolder.current.calls.delete).toHaveLength(1);
+    });
+
+    // ★★ NOT SWALLOWED. The old `.catch(() => {})` is what produced a live
+    // Firebase account with a stale `role: manager` claim and nothing in the
+    // database pointing at it — found in production, and invisible to everyone.
+    it("REPORTS a failed auth cleanup instead of hiding it", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ user_id: "fb1" }] });
+      vi.mocked(deleteAuthUser).mockRejectedValue(new Error("auth down"));
+      const r = await deleteStaff("s1");
+      expect(r.warning).toMatch(/sign-in account couldn't be deleted/i);
+      // It names the consequence the operator will otherwise meet later.
+      expect(r.warning).toMatch(/before inviting this email again/i);
+    });
+
+    // If the account cannot be removed, the worst outcome should be an orphaned
+    // login — not one permanently bounced out of every dashboard it touches by
+    // a claim nothing will ever clear.
+    it("strips the role claim when the account can't be deleted", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ user_id: "fb1" }] });
+      vi.mocked(deleteAuthUser).mockRejectedValue(new Error("auth down"));
+      await deleteStaff("s1");
+      expect(setUserClaims).toHaveBeenCalledWith("fb1", { role: null });
+    });
+
+    // ⚠ ONLY BY UID, NEVER BY EMAIL. An invite whose registration was abandoned
+    // leaves a Firebase account the row never recorded — but that address may
+    // be the person's SHOPPER account, which predates the invite and has orders
+    // behind it. The uid is the only id known to belong to this staff member.
+    it("touches no auth account when the row never recorded one", async () => {
+      dbHolder.current = makeDbMock({ returning: [{ user_id: null }] });
+      const r = await deleteStaff("s1");
+      expect(r.success).toBe(true);
+      expect(deleteAuthUser).not.toHaveBeenCalled();
+      expect(setUserClaims).not.toHaveBeenCalled();
+      expect(r.warning).toBeUndefined();
     });
   });
 
