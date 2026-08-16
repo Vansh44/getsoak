@@ -30,6 +30,7 @@ import {
   orders,
   products,
 } from "@/drizzle/schema";
+import type { OrderInsert } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import {
@@ -914,7 +915,7 @@ async function createExchangeOrder(
           // The units were HELD, not reserved — committing the hold below is
           // the stock movement, so there is nothing for a cancel to release.
           stockStatus: "none",
-        } as typeof orders.$inferInsert)
+        } satisfies OrderInsert as typeof orders.$inferInsert)
         .returning({ id: orders.id });
       const id = inserted[0]!.id;
 

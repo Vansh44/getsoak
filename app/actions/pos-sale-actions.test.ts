@@ -1060,10 +1060,17 @@ describe("placePosSale — store credit", () => {
     expect(order.storeCreditUsed).toBe(118);
   });
 
-  it("leaves storeCreditUsed null on an ordinary cash sale", async () => {
+  // ★★ ZERO, NEVER NULL — this test used to assert `toBeNull()` and that is
+  // exactly what kept the outage in place. `orders.store_credit_used` is
+  // `NOT NULL DEFAULT 0`; an explicit NULL does not fall back to the DEFAULT, it
+  // violates the constraint. So every till on the platform failed on insert with
+  // "Couldn't record the sale", on sales that never touched store credit. The
+  // mock db enforces no constraints, so the green test proved only that the
+  // wrong value was being sent consistently.
+  it("records zero store credit on an ordinary cash sale", async () => {
     const r = await placePosSale([line], cash);
     expect(r.success).toBe(true);
-    expect(dbHolder.current.calls.values[0].storeCreditUsed).toBeNull();
+    expect(dbHolder.current.calls.values[0].storeCreditUsed).toBe(0);
     expect(spendCredit).not.toHaveBeenCalled();
   });
 

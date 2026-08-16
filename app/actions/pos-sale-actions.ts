@@ -60,6 +60,7 @@ import {
   taxClasses,
   users,
 } from "@/drizzle/schema";
+import type { OrderInsert } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { likePattern } from "@/lib/pos/search";
 import { personLabel } from "@/lib/pos/person";
@@ -1229,7 +1230,18 @@ export async function placePosSale(
           // netting it off would understate the sale on the receipt, compute
           // GST on the wrong base, and make a later credit note reverse the
           // wrong amount.
-          storeCreditUsed: creditAsked > 0 ? creditAsked : null,
+          //
+          // ★★ ZERO, NEVER NULL, AND THAT IS NOT A STYLE CHOICE. The column is
+          // `NOT NULL DEFAULT 0`, and an explicit NULL does not fall back to a
+          // DEFAULT — it violates the constraint. Writing null here took EVERY
+          // till on the platform down the moment it deployed: a sale that used
+          // no credit (i.e. almost all of them) failed on insert, and the
+          // cashier saw only "Couldn't record the sale. Please try again."
+          // Nothing about the message pointed at store credit, which the sale
+          // never touched. Use the default's own value; to genuinely defer to a
+          // DEFAULT the key has to be OMITTED, which Drizzle's typed insert
+          // makes awkward here.
+          storeCreditUsed: creditAsked > 0 ? creditAsked : 0,
           stockStatus: "reserved",
           salesChannel: "pos",
           shiftId,
@@ -1240,7 +1252,7 @@ export async function placePosSale(
           supplierState,
           placeOfSupplyState: placeOfSupply,
           customerGstin,
-        } as typeof orders.$inferInsert)
+        } satisfies OrderInsert as typeof orders.$inferInsert)
         .returning({ id: orders.id, order_ref: orders.orderRef }),
     );
     orderRef = (rows[0] as { order_ref?: string })?.order_ref ?? "";

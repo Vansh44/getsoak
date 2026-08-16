@@ -2630,6 +2630,36 @@ group, span}` (span = columns of the 4-wide desktop grid),
         customer audience" (right: they leave holding a receipt). NOTE the
         coverage guard can't catch this class of gap — it asserts a key is
         emitted SOMEWHERE, not that every path which should emit it does.
+      - **★★ AN EXPLICIT `null` IS NOT A DEFAULT, AND IT TOOK EVERY TILL DOWN**
+        (found in prod 2026-08-16). `orders.store_credit_used` is
+        `NOT NULL DEFAULT 0`; `placePosSale` wrote
+        `creditAsked > 0 ? creditAsked : null`, and a NULL sent explicitly does
+        not fall back to a DEFAULT — it violates the constraint. So every POS
+        sale that used no store credit, which is nearly all of them, failed on
+        INSERT from the moment `147fe24` deployed. Exactly one POS order exists
+        on production, rung minutes before that deploy. Three things made it
+        expensive to find: the cashier saw only "Couldn't record the sale.
+        Please try again.", which never mentions credit and reads as transient;
+        `errMsg` logs a Drizzle error's `message`, which is only
+        "Failed query: …" with the reason on `cause` (the §15b lesson,
+        unlearned); and online checkout was fine throughout, because it writes
+        the column through a later UPDATE with a real number.
+      - **★★ THE COMPILER KNEW. A BLANKET `as` CAST SILENCED IT.**
+        `drizzle/schema.ts` declares the column `.notNull()`, so
+        `storeCreditUsed: null` should never have compiled. It did because all
+        three `orders` insert sites ended
+        `.values({ … } as typeof orders.$inferInsert)` — a cast that exists to
+        paper over TWO trigger-allocated columns (`order_no`, `order_ref`,
+        NOT NULL with no default) and in doing so switched checking off for the
+        other fifty. `OrderInsert` (exported from `drizzle/schema.ts`) is that
+        type minus those two, and every site now reads
+        `} satisfies OrderInsert as typeof orders.$inferInsert)`, so the gap is
+        exactly two columns wide. Applying it immediately surfaced two more
+        untyped values in `placeOrder`; each field therefore also accepts `SQL`,
+        matching Drizzle's real `.values()` signature — a pickup's
+        `pickup_expires_at` is `now() + make_interval(…)` so the deadline is the
+        DATABASE's clock, not the container's. That escape is visible (you have
+        to write ``sql`…` ``), which is the whole difference from a blanket cast.
       - **CANCELLING A POS SALE RESTOCKS AT ITS OWN LOCATION.**
         `updateOrderStatus` returns `orders.location_id` with the
         reserved→released claim and calls `release_stock_at` when it's set. The
