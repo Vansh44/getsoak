@@ -117,6 +117,17 @@ describe("beginAttempt", () => {
     expect(begun?.idempotencyKey).toBe(values.idempotencyKey);
   });
 
+  it("★★ persists the exact mandate ceiling before authorization checkout", async () => {
+    await beginAttempt({
+      invoiceId: INVOICE,
+      storeId: STORE,
+      amountPaise: 5_000_00,
+      mode: "manual",
+      mandateMaxPaise: 12_000_00,
+    });
+    expect(dbHolder.current.calls.values[0].mandateMaxPaise).toBe(12_000_00);
+  });
+
   it("★ reads a conflict as 'already collecting', not as an error", async () => {
     seed({ returning: [] });
     expect(

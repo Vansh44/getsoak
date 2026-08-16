@@ -117,6 +117,8 @@ export interface BeginAttemptInput {
   mode: "automatic" | "manual";
   mandateId?: string | null;
   providerTokenId?: string | null;
+  /** Exact ceiling offered during a mandate-authorisation checkout. */
+  mandateMaxPaise?: number | null;
 }
 
 export interface BeganAttempt {
@@ -150,6 +152,7 @@ export async function beginAttempt(
           amountPaise: input.amountPaise,
           mandateId: input.mandateId ?? null,
           providerTokenId: input.providerTokenId ?? null,
+          mandateMaxPaise: input.mandateMaxPaise ?? null,
         })
         // The partial unique index is on the IN-FLIGHT states, so a conflict
         // means "already collecting", not "duplicate row".

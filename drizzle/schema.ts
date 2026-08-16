@@ -452,7 +452,8 @@ export const billingMandates = pgTable(
     /** card | upi | emandate | nach | unknown. `unknown` means VERIFY (§17). */
     method: text().default("unknown").notNull(),
     status: text().default("pending").notNull(),
-    /** Read back from the token, never computed by us. */
+    /** Exact ceiling sent in the verified authorisation order. Copied from the
+     *  durable attempt, never accepted from the browser or recomputed later. */
     maxAmountPaise: bigint("max_amount_paise", { mode: "number" }),
     authenticatedAt: timestamp("authenticated_at", {
       withTimezone: true,
@@ -528,6 +529,10 @@ export const billingPaymentAttempts = pgTable(
     providerOrderId: text("provider_order_id"),
     providerPaymentId: text("provider_payment_id"),
     providerTokenId: text("provider_token_id"),
+    /** Exact max_amount sent when this attempt created a mandate. Null for
+     *  ordinary/manual payments. Persisted before checkout so confirmation can
+     *  activate the token with the ceiling the merchant actually authorised. */
+    mandateMaxPaise: bigint("mandate_max_paise", { mode: "number" }),
     failureCode: text("failure_code"),
     failureReason: text("failure_reason"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
@@ -591,6 +596,10 @@ export const billingPaymentAttempts = pgTable(
     check(
       "billing_payment_attempts_state_check",
       sql`state = ANY (ARRAY['created'::text, 'processing'::text, 'authorized'::text, 'captured'::text, 'failed'::text, 'cancelled'::text, 'refunded'::text, 'unknown'::text])`,
+    ),
+    check(
+      "billing_payment_attempts_mandate_max_check",
+      sql`(mandate_max_paise IS NULL) OR (mandate_max_paise > 0)`,
     ),
     check(
       "billing_payment_attempts_currency_check",

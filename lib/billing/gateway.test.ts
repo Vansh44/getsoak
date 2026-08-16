@@ -68,26 +68,23 @@ beforeEach(() => {
 });
 
 describe("the release gate", () => {
-  it("★★ autopay is OFF until the endpoint is verified against test mode", () => {
-    // Flipping this charges real merchants, so it is a deliberate switch rather
-    // than something that becomes true by accident. See
-    // docs/autopay-verification.md.
-    expect(RECURRING_CHARGE_VERIFIED).toBe(false);
-    expect(getRecurringCharge()).toBeNull();
-    expect(chargeUnavailableReason()).toMatch(/not yet verified/i);
+  it("★★ autopay is enabled for the verification rollout", () => {
+    expect(RECURRING_CHARGE_VERIFIED).toBe(true);
+    expect(getRecurringCharge()).toBe(chargeMandateViaRazorpay);
+    expect(chargeUnavailableReason()).toBeNull();
   });
 
-  it("★ reports MISSING CREDENTIALS separately from an unverified endpoint", () => {
-    // Two different problems with two different fixes; one message for both
-    // sends whoever is on call to the wrong place.
+  it("★ still fails safe when platform credentials are missing", () => {
     vi.mocked(getPlatformRazorpayCreds).mockReturnValue(null as any);
-    expect(chargeUnavailableReason()).toMatch(/not yet verified/i);
+    expect(getRecurringCharge()).toBeNull();
+    expect(chargeUnavailableReason()).toMatch(
+      /credentials are not configured/i,
+    );
   });
 });
 
-// The implementation is unreachable through getRecurringCharge while the flag
-// is false, so these drive it directly — the flag is a release decision, not a
-// reason to ship an untested charge path.
+// Drive the provider seam directly so each outcome remains deterministic even
+// while the public release gate is enabled.
 describe("charging a mandate", () => {
   const impl = chargeMandateViaRazorpay;
 
@@ -192,6 +189,13 @@ describe("charging a mandate", () => {
     dbHolder.rows = [];
     const res = (await impl(INPUT)) as any;
     expect(res.outcome).toBe("rejected");
+    expect(rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ a missing phone refuses the recurring debit before Razorpay", async () => {
+    dbHolder.rows = [{ email: "owner@acme.test", phone: null }];
+    const res = (await impl(INPUT)) as any;
+    expect(res).toMatchObject({ ok: false, outcome: "rejected" });
     expect(rzpCreateOrder).not.toHaveBeenCalled();
   });
 

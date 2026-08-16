@@ -1,12 +1,13 @@
-# Autopay — what is built, and how to turn it on
+# Autopay — enabled verification rollout
 
 Autopay means StoreMink debits a merchant's registered mandate at renewal
-instead of issuing an invoice they pay by hand. It is **built and off**.
+instead of issuing an invoice they pay by hand. It is **enabled in code** as of
+2026-08-16 for test-mode staging and an empty production account.
 
-Turning it on is one line — `RECURRING_CHARGE_VERIFIED` in
-`lib/billing/gateway.ts` — but do not flip it until the run below passes
-against a **test-mode** Razorpay account. Everything after that line charges
-real merchants.
+The verification run below is now the rollout checklist. Complete it before
+onboarding a real merchant. If any provider shape differs, immediately set
+`RECURRING_CHARGE_VERIFIED` back to false; invoice issuance and manual payment
+continue without automatic debits.
 
 ---
 
@@ -21,6 +22,7 @@ real merchants.
 | Collection routing                          | `collectionRoute` — mandate ceiling AND the AFA limit         |
 | Unknown-outcome handling                    | `collect.ts` + `lib/billing/reconcile.ts`                     |
 | Checkout token capture                      | `ensureRzpCustomer` + `readMandateFromPayment`                |
+| Authorised ceiling persistence              | `billing_payment_attempts.mandate_max_paise` → mandate        |
 
 The API shapes were taken from Razorpay's published reference on **2026-08-14**,
 not inferred:
@@ -63,7 +65,8 @@ would otherwise be told autopay is on and then invoiced by hand forever:
 - `RECURRING_CHARGE_VERIFIED` is true (we can actually collect),
 - `mandateFitsGateway(size)` — above ₹99,999 the authorisation order itself is
   rejected,
-- a billing contact exists, since a mandate belongs to a _customer_.
+- the owner has both an email and phone, since the authorisation customer and
+  subsequent recurring debit require them.
 
 Fail any one and it stays an ordinary one-time checkout.
 
@@ -77,6 +80,11 @@ that merchant every cycle. `GET /payments/:id` returns `token_id` and
 A failed lookup returns null and the plan is still granted: the money is already
 captured, so losing autopay is the acceptable half of that trade.
 
+The exact `token.max_amount` sent in the authorisation order is written to the
+payment attempt before checkout (`billing_09`) and copied into the mandate on
+confirmation. It is never accepted from the browser or recomputed after a
+pricing/tax change.
+
 ---
 
 ## The verification run
@@ -85,8 +93,8 @@ Use a **test-mode** account (`rzp_test_…`) and a store you do not mind billing
 
 ### 1. Charge shape
 
-With `RECURRING_CHARGE_VERIFIED` still `false`, drive the implementation
-directly against test mode and confirm:
+With test-mode platform credentials configured, subscribe a disposable staging
+store and confirm:
 
 - [ ] `POST /customers` returns a `cust_…` id, and calling it twice with the
       same email returns the **same** id rather than an error.
@@ -126,9 +134,12 @@ directly against test mode and confirm:
       reference does not promise one; do not reuse the refund-only
       `X-Refund-Idempotency` header without confirmation.
 
-### 4. Only then
+### 4. Release status
 
-- [ ] Flip `RECURRING_CHARGE_VERIFIED` to `true`.
+- [x] `RECURRING_CHARGE_VERIFIED` enabled for staging / empty-production
+      verification on 2026-08-16.
+- [ ] Apply `supabase/billing_09_attempt_mandate_ceiling.sql` to staging and
+      production before deploying this code.
 - [ ] Watch the first live renewal cycle end to end before trusting it.
 
 ---

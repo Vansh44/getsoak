@@ -769,18 +769,17 @@ the amount; the gateway only collects it.
 | 3b · Enrolment + manual payment + `/dashboard/plans` | ✅ done                               |
 | 4 · Signup enrolment on the new system               | ✅ done                               |
 | 5 · Buying an extra location on the new system       | ✅ done                               |
-| 6 · Webhook processor off the request path           | ⏳ **only needed for autopay**        |
+| 6 · Webhook processor off the request path           | ⏳ reconciliation is rollout fallback |
 | 7 · Reconciliation detectors + dunning notifications | ✅ done (+ operator queue UI)         |
 | 8 · AI-credit invoicing                              | ✅ done                               |
 | 9 · Delete `subscription-actions.ts` + the rzp plans | ✅ done 2026-08-13                    |
-| 10 · Autopay — mandate capture + recurring charge    | ⏳ **blocked on a test-mode account** |
+| 10 · Autopay — mandate capture + recurring charge    | 🧪 **enabled for verification**       |
 
-**★ AUTOPAY IS OFF, BUT THE SYSTEM IS NOT.** `RECURRING_CHARGE_VERIFIED` is false
-because the Razorpay subsequent-charge signature is unverified, so
-`collectionSkipped` is set — but pass 1 still ISSUES every renewal invoice, the
-merchant pays it on `/dashboard/plans`, and grace and downgrade run as designed.
-Six Razorpay facts need a test-mode account to settle; they are listed in the
-spec's §10 rather than guessed.
+**★ AUTOPAY IS ENABLED FOR VERIFICATION, AND THE MANUAL SYSTEM REMAINS.**
+`RECURRING_CHARGE_VERIFIED` is true as of 2026-08-16 for test-mode staging and
+an empty production account. Missing credentials, absent/revoked mandates,
+amounts above the mandate/AFA ceilings and incident rollback still issue an
+invoice payable on `/dashboard/plans`; none is misreported as a failed debit.
 
 **★★ AUTOPAY'S CODE PATH IS BUILT, BUT ITS RELEASE EVIDENCE IS NOT.**
 `startEnrolment` can create the Razorpay customer and authorisation order;
@@ -789,13 +788,13 @@ from the browser; and `chargeMandateViaRazorpay` creates a provider order,
 persists that order id before debit, then calls the recurring endpoint. Unknown
 outcomes remain in flight for reconciliation instead of being retried.
 
-Production still deliberately returns no charge function because
-`RECURRING_CHARGE_VERIFIED` is false. The exact recurring request behaviour,
-provider-side idempotency support, asynchronous event vocabulary and failure
-states still need the test-mode run in `docs/autopay-verification.md`; phase 6's
-webhook work follows that evidence. Until then no merchant is offered a mandate,
-activation emails promise no autopay, and every renewal invoice remains payable
-manually. That is coherent and safe — flipping the flag before the run is not.
+Production returns the charge function when platform credentials are present.
+The exact recurring request behaviour, provider-side idempotency support,
+asynchronous event vocabulary and failure states are being verified through
+`docs/autopay-verification.md`. The first rollout also persists the exact
+authorised ceiling on the durable attempt (`billing_09`) and requires both owner
+email and phone before offering a mandate, so a successful signup cannot create
+an unusable automatic-renewal promise.
 
 **★ THERE IS ONE BILLING SYSTEM NOW.** `subscription-actions.ts`,
 `lib/payments/subscription.ts`, the `razorpay_plans` cache and the five

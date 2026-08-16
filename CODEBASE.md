@@ -490,10 +490,10 @@ wholesip/
 │       │                      # two intervals. Auth FAILS CLOSED (it charges
 │       │                      # merchants and removes plans). A declined
 │       │                      # payment or a downgrade is 200, not an outage;
-│       │                      # only a thrown pass is 503. ⚠ While the Razorpay
-│       │                      # charge endpoint is unverified `collectionSkipped`
-│       │                      # is set — AUTOPAY is off, but pass 1 still ISSUES
-│       │                      # every invoice, payable by hand on /dashboard/plans
+│       │                      # only a thrown pass is 503. Automatic collection
+│       │                      # runs for eligible mandates when credentials exist;
+│       │                      # otherwise `collectionSkipped` is set and pass 1
+│       │                      # still ISSUES invoices payable on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
 │       │                      # activity_events 365d, email_logs 90d — windows
@@ -874,8 +874,8 @@ wholesip/
 │   │                          # Eligibility is checked BEFORE anything is
 │   │                          # written, so an over-AFA amount routes to manual
 │   │                          # rather than becoming a failed attempt. The
-│   │                          # gateway call is INJECTED, because the Razorpay
-│   │                          # subsequent-charge signature is still unverified.
+│   │                          # gateway call is INJECTED so provider behaviour
+│   │                          # remains isolated and directly testable.
 │   │                          # ★ renewal-worker.ts (server-only): three passes.
 │   │                          # COLLECT at T−4d (the X+3 rule), EVALUATE at T0,
 │   │                          # DOWNGRADE at T0+48h. ★★ A PROCESSING invoice at
@@ -1007,7 +1007,8 @@ wholesip/
 │   ├── billing_01_foundation.sql   # ★ §34 platform_billing_settings (operator GST
 │   │                          # singleton; tax OFF until a GSTIN exists) +
 │   │                          # billing_accounts + billing_mandates (one ACTIVE
-│   │                          # per store, max_amount read from the token)
+│   │                          # per store; max_amount copied from billing_09's
+│   │                          # durable authorisation attempt)
 │   ├── billing_02_subscriptions.sql # ★ §34 billing_subscriptions (OUR state
 │   │                          # machine, not Razorpay's) + billing_claim_downgrade()
 │   │                          # — ONE statement that re-checks state, deadline,
@@ -1046,6 +1047,10 @@ wholesip/
 │   │                          # invoice, partial unique) + billing_credits +
 │   │                          # billing_reconciliation_items + the additive
 │   │                          # billing_webhook_events extension
+│   ├── billing_09_attempt_mandate_ceiling.sql # ★ §34 exact token.max_amount
+│   │                          # persisted on the attempt BEFORE authorisation;
+│   │                          # copied into the mandate after verified payment,
+│   │                          # never browser-supplied or recomputed after drift
 │   ├── plans_02_basic_and_expiry.sql # ★ starter→basic rename + plan_expires_at — §15
 │   ├── ai_credits.sql         # ★ credit balances/ledger/purchases + add_ai_credits/
 │   │                          # try_spend_ai_credit RPCs (service-role only) — §16
@@ -5280,14 +5285,13 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       verified checkout and no amount lives in a provider-side plan. Two things
       the flow says out loud rather than assuming: a confirm that fails is a
       `toast.info` carrying the server's own wording (money may have moved —
-      §26's rule), and `autopay: false` is stated plainly, because a merchant who
-      assumes autopay is simply downgraded at the next cycle.
-    - **★★ `OpenInvoices` IS NOT A NICETY — IT IS THE ONLY WAY A RENEWAL GETS
-      PAID.** Automatic collection is gated behind `RECURRING_CHARGE_VERIFIED`,
-      so every invoice the worker writes is settled by hand or not at all; with
-      no surface for it, a merchant is downgraded 48 hours later for a bill they
-      never saw. It renders ABOVE everything on the page and renders NOTHING when
-      nothing is owed. A `processing` invoice shows "payment in progress" instead
+      §26's rule), and `autopay: false` is stated plainly whenever no mandate was
+      captured, because assuming otherwise becomes a downgrade next cycle.
+    - **★★ `OpenInvoices` REMAINS FIRST-CLASS.** Automatic collection handles
+      only eligible active mandates below both ceilings; no mandate, yearly/AFA,
+      a revoked mandate or an incident rollback still needs manual payment. It
+      renders ABOVE everything on the page and renders NOTHING when nothing is
+      owed. A `processing` invoice shows "payment in progress" instead
       of a Pay button — offering one would open a second payment against the same
       money, which the partial unique index would refuse anyway.
     - **★★ `startEnrolment` REFUSES A STORE ALREADY ON A PAID CYCLE.**
@@ -5689,6 +5693,9 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the wrong order succeeds and then fails at runtime. `billing_06` was a
       no-op: `store_subscriptions` was empty in production, so there was nothing
       to migrate.
+      **⚠ `billing_09_attempt_mandate_ceiling.sql` MUST BE APPLIED before this
+      autopay build** on both databases. It adds the durable authorisation
+      ceiling; deploying code first makes enrolment attempt inserts fail.
     - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
       `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
       in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
@@ -5709,11 +5716,10 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         was on — the same "promise a charge that never comes" failure the
         activation email was fixed for. The existing invariant test caught the
         clamp, which is why it isn't one.
-        **⚠ STILL OFF pending the test-mode run.** Enrolment can create the
+        **🧪 ENABLED FOR VERIFICATION (2026-08-16).** Enrolment creates the
         authorisation order and reads the token back from the verified payment;
-        the subsequent-charge implementation exists, but
-        `RECURRING_CHARGE_VERIFIED` prevents both mandate offering and automatic
-        debit until the provider behaviour below is observed.
+        `RECURRING_CHARGE_VERIFIED` now exposes the subsequent-charge function
+        when credentials exist. Roll back the flag on any provider-shape mismatch.
       - **★★ THE PROVIDER ORDER IS DURABLE BEFORE THE DEBIT.** Razorpay's
         published recurring API does not promise a provider-side idempotency
         header. `collectInvoice` therefore gives the provider seam a write-once
@@ -5722,10 +5728,20 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         asking for payments on that order, and failure to persist the handle
         refuses the debit. An order-creation timeout is a known non-charge
         because the debit endpoint was never called.
-    - **⚠ Six Razorpay facts are still unverified**, and they gate AUTOPAY ONLY —
-      not the system. Every path (enrolment, manual payment, plan change, location
-      purchase) confirms ON SESSION against a verified one-time checkout, and the
-      renewal worker issues invoices the merchant pays by hand. What is unverified:
+      - **★★ THE AUTHORISED CEILING IS DURABLE BEFORE CHECKOUT**
+        (`billing_09`). Razorpay's payment response supplies the token but not
+        the `token.max_amount` shown to the merchant. The exact server-computed
+        value is stored on the attempt before Checkout and copied into the
+        active mandate after signature verification. It is never browser-supplied
+        or recomputed after a price/tax change. Enrolment also requires owner
+        email AND phone before offering a mandate, because subsequent debit
+        requires both; otherwise checkout safely remains one-time and says
+        autopay is absent.
+    - **⚠ Six Razorpay facts are in rollout verification**, affecting AUTOPAY
+      ONLY — not the manual system. Every path (enrolment, manual payment, plan
+      change, location purchase) confirms ON SESSION against a verified checkout,
+      and the renewal worker still issues invoices payable by hand. What remains
+      to observe before onboarding a real merchant:
       exact subsequent-charge
       endpoint signature, recurring webhook event names, retry and
       payment-failure behaviour, e-mandate specifics, MCC restrictions. Listed

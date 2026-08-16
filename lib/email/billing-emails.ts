@@ -274,6 +274,8 @@ export function manageUrl(slug: string): string {
 
 export interface BillingRecipient {
   email: string;
+  /** Present only when the owner has a recurring-charge-capable contact. */
+  phone?: string | null;
   storeName: string;
   slug: string;
 }
@@ -285,38 +287,42 @@ export async function resolveBillingEmail(
 ): Promise<BillingRecipient | null> {
   let store: { name: string; slug: string } | undefined;
   let ownerEmail: string | null = null;
+  let ownerPhone: string | null = null;
   let billingEmail: string | null = null;
   try {
-    ({ store, ownerEmail, billingEmail } = await withService(async (db) => {
-      const [storeRows, ownerRows, billingRows] = await Promise.all([
-        db
-          .select({ name: stores.name, slug: stores.slug })
-          .from(stores)
-          .where(eq(stores.id, storeId))
-          .limit(1),
-        db
-          .select({ email: admins.email })
-          .from(admins)
-          .where(
-            and(
-              eq(admins.storeId, storeId),
-              eq(admins.role, "superadmin"),
-              isNotNull(admins.email),
-            ),
-          )
-          .limit(1),
-        db
-          .select({ contact_email: storeBillingSettings.contactEmail })
-          .from(storeBillingSettings)
-          .where(eq(storeBillingSettings.storeId, storeId))
-          .limit(1),
-      ]);
-      return {
-        store: storeRows[0],
-        ownerEmail: ownerRows[0]?.email ?? null,
-        billingEmail: billingRows[0]?.contact_email ?? null,
-      };
-    }));
+    ({ store, ownerEmail, ownerPhone, billingEmail } = await withService(
+      async (db) => {
+        const [storeRows, ownerRows, billingRows] = await Promise.all([
+          db
+            .select({ name: stores.name, slug: stores.slug })
+            .from(stores)
+            .where(eq(stores.id, storeId))
+            .limit(1),
+          db
+            .select({ email: admins.email, phone: admins.phone })
+            .from(admins)
+            .where(
+              and(
+                eq(admins.storeId, storeId),
+                eq(admins.role, "superadmin"),
+                isNotNull(admins.email),
+              ),
+            )
+            .limit(1),
+          db
+            .select({ contact_email: storeBillingSettings.contactEmail })
+            .from(storeBillingSettings)
+            .where(eq(storeBillingSettings.storeId, storeId))
+            .limit(1),
+        ]);
+        return {
+          store: storeRows[0],
+          ownerEmail: ownerRows[0]?.email ?? null,
+          ownerPhone: ownerRows[0]?.phone ?? null,
+          billingEmail: billingRows[0]?.contact_email ?? null,
+        };
+      },
+    ));
   } catch (err) {
     console.error(
       "resolveBillingEmail:",
@@ -329,6 +335,7 @@ export async function resolveBillingEmail(
   if (!email) return null;
   return {
     email,
+    phone: ownerEmail === email ? ownerPhone : null,
     storeName: store?.name || "Your store",
     slug: store?.slug || "",
   };

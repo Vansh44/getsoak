@@ -40,6 +40,7 @@ home, pricing, login, and signup deliberately navigate to `storemink.com`.
 | `POS_SESSION_SECRET` set                                                                                                                             | Without it device authorization and PIN login refuse with a clear error rather than 500ing        |
 | `RESEND_*` configured                                                                                                                                | Staff invitations and pickup emails go nowhere otherwise                                          |
 | `logistics_01_shiprocket.sql` applied + `PAYMENT_CRED_KEY` set                                                                                       | Schema is ledger-verified on staging + prod (2026-08-14); the key is still needed for credentials |
+| `billing_09_attempt_mandate_ceiling.sql` applied before the autopay build                                                                            | Confirmation otherwise cannot retain the exact ceiling the merchant authorised                    |
 
 **Status on local staging:** `pos_00`–`pos_11` and `locations_01`–`locations_09`
 are applied. `locations_10` and `20260816_0003_pos_pickup_prepared_at` are
@@ -130,6 +131,14 @@ location.
 remove `max_amount_paise` from that active mandate and retry: also refused. A
 missing ceiling cannot fail open because the part-period payment could succeed
 today while the next automatic renewal is impossible.
+
+**PS-1.17 ★★ — Autopay needs a chargeable billing contact**
+Subscribe once with an owner email but no owner phone, then again after adding a
+phone.
+**Expect:** the first checkout is an ordinary one-time payment and activation
+plainly says autopay was not set up. The second offers the mandate and records
+its exact authorised ceiling. A phone-less mandate would enrol successfully but
+fail every subsequent debit before reaching Razorpay.
 
 **PS-1.13 ★ — The price comes from the operator console, not the code**
 As a platform superadmin, open `storemink.com/dashboard` → Plan pricing. There

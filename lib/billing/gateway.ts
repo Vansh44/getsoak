@@ -7,10 +7,9 @@ import "server-only";
  * so everything above it is provable independently. This is the ONE
  * provider-specific seam.
  *
- * ★★ PRODUCTION RETURNS NULL TODAY, AND THAT IS THE SAFE ANSWER. The charge
- * implementation is present and contract-tested, but six Razorpay facts are
- * still unverified in test mode (docs/autopay-verification.md). The alternatives
- * are both worse:
+ * ★★ AUTOMATIC COLLECTION IS ENABLED for the staging / empty-production
+ * verification rollout. `getRecurringCharge` still returns null when platform
+ * credentials are absent, so invoice issuance always retains its manual path.
  *
  *   • Guessing the signature would bake an unverified call into the money path
  *     and make it look tested.
@@ -19,17 +18,16 @@ import "server-only";
  *     outcome, not a decline — every one of them would sit in reconciliation
  *     forever, indistinguishable from a real outage.
  *
- * Returning null instead means the renewal worker ISSUES each invoice and does
- * not charge it: no attempt rows, no phantom state, and the cron reports plainly
- * that collection is not configured. The merchant pays on /dashboard/plans,
- * which is a complete billing path on its own.
+ * Returning null when credentials are unavailable means the renewal worker
+ * ISSUES each invoice and does not charge it: no attempt rows, no phantom state,
+ * and the merchant pays on /dashboard/plans, a complete billing path on its own.
  *
  * ★ NULL MUST NOT STOP ISSUANCE. It did until 2026-08-13 — the whole pass was
  * skipped — so no invoice was ever written, nobody was ever downgraded, every
  * subscriber got free service past their cycle end, and the manual payment
  * surface had nothing to list. Issuing a document is not taking money.
  *
- * ── To finish this ────────────────────────────────────────────────────────
+ * ── Verification rollout ─────────────────────────────────────────────────
  *  1. Confirm the subsequent-charge endpoint and request body against a
  *     Razorpay TEST-MODE account (not the docs alone — the API reference does
  *     not reproduce the signature).
@@ -52,11 +50,12 @@ import type { ChargeFn } from "./collect";
 /**
  * Has the provider call been implemented and verified?
  *
- * ⚠ Flip this ONLY once step 1 above is done against a test-mode account. It
- * gates whether any merchant is charged automatically, so it is a deliberate
- * switch rather than something that becomes true by accident.
+ * Enabled 2026-08-16 at the owner's request for test-mode staging and an empty
+ * production account. Keep the verification runbook open while exercising the
+ * first mandate and debit; set this back to false immediately if an observed
+ * provider shape differs from the contract tests.
  */
-export const RECURRING_CHARGE_VERIFIED = false;
+export const RECURRING_CHARGE_VERIFIED = true;
 
 /**
  * The production charge function, or null when automatic collection cannot
@@ -215,8 +214,8 @@ async function resolveBillingContact(
         .where(and(eq(admins.storeId, storeId), eq(admins.role, "superadmin")))
         .limit(1),
     );
-    if (!row?.email) return null;
-    return { email: row.email, phone: row.phone ?? "" };
+    if (!row?.email || !row.phone) return null;
+    return { email: row.email, phone: row.phone };
   } catch {
     return null;
   }
