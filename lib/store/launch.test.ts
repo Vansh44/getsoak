@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
-// launch.ts reaches the DB in markStoreLaunched; isStoreLaunched is pure.
+// launch.ts reaches the DB in markStoreLaunched; these predicates are pure.
 vi.mock("@/lib/db/client", () => ({ withService: vi.fn() }));
 vi.mock("@/lib/observability/logger", () => ({ logError: vi.fn() }));
 
-import { isStoreLaunched } from "./launch";
+import { isStoreLaunched, isStoreSearchIndexable } from "./launch";
 
 describe("isStoreLaunched", () => {
   it("is false only when the flag is explicitly false", () => {
@@ -41,5 +41,22 @@ describe("isStoreLaunched", () => {
   it("is false for a missing store", () => {
     expect(isStoreLaunched(null)).toBe(false);
     expect(isStoreLaunched(undefined)).toBe(false);
+  });
+});
+
+describe("isStoreSearchIndexable", () => {
+  it("accepts launched merchant stores", () => {
+    expect(isStoreSearchIndexable({ settings: { launched: true } })).toBe(true);
+    expect(isStoreSearchIndexable({ settings: {} })).toBe(true);
+  });
+
+  it("rejects unlaunched and demo stores", () => {
+    expect(isStoreSearchIndexable({ settings: { launched: false } })).toBe(
+      false,
+    );
+    expect(
+      isStoreSearchIndexable({ settings: { launched: true, demo: true } }),
+    ).toBe(false);
+    expect(isStoreSearchIndexable(null)).toBe(false);
   });
 });

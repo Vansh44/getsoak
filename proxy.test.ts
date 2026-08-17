@@ -147,6 +147,19 @@ describe("proxy — store-host session gate", () => {
 });
 
 describe("proxy — host routing (unchanged)", () => {
+  it("permanently redirects www to the canonical apex", async () => {
+    const res = await proxy(
+      req(
+        "https://www.storemink.com/legal/privacy?source=legacy",
+        "www.storemink.com",
+      ),
+    );
+
+    expect(res.status).toBe(308);
+    expect(loc(res)).toBe("https://storemink.com/legal/privacy?source=legacy");
+    expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+
   it("passes static assets through untouched", async () => {
     const res = await proxy(req("https://shop.storemink.com/themes/x/a.webp"));
     expect(res.headers.get("x-middleware-rewrite")).toBeNull();

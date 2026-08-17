@@ -6,7 +6,7 @@ import { submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { ensureGoogleCoverageForStore } from "@/lib/seo/store-indexing";
 import { HELP_URL, PLATFORM_URL, POS_URL, THEMES_URL } from "@/lib/site";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
-import { isStoreLaunched } from "@/lib/store/launch";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,7 +72,7 @@ async function handle(request: Request): Promise<Response> {
         ...row,
         settings: (row.settings ?? {}) as Record<string, unknown>,
       }))
-      .filter((row) => isStoreLaunched(row) && row.settings.demo !== true);
+      .filter((row) => isStoreSearchIndexable(row));
     const storeResults = await mapConcurrent(eligible, (row) =>
       ensureGoogleCoverageForStore(row.id),
     );

@@ -15,6 +15,7 @@ import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
 import { resolveStorefrontAppearance } from "@/lib/chrome/types";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
 import { readThemeSelection } from "@/lib/themes/meta";
@@ -52,6 +53,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const googleVerification = normalizeGoogleVerificationToken(
     store.settings?.[GOOGLE_VERIFICATION_TOKEN_KEY],
   );
+  const searchIndexable = isStoreSearchIndexable(store);
   return {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
@@ -62,6 +64,13 @@ export async function generateMetadata(): Promise<Metadata> {
     ...(googleVerification
       ? { verification: { google: googleVerification } }
       : {}),
+    // New stores contain shared theme seed until the owner publishes something
+    // real, and demo stores are permanent shared showcases. robots.txt allows
+    // crawlers to fetch these public pages specifically so this directive can
+    // remove any stale copies that were indexed before the launch gate existed.
+    ...(searchIndexable
+      ? {}
+      : { robots: { index: false, follow: false, nocache: true } }),
   };
 }
 

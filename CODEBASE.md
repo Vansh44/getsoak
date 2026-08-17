@@ -38,14 +38,15 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 
 ### Host routing — `proxy.ts` (edge middleware, runs on everything except `_next` statics & `/api`)
 
-| Host                                                         | Behavior                                                                                                          |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
-| `pos.storemink.com` / `pos.localhost`                        | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
-| `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
-| `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
-| `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
-| Anything else                                                | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
+| Host                                                 | Behavior                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `help.storemink.com` / `help.localhost`              | Rewritten to `/help/*`                                                                                            |
+| `pos.storemink.com` / `pos.localhost`                | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
+| `themes.storemink.com` / `themes.localhost`          | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
+| `storemink.com`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
+| `www.storemink.com`                                  | Permanent 308 to the same path/query on canonical `storemink.com`                                                 |
+| `{slug}.storemink.com`, `{slug}.localhost`           | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
+| Anything else                                        | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
 
 `proxy.ts` also gates auth: `/dashboard` requires a valid **Firebase session
 cookie** (`sm_session`; redirect to `/auth/login`), enforces
@@ -6529,16 +6530,21 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   per purchase. Pages use `published_at`, not `updated_at`, because draft
   autosave advances `updated_at` while public HTML remains unchanged.
 - **A NEW STORE IS NOT INDEXABLE UNTIL ITS OWNER PUBLISHES SOMETHING**
-  (`lib/store/launch.ts`). At creation a store is pure theme seed — the same
+  (`lib/store/launch.ts`). `isStoreSearchIndexable()` is the one shared gate for
+  storefront metadata, robots, sitemaps and search-engine notifications. At
+  creation a store is pure theme seed — the same
   homepage, ~17 content pages and sample catalogue as every other store on that
   template — and `createStore` used to submit exactly that to Google + IndexNow
   the moment it existed. Mass-submitting near-duplicate placeholder stores spends
-  the whole `*.storemink.com` domain's reputation, and `robots.txt` cannot undo
-  it (Disallow stops crawling, not indexing). `stores.settings.launched` gates
-  `robots.ts` + `sitemap.ts`; `notifyStoreContentPublished()` launches from all
+  the whole `*.storemink.com` domain's reputation. `stores.settings.launched`
+  gates metadata + `sitemap.ts`; `notifyStoreContentPublished()` launches from all
   page/product/blog publication paths (including bulk products, bulk blogs,
   customer direct-publish and approval), not just the single-row editors, then
-  performs IndexNow + Google coverage out of band. **Absence of the flag means
+  performs IndexNow + Google coverage out of band. Unlaunched/demo storefront
+  pages emit `noindex, nofollow` and stay out of their empty sitemap, while
+  `robots.ts` permits crawling of public pages so Google can observe `noindex`
+  and remove stale seed URLs; unknown hosts still use `Disallow: /`.
+  **Absence of the flag means
   LAUNCHED** —
   pre-existing stores have no key and treating them as unlaunched would deindex
   live shops; `createStore` writes `launched: false` explicitly. Demo stores

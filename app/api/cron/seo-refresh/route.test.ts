@@ -15,7 +15,7 @@ vi.mock("@/lib/store/host", () => ({
   SEARCH_INDEXABLE: true,
 }));
 vi.mock("@/lib/store/launch", () => ({
-  isStoreLaunched: vi.fn(() => true),
+  isStoreSearchIndexable: vi.fn(() => true),
 }));
 vi.mock("@/lib/observability/logger", () => ({ logError: vi.fn() }));
 
