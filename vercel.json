@@ -19,6 +19,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron/search-metrics",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron/domain-reconcile",
       "schedule": "10 * * * *"
     },

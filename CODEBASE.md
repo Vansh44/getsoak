@@ -109,7 +109,8 @@ wholesip/
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
-│                              # daily seo-refresh and prune-logs (docs/cron-jobs.md)
+│                              # daily seo-refresh, search-metrics, and prune-logs
+│                              # (docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -486,6 +487,9 @@ wholesip/
 │       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help/themes
 │       │                      # sitemaps + every launched store; custom-domain META
 │       │                      # verification/property creation; 503 triggers retries
+│       ├── cron/search-metrics/ # ★ Daily Search Console ingest (§20): GET reconciles
+│       │                      # source epochs + the trailing work window; leased POST
+│       │                      # self-chain replaces one durable PT bucket at a time
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
 │       │                      # whose certificate issued after the merchant closed
 │       │                      # the tab. Without it a domain only ever goes live if
@@ -2255,6 +2259,20 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       the selected stock location. `analytics-summary-card.tsx` and
       `inventory-velocity.tsx` render these server results. Untouched layouts
       now also receive the Customers section; customized layouts remain stable.
+    - **Search Console Phase 3a foundation (2026-08-19; migration pending):**
+      `supabase/search_metrics_01_schema.sql` and migration
+      `20260819_0006_search_metrics` add service-only origin epochs, complete
+      metric buckets, leased `(source, PT date, dimension)` work and a
+      database-serialized per-property rate limiter. `lib/seo/search-performance.ts`
+      owns the anchored tenant page filter, PT dates, row caps and weighted
+      position normalization. `lib/seo/search-metrics.ts` reconciles canonical
+      origins, keeps closed-source correction bounds, replaces each bucket
+      transactionally, and drives `/api/cron/search-metrics` through a resumable
+      self-chain. Domain save/verify/disconnect and the unattended domain cron
+      record source transitions immediately; the daily ingest is the backstop.
+      Search metrics join the 488-day retention sweep. Merchant cards are the
+      next phase and deliberately do not render before this migration is applied
+      and collection has run.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -6637,6 +6655,16 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   successful stores are refreshed at most weekly, failures retry daily and make
   the cron return 503 so Cloud Scheduler's three retries engage. Full setup and
   Google-controlled limitations: `docs/seo-indexing.md`.
+  Search performance collection is a separate failure domain:
+  `/api/cron/search-metrics` runs after sitemap reconciliation, queries the
+  Search Analytics API, and never makes a metrics failure look like a sitemap
+  failure. Platform subdomains all query the root Domain property through an
+  anchored, regex-escaped page filter; custom domains query their URL-prefix
+  property. Every response must be page-aggregated. CTR is derived, while
+  position is stored as `position × impressions`. Source epochs preserve
+  history and enforce inclusive PT ownership bounds when canonical domains
+  change. The schema is service-role only; dashboard reads will use typed
+  tenant-gated aggregates rather than direct table access.
   **A store's public origin is always selected by `storeOrigin(store)`.** Never
   use `custom_domain ?? subdomain`. The custom domain counts only once
   `settings.custom_domain_verified === true` and the effective plan is still

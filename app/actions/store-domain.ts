@@ -32,6 +32,7 @@ import {
   ensureGoogleCoverageForStore,
   GOOGLE_INDEXING_SETTINGS_KEYS,
 } from "@/lib/seo/store-indexing";
+import { reconcileStoreSearchSource } from "@/lib/seo/search-metrics";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -157,6 +158,7 @@ export async function updateCustomDomain(
   }
 
   revalidateTag(STORE_TAG, "max");
+  after(() => reconcileStoreSearchSource(storeId));
 
   // ★ RELEASE THE DOMAIN THEY JUST REPLACED. `deprovision` was wired only to
   // disconnectDomain, so CHANGING a domain silently orphaned the old one's
@@ -428,7 +430,12 @@ export async function verifyDomain(): Promise<DomainResult> {
     // Ownership verification and sitemap registration are slower, independent
     // Google API calls. Start them now without holding the merchant's DNS check
     // open; the daily seo-refresh job retries every incomplete attempt.
-    after(() => ensureGoogleCoverageForStore(storeId));
+    after(() =>
+      Promise.all([
+        ensureGoogleCoverageForStore(storeId),
+        reconcileStoreSearchSource(storeId),
+      ]),
+    );
   }
   return { success: true };
 }
@@ -475,6 +482,7 @@ export async function disconnectDomain(): Promise<DomainResult> {
     return { error: "Couldn't disconnect the domain. Please try again." };
   }
   revalidateTag(STORE_TAG, "max");
+  after(() => reconcileStoreSearchSource(storeId));
 
   const gone = await deprovision(domain);
   if (gone.error)

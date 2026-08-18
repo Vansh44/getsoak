@@ -2,6 +2,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const after = vi.hoisted(() => vi.fn());
+const ensureGoogleCoverageForStore = vi.hoisted(() => vi.fn());
+const reconcileStoreSearchSource = vi.hoisted(() => vi.fn());
+
+vi.mock("next/server", () => ({ after }));
 vi.mock("@/lib/domains/reconcile", () => ({ sweepPendingDomains: vi.fn() }));
 vi.mock("@/lib/notifications/record", () => ({
   recordEvent: vi.fn(async () => {}),
@@ -13,6 +18,8 @@ vi.mock("@/lib/observability/logger", () => ({
   logWarn: vi.fn(),
   logInfo: vi.fn(),
 }));
+vi.mock("@/lib/seo/store-indexing", () => ({ ensureGoogleCoverageForStore }));
+vi.mock("@/lib/seo/search-metrics", () => ({ reconcileStoreSearchSource }));
 
 import { GET, POST } from "./route";
 import { sweepPendingDomains } from "@/lib/domains/reconcile";
@@ -141,6 +148,11 @@ describe("/api/cron/domain-reconcile", () => {
         storeId: "store-1",
       }),
     );
+    expect(after).toHaveBeenCalledOnce();
+    const continuation = after.mock.calls[0][0] as () => Promise<void>;
+    await continuation();
+    expect(ensureGoogleCoverageForStore).toHaveBeenCalledWith("store-1");
+    expect(reconcileStoreSearchSource).toHaveBeenCalledWith("store-1");
   });
 
   it("uses recordEvent, not emitEvent", async () => {

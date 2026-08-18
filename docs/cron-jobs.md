@@ -49,6 +49,7 @@ each job is a landmine the moment it does:
 | `storemink-plan-expiry`             | `15 0 * * *`   | `https://storemink.com/api/cron/plan-expiry`             |
 | `storemink-expire-pending-payments` | `30 1 * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
+| `storemink-search-metrics`          | `30 2 * * *`   | `https://storemink.com/api/cron/search-metrics`          |
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
@@ -60,9 +61,12 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-All eight exist. Each is `GET`, `Etc/UTC`, 300s attempt deadline, 3 retries, and an
-`Authorization: Bearer <CRON_SECRET>` header — the same secret the routes check
-(`CRON_SECRET` is in Secret Manager and already wired to the prod service).
+The original eight exist. **`storemink-search-metrics` is pending** until ledger
+migration `20260819_0006_search_metrics` is applied and its route is deployed;
+do not schedule it against an older schema. Each job is `GET`, `Etc/UTC`, 300s
+attempt deadline, 3 retries, and an `Authorization: Bearer <CRON_SECRET>` header
+— the same secret the routes check (`CRON_SECRET` is in Secret Manager and
+already wired to the prod service).
 
 `seo-refresh` registers the platform/help/themes sitemaps, retries sitemap
 coverage for every launched store, and automatically verifies Search Console URL-prefix
@@ -120,6 +124,23 @@ gcloud scheduler jobs create http storemink-seo-refresh \
   --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
+
+After the search-metrics migration and deploy are verified, create its separate
+worker heartbeat. The route's GET reconciles the five-day PT correction window;
+the internal POST chain only drains its leased buckets:
+
+```bash
+gcloud scheduler jobs create http storemink-search-metrics \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="30 2 * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/search-metrics" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+This is intentionally not part of `seo-refresh`: a Search Analytics outage must
+not make sitemap reconciliation report red, and its durable
+`(source_id, PT date, dimension)` cursor can resume independently.
 
 The domain backstop is the one **hourly** job. Google's managed certificate takes
 up to ~30 minutes after the challenge CNAME resolves, and merchants edit DNS on
@@ -220,11 +241,12 @@ because there was nothing to list. The job reported green throughout.
 Three tables grew without bound because their retention policy was written down
 and never wired to anything:
 
-| Table             | Window   | Why                                                                                                  |
-| ----------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `notifications`   | 90 days  | A read inbox row is history.                                                                         |
-| `activity_events` | 365 days | The audit trail, so it gets the longest life.                                                        |
-| `email_logs`      | 90 days  | Holds rendered message BODIES, so it is much the heaviest of the three and gets the shortest window. |
+| Table                  | Window   | Why                                                                                                  |
+| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `notifications`        | 90 days  | A read inbox row is history.                                                                         |
+| `activity_events`      | 365 days | The audit trail, so it gets the longest life.                                                        |
+| `email_logs`           | 90 days  | Holds rendered message BODIES, so it is much the heaviest of the three and gets the shortest window. |
+| `store_search_metrics` | 488 days | Matches the source product's roughly 16-month Search Console history window.                         |
 
 `supabase/email_logs.sql` documented the 90-day intent and even carries an
 `email_logs_created_idx` built "for retention sweeps". `pruneNotifications` had

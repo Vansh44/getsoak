@@ -124,12 +124,17 @@ The overview-dashboard parity milestone is done when a seller can:
 
 ## 1. Where we actually are
 
-### Search Console — submission only
+### Search Console — Phase 3a collection foundation built, migration pending
 
-`lib/seo/search-engines.ts` is entirely **write-side**: `sitemaps.submit`,
-`sites.add`, and the two `siteVerification` calls. `searchanalytics` appears
-**nowhere in the repo**. There is no clicks/impressions/position/query storage
-and no merchant surface.
+As of 2026-08-19, `lib/seo/search-engines.ts` also exposes the authenticated
+Search Analytics query, while `lib/seo/search-performance.ts` and
+`lib/seo/search-metrics.ts` implement the anchored tenant filter, source epochs,
+bounded row normalization, transactional bucket replacement, durable leases and
+fleet-wide property rate limit. `/api/cron/search-metrics` reconciles work on its
+Scheduler GET and self-chains through POST. Migration
+`20260819_0006_search_metrics` is not applied yet, so the route must not be
+scheduled until that release gate is complete. Merchant cards and indexing
+health remain unbuilt.
 
 What already exists and is reusable as-is:
 
@@ -492,13 +497,11 @@ feed, and `FAILURE_SOURCES` is a registry of reads, so it is one entry.
 
 Found while mapping; each one degrades the feature above.
 
-1. **`lib/domains/reconcile.ts:366` flips `custom_domain_verified` without
-   calling `ensureGoogleCoverageForStore`.** Only the interactive
-   `verifyDomain()` action triggers coverage (`store-domain.ts:431`). Since §30
-   moved domain completion to the cron precisely because merchants close the tab,
-   the common path is now the one that never registers the property — so a
-   custom-domain store gets no Search Console property, and therefore no search
-   data, until the next `seo-refresh`. One `after()` call.
+1. **Closed in Phase 3a:** the unattended `domain-reconcile` route now defers
+   both `ensureGoogleCoverageForStore` and the source-epoch reconciliation for
+   every domain it makes live. Interactive save/verify/disconnect workflows
+   record the same source transition, while the daily search-metrics preparation
+   remains an idempotent backstop.
 2. **Nothing calls `sites.delete` / `webResource.delete` on disconnect.**
    `store-domain.ts:461` drops the DB keys and leaves Google's ownership record
    and URL-prefix property behind. `docs/seo-indexing.md:79-82` documents a
