@@ -131,6 +131,22 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260818_0005_analytics_dashboard_layouts",
+      "description": "Persist bounded personal Analytics dashboard layouts per store admin",
+      "file": "../../supabase/analytics_01_dashboard_layouts.sql",
+      "transaction": true,
+      "requires": ["20260816_0004_ai_credit_invoice_paid_repair"],
+      "verify": {
+        "tables": ["analytics_dashboard_layouts"],
+        "constraints": [
+          "analytics_dashboard_layouts_layout_is_object",
+          "analytics_dashboard_layouts_pkey",
+          "analytics_dashboard_layouts_schema_version_check"
+        ],
+        "rlsTables": ["analytics_dashboard_layouts"]
+      }
     }
   ]
 }

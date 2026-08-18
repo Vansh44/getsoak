@@ -18,13 +18,14 @@ import {
   getTopCategories,
 } from "./data";
 import type { CatalogSnapshots, SalesAnalytics } from "./data";
-import type { WidgetId } from "./widgets";
+import { isWidgetId, type WidgetId } from "./widgets";
 import {
   parseAnalyticsRange,
   type AnalyticsRange,
   type AnalyticsSearchParams,
 } from "@/lib/analytics/range";
 import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
+import { getAnalyticsDashboardLayout } from "@/lib/analytics/layout-store";
 import { getViewerLocations } from "@/lib/locations/scope";
 
 function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
@@ -185,6 +186,13 @@ export default async function AnalyticsPage({
     );
   }
 
+  const allowedWidgetIds = Object.keys(slots).filter(isWidgetId);
+  const initialLayout = await getAnalyticsDashboardLayout(
+    storeId,
+    access.userId,
+    allowedWidgetIds,
+  );
+
   return (
     <div className="dash-analytics">
       {showBlogApprovals ? <RealtimeRefresher tables={["blogs"]} /> : null}
@@ -192,6 +200,7 @@ export default async function AnalyticsPage({
         storeId={storeId}
         slots={slots}
         headerExtras={<AnalyticsFilters range={range} />}
+        initialLayout={initialLayout}
       />
     </div>
   );

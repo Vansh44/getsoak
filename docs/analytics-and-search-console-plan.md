@@ -1,6 +1,6 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** implementation underway — Phase 1 shipped (2026-08-18) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — Phase 1 + Phase 2a shipped (2026-08-18) · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -22,8 +22,12 @@ Search storage, explicit business time zones, and session/purchase semantics.
 IANA-zone ranges and comparisons, store time-zone settings, recognized Total
 sales less completed refunds, raw-rupee adaptive charts, staff location scope,
 restricted customer-card omission, and independent Suspense widget reads. The
-remaining B2 commerce widgets, server-persisted editor, Search Console, and
-first-party traffic phases remain planned below.
+The Phase 2a persistence seam is also implemented: a bounded per-admin server record,
+optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
+and one-time import/removal of the legacy localStorage order. Named sections and
+semantic card sizes remain Phase 2b; the remaining B2 commerce widgets, Search
+Console, and first-party traffic phases remain planned below. Ledger migration
+`20260818_0005_analytics_dashboard_layouts` is applied.
 
 ---
 
@@ -608,6 +612,18 @@ Example value:
 }
 ```
 
+Phase 2a intentionally persists the current ordered-card editor first:
+
+```json
+{
+  "defaultRevision": 1,
+  "widgetIds": ["metric_revenue", "metric_orders"]
+}
+```
+
+Phase 2b migrates that versioned value to the section/size shape above. The
+column-level schema does not change.
+
 Rules:
 
 - no row means "follow the current product default"; Reset deletes the row;
@@ -621,8 +637,8 @@ Rules:
   definitions are accepted;
 - writes derive `store_id` and `admin_user_id` from the authenticated request;
   neither is trusted from the browser;
-- last-write-wins is acceptable for the same admin editing on two devices, but
-  return `updated_at` so the UI can warn before overwriting a newer draft.
+- return `updated_at` and compare it on Save/Reset; the shipped implementation
+  rejects a stale tab rather than silently overwriting a newer device.
 
 #### Global filters and metric semantics
 
@@ -902,6 +918,10 @@ From `docs/roadmap.md`:
 ### Dashboard
 
 - Default, saved, empty, corrupt, legacy, and reset layouts all render safely.
+- A valid legacy localStorage order imports only when no server row exists and
+  is removed only after the server write succeeds.
+- Two tabs editing the same admin layout cannot silently overwrite each other;
+  the stale Save/Reset receives a reload warning.
 - Add/remove/reorder/resize/section operations work with pointer and keyboard.
 - Save persists across browser/device; Cancel performs no write.
 - Mobile order matches desktop reading order and never relies on a four-column

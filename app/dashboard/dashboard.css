@@ -3740,6 +3740,19 @@ a.customer-detail-field:hover {
   color: rgba(255, 255, 255, 0.9);
 }
 
+.dashboard-shell .dash-savebar-error {
+  display: block;
+  margin-top: 2px;
+  color: #fca5a5;
+  font-size: 11.5px;
+  font-weight: 450;
+}
+
+.dashboard-shell .dash-sb-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .dashboard-shell .dash-savebar-dot {
   width: 7px;
   height: 7px;

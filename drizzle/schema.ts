@@ -3272,6 +3272,45 @@ export const posLayouts = pgTable(
   ],
 );
 
+// Personal Analytics dashboard preferences (analytics_01_dashboard_layouts.sql).
+// No row means "follow the current product default". The JSON remains bounded
+// and validated in app/actions/analytics-layout.ts; it is never authorization.
+export const analyticsDashboardLayouts = pgTable(
+  "analytics_dashboard_layouts",
+  {
+    storeId: uuid("store_id").notNull(),
+    adminUserId: text("admin_user_id").notNull(),
+    schemaVersion: integer("schema_version").default(1).notNull(),
+    layout: jsonb().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminUserId] }),
+    index("analytics_dashboard_layouts_admin_idx").using(
+      "btree",
+      table.adminUserId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "analytics_dashboard_layouts_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "analytics_dashboard_layouts_schema_version_check",
+      sql`${table.schemaVersion} > 0`,
+    ),
+    check(
+      "analytics_dashboard_layouts_layout_is_object",
+      sql`jsonb_typeof(${table.layout}) = 'object'`,
+    ),
+  ],
+);
+
 // Per-location receipt numbers (supabase/pos_06_sell_path.sql). Allocated
 // ONLY through the next_pos_receipt_no() RPC — a single atomic UPDATE, the
 // same allocator pattern as next_order_no — so nothing reads or writes this

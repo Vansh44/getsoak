@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import type { ReactNode } from "react";
 import {
   DndContext,
@@ -20,6 +27,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Plus, Search, X } from "lucide-react";
+import {
+  resetAnalyticsDashboardLayout,
+  saveAnalyticsDashboardLayout,
+} from "@/app/actions/analytics-layout";
+import type { AnalyticsLayoutView } from "@/lib/analytics/layout";
 
 import {
   WIDGETS,
@@ -50,26 +62,26 @@ interface DashboardCanvasProps {
   /** Server-rendered card for each widget the viewer is allowed to see. */
   slots: Partial<Record<WidgetId, ReactNode>>;
   headerExtras?: ReactNode;
+  initialLayout: AnalyticsLayoutView;
 }
 
-function readLayout(storeId: string, allowed: WidgetId[]): WidgetId[] {
+function readLegacyLayout(
+  storeId: string,
+  allowed: WidgetId[],
+): WidgetId[] | null {
   try {
     const raw = window.localStorage.getItem(layoutStorageKey(storeId));
-    const parsed = normalizeLayout(raw ? JSON.parse(raw) : null, allowed);
-    return parsed ?? defaultLayoutFor(allowed);
+    return normalizeLayout(raw ? JSON.parse(raw) : null, allowed);
   } catch {
-    return defaultLayoutFor(allowed);
+    return null;
   }
 }
 
-function writeLayout(storeId: string, layout: WidgetId[]) {
+function removeLegacyLayout(storeId: string) {
   try {
-    window.localStorage.setItem(
-      layoutStorageKey(storeId),
-      JSON.stringify(layout),
-    );
+    window.localStorage.removeItem(layoutStorageKey(storeId));
   } catch {
-    // Private mode / quota — the dashboard still works, it just won't persist.
+    // Private mode / storage policy: server persistence is already authoritative.
   }
 }
 
@@ -77,48 +89,108 @@ export function DashboardCanvas({
   storeId,
   slots,
   headerExtras,
+  initialLayout,
 }: DashboardCanvasProps) {
   const allowed = useMemo(
     () => Object.keys(slots).filter((id): id is WidgetId => id in WIDGETS),
     [slots],
   );
 
-  // Server and first client paint must agree, so render the DEFAULT layout
-  // during hydration and swap to the saved one in an effect.
-  const [layout, setLayout] = useState<WidgetId[]>(() =>
-    defaultLayoutFor(allowed),
+  // The server-selected layout is the first paint, so hydration and the saved
+  // cross-device preference agree. localStorage is read once only as a legacy
+  // migration input when no server row exists.
+  const [layout, setLayout] = useState<WidgetId[]>(initialLayout.items);
+  const [layoutConfigured, setLayoutConfigured] = useState(
+    initialLayout.configured,
   );
+  const [updatedAt, setUpdatedAt] = useState(initialLayout.updatedAt);
   const [draft, setDraft] = useState<WidgetId[] | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [resetRequested, setResetRequested] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const legacyAttempted = useRef(false);
 
   useEffect(() => {
-    setLayout(readLayout(storeId, allowed));
-    // `allowed` is derived from the server slots — stable for a given page load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeId]);
+    if (legacyAttempted.current) return;
+    legacyAttempted.current = true;
+    if (layoutConfigured) {
+      removeLegacyLayout(storeId);
+      return;
+    }
+    const legacy = readLegacyLayout(storeId, allowed);
+    if (legacy === null) return;
+    startTransition(async () => {
+      const result = await saveAnalyticsDashboardLayout(legacy, null);
+      if (result.success) {
+        setLayout(legacy);
+        setLayoutConfigured(true);
+        setUpdatedAt(result.updatedAt ?? null);
+        removeLegacyLayout(storeId);
+      } else {
+        setSaveError(
+          result.error ?? "Couldn't import the saved browser layout.",
+        );
+      }
+    });
+  }, [allowed, layoutConfigured, storeId]);
 
   const editing = draft !== null;
   const visible = draft ?? layout;
 
-  const startEditing = () => setDraft(layout);
+  const startEditing = () => {
+    setSaveError(null);
+    setResetRequested(false);
+    setDraft(layout);
+  };
   const cancelEditing = () => {
     setDraft(null);
     setLibraryOpen(false);
+    setResetRequested(false);
+    setSaveError(null);
   };
   const save = () => {
-    if (draft) {
-      setLayout(draft);
-      writeLayout(storeId, draft);
-    }
-    setDraft(null);
-    setLibraryOpen(false);
+    if (!draft || pending) return;
+    const next = [...draft];
+    setSaveError(null);
+    startTransition(async () => {
+      const result = resetRequested
+        ? await resetAnalyticsDashboardLayout(updatedAt)
+        : await saveAnalyticsDashboardLayout(next, updatedAt);
+      if (!result.success) {
+        setSaveError(result.error ?? "Couldn't save the dashboard.");
+        return;
+      }
+      setLayout(resetRequested ? defaultLayoutFor(allowed) : next);
+      setLayoutConfigured(!resetRequested);
+      setUpdatedAt(result.updatedAt ?? null);
+      setDraft(null);
+      setLibraryOpen(false);
+      setResetRequested(false);
+      removeLegacyLayout(storeId);
+    });
   };
 
-  const remove = (id: WidgetId) =>
+  const remove = (id: WidgetId) => {
+    setResetRequested(false);
     setDraft((d) => (d ? d.filter((w) => w !== id) : d));
-  const add = (id: WidgetId) =>
+  };
+  const add = (id: WidgetId) => {
+    setResetRequested(false);
     setDraft((d) => (d && !d.includes(id) ? [...d, id] : d));
-  const reset = () => setDraft(defaultLayoutFor(allowed));
+  };
+  const reset = () => {
+    if (
+      !window.confirm(
+        "Reset this dashboard to StoreMink's current default layout?",
+      )
+    ) {
+      return;
+    }
+    setDraft(defaultLayoutFor(allowed));
+    setResetRequested(true);
+    setSaveError(null);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -130,6 +202,7 @@ export function DashboardCanvas({
   const onDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    setResetRequested(false);
     setDraft((d) => {
       if (!d) return d;
       const from = d.indexOf(active.id as WidgetId);
@@ -169,7 +242,14 @@ export function DashboardCanvas({
         <div className="dash-savebar">
           <div className="dash-savebar-msg">
             <span className="dash-savebar-dot" aria-hidden />
-            Editing dashboard — drag cards to reorder
+            <span>
+              Editing dashboard — drag cards to reorder
+              {saveError ? (
+                <span className="dash-savebar-error" role="alert">
+                  {saveError}
+                </span>
+              ) : null}
+            </span>
           </div>
           <div className="dash-savebar-actions">
             <button type="button" className="dash-sb-btn" onClick={reset}>
@@ -186,8 +266,9 @@ export function DashboardCanvas({
               type="button"
               className="dash-sb-btn is-primary"
               onClick={save}
+              disabled={pending}
             >
-              Save
+              {pending ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
