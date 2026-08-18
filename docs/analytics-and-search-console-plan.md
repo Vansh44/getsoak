@@ -124,17 +124,17 @@ The overview-dashboard parity milestone is done when a seller can:
 
 ## 1. Where we actually are
 
-### Search Console — Phase 3a collection foundation built, migration pending
+### Search Console — Phase 3b merchant dashboard built; indexing health next
 
-As of 2026-08-19, `lib/seo/search-engines.ts` also exposes the authenticated
-Search Analytics query, while `lib/seo/search-performance.ts` and
-`lib/seo/search-metrics.ts` implement the anchored tenant filter, source epochs,
-bounded row normalization, transactional bucket replacement, durable leases and
-fleet-wide property rate limit. `/api/cron/search-metrics` reconciles work on its
-Scheduler GET and self-chains through POST. Migration
-`20260819_0006_search_metrics` is not applied yet, so the route must not be
-scheduled until that release gate is complete. Merchant cards and indexing
-health remain unbuilt.
+As of 2026-08-19, migration `20260819_0006_search_metrics` is applied.
+`lib/seo/search-engines.ts` exposes the authenticated Search Analytics query,
+while `lib/seo/search-performance.ts` and `lib/seo/search-metrics.ts` implement
+the anchored tenant filter, source epochs, bounded row normalization,
+transactional bucket replacement, durable leases and fleet-wide property rate
+limit. `/api/cron/search-metrics` reconciles work on its Scheduler GET and
+self-chains through POST. The analytics dashboard now ships the seven delayed
+Google Search cards, source/freshness disclosure, and all five product states
+from A6. Indexing-health surfaces in A7 remain the next phase.
 
 What already exists and is reusable as-is:
 
@@ -448,6 +448,10 @@ it together.
 and burns a call to find that out.
 
 ### A6 What the merchant sees
+
+**Built 2026-08-19.** The seven cards below are registered under Search and are
+included in the default Google Search section. Existing customized dashboards
+remain unchanged and can add them from the widget library.
 
 No new page. The widget registry already does this — add entries to `WIDGETS`
 (`analytics/widgets.ts:32`) and nodes to the `slots` map (`analytics/page.tsx:34`)

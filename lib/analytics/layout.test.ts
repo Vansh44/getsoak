@@ -56,6 +56,18 @@ describe("analytics layout v2 contract", () => {
         title: "Customers",
         cards: ["customer_mix", "metric_customers"],
       },
+      {
+        title: "Google Search",
+        cards: [
+          "search_clicks",
+          "search_impressions",
+          "search_ctr",
+          "search_position",
+          "search_trend",
+          "search_queries",
+          "search_pages",
+        ],
+      },
     ]);
   });
 

@@ -214,9 +214,11 @@ wholesip/
 │   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css)
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
-│   │   │                      # filters, streamed aggregates, widget registry, and
-│   │   │                      # server-persisted per-admin "Edit dashboard" canvas
+│   │   │                      # filters, streamed commerce + tenant-scoped Google
+│   │   │                      # Search aggregates, widget registry, and persisted
+│   │   │                      # per-admin "Edit dashboard" canvas
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
+│   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
 │   │   │                      # ★ A wide list table (`dash-table-wide`) sets an
@@ -2259,7 +2261,7 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       the selected stock location. `analytics-summary-card.tsx` and
       `inventory-velocity.tsx` render these server results. Untouched layouts
       now also receive the Customers section; customized layouts remain stable.
-    - **Search Console Phase 3a foundation (2026-08-19; migration pending):**
+    - **Search Console Phase 3a foundation (2026-08-19; migration applied):**
       `supabase/search_metrics_01_schema.sql` and migration
       `20260819_0006_search_metrics` add service-only origin epochs, complete
       metric buckets, leased `(source, PT date, dimension)` work and a
@@ -2270,9 +2272,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       transactionally, and drives `/api/cron/search-metrics` through a resumable
       self-chain. Domain save/verify/disconnect and the unattended domain cron
       record source transitions immediately; the daily ingest is the backstop.
-      Search metrics join the 488-day retention sweep. Merchant cards are the
-      next phase and deliberately do not render before this migration is applied
-      and collection has run.
+      Search metrics join the 488-day retention sweep.
+    - **Search Console Phase 3b merchant dashboard (2026-08-19):**
+      `analytics/search-data.ts` reads totals, impression-weighted position, and
+      top query/page aggregates with an explicit `store_id` predicate on every
+      service-role query. Seven registry slots render clicks, impressions, CTR,
+      average position, a dual-series trend, top queries and top landing pages
+      in a default **Google Search** section and the editor's Search library.
+      All cards disclose the Google source, Pacific Time dates, the usual
+      two-day lag and last refresh. They distinguish unlaunched, collecting,
+      healthy-zero-visibility, ready and actionable source-error states; stale
+      successful data stays visible with a warning. Customized layouts remain
+      unchanged until the merchant adds the new cards.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend

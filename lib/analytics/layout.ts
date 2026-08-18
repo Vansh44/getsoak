@@ -66,6 +66,13 @@ export const WIDGET_SIZE_RULES: Record<
   activity: { default: "half", min: "half" },
   blog_approvals: { default: "compact", min: "compact" },
   enquiries: { default: "full", min: "half" },
+  search_clicks: { default: "compact", min: "compact" },
+  search_impressions: { default: "compact", min: "compact" },
+  search_ctr: { default: "compact", min: "compact" },
+  search_position: { default: "compact", min: "compact" },
+  search_trend: { default: "full", min: "half" },
+  search_queries: { default: "half", min: "half" },
+  search_pages: { default: "half", min: "half" },
 };
 
 const DEFAULT_SECTIONS: Array<{
@@ -92,6 +99,19 @@ const DEFAULT_SECTIONS: Array<{
     id: "customers",
     title: "Customers",
     widgets: ["customer_mix", "metric_customers"],
+  },
+  {
+    id: "google-search",
+    title: "Google Search",
+    widgets: [
+      "search_clicks",
+      "search_impressions",
+      "search_ctr",
+      "search_position",
+      "search_trend",
+      "search_queries",
+      "search_pages",
+    ],
   },
 ];
 

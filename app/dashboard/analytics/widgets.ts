@@ -28,14 +28,22 @@ export type WidgetId =
   | "recent_orders"
   | "activity"
   | "blog_approvals"
-  | "enquiries";
+  | "enquiries"
+  | "search_clicks"
+  | "search_impressions"
+  | "search_ctr"
+  | "search_position"
+  | "search_trend"
+  | "search_queries"
+  | "search_pages";
 
 export type WidgetGroup =
   | "Metrics"
   | "Sales"
   | "Customers"
   | "Inventory"
-  | "Content";
+  | "Content"
+  | "Search";
 
 export interface WidgetMeta {
   id: WidgetId;
@@ -167,6 +175,48 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     description: "Customer blog submissions awaiting your review.",
     group: "Content",
   },
+  search_clicks: {
+    id: "search_clicks",
+    title: "Google Search clicks",
+    description: "Visits started by a click from Google Search.",
+    group: "Search",
+  },
+  search_impressions: {
+    id: "search_impressions",
+    title: "Google Search impressions",
+    description: "Times Google showed a link to your store.",
+    group: "Search",
+  },
+  search_ctr: {
+    id: "search_ctr",
+    title: "Search click-through rate",
+    description: "Google Search clicks divided by impressions.",
+    group: "Search",
+  },
+  search_position: {
+    id: "search_position",
+    title: "Average search position",
+    description: "Impression-weighted average position in Google Search.",
+    group: "Search",
+  },
+  search_trend: {
+    id: "search_trend",
+    title: "Google Search performance",
+    description: "Clicks and impressions over time from Google Search.",
+    group: "Search",
+  },
+  search_queries: {
+    id: "search_queries",
+    title: "Top Google searches",
+    description: "Search terms ranked by clicks from Google.",
+    group: "Search",
+  },
+  search_pages: {
+    id: "search_pages",
+    title: "Top search landing pages",
+    description: "Store pages ranked by clicks from Google Search.",
+    group: "Search",
+  },
 };
 
 export const WIDGET_GROUPS: WidgetGroup[] = [
@@ -175,6 +225,7 @@ export const WIDGET_GROUPS: WidgetGroup[] = [
   "Customers",
   "Inventory",
   "Content",
+  "Search",
 ];
 
 /** The out-of-the-box dashboard, in render order. Lays out as four tidy rows. */

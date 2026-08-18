@@ -9,6 +9,11 @@ import { MetricCard } from "../components/metric-card";
 import { RealtimeRefresher } from "../components/realtime-refresher";
 import { RecentOrdersTable } from "../components/recent-orders-table";
 import { RevenueChart } from "../components/revenue-chart-lazy";
+import {
+  SearchMetricCard,
+  SearchRankingWidget,
+  SearchTrendWidget,
+} from "../components/search-widgets";
 import { TopCategories } from "../components/top-categories";
 import { TopProducts } from "../components/top-products";
 import { getActingStoreId, requireSectionAccess } from "../lib/access";
@@ -31,6 +36,7 @@ import {
   getTopProducts,
 } from "./data";
 import type { CatalogSnapshots, SalesAnalytics } from "./data";
+import { getSearchAnalytics, type SearchAnalytics } from "./search-data";
 import { isWidgetId, type WidgetId } from "./widgets";
 import {
   parseAnalyticsRange,
@@ -255,6 +261,30 @@ async function ActivityWidget({
   return <ActivityFeed items={await data} />;
 }
 
+async function SearchMetricWidget({
+  data,
+  metric,
+}: {
+  data: Promise<SearchAnalytics>;
+  metric: "clicks" | "impressions" | "ctr" | "position";
+}) {
+  return <SearchMetricCard data={await data} metric={metric} />;
+}
+
+async function SearchTrend({ data }: { data: Promise<SearchAnalytics> }) {
+  return <SearchTrendWidget data={await data} />;
+}
+
+async function SearchRanking({
+  data,
+  kind,
+}: {
+  data: Promise<SearchAnalytics>;
+  kind: "query" | "page";
+}) {
+  return <SearchRankingWidget data={await data} kind={kind} />;
+}
+
 export default async function AnalyticsPage({
   searchParams,
 }: {
@@ -298,6 +328,7 @@ export default async function AnalyticsPage({
   const discounts = getDiscountImpact(storeId, location, range);
   const returns = getReturnsAndRefunds(storeId, location, range);
   const velocity = getInventoryVelocity(storeId, location, range);
+  const search = getSearchAnalytics(storeId, range);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
@@ -386,6 +417,41 @@ export default async function AnalyticsPage({
     activity: (
       <Suspense fallback={<WidgetSkeleton />}>
         <ActivityWidget data={activity} />
+      </Suspense>
+    ),
+    search_clicks: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SearchMetricWidget data={search} metric="clicks" />
+      </Suspense>
+    ),
+    search_impressions: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SearchMetricWidget data={search} metric="impressions" />
+      </Suspense>
+    ),
+    search_ctr: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SearchMetricWidget data={search} metric="ctr" />
+      </Suspense>
+    ),
+    search_position: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SearchMetricWidget data={search} metric="position" />
+      </Suspense>
+    ),
+    search_trend: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <SearchTrend data={search} />
+      </Suspense>
+    ),
+    search_queries: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <SearchRanking data={search} kind="query" />
+      </Suspense>
+    ),
+    search_pages: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <SearchRanking data={search} kind="page" />
       </Suspense>
     ),
   };
