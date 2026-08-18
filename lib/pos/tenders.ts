@@ -65,31 +65,34 @@ export const TENDER_METHODS: PosTenderMethod[] = [
 ];
 
 /**
- * ★★ WHAT A COLLECTION COUNTER MAY TAKE — STILL NARROWER, AND THAT IS THE POINT.
+ * ★★ WHAT A COLLECTION COUNTER MAY TAKE — NOW THE SAME SET, AND THAT TOOK WORK.
  *
- * `markCollected` settles a pay-at-store collection. Because it shares
- * `validateTenderShape`, adding a method here makes that counter accept it —
- * so a method belongs on this list only once that action can actually SETTLE
- * it. Widening a shared constant without checking both sides is the exact
- * failure the allowlist exists to prevent; a test caught it for `store_credit`.
+ * This list existed because `markCollected` could not settle everything the
+ * sell counter could. Because both counters share `validateTenderShape`, a
+ * method belongs on a list only once the action behind it can actually SETTLE
+ * it — widening a shared constant without checking both sides is how a counter
+ * marks an order paid against money nothing ever took. A test caught exactly
+ * that for `store_credit` once.
  *
- * ★★ `razorpay` LEFT THIS LIST IN STEP 12 AND HAS REJOINED IT. It was removed
- * while only `placePosSale` verified gateway payments — accepting it here would
- * have marked a collection paid against money nobody checked was taken.
- * `markCollected` now runs the SAME `verifyGatewayTenders` from
- * lib/payments/pos-gateway.ts, before its claim, so the reason for the
- * exclusion is gone.
+ * Both exclusions have since been closed, in order:
+ *   • `razorpay`     — markCollected now runs the same `verifyGatewayTenders`
+ *                      as the sell path, before its claim (§18 Step 12).
+ *   • `store_credit` — markCollected now SPENDS it, inside the same
+ *                      transaction as its hand-over claim (§29).
  *
- * ★ `store_credit` IS STILL ABSENT, and for its original reason: no credit
- * spend is wired into `markCollected`, so accepting one would mark an order
- * paid against a balance nothing ever deducted. Wire that in and the two lists
- * finally become one.
+ * ⚠ IT IS KEPT AS A SEPARATE CONSTANT RATHER THAN ALIASED TO THE ONE ABOVE.
+ * The two are equal today by coincidence of both being finished, not by rule:
+ * the next method added to the till — a gift card, most likely — will land on
+ * the sell counter first and have to earn its place here separately. Collapsing
+ * them now would silently grant that method to a counter that cannot settle it,
+ * which is the precise failure this whole mechanism exists to prevent.
  */
 export const COUNTER_TENDER_METHODS: PosTenderMethod[] = [
   "cash",
   "card",
   "upi",
   "razorpay",
+  "store_credit",
 ];
 
 /** Tenders that need a customer on the sale, because they draw on a balance

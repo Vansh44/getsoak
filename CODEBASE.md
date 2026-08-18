@@ -2054,8 +2054,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     claim, in each case while a refusal still costs nothing. `razorpay` briefly
     LEFT `COUNTER_TENDER_METHODS` while only the sell path checked, and rejoined
     once the collection path did: a method belongs on an allowlist only when the
-    action behind it can SETTLE it. `store_credit` is still absent there, its own
-    spend being unwired. ⚠ A gateway clash at the collection counter CANNOT
+    action behind it can SETTLE it. `store_credit` followed it once
+    `markCollected` gained the SPEND — run INSIDE the same transaction as the
+    hand-over claim, because `try_spend_customer_credit` is atomic per call but
+    is NOT deduplicated by its ref, so exactly-once has to come from the claim.
+    Spending before it would take money for a hand-over that then loses a race;
+    after it would give the goods away when the balance moved. A false spend
+    THROWS, rolling the claim back. `getCollectionCredit` reads the balance when
+    the pad OPENS rather than on the 30s queue poll. The two tender lists are
+    equal today and stay SEPARATE constants: the next method (a gift card) will
+    land on the sell counter first and must earn its place here on its own. ⚠ A gateway clash at the collection counter CANNOT
     unwind the way the sell counter's does — the claim has committed and the
     parcel is gone — so it is logged distinctly for a human to reconcile. - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
     `lib/payments/store-webhook.ts`, `supabase/payments_02_store_webhook.sql`).

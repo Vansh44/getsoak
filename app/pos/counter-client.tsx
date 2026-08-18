@@ -47,6 +47,7 @@ import { toast } from "sonner";
 import { isCollectionCode } from "@/lib/fulfilment/collection-code";
 import { collectionNote, collectionState } from "@/lib/pos/collection-state";
 import {
+  getCollectionCredit,
   findPickupByCode,
   getPickupQueue,
   markCollected,
@@ -146,6 +147,8 @@ export function CounterClient({
     order: PickupOrder;
     acked: boolean;
   } | null>(null);
+  /** The attached customer's spendable credit, or null while it loads. */
+  const [collectionCredit, setCollectionCredit] = useState<number | null>(null);
   const [confirmUnprepared, setConfirmUnprepared] =
     useState<PickupOrder | null>(null);
   const [pending, start] = useTransition();
@@ -331,6 +334,13 @@ export function CounterClient({
     }
     if (o.amountDue > 0) {
       setTendering({ order: o, acked });
+      // Fetched here rather than carried on the queue row: the queue is polled
+      // every 30s and is deliberately one cheap indexed read (§22). Starts at
+      // null so the option stays hidden until we actually know.
+      setCollectionCredit(null);
+      void getCollectionCredit(o.id)
+        .then(setCollectionCredit)
+        .catch(() => setCollectionCredit(0));
       return;
     }
     void act(
@@ -732,6 +742,11 @@ export function CounterClient({
           confirmLabel="Take payment & hand over"
           onCancel={() => setTendering(null)}
           onComplete={takePayment}
+          // Null until the balance lands, which is what keeps the option off
+          // the pad rather than flashing a ₹0 one. markCollected re-reads and
+          // spends it atomically, so a stale figure costs a refusal, never an
+          // overdraw.
+          storeCredit={collectionCredit}
         />
       )}
 

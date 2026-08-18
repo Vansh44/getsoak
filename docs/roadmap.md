@@ -866,8 +866,12 @@ counter ends up settling against an unverified payment.
 while only the sell path checked — accepting it at a collection would have
 marked an order paid against money nobody confirmed was taken — and restored
 once `markCollected` ran the same verify. A method belongs on an allowlist only
-when the action behind it can SETTLE it. `store_credit` is still absent there,
-its own spend being unwired; wire that in and the two lists finally merge.
+when the action behind it can SETTLE it. `store_credit` followed it once `markCollected`
+gained the SPEND — inside the same transaction as the hand-over claim, since
+`try_spend_customer_credit` is atomic per call but not deduplicated by its ref,
+so exactly-once must come from the claim. The two lists are equal now, and stay
+separate constants: `gift_card` will land on the sell counter first and must
+earn its place at the collection counter on its own.
 
 **⚠ THE COLLECTION COUNTER CANNOT UNWIND.** At the sell counter a gateway clash
 surfacing at the payments insert releases stock and deletes the order. At a

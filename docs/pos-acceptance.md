@@ -2565,6 +2565,36 @@ verify, and a round trip here would sit on every already-paid hand-over.
 
 ---
 
+**PS-CR.9 ★★ — A collection settles from store credit**
+On a pay-at-store collection owing ₹340 for a customer with ₹1,000 credit, pay
+with Store credit.
+**Expect:** hand-over completes, the balance drops by ₹340, and the ledger
+carries one `spend` row keyed on that order.
+
+**PS-CR.10 ★★ — The spend and the hand-over are atomic**
+Force the balance to move between the pad opening and Confirm (spend it
+elsewhere).
+**Expect:** refused with "store credit changed while you were paying", the order
+is STILL awaiting/ready, and the balance is untouched. Neither half happens.
+
+**PS-CR.11 ★★ — A second tap does not deduct twice**
+Tap hand-over twice on a credit-settled collection.
+**Expect:** the second matches zero rows and the balance moves ONCE. The RPC is
+not deduplicated by its ref, so the claim is what makes this exactly-once.
+
+**PS-CR.12 ★ — An anonymous order cannot draw credit**
+Post a store_credit tender for a collection whose order has no customer.
+**Expect:** refused — a balance belongs to somebody, and this counter has no way
+to attach one.
+
+**PS-CR.13 ★ — Credit already applied at checkout accumulates**
+Collect an order that used ₹100 credit at checkout, paying ₹340 more from the
+balance.
+**Expect:** `orders.store_credit_used` reads ₹440, not ₹340 — assigning would
+erase what checkout recorded and understate what a credit note must reverse.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2602,7 +2632,7 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**A dashboard-received return restocks the DEFAULT location**~~   | **FIXED** (PS-RL.1–RL.7). `order_returns.location_id` was never written from `return-actions.ts`, so `receiveReturn` fell to the bare `adjust_stock` wrapper and a parcel that arrived in Mumbai credited Delhi. Now asked for, validated before the claim, and named in the toast                                     |
 | **A walk-in with NO record can't get an emailed receipt**           | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt                                                                 |
 | **The customer claim has never been run in a browser**              | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
-| **Store credit can't be spent at a COLLECTION**                     | PS-CR.8. The sell counter spends it; `markCollected` has no spend wired, so it is the ONE method still absent from `COUNTER_TENDER_METHODS` — `razorpay` rejoined in Step 12 once that counter verified one. Wire the spend and the two allowlists finally merge                                                       |
+| ~~**Store credit can't be spent at a COLLECTION**~~                 | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                   |
 | **A held sale has no auto-expiry**                                  | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                                                                                       |
 | **Analytics has no location filter**                                | Store-wide figures only                                                                                                                                                                                                                                                                                                |
 | **`order.pickup_expiring` email only**                              | No in-app pre-expiry banner                                                                                                                                                                                                                                                                                            |
