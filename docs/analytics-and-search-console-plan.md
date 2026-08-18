@@ -1,6 +1,6 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** implementation underway — Phase 1 + Phase 2a shipped (2026-08-18) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — Phase 1 + Phase 2a/2b shipped (2026-08-18) · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -22,11 +22,14 @@ Search storage, explicit business time zones, and session/purchase semantics.
 IANA-zone ranges and comparisons, store time-zone settings, recognized Total
 sales less completed refunds, raw-rupee adaptive charts, staff location scope,
 restricted customer-card omission, and independent Suspense widget reads. The
-The Phase 2a persistence seam is also implemented: a bounded per-admin server record,
+Phase 2 dashboard editor is also implemented: a bounded per-admin server record,
 optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
-and one-time import/removal of the legacy localStorage order. Named sections and
-semantic card sizes remain Phase 2b; the remaining B2 commerce widgets, Search
-Console, and first-party traffic phases remain planned below. Ledger migration
+one-time import/removal of the legacy localStorage order, versioned named
+sections, visibility/reorder/delete controls, cross-section card movement, and
+semantic `compact`/`half`/`full` sizes. Existing version 1 rows upgrade at the
+read boundary and write version 2 on their next save; no second database
+migration is required. The remaining B2 commerce widgets, Search Console, and
+first-party traffic phases remain planned below. Ledger migration
 `20260818_0005_analytics_dashboard_layouts` is applied.
 
 ---
@@ -77,26 +80,26 @@ Shopify's current overview dashboard supports:
 - later-layer capabilities such as custom reports, targets, and generated
   insights.
 
-StoreMink already has add/remove/reorder, a searchable library, Save/Cancel/Reset,
-and a default card registry. It does **not** yet have resize, real sections,
-server persistence, a global date/comparison contract, report drill-downs, or
-enough commerce/traffic metrics. Calling the current page "Shopify parity" would
-therefore be inaccurate.
+StoreMink now has add/remove/reorder, named sections, semantic card sizes, a
+searchable library, Save/Cancel/Reset, server persistence, and a global
+date/comparison contract. It does **not** yet have report drill-downs or enough
+commerce/traffic metrics. Calling the current page full "Shopify parity" would
+therefore still be inaccurate.
 
-| Capability                          | Shopify now                 | StoreMink now                       | This spec                               |
-| ----------------------------------- | --------------------------- | ----------------------------------- | --------------------------------------- |
-| Default dashboard                   | Yes                         | Yes, 10 mixed cards                 | Replace with seller-performance default |
-| Global date + comparison            | Yes                         | No                                  | Release 1                               |
-| Add/remove/reorder                  | Yes                         | Yes                                 | Keep and harden                         |
-| Resize cards                        | Yes                         | No; span is fixed in registry       | Release 1                               |
-| Named/reorderable/hideable sections | Yes                         | No; library groups are not sections | Release 1                               |
-| Searchable widget library           | Yes                         | Yes                                 | Keep; add categories and "New" state    |
-| Cross-device persistence            | Yes in product behavior     | No; browser `localStorage` only     | Release 1, per admin                    |
-| Card -> detailed report             | Yes                         | No                                  | Release 2                               |
-| Custom report -> dashboard card     | Yes                         | No report builder                   | Later, not dashboard-parity blocker     |
-| Targets and generated insights      | Yes                         | No                                  | Later                                   |
-| Google Search Console cards         | Not native to Shopify admin | No                                  | Release 2 differentiator                |
-| First-party sessions/conversion     | Yes                         | No event pipeline                   | Release 3                               |
+| Capability                          | Shopify now                 | StoreMink now                      | This spec                               |
+| ----------------------------------- | --------------------------- | ---------------------------------- | --------------------------------------- |
+| Default dashboard                   | Yes                         | Yes, 10 mixed cards                | Replace with seller-performance default |
+| Global date + comparison            | Yes                         | Yes                                | Shipped                                 |
+| Add/remove/reorder                  | Yes                         | Yes, including cross-section moves | Shipped                                 |
+| Resize cards                        | Yes                         | Yes; semantic bounded sizes        | Shipped                                 |
+| Named/reorderable/hideable sections | Yes                         | Yes                                | Shipped                                 |
+| Searchable widget library           | Yes                         | Yes                                | Keep; add categories and "New" state    |
+| Cross-device persistence            | Yes in product behavior     | Yes; server-side per admin         | Shipped                                 |
+| Card -> detailed report             | Yes                         | No                                 | Release 2                               |
+| Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker     |
+| Targets and generated insights      | Yes                         | No                                 | Later                                   |
+| Google Search Console cards         | Not native to Shopify admin | No                                 | Release 2 differentiator                |
+| First-party sessions/conversion     | Yes                         | No event pipeline                  | Release 3                               |
 
 ### 0.2 Definition of done for dashboard parity
 
@@ -557,8 +560,8 @@ the viewer later becomes unrestricted.
 - The page header contains **Edit dashboard** as requested. It is visible to any
   role that can view Analytics because changing a personal layout does not change
   store data.
-- Editing is desktop-only for v1. Mobile renders the saved responsive order and
-  says to use desktop when customization is requested.
+- Editing is responsive. Mobile renders the saved single-column order and keeps
+  non-drag controls available for section/card movement and sizing.
 - Entering edit mode creates a draft. **Save** commits, **Cancel** discards, and
   **Reset to default** removes the personal override after confirmation.
 - Cards drag within or across sections. Sections can be added, renamed, hidden,
@@ -612,7 +615,7 @@ Example value:
 }
 ```
 
-Phase 2a intentionally persists the current ordered-card editor first:
+Phase 2a initially persisted the ordered-card editor as:
 
 ```json
 {
@@ -621,8 +624,9 @@ Phase 2a intentionally persists the current ordered-card editor first:
 }
 ```
 
-Phase 2b migrates that versioned value to the section/size shape above. The
-column-level schema does not change.
+Phase 2b now reads that version 1 value into one `Overview` section while
+preserving card order. Every subsequent save emits the section/size shape above
+with `schema_version = 2`. The column-level schema does not change.
 
 Rules:
 

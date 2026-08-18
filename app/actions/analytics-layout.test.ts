@@ -33,6 +33,26 @@ const VIEWER = {
   storeId: "store-1",
 };
 
+function layout(
+  items: Array<{ widgetId: string; size?: string }>,
+  id = "overview",
+) {
+  return {
+    defaultRevision: 2,
+    sections: [
+      {
+        id,
+        title: "Overview",
+        hidden: false,
+        items: items.map((item) => ({
+          widgetId: item.widgetId,
+          size: item.size ?? "compact",
+        })),
+      },
+    ],
+  };
+}
+
 describe("analytics layout actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -47,19 +67,30 @@ describe("analytics layout actions", () => {
       isSuperadmin: false,
       permissions: {},
     } as any);
-    const result = await saveAnalyticsDashboardLayout(["metric_orders"], null);
+    const result = await saveAnalyticsDashboardLayout(
+      layout([{ widgetId: "metric_orders" }]),
+      null,
+    );
     expect(result.error).toMatch(/access/i);
     expect(dbHolder.current.calls.select).toHaveLength(0);
   });
 
   it("rejects unknown, duplicate, and currently unauthorized cards", async () => {
     expect(
-      (await saveAnalyticsDashboardLayout(["made_up"], null)).error,
+      (
+        await saveAnalyticsDashboardLayout(
+          layout([{ widgetId: "made_up" }]),
+          null,
+        )
+      ).error,
     ).toMatch(/valid/i);
     expect(
       (
         await saveAnalyticsDashboardLayout(
-          ["metric_orders", "metric_orders"],
+          layout([
+            { widgetId: "metric_orders" },
+            { widgetId: "metric_orders" },
+          ]),
           null,
         )
       ).error,
@@ -72,23 +103,38 @@ describe("analytics layout actions", () => {
     } as any);
     vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
     expect(
-      (await saveAnalyticsDashboardLayout(["metric_customers"], null)).error,
+      (
+        await saveAnalyticsDashboardLayout(
+          layout([{ widgetId: "metric_customers" }]),
+          null,
+        )
+      ).error,
     ).toMatch(/valid/i);
   });
 
   it("creates a personal row keyed from the authenticated viewer", async () => {
     const result = await saveAnalyticsDashboardLayout(
-      ["metric_orders", "metric_revenue"],
+      layout([{ widgetId: "metric_orders" }, { widgetId: "metric_revenue" }]),
       null,
     );
     expect(result.success).toBe(true);
     expect(dbHolder.current.calls.values[0]).toMatchObject({
       storeId: "store-1",
       adminUserId: "user-1",
-      schemaVersion: 1,
+      schemaVersion: 2,
       layout: {
-        defaultRevision: 1,
-        widgetIds: ["metric_orders", "metric_revenue"],
+        defaultRevision: 2,
+        sections: [
+          {
+            id: "overview",
+            title: "Overview",
+            hidden: false,
+            items: [
+              { widgetId: "metric_orders", size: "compact" },
+              { widgetId: "metric_revenue", size: "compact" },
+            ],
+          },
+        ],
       },
     });
     expect(dbHolder.current.calls.forUpdate).toEqual(["update"]);
@@ -122,14 +168,14 @@ describe("analytics layout actions", () => {
     });
 
     const result = await saveAnalyticsDashboardLayout(
-      ["metric_revenue"],
+      layout([{ widgetId: "metric_revenue" }]),
       "2026-08-18T00:00:00.000Z",
     );
     expect(result.success).toBe(true);
-    expect(dbHolder.current.calls.values[0].layout.widgetIds).toEqual([
-      "metric_revenue",
-      "metric_customers",
-      "blog_approvals",
+    expect(dbHolder.current.calls.values[0].layout.sections[0].items).toEqual([
+      { widgetId: "metric_revenue", size: "compact" },
+      { widgetId: "metric_customers", size: "compact" },
+      { widgetId: "blog_approvals", size: "compact" },
     ]);
   });
 
@@ -145,7 +191,7 @@ describe("analytics layout actions", () => {
       ],
     });
     const result = await saveAnalyticsDashboardLayout(
-      ["metric_orders"],
+      layout([{ widgetId: "metric_orders" }]),
       "2026-08-18T00:00:00.000Z",
     );
     expect(result.conflict).toBe(true);

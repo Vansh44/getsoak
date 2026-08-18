@@ -2201,9 +2201,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     - `analytics/page.tsx` starts independent widget reads together and hands
       Suspense-wrapped server nodes to the canvas. A card the viewer cannot use
       is never placed in `slots`, so permission gating stays server-side.
-    - `analytics/dashboard-canvas.tsx` owns the draft UI: dnd-kit reorder,
+    - `analytics/dashboard-canvas.tsx` owns the draft UI: dnd-kit reorder within
+      and across named sections, section add/rename/hide/reorder/delete,
+      semantic card sizing, keyboard-accessible section/card move controls,
       remove/add, Cancel, Save, and confirmed Reset. `useSortable` is called
-      only under its DndContext.
+      only under its DndContext. Saved sections render as a responsive
+      four-column grid; `compact`/`half`/`full` collapse to one column on mobile.
     - **Phase 2a persistence (2026-08-18):**
       `supabase/analytics_01_dashboard_layouts.sql` and the matching
       `analyticsDashboardLayouts` Drizzle model store a bounded, versioned
@@ -2218,8 +2221,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       newer device. Temporarily unavailable cards remain dormant in stored JSON
       while server rendering filters them. The old
       `sm.analytics.layout.v1.{storeId}` value is only a one-time migration
-      input when no server row exists, then it is removed. Full named sections
-      and semantic card sizes are the remaining Phase 2b model extension.
+      input when no server row exists, then it is removed.
+    - **Phase 2b layout model (2026-08-18):** the version 2 JSON contract stores
+      at most 12 named sections with stable ids, visibility, ordered cards, and
+      semantic `compact`/`half`/`full` sizes. Charts and tables enforce a minimum
+      half width. The strict write validator rejects duplicate/unknown cards,
+      invalid section metadata, unsupported sizes, and oversized JSON; the
+      lenient read path ignores retired cards. Existing version 1 flat rows are
+      presented as one `Overview` section without losing order and are rewritten
+      as version 2 on the next save, so no additional SQL migration is needed.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend

@@ -8,9 +8,11 @@ import { WIDGETS, type WidgetId } from "@/app/dashboard/analytics/widgets";
 import { analyticsDashboardLayouts } from "@/drizzle/schema";
 import {
   ANALYTICS_LAYOUT_SCHEMA_VERSION,
+  MAX_ANALYTICS_SECTIONS,
+  sanitizeAnalyticsLayoutInput,
   sanitizeStoredAnalyticsLayout,
-  sanitizeWidgetIds,
   storedAnalyticsLayout,
+  type AnalyticsLayoutSection,
 } from "@/lib/analytics/layout";
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
@@ -71,14 +73,18 @@ async function lockLayout(
 }
 
 export async function saveAnalyticsDashboardLayout(
-  rawWidgetIds: unknown,
+  rawLayout: unknown,
   expectedUpdatedAt: string | null,
 ): Promise<AnalyticsLayoutActionResult> {
   const ctx = await actionContext();
   if (!ctx) return { error: "You don't have access to Analytics." };
 
-  const requested = sanitizeWidgetIds(rawWidgetIds);
-  if (!requested || requested.some((id) => !ctx.allowed.has(id))) {
+  const requested = sanitizeAnalyticsLayoutInput(rawLayout);
+  const requestedIds =
+    requested?.sections.flatMap((section) =>
+      section.items.map((item) => item.widgetId),
+    ) ?? [];
+  if (!requested || requestedIds.some((id) => !ctx.allowed.has(id))) {
     return { error: "That dashboard layout isn't valid for this account." };
   }
 
@@ -109,8 +115,31 @@ export async function saveAnalyticsDashboardLayout(
       // Their preference must survive a location/permission change, but they
       // remain omitted from both rendering and submitted client input.
       const old = sanitizeStoredAnalyticsLayout(existing?.layout);
-      const dormant = old?.widgetIds.filter((id) => !ctx.allowed.has(id)) ?? [];
-      const widgetIds = [...requested, ...dormant];
+      const sections: AnalyticsLayoutSection[] = requested.sections.map(
+        (section) => ({
+          ...section,
+          items: section.items.map((item) => ({ ...item })),
+        }),
+      );
+      for (const oldSection of old?.sections ?? []) {
+        const dormant = oldSection.items.filter(
+          (item) => !ctx.allowed.has(item.widgetId),
+        );
+        if (dormant.length === 0) continue;
+        const matching = sections.find(
+          (section) => section.id === oldSection.id,
+        );
+        if (matching) {
+          matching.items.push(...dormant);
+        } else if (sections.length < MAX_ANALYTICS_SECTIONS) {
+          sections.push({ ...oldSection, items: dormant });
+        } else if (sections[0]) {
+          // The submitted layout already used every section slot. Preserve the
+          // inaccessible preferences in the first section rather than dropping
+          // them; server filtering keeps them invisible until access returns.
+          sections[0].items.push(...dormant);
+        }
+      }
 
       await db
         .insert(analyticsDashboardLayouts)
@@ -118,7 +147,7 @@ export async function saveAnalyticsDashboardLayout(
           storeId: ctx.viewer.storeId,
           adminUserId: ctx.viewer.userId,
           schemaVersion: ANALYTICS_LAYOUT_SCHEMA_VERSION,
-          layout: storedAnalyticsLayout(widgetIds),
+          layout: storedAnalyticsLayout(sections),
           updatedAt,
         })
         .onConflictDoUpdate({
@@ -128,7 +157,7 @@ export async function saveAnalyticsDashboardLayout(
           ],
           set: {
             schemaVersion: ANALYTICS_LAYOUT_SCHEMA_VERSION,
-            layout: storedAnalyticsLayout(widgetIds),
+            layout: storedAnalyticsLayout(sections),
             updatedAt,
           },
         });

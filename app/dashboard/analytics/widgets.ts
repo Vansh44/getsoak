@@ -4,7 +4,9 @@
 // data (no JSX) so both the server page and the client canvas can import it.
 //
 // Adding a widget = add an entry here + render its node into the `slots` map in
-// page.tsx. Everything else (library grouping, spans, persistence) follows.
+// page.tsx. Everything else (library grouping and persistence) follows. Card
+// size defaults and minimums live in lib/analytics/layout.ts because sizes are
+// versioned user preferences rather than fixed widget metadata.
 
 export type WidgetId =
   | "metric_revenue"
@@ -25,8 +27,6 @@ export interface WidgetMeta {
   title: string;
   description: string;
   group: WidgetGroup;
-  /** Columns occupied on the 4-wide desktop grid (1 = quarter, 4 = full). */
-  span: 1 | 2 | 3 | 4;
 }
 
 export const WIDGETS: Record<WidgetId, WidgetMeta> = {
@@ -36,70 +36,60 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     description:
       "Recognized sales less completed refunds in the selected range.",
     group: "Metrics",
-    span: 1,
   },
   metric_orders: {
     id: "metric_orders",
     title: "Orders",
     description: "Recognized orders placed in the selected range.",
     group: "Metrics",
-    span: 1,
   },
   metric_customers: {
     id: "metric_customers",
     title: "Total customers",
     description: "Everyone who has an account on your store.",
     group: "Metrics",
-    span: 1,
   },
   metric_products: {
     id: "metric_products",
     title: "Products listed",
     description: "Published products in your catalog.",
     group: "Metrics",
-    span: 1,
   },
   revenue_chart: {
     id: "revenue_chart",
     title: "Total sales over time",
     description: "Recognized sales over the dashboard's selected date range.",
     group: "Sales",
-    span: 3,
   },
   top_categories: {
     id: "top_categories",
     title: "Sales by category",
     description: "Which categories bring in the most revenue.",
     group: "Sales",
-    span: 1,
   },
   recent_orders: {
     id: "recent_orders",
     title: "Recent orders",
     description: "The five most recent orders and their status.",
     group: "Sales",
-    span: 2,
   },
   activity: {
     id: "activity",
     title: "Recent activity",
     description: "Orders, enquiries and blog posts as they happen.",
     group: "Customers",
-    span: 2,
   },
   enquiries: {
     id: "enquiries",
     title: "Enquiries",
     description: "Enquiry counts by status plus the latest messages.",
     group: "Customers",
-    span: 3,
   },
   blog_approvals: {
     id: "blog_approvals",
     title: "Blog approvals",
     description: "Customer blog submissions awaiting your review.",
     group: "Content",
-    span: 1,
   },
 };
 
