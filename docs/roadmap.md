@@ -40,23 +40,52 @@ sequence AND the spec for everything still to build.
 | **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
-| **3**  | **Pickup end to end: collection code, QR, role split**         | L    | ◐ part  |
-| **4**  | **POS customer capture (Shopify parity) + claim/merge**        | L    | ⏭ next |
-| **5**  | Receipts — email, then WhatsApp/SMS (POS 6)                    | M    | ⏳      |
-| **6**  | Channel stock policy (LOC H)                                   | M    | ⏳      |
-| **7**  | Transfer lifecycle (LOC I)                                     | M    | ⏳      |
+| **3**  | Pickup end to end: collection code, QR, role split             | L    | ✅ done |
+| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ✅ done |
+| **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**   | M    | ⏭ next |
+| **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
+| **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
+| **6**  | Channel stock policy, per location and configurable (LOC H)    | M    | ⏳      |
+| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state) | S    | ⏳      |
 | **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
 | **9**  | Gift cards                                                     | M    | ⏳      |
 | **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
 | **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
+
+**★ THE NUMBER IS A STABLE ID, NOT A SEQUENCE.** Row ORDER is the priority; the
+number only names the step. Steps 12 and 13 are newer than 6–11 and sit above
+them deliberately. Do not renumber to make the column ascending —
+`docs/inventory-fulfilment-roadmap.md` cites "Step 8" by number, and the
+returns plan cites Steps 1–4, so a tidy-up silently repoints those references.
+
+**★ WHAT `✅ done` MEANS IN THIS TABLE: the code shipped.** It does NOT mean
+anyone has run it in a browser — that is tracked in **P1** and in each step's
+own ⚠ notes. Steps 2, 3, 4, 12 and 13 are all `✅ done` and every one of them is
+still unexercised against a real till, browser or gateway. Reading `done` as
+`shippable` is how this table stops being trusted; if a step's code is finished,
+mark it done and put the caveat in the section, rather than leaving the row at
+`◐ part` on a different standard from its neighbours.
+
+**★ MIGRATIONS ARE NO LONGER A CAVEAT — they are all applied** (owner,
+2026-08-18; spot-verified the same day against `storemink` AND
+`storemink_staging`: `pos_parked_sales`, `store_sms_providers`,
+`sms_suppressions`, `platform_announcements`,
+`order_payments_gateway_ref_key`, `orders.pickup_code`,
+`orders.cancellation_status`, `users.claimed_at`, `order_returns.location_id`,
+`store_payment_providers.webhook_secret_enc`, and all six FKs to `users.id`
+carrying `ON UPDATE CASCADE`). ⚠ That is a point-in-time check of the objects
+those files create, not proof that every statement in every file ran — ask the
+database, not this paragraph, before depending on a specific one.
 
 **Where we actually are.** Everything in the top block works. **Step 0 is
 numbered 0 because it is not optional and not sequenced with the rest** — it is
 how StoreMink gets paid, and the old path cannot change an amount on a UPI or
 e-mandate mandate at all (`docs/billing-architecture.md` §2). **Pickup is the
 outlier**: every piece exists — holds, routing, the collection queue, tender
-capture at hand-over, four email events — and _none of it has ever been run end
-to end in a browser_. Steps 1 and 3 finish it.
+capture at hand-over, four email events, and since 2026-08-10 the collection
+code, QR page and role split — and _none of it has ever been run end to end in a
+browser_. Steps 1 and 3 built it and its migration is applied; what is left is
+purely the run, which sits in the P1 gate rather than in a feature step.
 
 **Release-hardening P1 is verification-first, not another feature track.** The
 ordered gate is: notification actions → shipment/shipping actions → pickup in
@@ -76,8 +105,9 @@ centre public/operator boundaries, Shiprocket connection secrets and warehouse
 mapping, custom-domain state transitions and store-signup provisioning/rollback.
 The code-only action hardening is complete. The release gate remains open:
 browser pickup still needs an authorized disposable environment/data set, then
-Razorpay refunds and billing need test-mode credentials; autopay follows only
-after those real provider behaviours are observed. This gate does not change
+Razorpay refunds, billing and the new counter tender (Step 12) need test-mode
+credentials; autopay follows only after those real provider behaviours are
+observed. Schema is no longer part of this gate — every migration is applied. This gate does not change
 Step 4's place in the product roadmap; it decides when the already-built system
 is safe to expose to real transactions.
 
@@ -244,7 +274,7 @@ the refund DESTINATION is chosen and confirmed, Shopify's model.
   (`none` / `until_fulfilled` / `1h` / `24h` / `custom`), eligibility, the fixed
   cancel-reason vocabulary, and which refund destinations an order can honour.
 - `supabase/orders_01_cancellation.sql` — the request lifecycle as columns on
-  `orders` (⚠ **not applied yet**), plus a partial index for the queue.
+  `orders` (applied), plus a partial index for the queue.
 - Three settings: allow, window (select), approval (select, **approval
   required** by default).
 - `lib/orders/approve-cancellation.ts` — ONE implementation of "cancel it",
@@ -261,9 +291,8 @@ approve/decline, and the settings selects (registry-driven, so the page needed
 only its now-wrong footnote corrected — it claimed cancelling "never moves
 money").
 
-**Acceptance:** PS-D.1–D.13. **⚠ Not verified in a browser** — the Cloud SQL
-proxy needs `gcloud auth application-default login`, and the migration is not
-applied.
+**Acceptance:** PS-D.1–D.13. **⚠ Still not verified in a browser** — the
+migration is applied now, so nothing blocks it but the run itself.
 
 **★ ASKING IS NOT CANCELLING.** A customer raises a request; a human approves
 it. Money and stock move on APPROVAL. Before this, an eligible order was
@@ -366,8 +395,8 @@ editor, `(pages)/orders/[id]`.
 
 **✅ Shipped:** `lib/fulfilment/collection-code.ts` (pure + 13 tests — Crockford
 base32, so the characters people misread off a phone are not in the alphabet and
-the normaliser folds them back), `orders.pickup_code` (⚠ **migration not
-applied**), code minted at checkout for collections only, the `fulfil_pickup`
+the normaliser folds them back), `orders.pickup_code` (migration applied), code
+minted at checkout for collections only, the `fulfil_pickup`
 capability gating "mark ready" to manager and above, the customer collection
 page at `/orders/[id]/collect` with a client-rendered QR, the code carried into
 the `order.ready_for_pickup` notification, and `findPickupByCode` for the
@@ -387,8 +416,10 @@ about ordinary orders for every existing store (invariant 1). Only the four
 pickup-specific events default, and those are safe because pickup has no live
 users. A merchant's own choice always wins over the default.
 
-**⏳ Remaining:** running PS-8.1–8.31 and PS-E.1–E.6 in a browser — blocked on
-the Cloud SQL proxy (ADC) and the two unapplied migrations.
+**⏳ Remaining:** running PS-8.1–8.31 and PS-E.1–E.6 in a browser. Nothing
+blocks it any more — `supabase/locations_11_pickup_code.sql` is applied
+(`orders.pickup_code` verified present in `storemink` and `storemink_staging`,
+2026-08-18), so the only thing left is somebody doing the run.
 
 **★ THE ROLE SPLIT WAS SAFE TO MAKE** because no store had pickup enabled
 (owner confirmed 2026-08-09) — there was no live behaviour to take away. It is
@@ -466,7 +497,7 @@ confirmation email and the order page.
 
 ---
 
-## Step 4 — POS customer capture, the Shopify way
+## Step 4 — POS customer capture, the Shopify way ✅ DONE
 
 ### Shipped foundation — channel-aware shopper history
 
@@ -496,8 +527,11 @@ and their later signup adopts the row.
 3. At payment → **receipt options**: print, email, text, none. Contact entered
    _there_ attaches to the sale even with no customer record.
 
-**(1) and (2) SHIPPED.** Search, inline create, and a sale that completes with or
-without a customer. **(3) receipt contact is the remaining piece** — see below.
+**All three SHIPPED.** Search, inline create, a sale that completes with or
+without a customer, and the receipt-contact box on the tender panel — see
+"SHIPPED — receipt contact" below. SMS as a receipt channel is Step 5, not this
+step: no POS receipt path sends over SMS today (there is no
+`lib/pos/receipt-delivery.ts`).
 
 ### Why creating is hard here
 
@@ -653,7 +687,7 @@ own portal approved — leaving them unable to tell whose rule they broke.
 Merchants connect their own Twilio account in **Channels → Twilio SMS**.
 StoreMink never fronts the carrier bill and never carries their spam risk.
 
-**Shipped since:** the schema (`supabase/sms_01_schema.sql`, ⚠ **not applied**),
+**Shipped since:** the schema (`supabase/sms_01_schema.sql`, applied),
 the Twilio client and the `lib/sms/send.ts` choke point with its coverage guard,
 the Channels connection card, the SMS log as a sixth log plus a Failures source,
 and the DLT template mirror actions. See CODEBASE §37.
@@ -673,9 +707,7 @@ per-store conditions resolved at fan-out. See CODEBASE §37.
    messaging webhook pointed at us. Until then opt-out is ENFORCED on send but
    can only be RECORDED by hand — the wrong way round for the one part of this a
    regulator cares about.
-2. **The `sms_suppressions` migration** — appended to `supabase/sms_01_schema.sql`
-   after the rest of that file was applied, so it needs running on its own.
-3. **Nobody has sent a real message.** Every path is unit-tested against mocks;
+2. **Nobody has sent a real message.** Every path is unit-tested against mocks;
    none has touched Twilio, and no merchant has a DLT registration to test with.
    The first real send is the first real test.
 
@@ -691,18 +723,82 @@ Per-location, per-channel reserve buffers: "never sell the last 2 online at this
 shop", so the shelf can't be emptied by the website mid-afternoon. Rests on the
 Phase E reservations, which is why it comes after them.
 
+**Owner decision, 2026-08-18: it is CONFIGURABLE, not a hardcoded rule.** A
+buffer that cannot be turned off is a rule about someone else's business, and
+the right number differs per shop — a flagship holding two back is prudent, a
+dark store holding two back is two units of dead stock.
+
+**★★ BUT IT CANNOT BE A REGISTRY SETTING ALONE, AND THAT IS THE WHOLE DESIGN
+PROBLEM.** `lib/settings/registry.ts` holds ONE value per STORE (convention #9).
+This buffer is per LOCATION _and_ per CHANNEL, which the registry cannot
+address — the same wall `products.returnable` hit in §28, where "only certain
+products" turned out to be a column and not a setting. So it is two layers:
+
+- **the store-wide default** in the registry (`inventory.onlineReserveBuffer`,
+  section `locations`, default **0** — invariant 1, since any non-zero default
+  would silently make every existing store stop selling stock it has);
+- **the per-location override** on `store_locations`, alongside `capabilities`
+  and for its reason: jsonb keyed by channel means a third channel is a registry
+  entry rather than a migration plus a check to forget in every consumer.
+
+**★ THE BUFFER BELONGS TO `available`, NOT TO `on_hand`.** Phase E already
+defines `available = on_hand − reserved`; a buffer is a third subtrahend and
+must land in the same place, or the two definitions drift and one of them is
+what the storefront reads. Concretely `online_stock` becomes
+`SUM(on_hand − reserved − buffer)` over online-fulfil locations, floored at 0.
+
+**★ IT MUST NOT BLOCK THE TILL.** The buffer's entire purpose is to hold stock
+BACK for the counter, so applying it to `placePosSale` would reserve units
+against the very sale it exists to protect. It is an ONLINE-channel rule, and
+the POS path must be tested to prove it ignores it.
+
 ---
 
-## Step 7 — Transfer lifecycle _(LOC I)_
+## Step 7 — Transfer dispatch note _(LOC I — rescoped 2026-08-18)_
 
-Today a transfer is instantaneous — one atomic RPC, both legs or neither. Real
-stock spends days on a van. **Ships:** an in-transit state, so units belong to
-neither shop's sellable count while they move.
+**★★ THE IN-TRANSIT STOCK BUCKET IS CANCELLED (owner, 2026-08-18).** The
+original step is struck out below. A POS manages one location's stock, so a
+transfer is two ordinary adjustments — Delhi counts it out, Mumbai counts it in
+when the van arrives — and modelling a third place stock can "be" buys tracking
+nobody asked for.
 
-**★ THE GUARD CHANGES HERE.** `transfer_stock` currently checks
-`on_hand >= qty` plus reserved. Once stock can be in transit that must become
-`on_hand − reserved − in_transit`, or a transfer will ship units already promised
-to someone.
+**What ships instead:** a **transfer note** — a printable document naming the
+destination, the items and the quantities, generated when stock is counted out.
+
+**★ IT IS A ROW FIRST AND PAPER SECOND, and that distinction is the whole
+value.** A printed sheet with no record behind it cannot be received against:
+the destination re-keys the quantities by hand, two people can both "receive"
+the same delivery and double-count it, and a van that never arrives is
+indistinguishable from a miscount at either end. So `stock_transfers` +
+`stock_transfer_items` hold what was sent, and receiving CLAIMS the note —
+a conditional UPDATE on `received_at IS NULL`, the pattern every exactly-once
+path here already uses (the cancel-restock claim, `billing_claim_downgrade`).
+The print view is then a view of the row.
+
+**★ ACCEPT THAT TOTAL STOCK DIPS WHILE THE VAN IS MOVING, KNOWINGLY.**
+`products.stock` is `SUM(on_hand)`, so counting out at Delhi before counting in
+at Mumbai understates what the business owns for the length of the journey.
+Two reasons this is tolerable, and one thing it means:
+
+- for SELLING it is correct — `online_stock` counts only `online_fulfil`
+  locations, and units on a van genuinely cannot be shipped from Delhi;
+- the dip is visible and self-correcting the moment the note is received.
+- ⚠ It means **"stock on hand" stops being an answer to "what do we own"**
+  during a transfer. If that figure ever feeds a reorder decision or a valuation
+  report, the open-note quantity has to be added back — which is the one job the
+  cancelled in-transit bucket was doing for free. The note makes that quantity
+  queryable, so the report can do it without a stock state.
+
+**★ THE ATOMIC RPC STAYS FOR SAME-DAY MOVES.** `transfer_stock` commits both
+legs in one transaction and is correct when someone carries a box between two
+counters in the same building. Do not delete it; the note is the multi-day case,
+not a replacement.
+
+**~~Struck: the original in-transit design.~~** _An in-transit state so units
+belong to neither shop's sellable count while they move, and `transfer_stock`'s
+guard becoming `on_hand − reserved − in_transit`. Recorded so it is not
+re-proposed as a new idea — and because if the ownership-reporting caveat above
+ever bites hard enough, this is the design to come back to._
 
 ---
 
@@ -746,6 +842,220 @@ and refunds exist to unwind the loser.
 
 Ship-from-store, endless aisle, inter-state IGST across locations, and unified
 customer history spanning till and website.
+
+---
+
+## Step 12 — POS payments: a gateway tender at the till ✅ DONE
+
+**✅ Shipped.** `lib/payments/pos-gateway.ts` (start + verify, built only on the
+three Razorpay calls already live in production since §18),
+`startPosGatewayPayment` / `confirmPosGatewayPayment`, the Online method on the
+tender pad, and `supabase/pos_15_gateway_tender.sql` (applied — the index is
+present in both databases, verified 2026-08-18).
+
+**★★ BOTH COUNTERS VERIFY, FROM ONE IMPLEMENTATION.** `verifyGatewayTenders`
+holds the rule — reference present, not already used, then captured for the
+exact amount — and is called by `placePosSale` before its order insert and by
+`markCollected` before its claim. It shipped inline in the sell path first and
+was extracted the moment the collection counter needed the same question
+answered: this is a security check on a money path, and both actions are
+independently reachable endpoints, so a second hand-written copy is how one
+counter ends up settling against an unverified payment.
+
+**★ `razorpay` LEFT `COUNTER_TENDER_METHODS` AND REJOINED IT.** It was removed
+while only the sell path checked — accepting it at a collection would have
+marked an order paid against money nobody confirmed was taken — and restored
+once `markCollected` ran the same verify. A method belongs on an allowlist only
+when the action behind it can SETTLE it. `store_credit` is still absent there,
+its own spend being unwired; wire that in and the two lists finally merge.
+
+**⚠ THE COLLECTION COUNTER CANNOT UNWIND.** At the sell counter a gateway clash
+surfacing at the payments insert releases stock and deletes the order. At a
+collection the claim has already committed and the customer is holding the
+parcel, so the same clash is logged distinctly for a human to reconcile instead
+of being dressed up as the ordinary lost-breakdown case.
+
+The three server-side guards are mutation-checked, and so is the ORDERING at
+the collection counter — moving its verify after the claim fails a test.
+
+**★ `getLiveStoreGateway` MOVED TO `lib/payments/provider.ts`.** The three
+conditions that decide whether a store may charge a card — connected, enabled,
+plan — were private to `checkout-actions.ts`, and the till needed the same
+answer. One implementation, two counters; it also gained the tests it never had
+(a paused channel, an expired timed grant, an unreadable store row).
+⚠ Its failure mode changed in the move: an unreadable store row now returns null
+(offline-only, logged) instead of throwing out of `getCheckoutConfig` and taking
+the checkout page with it. Fails closed on the money question either way.
+
+**Owner, 2026-08-18: "right now only cash works properly."** That is the right
+diagnosis of the symptom and it is worth being precise about the cause, because
+half of this step turns out to be built already.
+
+**✅ SPLIT PAYMENT IS DONE.** `lib/pos/tenders.ts` takes up to `MAX_TENDERS` (6)
+tenders on one sale, and `settleTenders` derives coverage and change in PAISE.
+The owner's example — a ₹500 bill settled ₹300 cash + ₹200 online — already
+totals, balances and reconciles. Nothing about the split needs building.
+
+**❌ WHAT IS MISSING IS THE GATEWAY LEG.** `card` and `upi` are, by the original
+design (`docs/pos-plan.md` §7, decision 8), an EXTERNAL terminal: the shop
+swipes on their own machine and the cashier types the amount and a reference.
+StoreMink never talks to a gateway, so nothing is verified — the "payment" is a
+number a human typed.
+
+**★★ AND `razorpay` IS ON THE SERVER ALLOWLIST WITH NOTHING BEHIND IT.**
+`TENDER_METHODS` includes it; `app/actions/pos-sale-actions.ts` contains no
+gateway call at all, and `app/pos/sell/tender-panel.tsx` offers only cash, card
+and UPI. So a `razorpay` tender is accepted, recorded and counted in shift
+reconciliation as money the gateway never received. This is the exact reasoning
+that file gives for keeping `gift_card` OFF the list — "a list the SERVER
+accepts must never be wider than what the system can actually settle" — and it
+is the one place that rule is currently broken. **Either wire it in this step or
+remove it from the list; do not leave it as a third silently-unverified method.**
+
+⚠ Note what this is NOT: a privilege hole. A cashier who can post `razorpay` can
+already post `card`, so nothing new is reachable. The damage is to TRUTHFULNESS
+— the Z-report claims gateway money that no gateway holds.
+
+**Shipped.**
+
+- A **`razorpay` tender that actually charges**, via the store's OWN BYO gateway
+  — Razorpay Standard Checkout on the till, then confirmation before the sale
+  completes. The merchant keeps 0% surcharge; the money settles directly to
+  them, exactly as online checkout does.
+- The tender panel gains the method, gated on a live gateway — a control that
+  always fails in front of a customer is worse than no control (the
+  `RegisterConfig.canDiscount` rule).
+- Card/UPI stay external-terminal records and the panel now SAYS so
+  ("Recorded from your own terminal"); Online says "Charged and verified with
+  the gateway". Three buttons that looked equally trustworthy were the reason
+  nobody noticed only one of them proved anything.
+
+**★★ NO QR-CODE API, DELIBERATELY.** A UPI QR is the natural Indian counter
+flow and Razorpay has an API for it — but it is provider surface this codebase
+has never called, and §34 already records six unverified Razorpay facts. Every
+call used here (`rzpCreateOrder`, `rzpFetchPayment`, `verifyCheckoutSignature`)
+has run in production since §18. Standard Checkout offers UPI inside the modal,
+so the customer can still scan; and because confirmation is a server-side read
+of the PAYMENT, a QR presentation slots in later behind the identical verify.
+
+**★★ THE AMOUNT IS NOT RE-PRICED FROM THE CART, AND THAT IS CORRECT.** A gateway
+tender is one leg of a split — "₹200 of this on UPI" — so it is a number the
+cashier typed, not a cart total. The cart's authority is enforced where it
+belongs: `placePosSale` re-prices the whole sale, and `settleTenders` refuses a
+non-cash tender above that total. Charging a cart-derived amount here would be
+wrong for every split, which is the case this exists for.
+
+**★★ THE REPLAY GUARD IS A SEPARATE PROBLEM FROM VERIFICATION.** A captured
+payment stays captured, so re-presenting the same reference verifies perfectly
+every time. Only "has this reference already settled a sale?" stops it paying
+for two. That check is in the action AND in a partial unique index, because the
+action's version is a read-then-write that two tills can both pass.
+
+**★ THE SALE MUST NOT COMPLETE ON AN UNCONFIRMED CHARGE.** The goods leave the
+shelf at the counter, so an optimistic "assume it worked" is unrecoverable in a
+way online checkout's retry is not. Confirmation is a server-side read of the
+payment, never a client callback — the §18 rule.
+
+**★★ AND AN UNREADABLE GATEWAY IS REFUSED HERE, unlike online.**
+`verifyCapturedCheckoutPayment` falls back to the HMAC when Razorpay cannot be
+read, which is right for checkout: the order already exists as `pending` and a
+sweep reconciles it. A till sale has no pending state — it is born `paid` — so
+there is nothing to reconcile back from and an unverified completion is money
+the shop may never have received. The customer's money is captured and safe
+either way, so "we couldn't check, try again" is the honest answer.
+
+**★ A HALF-TENDERED SALE HAS ITS EXIT.** A dismissed modal or a declined card
+stages nothing, leaves the other tenders untouched, and says so — the cashier
+takes the amount another way. A cancelled payment is an ordinary counter
+outcome, not an error to recover from.
+
+**⚠ THE WINDOW THAT IS NOT CLOSED.** Stock is reserved when the sale completes,
+not when the payment is taken, so between "customer paid" and "Complete sale" a
+concurrent till could take the last unit — the sale then fails with the existing
+"only N left" against a captured payment, which the merchant refunds from the
+dashboard (§26). Holding stock at payment time was considered and rejected for
+the reason parking holds none: an abandoned hold strands stock and needs a
+sweep. The window is seconds, at a counter, with the goods in the customer's
+hand — but it is real, and it is why the failure message must name the payment.
+
+---
+
+## Step 13 — Return restock lands at the shop that took it ✅ DONE
+
+**Owner, 2026-08-18**, and the scenario is exact: Delhi is a warehouse that
+fulfils online, Mumbai is a shop doing counter sales, pickup and returns. Goods
+handed back at Mumbai must land on **Mumbai's** shelf.
+
+**✅ Shipped.** `lib/returns/restock-location.ts` (server-only reader +
+`defaultRestockLocation`, pure, 6 tests), a `locationId` argument on
+`receiveReturn` validated against that same list BEFORE the claim, the location
+written into the claim statement, and a picker on the returns queue. Five new
+action tests, both guards mutation-checked. `npm run test` and `test:shuffle`
+both green at 4,583.
+
+**★★ ONE CHANGE FROM THE SPEC ABOVE, AND IT MATTERS: THE FILTER IS
+`receive_stock`, NOT `returns`.** This section originally said
+"capability-filtered to `returns`". Writing it exposed that as wrong. The
+`returns` capability means "a customer may hand goods back AT THIS COUNTER" —
+it `requires: ["pos"]`, because someone has to be standing there — but a
+POSTED return has no counter and goes to whatever address is on the label,
+usually the warehouse. Filtering on `returns` would have made Delhi
+unselectable for precisely the returns that physically arrive there, which for
+an online store is the common case. So candidates are locations that can have
+stock booked in at all (`receive_stock`: defaults true for every type, no plan
+gate), and the returns desk is used only to pick the DEFAULT. In the owner's
+scenario both shops are offered and Mumbai is preselected.
+
+**✅ AT THE TILL, THIS IS ALREADY RIGHT.** `app/actions/pos-return-actions.ts`
+restocks through `adjust_stock_at(p_location => op.locationId)` — the operator's
+own location, resolved server-side. A BORIS return of an online order walked
+into Mumbai already credits Mumbai. No change needed.
+
+**❌ FROM THE DASHBOARD DESK, IT IS WRONG.** `order_returns.location_id` is
+never populated by `app/actions/return-actions.ts` — there is no assignment
+anywhere in the file — so `receiveReturn` takes the null branch and calls the
+bare `adjust_stock` wrapper, which per §22 delegates to the store's **default
+location**. The code says so plainly in a comment. In the owner's setup that is
+Delhi: the parcel is physically in Mumbai, the books credit Delhi, and both
+shops are wrong by the same quantity with nothing to flag it.
+
+**Shipped.** A location on the receive step — picked by the merchant, written
+to `order_returns.location_id` so the existing `adjust_stock_at` branch (already
+there, already correct) is the one that runs.
+
+**★ THE PICKER IS SCOPED, NOT FREE.** It respects `admin_locations` (§23) — a
+branch manager choosing another branch's shelf is the same escape the orders
+exporter had — and the action re-validates against the SAME list the picker was
+built from. A dropdown is an affordance, not a permission.
+
+**★ VALIDATION RUNS BEFORE THE CLAIM.** Claiming first and validating second
+would flip the return to `received` with the goods booked in nowhere — and only
+an `approved` return can be received, so the queue offers no way back. Pinned by
+a test that asserts zero writes on a rejected location.
+
+**★ THE WRITE IS A `coalesce`, NOT AN ASSIGNMENT.** It fills in an unknown and
+never overwrites a recorded one: a till return already knows its own shop, and
+that is a fact about where somebody physically stood, not a preference to be
+corrected from a desk afterwards.
+
+**★ DEFAULTING IS NOT THE SAME AS GUESSING.** One returns desk ⇒ default to it
+and NAME it; several, or none with several candidates ⇒ ask outright, button
+disabled until chosen. Silently picking the first would reproduce today's bug
+with a nicer implementation. The success toast names the shelf, because that is
+the last cheap moment to catch a wrong choice.
+
+**★ A SINGLE-LOCATION STORE IS UNTOUCHED.** No picker, one click, and
+`location_id` stays null so the default-location wrapper runs exactly as before
+(invariant 1).
+
+**★ DO NOT REACH FOR `resolveFulfilmentLocation`.** It answers "where would this
+ship FROM", which is the wrong question for goods coming BACK — it filters on
+`online_fulfil`, so in this very scenario it returns Delhi. It is used correctly
+elsewhere in that file, for exchange replacement holds; that is not this.
+
+**⚠ Existing rows are not backfillable.** Nothing recorded where past returns
+physically arrived, so a migration would be inventing history. Fix forward and
+leave the old rows on the default location.
 
 ---
 

@@ -65,17 +65,25 @@ export const TENDER_METHODS: PosTenderMethod[] = [
 ];
 
 /**
- * ★★ WHAT A COLLECTION COUNTER MAY TAKE — NARROWER, AND THAT IS THE POINT.
+ * ★★ WHAT A COLLECTION COUNTER MAY TAKE — STILL NARROWER, AND THAT IS THE POINT.
  *
- * `markCollected` settles a pay-at-store collection, and it has no store-credit
- * spend wired into it. Because it shares `validateTenderShape`, simply adding
- * `store_credit` to the list above made that counter ACCEPT credit and mark the
- * order paid against a balance nothing ever deducted — the exact failure the
- * allowlist exists to prevent, reintroduced at the other counter by widening a
- * shared constant. A test caught it.
+ * `markCollected` settles a pay-at-store collection. Because it shares
+ * `validateTenderShape`, adding a method here makes that counter accept it —
+ * so a method belongs on this list only once that action can actually SETTLE
+ * it. Widening a shared constant without checking both sides is the exact
+ * failure the allowlist exists to prevent; a test caught it for `store_credit`.
  *
- * So the allowed set is per COUNTER, not global. Wire the spend into
- * `markCollected` and this list can simply become the one above.
+ * ★★ `razorpay` LEFT THIS LIST IN STEP 12 AND HAS REJOINED IT. It was removed
+ * while only `placePosSale` verified gateway payments — accepting it here would
+ * have marked a collection paid against money nobody checked was taken.
+ * `markCollected` now runs the SAME `verifyGatewayTenders` from
+ * lib/payments/pos-gateway.ts, before its claim, so the reason for the
+ * exclusion is gone.
+ *
+ * ★ `store_credit` IS STILL ABSENT, and for its original reason: no credit
+ * spend is wired into `markCollected`, so accepting one would mark an order
+ * paid against a balance nothing ever deducted. Wire that in and the two lists
+ * finally become one.
  */
 export const COUNTER_TENDER_METHODS: PosTenderMethod[] = [
   "cash",

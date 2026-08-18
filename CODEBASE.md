@@ -426,6 +426,8 @@ wholesip/
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
 │   │   │                      # cancelMyReturn (shopper) + getReturnQueue/reviewReturn/
 │   │   │                      # receiveReturn (merchant). Never moves money.
+│   │   │                      # receiveReturn takes WHERE the goods landed and
+│   │   │                      # validates it BEFORE claiming (§28 restock rule).
 │   │   ├── refund-actions.ts  # ★ Money OUT (§26): refundOrder (pending-row-FIRST
 │   │   │                      # idempotency, FOR UPDATE cap, unknown ≠ failure) +
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
@@ -633,6 +635,21 @@ wholesip/
 │   │                          # ONE answer to "can this come back, and until when";
 │   │                          # the window starts at POSSESSION, and it fails OPEN
 │   │                          # on a dateless legacy row). Both pure + tested.
+│   │                          # ★ restock-location.ts (server-only): WHICH SHELF
+│   │                          # returned goods land on. The till always knew
+│   │                          # (op.locationId); the DESK did not, so every
+│   │                          # posted return credited the store's DEFAULT
+│   │                          # location — a parcel received in Mumbai restocked
+│   │                          # Delhi, both shops wrong by the same quantity with
+│   │                          # nothing to flag it. ⚠ Candidates filter on
+│   │                          # `receive_stock`, NOT `returns`: the latter means
+│   │                          # "handed back AT THIS COUNTER" and `requires:
+│   │                          # ["pos"]`, so it would make the warehouse
+│   │                          # unselectable for exactly the posted returns that
+│   │                          # arrive there. The returns desk only picks the
+│   │                          # DEFAULT (defaultRestockLocation, pure). ONE list
+│   │                          # feeds both the picker and the action's
+│   │                          # validation, so they cannot drift.
 │   ├── orders/                # ★ cancel.ts (§26): the ONE implementation of what
 │   │                          # cancelling DOES to stock — reserved stock released
 │   │                          # AT THE LOCATION THAT RESERVED IT, pickup holds
@@ -819,7 +836,29 @@ wholesip/
 │   │                          # First adopters: lib/ai/gemini.ts + proxy.ts 500 catch. Tested.
 │   ├── payments/              # ★ Online payments (§18): crypto.ts (AES-256-GCM cred
 │   │                          # encryption), razorpay.ts (server fetch client + HMAC verify,
-│   │                          # tested), provider.ts (store/platform cred loaders),
+│   │                          # tested), provider.ts (store/platform cred loaders
+│   │                          # + ★ getLiveStoreGateway — the THREE conditions
+│   │                          # that decide whether a store may charge a card:
+│   │                          # connected, enabled, and an EFFECTIVE plan that
+│   │                          # includes online payments. Was private to
+│   │                          # checkout-actions.ts until the till became a
+│   │                          # second counter (§18 Step 12); one implementation,
+│   │                          # two counters. Fails CLOSED on an unreadable
+│   │                          # store row — an unknown plan is not permission
+│   │                          # to charge somebody),
+│   │                          # ★ pos-gateway.ts (§18 Step 12: startCounterPayment
+│   │                          # + verifyCounterPayment for the TILL. Built only on
+│   │                          # the three Razorpay calls already live in prod —
+│   │                          # no QR-code API, which is unverified surface.
+│   │                          # ⚠ Its verify REFUSES on an unreadable gateway
+│   │                          # where verifyCapturedCheckoutPayment falls back to
+│   │                          # the HMAC: a till sale is born `paid` with no
+│   │                          # pending state to reconcile back from, so an
+│   │                          # unverified completion is money the shop may never
+│   │                          # have received. ★ verifyGatewayTenders is the ONE
+│   │                          # check BOTH counters run — reference present, not
+│   │                          # already used (order_payments), then captured for
+│   │                          # the exact amount),
 │   │                          # razorpay-client.ts (client checkout.js loader + modal),
 │   │                          # ★ issue-refund.ts (§26/§28: THE refund mechanism,
 │   │                          # shared by the dashboard and the till — authorization
@@ -1994,7 +2033,31 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     claim pending→failed, restock via the reserved→released conditional
     claim (exactly-once, order-actions pattern), release the coupon use,
     cancel the order. Refunds are out of scope v1 (merchant refunds from
-    their own Razorpay dashboard). - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
+    their own Razorpay dashboard). - **★★ THE TILL TAKES GATEWAY PAYMENTS TOO (Step 12).** Split payment was
+    never the gap — `lib/pos/tenders.ts` has always taken six tenders and
+    settled change in paise. The gap was that NOTHING was verified: `card`
+    and `upi` are external-terminal RECORDS by design (§7 of pos-plan), and
+    `razorpay` sat in `TENDER_METHODS` with no gateway call anywhere, so it
+    was accepted, recorded and counted in shift reconciliation as money the
+    gateway never received. `placePosSale` now reads every razorpay tender
+    back with `rzpFetchPayment` and refuses anything that is not a CAPTURED
+    INR payment for the exact tender amount — the check that stops a client
+    claiming ₹500 against a real ₹200 payment. **★ VERIFICATION AND REPLAY
+    ARE DIFFERENT PROBLEMS**: a captured payment stays captured, so
+    re-presenting one verifies perfectly every time; only
+    `order_payments.reference` uniqueness stops it settling two sales, in the
+    action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
+    (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
+    reserve**, so a refused payment unwinds nothing. **★★ BOTH COUNTERS VERIFY,
+    FROM ONE IMPLEMENTATION** — `verifyGatewayTenders` is called by
+    `placePosSale` before its order insert and by `markCollected` before its
+    claim, in each case while a refusal still costs nothing. `razorpay` briefly
+    LEFT `COUNTER_TENDER_METHODS` while only the sell path checked, and rejoined
+    once the collection path did: a method belongs on an allowlist only when the
+    action behind it can SETTLE it. `store_credit` is still absent there, its own
+    spend being unwired. ⚠ A gateway clash at the collection counter CANNOT
+    unwind the way the sell counter's does — the claim has committed and the
+    parcel is gone — so it is logged distinctly for a human to reconcile. - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
     `lib/payments/store-webhook.ts`, `supabase/payments_02_store_webhook.sql`).
     Reconcile-on-read left a real hole: close the tab on the Razorpay screen
     and the money is captured while the order sits `pending` until the hourly
@@ -2024,9 +2087,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     A paused gateway deliberately stops honouring the webhook, since an
     order marked paid through a channel the merchant switched off is a
     surprise.
-    ⚠ `payments_02_store_webhook.sql` needs the `postgres` role and is NOT yet
-    applied; until it is, `loadPaymentWebhookSecret` fails closed and the route
-    answers 503.
+    `payments_02_store_webhook.sql` is APPLIED (verified 2026-08-18:
+    `store_payment_providers.webhook_secret_enc` exists in both databases). It
+    needed the `postgres` role. Until it was applied,
+    `loadPaymentWebhookSecret` failed closed and the route answered 503 —
+    which is the behaviour to expect again in any environment it has not run
+    in.
 
 19. **Signup wizard (Shopify-style, `app/platform/signup/page.tsx`).** One
     client wizard, one focused screen per step, with a progress stepper. Step
@@ -2733,7 +2799,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
       - **★★ HOLD A SALE** (`lib/pos/park.ts` pure, `pos-park-actions.ts`,
-        `supabase/pos_14_parked_sales.sql` — ⚠ **not applied**). Suspend the
+        `supabase/pos_14_parked_sales.sql`, applied). Suspend the
         cart, serve the next customer, bring it back.
         - **★ A TABLE, NOT localStorage.** A park has to survive the thing it
           exists for: the till IDLE-LOCKS after ten minutes and `posLock` clears
@@ -5745,9 +5811,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the wrong order succeeds and then fails at runtime. `billing_06` was a
       no-op: `store_subscriptions` was empty in production, so there was nothing
       to migrate.
-      **⚠ `billing_09_attempt_mandate_ceiling.sql` MUST BE APPLIED before this
-      autopay build** on both databases. It adds the durable authorisation
-      ceiling; deploying code first makes enrolment attempt inserts fail.
+      **`billing_09_attempt_mandate_ceiling.sql` is APPLIED** to both databases
+      (verified 2026-08-18). It adds the durable authorisation ceiling the
+      autopay build depends on — shipping that code against a database without
+      it makes every enrolment attempt insert fail, which is why it was a
+      prerequisite rather than a follow-up.
     - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
       `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
       in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
@@ -6059,7 +6127,8 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **★ BYO PER STORE, decided 2026-08-15** (owner). Merchants connect their
       own Twilio account in **Channels → Twilio SMS**; StoreMink never fronts
       the carrier bill and never carries their spam risk. Schema in
-      `supabase/sms_01_schema.sql` (⚠ **not applied**): `store_sms_providers`
+      `supabase/sms_01_schema.sql` (applied, incl. the separately-appended
+      `sms_suppressions` block): `store_sms_providers`
       (the `store_payment_providers` shape — service-role only, auth token
       AES-256-GCM under `PAYMENT_CRED_KEY`, encrypted rather than hashed
       because it is PRESENTED on every request), `store_sms_templates`,
@@ -6240,8 +6309,8 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       writes a platform row, because there is no platform Twilio account.
     - **★★ ANNOUNCEMENTS — StoreMink telling its MERCHANTS something**
       (`/dashboard/announcements`, `lib/announcements/`,
-      `supabase/announcements_01_schema.sql` — ⚠ **not applied**; run as
-      `postgres` before deploying). Distinct from every other messaging table
+      `supabase/announcements_01_schema.sql`, applied — it needs the
+      `postgres` role). Distinct from every other messaging table
       here: `notification_email_queue` is an EVENT fanned out to identified
       recipients, `email_campaigns` is a MERCHANT mailing THEIR shoppers, this
       is the PLATFORM mailing its merchants.

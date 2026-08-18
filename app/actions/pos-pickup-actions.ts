@@ -23,7 +23,7 @@
 import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
-import { dbErrorMessage } from "@/lib/db/errors";
+import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   orderItems,
   orderPayments,
@@ -48,6 +48,7 @@ import {
   COUNTER_TENDER_METHODS,
   type PosTender,
 } from "@/lib/pos/tenders";
+import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { handoverGate } from "@/lib/pos/collection-state";
@@ -284,15 +285,27 @@ export async function markCollected(
     const bad = validateTenderShape(
       tenders,
       `Take the ₹${due.toLocaleString("en-IN")} owed on this order before handing it over.`,
-      // ★ NARROWER than the sell counter: no store-credit spend is wired here,
-      // so accepting one would mark a collection paid against a balance nothing
-      // deducted.
+      // ★ STILL narrower than the sell counter: no store-credit spend is wired
+      // here, so accepting one would mark a collection paid against a balance
+      // nothing deducted. `razorpay` REJOINED it once the verify below existed.
       COUNTER_TENDER_METHODS,
     );
     if (bad) return { error: bad };
     const settled = settleTenders(tenders, due);
     if ("error" in settled) return { error: settled.error };
     change = settled.change;
+
+    // ── Gateway tenders (§18 Step 12) ──────────────────────────────────────
+    // ★★ THE SAME CHECK THE SELL COUNTER RUNS, from the same module. Until this
+    // existed, `razorpay` was kept out of COUNTER_TENDER_METHODS entirely,
+    // because accepting it here would have marked a collection paid against
+    // money nobody had confirmed was taken.
+    //
+    // ★ BEFORE THE CLAIM, for the reason the money read and the prepared gate
+    // are: a refusal has to land while the goods are still on the shelf. After
+    // the claim the order reads as collected and the customer is walking away.
+    const badGateway = await verifyGatewayTenders(op.storeId, tenders);
+    if (badGateway) return { error: badGateway };
 
     // Which drawer this money belongs to. Stamped on the order in the SAME
     // statement as the claim, so a collection cannot be recorded without its
@@ -417,7 +430,19 @@ export async function markCollected(
       // The customer has paid and is holding the goods; the collection is NOT
       // undone. Log loudly — this is the one path that can still leave cash
       // unrecorded, and it is now an error rather than the design.
-      console.error("markCollected (payments):", err);
+      //
+      // ⚠ A UNIQUE VIOLATION HERE MEANS SOMETHING SHARPER than a lost
+      // breakdown: `order_payments_gateway_ref_key` fired, so that gateway
+      // payment already settled a different order and the verify above lost a
+      // race. Unlike the sell counter this CANNOT unwind — the claim committed
+      // and the parcel is gone — so it is logged distinctly for a human to
+      // reconcile rather than dressed up as the ordinary case.
+      console.error(
+        isUniqueViolation(err)
+          ? "markCollected (payments): gateway reference already settled another order"
+          : "markCollected (payments):",
+        err,
+      );
     }
   }
 

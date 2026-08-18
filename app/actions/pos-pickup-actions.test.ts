@@ -25,6 +25,9 @@ vi.mock("@/lib/inventory/reservations", () => ({
   commitHold: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("@/lib/settings/resolve", () => ({ getStoreSettings: vi.fn() }));
+vi.mock("@/lib/payments/pos-gateway", () => ({
+  verifyGatewayTenders: vi.fn(),
+}));
 vi.mock("./pos-shift-actions", () => ({
   currentShiftIdFor: vi.fn(async () => null),
 }));
@@ -48,6 +51,7 @@ import {
   markCollected,
   markReadyForPickup,
 } from "./pos-pickup-actions";
+import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -102,6 +106,10 @@ const cash = (amount: number, tendered = amount) => [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS. null = every gateway
+  // tender checks out; the RULE is tested in lib/payments/pos-gateway.test.ts,
+  // these assert this counter's WIRING.
+  vi.mocked(verifyGatewayTenders).mockResolvedValue(null);
   vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
   vi.mocked(getStoreSettings).mockResolvedValue({
     "pos.requireOpenShift": false,
@@ -551,5 +559,60 @@ describe("markCollected — an order that was never marked ready", () => {
     });
     expect(res.success).toBeUndefined();
     expect(res.error).toBeTruthy();
+  });
+});
+
+// ── Gateway payments at the collection counter (roadmap Step 12) ───────────
+// `razorpay` was deliberately kept OFF COUNTER_TENDER_METHODS while
+// placePosSale was the only action that verified one: accepting it here would
+// have marked a collection paid against money nobody checked was taken. These
+// pin the wiring that let it back on.
+
+describe("markCollected — gateway tenders", () => {
+  const online = [
+    { method: "razorpay" as const, amount: 340, reference: "pay_ok" },
+  ];
+
+  it("★★ settles a collection with a verified gateway payment", async () => {
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", online);
+
+    expect(res.success).toBe(true);
+    expect(verifyGatewayTenders).toHaveBeenCalledWith("store-1", online);
+    expect(dbHolder.current.calls.values[0]).toEqual([
+      expect.objectContaining({
+        method: "razorpay",
+        amount: 340,
+        reference: "pay_ok",
+        // Change can only come out of cash — a gateway payment is charged for
+        // an amount somebody typed, so there is nothing to hand back.
+        tendered: null,
+        changeDue: null,
+      }),
+    ]);
+  });
+
+  it("★★ a refused payment does NOT hand the goods over", async () => {
+    // BEFORE the claim, for the reason the money read and the prepared gate
+    // are: a refusal has to land while the parcel is still on the shelf. After
+    // the claim the order reads as collected and the customer is walking away.
+    vi.mocked(verifyGatewayTenders).mockResolvedValue(
+      "That online payment has already been used on another sale.",
+    );
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", online);
+
+    expect(res.error).toMatch(/already been used/i);
+    expect(res.success).toBeUndefined();
+    // Nothing claimed, nothing recorded.
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ a prepaid collection never asks the gateway", async () => {
+    // Nothing is owed, so there is no tender to verify — and a round trip here
+    // would sit on the hand-over of every already-paid parcel.
+    await markCollected("ord-1");
+    expect(verifyGatewayTenders).not.toHaveBeenCalled();
   });
 });

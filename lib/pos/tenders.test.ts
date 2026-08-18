@@ -50,14 +50,34 @@ describe("the allowlist", () => {
     ).toMatch(/invalid payment method/i);
   });
 
-  // The collection counter's list is the sell counter's MINUS the account
-  // tenders. Pinned so a future method added to one is a deliberate decision
-  // about the other, not an oversight.
-  it("the collection list is the sell list minus account tenders", () => {
+  // The collection counter's list is the sell counter's MINUS every method
+  // `markCollected` cannot actually settle. Pinned so a future method added to
+  // one is a deliberate decision about the other, not an oversight.
+  //
+  // `store_credit` is the only one left: no credit spend is wired into
+  // markCollected, so accepting it would mark an order paid against a balance
+  // nothing ever deducted. Wire that in and the two lists become one.
+  it("the collection list is the sell list minus what it cannot settle", () => {
     const extra = TENDER_METHODS.filter(
       (m) => !COUNTER_TENDER_METHODS.includes(m),
     );
     expect(extra).toEqual(["store_credit"]);
+  });
+
+  it("★★ accepts a gateway tender now that markCollected verifies one", () => {
+    // It was OFF this list for exactly as long as `placePosSale` was the only
+    // action reading a payment back from Razorpay. Both counters now run the
+    // same verifyGatewayTenders, so the shape is settleable at both.
+    //
+    // ⚠ Being on the list is NOT the gate — it says the SHAPE is settleable.
+    // markCollected still proves the money exists before its claim.
+    expect(
+      validateTenderShape(
+        [{ method: "razorpay", amount: 10, reference: "pay_x" }] as never,
+        "x",
+        COUNTER_TENDER_METHODS,
+      ),
+    ).toBeNull();
   });
 
   it("the collection counter still takes the money instruments", () => {
