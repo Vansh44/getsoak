@@ -1,6 +1,6 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** implementation underway — Phase 1 + Phase 2a/2b shipped (2026-08-18) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — Phase 1 + Phase 2a–2c shipped (2026-08-19) · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -22,14 +22,16 @@ Search storage, explicit business time zones, and session/purchase semantics.
 IANA-zone ranges and comparisons, store time-zone settings, recognized Total
 sales less completed refunds, raw-rupee adaptive charts, staff location scope,
 restricted customer-card omission, and independent Suspense widget reads. The
-Phase 2 dashboard editor is also implemented: a bounded per-admin server record,
+The Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
 optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
 one-time import/removal of the legacy localStorage order, versioned named
 sections, visibility/reorder/delete controls, cross-section card movement, and
 semantic `compact`/`half`/`full` sizes. Existing version 1 rows upgrade at the
 read boundary and write version 2 on their next save; no second database
-migration is required. The remaining B2 commerce widgets, Search Console, and
-first-party traffic phases remain planned below. Ledger migration
+migration is required. Phase 2c adds a scope-safe URL location filter plus AOV,
+units sold, top products, sales by channel, and sales by location. The advanced
+commerce widgets, Search Console, and first-party traffic phases remain planned
+below. Ledger migration
 `20260818_0005_analytics_dashboard_layouts` is applied.
 
 ---
@@ -86,20 +88,20 @@ date/comparison contract. It does **not** yet have report drill-downs or enough
 commerce/traffic metrics. Calling the current page full "Shopify parity" would
 therefore still be inaccurate.
 
-| Capability                          | Shopify now                 | StoreMink now                      | This spec                               |
-| ----------------------------------- | --------------------------- | ---------------------------------- | --------------------------------------- |
-| Default dashboard                   | Yes                         | Yes, 10 mixed cards                | Replace with seller-performance default |
-| Global date + comparison            | Yes                         | Yes                                | Shipped                                 |
-| Add/remove/reorder                  | Yes                         | Yes, including cross-section moves | Shipped                                 |
-| Resize cards                        | Yes                         | Yes; semantic bounded sizes        | Shipped                                 |
-| Named/reorderable/hideable sections | Yes                         | Yes                                | Shipped                                 |
-| Searchable widget library           | Yes                         | Yes                                | Keep; add categories and "New" state    |
-| Cross-device persistence            | Yes in product behavior     | Yes; server-side per admin         | Shipped                                 |
-| Card -> detailed report             | Yes                         | No                                 | Release 2                               |
-| Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker     |
-| Targets and generated insights      | Yes                         | No                                 | Later                                   |
-| Google Search Console cards         | Not native to Shopify admin | No                                 | Release 2 differentiator                |
-| First-party sessions/conversion     | Yes                         | No event pipeline                  | Release 3                               |
+| Capability                          | Shopify now                 | StoreMink now                      | This spec                            |
+| ----------------------------------- | --------------------------- | ---------------------------------- | ------------------------------------ |
+| Default dashboard                   | Yes                         | Yes; seller-performance default    | Shipped                              |
+| Global date + comparison            | Yes                         | Yes                                | Shipped                              |
+| Add/remove/reorder                  | Yes                         | Yes, including cross-section moves | Shipped                              |
+| Resize cards                        | Yes                         | Yes; semantic bounded sizes        | Shipped                              |
+| Named/reorderable/hideable sections | Yes                         | Yes                                | Shipped                              |
+| Searchable widget library           | Yes                         | Yes                                | Keep; add categories and "New" state |
+| Cross-device persistence            | Yes in product behavior     | Yes; server-side per admin         | Shipped                              |
+| Card -> detailed report             | Yes                         | No                                 | Release 2                            |
+| Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker  |
+| Targets and generated insights      | Yes                         | No                                 | Later                                |
+| Google Search Console cards         | Not native to Shopify admin | No                                 | Release 2 differentiator             |
+| First-party sessions/conversion     | Yes                         | No event pipeline                  | Release 3                            |
 
 ### 0.2 Definition of done for dashboard parity
 
@@ -654,7 +656,9 @@ rendering agree. Layout preferences do not contain filter values.
 - default: **Last 90 days**, matching Shopify's current overview default;
 - comparison: Previous period (default), Previous year, Custom, None;
 - location: All accessible locations or one accessible location, once location
-  analytics ships; the server intersects the request with staff scope;
+  analytics ships; the server intersects the request with staff scope. This is
+  now shipped: an exact physical-location selection excludes online/unassigned
+  orders, while the aggregate accessible view includes them;
 - currency: store currency only in the first release. Multi-currency display is
   not parity-critical while orders are effectively INR; do not show a dead
   currency selector.
@@ -732,18 +736,23 @@ separate library card later; it must not be silently mixed into Total sales.
 No schema change, no tracking. This is the best value-to-effort ratio in the
 document, and it is most of what a merchant means by "Shopify-like".
 
-| Widget                   | Source                                                                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| AOV                      | Total sales / recognized orders                                                                                                       |
-| Units sold               | `order_items.quantity` — exists, never summed                                                                                         |
-| Top products (units + ₹) | `order_items` grouped by `product_id` — replaces the fake one                                                                         |
-| Sales by channel         | `orders.sales_channel` — online vs POS, already written                                                                               |
-| **Sales by location**    | `orders.location_id` — the roadmap's outstanding item (§510)                                                                          |
-| Sales by payment method  | Tender-value allocation: POS `order_payments`; online `store_credit_used` plus the remaining order value under its gateway/COD method |
-| New vs returning         | first `orders.created_at` per `customer_id`                                                                                           |
-| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`                                                                          |
-| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value                                                                          |
-| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times                                                                           |
+| Widget                   | Source                                                                                                                                | Status  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| AOV                      | Total sales / recognized orders                                                                                                       | Shipped |
+| Units sold               | `order_items.quantity` — exists, never summed                                                                                         | Shipped |
+| Top products (units + ₹) | `order_items` grouped by `product_id` — replaces the fake one                                                                         | Shipped |
+| Sales by channel         | `orders.sales_channel` — online vs POS, already written                                                                               | Shipped |
+| **Sales by location**    | `orders.location_id` — the roadmap's outstanding item (§510)                                                                          | Shipped |
+| Sales by payment method  | Tender-value allocation: POS `order_payments`; online `store_credit_used` plus the remaining order value under its gateway/COD method | Planned |
+| New vs returning         | first `orders.created_at` per `customer_id`                                                                                           | Planned |
+| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`                                                                          | Planned |
+| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value                                                                          | Planned |
+| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times                                                                           | Planned |
+
+Phase 2c uses the shared recognized-order contract for all five shipped cards.
+Channel and location values subtract completed refunds by settlement date. Top
+products and units sold remain merchandise/unit measures and do not pretend that
+returned quantities are known before the dedicated returns widget ships.
 
 "Sales by payment method" means currency value by tender, not order count.
 `orders.payment_method = 'split'` is only a summary and must never become a

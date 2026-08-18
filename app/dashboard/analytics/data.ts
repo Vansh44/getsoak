@@ -21,8 +21,13 @@ import {
   orderRefunds,
   orders,
   products,
+  storeLocations,
   users,
 } from "@/drizzle/schema";
+import type {
+  AnalyticsLocationOption,
+  AnalyticsLocationSelection,
+} from "@/lib/analytics/location";
 import type { AnalyticsRange, AnalyticsWindow } from "@/lib/analytics/range";
 import { withService } from "@/lib/db/client";
 import type { LocationScope } from "@/lib/locations/scope";
@@ -41,11 +46,14 @@ export interface SalesPoint {
   /** Raw store-currency units; never rounded to thousands. */
   sales: number;
   orders: number;
+  units: number;
 }
 
 export interface SalesAnalytics {
   totalSales: Stat;
   orders: Stat;
+  averageOrderValue: Stat;
+  unitsSold: Stat;
   series: SalesPoint[];
   rangeLabel: string;
   comparisonLabel: string | null;
@@ -59,6 +67,21 @@ export interface CatalogSnapshots {
 export interface TopCategory {
   name: string;
   amount: number;
+  share: number;
+}
+
+export interface TopProduct {
+  id: string;
+  name: string;
+  units: number;
+  amount: number;
+}
+
+export interface CommerceBreakdown {
+  key: string;
+  name: string;
+  amount: number;
+  orders: number;
   share: number;
 }
 
@@ -84,11 +107,35 @@ export const RECOGNIZED_PAYMENT_STATUSES = [
 ] as const;
 export const RECOGNIZED_POS_STATUSES = ["completed", "refunded"] as const;
 
-function locationCondition(scope: LocationScope): SQL | undefined {
-  if (scope === null) return undefined;
-  // Online/unrouted orders have no physical location and remain visible to
-  // every scoped viewer, matching lib/locations/scope.ts's security contract.
-  return or(isNull(orders.locationId), inArray(orders.locationId, scope));
+function locationCondition(
+  selection: AnalyticsLocationSelection,
+): SQL | undefined {
+  if (selection.locationIds === null) return undefined;
+  const physical =
+    selection.locationIds.length > 0
+      ? inArray(orders.locationId, selection.locationIds)
+      : sql`false`;
+  // Aggregate accessible views include online/unrouted orders. Selecting one
+  // physical shop is intentionally exact and excludes those NULL rows.
+  return selection.includeUnassigned
+    ? or(isNull(orders.locationId), physical)
+    : physical;
+}
+
+export async function getAnalyticsLocationOptions(
+  storeId: string,
+  viewerScope: LocationScope,
+): Promise<AnalyticsLocationOption[]> {
+  const rows = await withService((db) =>
+    db
+      .select({ id: storeLocations.id, name: storeLocations.name })
+      .from(storeLocations)
+      .where(eq(storeLocations.storeId, storeId))
+      .orderBy(storeLocations.sortOrder, storeLocations.name),
+  );
+  if (viewerScope === null) return rows;
+  const allowed = new Set(viewerScope);
+  return rows.filter((row) => allowed.has(row.id));
 }
 
 /** The single recognized-sale contract shared by all Phase 1 commerce cards. */
@@ -154,15 +201,15 @@ function pointLabel(key: string, grain: "day" | "week" | "month") {
 
 export async function getSalesAnalytics(
   storeId: string,
-  scope: LocationScope,
+  location: AnalyticsLocationSelection,
   range: AnalyticsRange,
 ): Promise<SalesAnalytics> {
-  const scoped = locationCondition(scope);
+  const scoped = locationCondition(location);
   const grain = grainFor(range.current);
 
   return withService(async (db) => {
     const totalsFor = async (window: AnalyticsWindow) => {
-      const [[orderRow], [refundRow]] = await Promise.all([
+      const [[orderRow], [refundRow], [unitRow]] = await Promise.all([
         db
           .select({
             sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
@@ -197,70 +244,114 @@ export async function getSalesAnalytics(
               refundWindow(window),
             ),
           ),
+        db
+          .select({
+            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+          })
+          .from(orderItems)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderItems.orderId),
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(window),
+              ...(scoped ? [scoped] : []),
+            ),
+          ),
       ]);
       return {
         sales: Number(orderRow?.sales ?? 0) - Number(refundRow?.refunds ?? 0),
         orders: Number(orderRow?.count ?? 0),
+        units: Number(unitRow?.units ?? 0),
       };
     };
 
     const bucket = sql`date_trunc(${grain}, ${orders.createdAt} at time zone ${range.timeZone})`;
     const refundBucket = sql`date_trunc(${grain}, ${orderRefunds.createdAt} at time zone ${range.timeZone})`;
-    const [current, previous, orderRows, refundRows] = await Promise.all([
-      totalsFor(range.current),
-      range.compare ? totalsFor(range.compare) : Promise.resolve(null),
-      db
-        .select({
-          key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
-          sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .groupBy(bucket)
-        .orderBy(bucket),
-      db
-        .select({
-          key: sql<string>`to_char(${refundBucket}, 'YYYY-MM-DD')`,
-          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-        })
-        .from(orderRefunds)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderRefunds.orderId),
-            eq(orders.storeId, storeId),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(
-          and(
-            eq(orderRefunds.storeId, storeId),
-            eq(orderRefunds.status, "completed"),
-            refundWindow(range.current),
-          ),
-        )
-        .groupBy(refundBucket)
-        .orderBy(refundBucket),
-    ]);
+    const [current, previous, orderRows, refundRows, unitRows] =
+      await Promise.all([
+        totalsFor(range.current),
+        range.compare ? totalsFor(range.compare) : Promise.resolve(null),
+        db
+          .select({
+            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+            sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(orders)
+          .where(
+            and(
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(range.current),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .groupBy(bucket)
+          .orderBy(bucket),
+        db
+          .select({
+            key: sql<string>`to_char(${refundBucket}, 'YYYY-MM-DD')`,
+            refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+          })
+          .from(orderRefunds)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderRefunds.orderId),
+              eq(orders.storeId, storeId),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .where(
+            and(
+              eq(orderRefunds.storeId, storeId),
+              eq(orderRefunds.status, "completed"),
+              refundWindow(range.current),
+            ),
+          )
+          .groupBy(refundBucket)
+          .orderBy(refundBucket),
+        db
+          .select({
+            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+          })
+          .from(orderItems)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderItems.orderId),
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(range.current),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .groupBy(bucket)
+          .orderBy(bucket),
+      ]);
 
-    const points = new Map<string, { sales: number; orders: number }>();
+    const points = new Map<
+      string,
+      { sales: number; orders: number; units: number }
+    >();
     for (const row of orderRows) {
       points.set(row.key, {
         sales: Number(row.sales),
         orders: Number(row.count),
+        units: 0,
       });
     }
     for (const row of refundRows) {
-      const point = points.get(row.key) ?? { sales: 0, orders: 0 };
+      const point = points.get(row.key) ?? { sales: 0, orders: 0, units: 0 };
       point.sales -= Number(row.refunds);
+      points.set(row.key, point);
+    }
+    for (const row of unitRows) {
+      const point = points.get(row.key) ?? { sales: 0, orders: 0, units: 0 };
+      point.units = Number(row.units);
       points.set(row.key, point);
     }
     const series = [...points.entries()]
@@ -281,6 +372,23 @@ export async function getSalesAnalytics(
         value: current.orders,
         ...comparisonTrend(current.orders, previous?.orders ?? null),
         spark: series.map((point) => point.orders),
+      },
+      averageOrderValue: {
+        value: current.orders > 0 ? current.sales / current.orders : 0,
+        ...comparisonTrend(
+          current.orders > 0 ? current.sales / current.orders : 0,
+          previous && previous.orders > 0
+            ? previous.sales / previous.orders
+            : null,
+        ),
+        spark: series.map((point) =>
+          point.orders > 0 ? point.sales / point.orders : 0,
+        ),
+      },
+      unitsSold: {
+        value: current.units,
+        ...comparisonTrend(current.units, previous?.units ?? null),
+        spark: series.map((point) => point.units),
       },
       series,
       rangeLabel: range.label,
@@ -320,10 +428,10 @@ export async function getCatalogSnapshots(
 
 export async function getTopCategories(
   storeId: string,
-  scope: LocationScope,
+  location: AnalyticsLocationSelection,
   range: AnalyticsRange,
 ): Promise<TopCategory[]> {
-  const scoped = locationCondition(scope);
+  const scoped = locationCondition(location);
   return withService(async (db) => {
     const [earnedRows, categoryRows] = await Promise.all([
       db
@@ -369,12 +477,225 @@ export async function getTopCategories(
   });
 }
 
+export async function getTopProducts(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<TopProduct[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const rows = await db
+      .select({
+        id: orderItems.productId,
+        name: sql<string>`max(${orderItems.name})`,
+        units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+        amount: sql<number>`coalesce(sum(${orderItems.total}), 0)::float8`,
+      })
+      .from(orderItems)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderItems.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(orderItems.productId)
+      .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}), 0)`))
+      .limit(10);
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      units: Number(row.units),
+      amount: Number(row.amount),
+    }));
+  });
+}
+
+function channelName(key: string): string {
+  if (key === "pos") return "Point of sale";
+  if (key === "online") return "Online store";
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function finalizeBreakdown(
+  earnedRows: Array<{
+    key: string;
+    name: string;
+    amount: number;
+    orders: number;
+  }>,
+  refundRows: Array<{ key: string; name?: string; refunds: number }>,
+): CommerceBreakdown[] {
+  const net = new Map(
+    earnedRows.map((row) => [
+      row.key,
+      {
+        key: row.key,
+        name: row.name,
+        amount: Number(row.amount),
+        orders: Number(row.orders),
+      },
+    ]),
+  );
+  for (const refund of refundRows) {
+    const row = net.get(refund.key) ?? {
+      key: refund.key,
+      name: refund.name ?? refund.key,
+      amount: 0,
+      orders: 0,
+    };
+    row.amount -= Number(refund.refunds);
+    net.set(refund.key, row);
+  }
+  const rows = [...net.values()];
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  return rows
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name))
+    .map((row) => ({
+      ...row,
+      share:
+        total > 0 ? Math.max(0, Math.round((row.amount / total) * 100)) : 0,
+    }));
+}
+
+export async function getSalesByChannel(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CommerceBreakdown[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [earnedRows, refundRows] = await Promise.all([
+      db
+        .select({
+          key: orders.salesChannel,
+          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .groupBy(orders.salesChannel),
+      db
+        .select({
+          key: orders.salesChannel,
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        )
+        .groupBy(orders.salesChannel),
+    ]);
+    return finalizeBreakdown(
+      earnedRows.map((row) => ({ ...row, name: channelName(row.key) })),
+      refundRows.map((row) => ({ ...row, name: channelName(row.key) })),
+    );
+  });
+}
+
+export async function getSalesByLocation(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CommerceBreakdown[]> {
+  const scoped = locationCondition(location);
+  const key = sql<string>`coalesce(${orders.locationId}::text, 'online')`;
+  const name = sql<string>`coalesce(${storeLocations.name}, 'Online / unassigned')`;
+  return withService(async (db) => {
+    const [earnedRows, refundRows] = await Promise.all([
+      db
+        .select({
+          key,
+          name,
+          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .groupBy(key, name),
+      db
+        .select({
+          key,
+          name,
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        )
+        .groupBy(key, name),
+    ]);
+    return finalizeBreakdown(earnedRows, refundRows);
+  });
+}
+
 export async function getRecentOrders(
   storeId: string,
-  scope: LocationScope,
+  location: AnalyticsLocationSelection,
   range: AnalyticsRange,
 ): Promise<RecentOrder[]> {
-  const scoped = locationCondition(scope);
+  const scoped = locationCondition(location);
   return withService(async (db) => {
     const rows = await db
       .select({
@@ -407,10 +728,10 @@ export async function getRecentOrders(
 
 export async function getActivity(
   storeId: string,
-  scope: LocationScope,
+  location: AnalyticsLocationSelection,
   range: AnalyticsRange,
 ): Promise<ActivityItem[]> {
-  const scoped = locationCondition(scope);
+  const scoped = locationCondition(location);
   return withService(async (db) => {
     const [orderRows, enquiryRows, blogRows] = await Promise.all([
       db

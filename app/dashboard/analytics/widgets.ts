@@ -11,10 +11,15 @@
 export type WidgetId =
   | "metric_revenue"
   | "metric_orders"
+  | "metric_aov"
+  | "metric_units"
   | "metric_customers"
   | "metric_products"
   | "revenue_chart"
   | "top_categories"
+  | "top_products"
+  | "sales_by_channel"
+  | "sales_by_location"
   | "recent_orders"
   | "activity"
   | "blog_approvals"
@@ -43,6 +48,18 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     description: "Recognized orders placed in the selected range.",
     group: "Metrics",
   },
+  metric_aov: {
+    id: "metric_aov",
+    title: "Average order value",
+    description: "Total sales divided by recognized orders in the range.",
+    group: "Metrics",
+  },
+  metric_units: {
+    id: "metric_units",
+    title: "Units sold",
+    description: "Line-item quantity across recognized orders in the range.",
+    group: "Metrics",
+  },
   metric_customers: {
     id: "metric_customers",
     title: "Total customers",
@@ -65,6 +82,24 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     id: "top_categories",
     title: "Sales by category",
     description: "Which categories bring in the most revenue.",
+    group: "Sales",
+  },
+  top_products: {
+    id: "top_products",
+    title: "Top products",
+    description: "Products ranked by units sold with merchandise value.",
+    group: "Sales",
+  },
+  sales_by_channel: {
+    id: "sales_by_channel",
+    title: "Sales by channel",
+    description: "Recognized sales from the online store and point of sale.",
+    group: "Sales",
+  },
+  sales_by_location: {
+    id: "sales_by_location",
+    title: "Sales by location",
+    description: "Recognized sales across physical and online locations.",
     group: "Sales",
   },
   recent_orders: {
@@ -104,14 +139,12 @@ export const WIDGET_GROUPS: WidgetGroup[] = [
 export const DEFAULT_LAYOUT: WidgetId[] = [
   "metric_revenue",
   "metric_orders",
-  "metric_customers",
-  "metric_products",
+  "metric_aov",
+  "metric_units",
   "revenue_chart",
-  "top_categories",
-  "recent_orders",
-  "activity",
-  "blog_approvals",
-  "enquiries",
+  "top_products",
+  "sales_by_channel",
+  "sales_by_location",
 ];
 
 export function isWidgetId(value: unknown): value is WidgetId {

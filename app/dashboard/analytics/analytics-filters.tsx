@@ -1,4 +1,5 @@
 import type { AnalyticsRange } from "@/lib/analytics/range";
+import type { AnalyticsLocationOption } from "@/lib/analytics/location";
 
 const RANGES = [
   ["today", "Today"],
@@ -19,7 +20,15 @@ const COMPARISONS = [
   ["none", "No comparison"],
 ] as const;
 
-export function AnalyticsFilters({ range }: { range: AnalyticsRange }) {
+export function AnalyticsFilters({
+  range,
+  locations,
+  selectedLocationId,
+}: {
+  range: AnalyticsRange;
+  locations: AnalyticsLocationOption[];
+  selectedLocationId: string | null;
+}) {
   return (
     <form method="get" className="dash-an-filters">
       <select name="range" defaultValue={range.preset} aria-label="Date range">
@@ -40,6 +49,20 @@ export function AnalyticsFilters({ range }: { range: AnalyticsRange }) {
           </option>
         ))}
       </select>
+      {locations.length > 0 ? (
+        <select
+          name="location"
+          defaultValue={selectedLocationId ?? "all"}
+          aria-label="Location"
+        >
+          <option value="all">All accessible locations</option>
+          {locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <details className="dash-an-custom-dates">
         <summary>Custom dates</summary>
         <div>

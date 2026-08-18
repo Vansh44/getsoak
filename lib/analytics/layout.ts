@@ -48,10 +48,15 @@ export const WIDGET_SIZE_RULES: Record<
 > = {
   metric_revenue: { default: "compact", min: "compact" },
   metric_orders: { default: "compact", min: "compact" },
+  metric_aov: { default: "compact", min: "compact" },
+  metric_units: { default: "compact", min: "compact" },
   metric_customers: { default: "compact", min: "compact" },
   metric_products: { default: "compact", min: "compact" },
   revenue_chart: { default: "full", min: "half" },
   top_categories: { default: "half", min: "half" },
+  top_products: { default: "half", min: "half" },
+  sales_by_channel: { default: "half", min: "half" },
+  sales_by_location: { default: "full", min: "half" },
   recent_orders: { default: "half", min: "half" },
   activity: { default: "half", min: "half" },
   blog_approvals: { default: "compact", min: "compact" },
@@ -66,24 +71,18 @@ const DEFAULT_SECTIONS: Array<{
   {
     id: "overview",
     title: "Overview",
-    widgets: [
-      "metric_revenue",
-      "metric_orders",
-      "metric_customers",
-      "metric_products",
-    ],
+    widgets: ["metric_revenue", "metric_orders", "metric_aov", "metric_units"],
   },
   {
     id: "sales",
     title: "Sales",
-    widgets: ["revenue_chart", "top_categories", "recent_orders"],
+    widgets: [
+      "revenue_chart",
+      "top_products",
+      "sales_by_channel",
+      "sales_by_location",
+    ],
   },
-  {
-    id: "customers",
-    title: "Customers",
-    widgets: ["activity", "enquiries"],
-  },
-  { id: "content", title: "Content", widgets: ["blog_approvals"] },
 ];
 
 const SECTION_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;

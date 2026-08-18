@@ -2230,6 +2230,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       lenient read path ignores retired cards. Existing version 1 flat rows are
       presented as one `Overview` section without losing order and are rewritten
       as version 2 on the next save, so no additional SQL migration is needed.
+    - **Phase 2c commerce expansion (2026-08-19):**
+      `lib/analytics/location.ts` resolves the URL `location` value only against
+      server-fetched options already intersected with `getViewerLocations()`.
+      Aggregate views include accessible physical locations plus online/
+      unassigned orders; choosing one physical location is exact and excludes
+      NULL-location orders. `analytics/data.ts` applies that resolved contract
+      to every order-shaped query and adds AOV, units sold, top products, sales
+      by channel, and sales by location. Channel/location totals use recognized
+      orders less completed refunds by settlement date. The new reusable
+      `commerce-breakdown.tsx` and `top-products.tsx` cards are server-rendered
+      under their own Suspense slots. Untouched layouts receive the revised
+      Overview/Sales default; customized layouts are not silently changed.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend

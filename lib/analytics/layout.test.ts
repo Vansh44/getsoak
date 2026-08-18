@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WIDGETS, type WidgetId } from "@/app/dashboard/analytics/widgets";
 import {
   availableWidgetSizes,
   defaultAnalyticsSections,
@@ -23,6 +24,35 @@ describe("analytics layout v2 contract", () => {
       },
     ]);
     expect(availableWidgetSizes("revenue_chart")).toEqual(["half", "full"]);
+  });
+
+  it("uses the seller-performance cards for untouched dashboards", () => {
+    const all = Object.keys(WIDGETS) as WidgetId[];
+    expect(
+      defaultAnalyticsSections(all).map((section) => ({
+        title: section.title,
+        cards: section.items.map((item) => item.widgetId),
+      })),
+    ).toEqual([
+      {
+        title: "Overview",
+        cards: [
+          "metric_revenue",
+          "metric_orders",
+          "metric_aov",
+          "metric_units",
+        ],
+      },
+      {
+        title: "Sales",
+        cards: [
+          "revenue_chart",
+          "top_products",
+          "sales_by_channel",
+          "sales_by_location",
+        ],
+      },
+    ]);
   });
 
   it("strictly validates section titles, ids, unique cards, and minimum sizes", () => {

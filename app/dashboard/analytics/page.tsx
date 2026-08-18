@@ -1,21 +1,27 @@
 import { Suspense, type ReactNode } from "react";
 import { ActivityFeed } from "../components/activity-feed";
 import { BlogApprovals } from "../components/blog-approvals";
+import { CommerceBreakdown } from "../components/commerce-breakdown";
 import { EnquiriesOverview } from "../components/enquiries-overview";
 import { MetricCard } from "../components/metric-card";
 import { RealtimeRefresher } from "../components/realtime-refresher";
 import { RecentOrdersTable } from "../components/recent-orders-table";
 import { RevenueChart } from "../components/revenue-chart-lazy";
 import { TopCategories } from "../components/top-categories";
+import { TopProducts } from "../components/top-products";
 import { getActingStoreId, requireSectionAccess } from "../lib/access";
 import { AnalyticsFilters } from "./analytics-filters";
 import { DashboardCanvas } from "./dashboard-canvas";
 import {
   getActivity,
+  getAnalyticsLocationOptions,
   getCatalogSnapshots,
   getRecentOrders,
   getSalesAnalytics,
+  getSalesByChannel,
+  getSalesByLocation,
   getTopCategories,
+  getTopProducts,
 } from "./data";
 import type { CatalogSnapshots, SalesAnalytics } from "./data";
 import { isWidgetId, type WidgetId } from "./widgets";
@@ -26,6 +32,7 @@ import {
 } from "@/lib/analytics/range";
 import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { getAnalyticsDashboardLayout } from "@/lib/analytics/layout-store";
+import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { getViewerLocations } from "@/lib/locations/scope";
 
 function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
@@ -42,14 +49,22 @@ async function SalesMetric({
   metric,
 }: {
   data: Promise<SalesAnalytics>;
-  metric: "sales" | "orders";
+  metric: "sales" | "orders" | "aov" | "units";
 }) {
   const result = await data;
-  return metric === "sales" ? (
-    <MetricCard label="Total sales" stat={result.totalSales} currency />
-  ) : (
-    <MetricCard label="Orders" stat={result.orders} />
-  );
+  if (metric === "sales")
+    return <MetricCard label="Total sales" stat={result.totalSales} currency />;
+  if (metric === "orders")
+    return <MetricCard label="Orders" stat={result.orders} />;
+  if (metric === "aov")
+    return (
+      <MetricCard
+        label="Average order value"
+        stat={result.averageOrderValue}
+        currency
+      />
+    );
+  return <MetricCard label="Units sold" stat={result.unitsSold} />;
 }
 
 async function SnapshotMetric({
@@ -87,6 +102,28 @@ async function CategoryWidget({
   return <TopCategories items={await data} />;
 }
 
+async function TopProductsWidget({
+  data,
+}: {
+  data: ReturnType<typeof getTopProducts>;
+}) {
+  return <TopProducts items={await data} />;
+}
+
+async function BreakdownWidget({
+  data,
+  title,
+  subtitle,
+}: {
+  data: ReturnType<typeof getSalesByChannel>;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <CommerceBreakdown items={await data} title={title} subtitle={subtitle} />
+  );
+}
+
 async function RecentOrdersWidget({
   data,
 }: {
@@ -118,14 +155,29 @@ export default async function AnalyticsPage({
   ]);
   const timeZone = await getStoreAnalyticsTimeZone(storeId);
   const range: AnalyticsRange = parseAnalyticsRange(params, timeZone);
+  const locationOptions = await getAnalyticsLocationOptions(
+    storeId,
+    locationScope,
+  );
+  const location = resolveAnalyticsLocation(
+    params.location,
+    locationScope,
+    locationOptions,
+  );
 
   // Start every independent data source together. Each slot awaits only its own
   // promise under Suspense, so a slow activity query cannot hold sales cards.
-  const sales = getSalesAnalytics(storeId, locationScope, range);
+  const sales = getSalesAnalytics(storeId, location, range);
   const catalog = getCatalogSnapshots(storeId);
-  const categories = getTopCategories(storeId, locationScope, range);
-  const recentOrders = getRecentOrders(storeId, locationScope, range);
-  const activity = getActivity(storeId, locationScope, range);
+  const categories = getTopCategories(storeId, location, range);
+  const topProducts = getTopProducts(storeId, location, range);
+  const channelSales = getSalesByChannel(storeId, location, range);
+  const locationSales =
+    locationOptions.length > 0
+      ? getSalesByLocation(storeId, location, range)
+      : Promise.resolve([]);
+  const recentOrders = getRecentOrders(storeId, location, range);
+  const activity = getActivity(storeId, location, range);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
@@ -136,6 +188,16 @@ export default async function AnalyticsPage({
     metric_orders: (
       <Suspense fallback={<WidgetSkeleton compact />}>
         <SalesMetric data={sales} metric="orders" />
+      </Suspense>
+    ),
+    metric_aov: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SalesMetric data={sales} metric="aov" />
+      </Suspense>
+    ),
+    metric_units: (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SalesMetric data={sales} metric="units" />
       </Suspense>
     ),
     metric_products: (
@@ -153,6 +215,20 @@ export default async function AnalyticsPage({
         <CategoryWidget data={categories} />
       </Suspense>
     ),
+    top_products: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <TopProductsWidget data={topProducts} />
+      </Suspense>
+    ),
+    sales_by_channel: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <BreakdownWidget
+          data={channelSales}
+          title="Sales by channel"
+          subtitle="Recognized sales less completed refunds"
+        />
+      </Suspense>
+    ),
     recent_orders: (
       <Suspense fallback={<WidgetSkeleton />}>
         <RecentOrdersWidget data={recentOrders} />
@@ -164,6 +240,17 @@ export default async function AnalyticsPage({
       </Suspense>
     ),
   };
+  if (locationOptions.length > 0) {
+    slots.sales_by_location = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <BreakdownWidget
+          data={locationSales}
+          title="Sales by location"
+          subtitle="Physical shops and online / unassigned orders"
+        />
+      </Suspense>
+    );
+  }
   if (locationScope === null) {
     slots.metric_customers = (
       <Suspense fallback={<WidgetSkeleton compact />}>
@@ -199,7 +286,13 @@ export default async function AnalyticsPage({
       <DashboardCanvas
         storeId={storeId}
         slots={slots}
-        headerExtras={<AnalyticsFilters range={range} />}
+        headerExtras={
+          <AnalyticsFilters
+            range={range}
+            locations={locationOptions}
+            selectedLocationId={location.selectedId}
+          />
+        }
         initialLayout={initialLayout}
       />
     </div>

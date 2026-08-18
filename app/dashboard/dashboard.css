@@ -4075,3 +4075,59 @@ a.customer-detail-field:hover {
   line-height: 1.45;
   color: var(--dash-text-3);
 }
+
+.dashboard-shell .dash-breakdown-meta {
+  margin-top: 5px;
+  color: var(--dash-text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-shell .dash-product-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-shell .dash-product-row {
+  display: grid;
+  grid-template-columns: 24px minmax(100px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--dash-border);
+  color: var(--dash-text-2);
+  font-size: 12.5px;
+}
+
+.dashboard-shell .dash-product-row:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-shell .dash-product-rank {
+  color: var(--dash-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-shell .dash-product-name {
+  overflow: hidden;
+  color: var(--dash-text);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-shell .dash-product-units,
+.dashboard-shell .dash-product-sales {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .dashboard-shell .dash-product-row {
+    grid-template-columns: 20px minmax(80px, 1fr) auto;
+  }
+
+  .dashboard-shell .dash-product-sales {
+    display: none;
+  }
+}

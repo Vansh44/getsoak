@@ -30,7 +30,10 @@ function chain(): any {
   // crash rather than on the query.
   const row = new Proxy(
     {},
-    { get: (_t, k) => (k === "then" ? undefined : (0 as never)) },
+    {
+      get: (_t, k) =>
+        k === "then" ? undefined : k === "key" ? "online" : (0 as never),
+    },
   );
   c.then = (res: (v: unknown[]) => unknown) => res([row]);
   return c;
@@ -44,6 +47,7 @@ import {
   comparisonTrend,
   getRecentOrders,
   getSalesAnalytics,
+  getSalesByChannel,
   RECOGNIZED_PAYMENT_STATUSES,
   RECOGNIZED_POS_STATUSES,
 } from "./data";
@@ -54,6 +58,17 @@ const range = parseAnalyticsRange(
   "Asia/Kolkata",
   new Date("2026-08-18T10:30:00.000Z"),
 );
+
+const allLocations = {
+  locationIds: null,
+  includeUnassigned: true,
+  selectedId: null,
+} as const;
+const scopedLocations = (locationIds: string[]) => ({
+  locationIds,
+  includeUnassigned: true,
+  selectedId: null,
+});
 
 /**
  * The PARAMETER values across every captured WHERE.
@@ -91,7 +106,7 @@ describe("analytics data — location scope", () => {
   // want whole-business figures, so an unrestricted viewer must not suddenly be
   // narrowed by a feature aimed at their staff.
   it("adds no location predicate for an unrestricted viewer", async () => {
-    await getRecentOrders("store-1", null, range);
+    await getRecentOrders("store-1", allLocations, range);
     expect(params()).not.toContain("loc-1");
   });
 
@@ -99,17 +114,26 @@ describe("analytics data — location scope", () => {
   // other branch's revenue, while the orders list refuses them a single order
   // from it.
   it("bounds a restricted viewer's figures to their shops", async () => {
-    await getRecentOrders("store-1", ["loc-1", "loc-2"], range);
+    await getRecentOrders(
+      "store-1",
+      scopedLocations(["loc-1", "loc-2"]),
+      range,
+    );
     const sent = params();
     expect(sent).toContain("loc-1");
     expect(sent).toContain("loc-2");
+  });
+
+  it("applies the same scope to Phase 2 commerce widgets", async () => {
+    await getSalesByChannel("store-1", scopedLocations(["loc-2"]), range);
+    expect(params()).toContain("loc-2");
   });
 
   // ⚠ EMPTY is "assigned to nothing that still exists" — a real state, NOT
   // unrestricted. It must produce a predicate that matches nothing rather than
   // silently widening to the whole store.
   it("still bounds a viewer assigned to nothing that exists", async () => {
-    await getRecentOrders("store-1", [], range);
+    await getRecentOrders("store-1", scopedLocations([]), range);
     // The store filter is always present; what must NOT happen is the query
     // running with no location predicate at all.
     expect(captured.wheres.length).toBeGreaterThan(0);
@@ -118,7 +142,7 @@ describe("analytics data — location scope", () => {
 
 describe("recognized sales", () => {
   it("uses the settled/COD/POS contract and completed refunds", async () => {
-    await getSalesAnalytics("store-1", null, range);
+    await getSalesAnalytics("store-1", allLocations, range);
     const sent = params();
     expect(sent).toContain("completed");
     expect(sent).toContain("cancelled");

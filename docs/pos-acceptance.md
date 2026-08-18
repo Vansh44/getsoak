@@ -2620,6 +2620,17 @@ reload/share the URL. Repeat with a DST-observing zone across its clock change.
 the selection, and no day is forced to 24 hours. Missing/invalid legacy settings
 fall back to `Asia/Kolkata`.
 
+**PS-AN.4 ★★ — A location URL is a filter, never an authority**
+Open Analytics as the owner and select one physical shop. Confirm Total sales,
+Orders, AOV, Units sold, charts, product/channel/location breakdowns, recent
+orders, and the order portion of Activity all narrow to that shop and exclude
+online/unassigned orders. Then paste another shop's id into `?location=` while
+signed in as a location-bound manager.
+**Expect:** the valid owner selection survives refresh/share and every
+order-shaped card agrees. The inaccessible or invalid id falls back to all of
+that manager's accessible locations (plus online/unassigned orders); it never
+widens access and never becomes a direct database predicate.
+
 ---
 
 ## 12. Known gaps
@@ -2661,7 +2672,7 @@ Real and deliberate, so nobody files them as bugs:
 | **The customer claim has never been run in a browser**              | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
 | ~~**Store credit can't be spent at a COLLECTION**~~                 | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                   |
 | **A held sale has no auto-expiry**                                  | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                                                                                       |
-| **Analytics has no owner-selectable location filter**               | **PARTLY FIXED (PS-AN.1–AN.2).** Staff scope is enforced across order-shaped cards and store-wide Total customers is hidden from restricted viewers. An unrestricted owner still cannot choose one location as an analytical filter; that ships with the Phase 2 location widget                                       |
+| ~~**Analytics has no owner-selectable location filter**~~           | **FIXED (PS-AN.1–AN.4).** Staff scope remains the authority; owners and eligible staff can select one accessible physical location through the URL-owned global filter, and an exact shop view excludes online/unassigned orders                                                                                       |
 | **`order.pickup_expiring` email only**                              | No in-app pre-expiry banner                                                                                                                                                                                                                                                                                            |
 | **Offline selling**                                                 | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                                                                                            |
 | ~~**Live delivery rates at checkout**~~                             | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                                                                                          |
