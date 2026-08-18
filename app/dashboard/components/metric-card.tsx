@@ -59,8 +59,10 @@ function Sparkline({ data }: { data: number[] }) {
 export function MetricCard({ label, stat, currency = false }: MetricCardProps) {
   // A flat month reads as "—", not "+0%" — Shopify's convention, and it stops
   // an empty store from showing a wall of meaningless green.
+  const noComparison = stat.trendPct === null;
   const flat = stat.trendPct === 0;
-  const deltaClass = flat ? "is-flat" : stat.trendUp ? "is-up" : "is-down";
+  const deltaClass =
+    noComparison || flat ? "is-flat" : stat.trendUp ? "is-up" : "is-down";
 
   return (
     <div className="dash-metric">
@@ -69,11 +71,13 @@ export function MetricCard({ label, stat, currency = false }: MetricCardProps) {
         <span className="dash-metric-val">
           {formatValue(stat.value, currency)}
         </span>
-        <span className={`dash-metric-delta ${deltaClass}`}>
-          {flat
-            ? "—"
-            : `${stat.trendUp ? "↑" : "↓"} ${Math.abs(stat.trendPct)}%`}
-        </span>
+        {!noComparison ? (
+          <span className={`dash-metric-delta ${deltaClass}`}>
+            {flat
+              ? "—"
+              : `${stat.trendUp ? "↑" : "↓"} ${Math.abs(stat.trendPct ?? 0)}%`}
+          </span>
+        ) : null}
         <Sparkline data={stat.spark} />
       </div>
     </div>

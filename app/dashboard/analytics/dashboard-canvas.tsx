@@ -49,6 +49,7 @@ interface DashboardCanvasProps {
   storeId: string;
   /** Server-rendered card for each widget the viewer is allowed to see. */
   slots: Partial<Record<WidgetId, ReactNode>>;
+  headerExtras?: ReactNode;
 }
 
 function readLayout(storeId: string, allowed: WidgetId[]): WidgetId[] {
@@ -72,7 +73,11 @@ function writeLayout(storeId: string, layout: WidgetId[]) {
   }
 }
 
-export function DashboardCanvas({ storeId, slots }: DashboardCanvasProps) {
+export function DashboardCanvas({
+  storeId,
+  slots,
+  headerExtras,
+}: DashboardCanvasProps) {
   const allowed = useMemo(
     () => Object.keys(slots).filter((id): id is WidgetId => id in WIDGETS),
     [slots],
@@ -191,6 +196,7 @@ export function DashboardCanvas({ storeId, slots }: DashboardCanvasProps) {
       <header className="dash-an-head">
         <h1>Analytics</h1>
         <div className="dash-an-actions">
+          {!editing ? headerExtras : null}
           {editing ? (
             <div className="dash-lib-anchor">
               <button

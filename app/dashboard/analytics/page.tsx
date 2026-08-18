@@ -1,71 +1,198 @@
-import type { ReactNode } from "react";
-
-import { MetricCard } from "../components/metric-card";
+import { Suspense, type ReactNode } from "react";
 import { ActivityFeed } from "../components/activity-feed";
-import { RevenueChart } from "../components/revenue-chart-lazy";
-import { EnquiriesOverview } from "../components/enquiries-overview";
-import { TopCategories } from "../components/top-categories";
-import { RecentOrdersTable } from "../components/recent-orders-table";
 import { BlogApprovals } from "../components/blog-approvals";
+import { EnquiriesOverview } from "../components/enquiries-overview";
+import { MetricCard } from "../components/metric-card";
 import { RealtimeRefresher } from "../components/realtime-refresher";
-import { requireSectionAccess, getActingStoreId } from "../lib/access";
-import { getAnalyticsData } from "./data";
+import { RecentOrdersTable } from "../components/recent-orders-table";
+import { RevenueChart } from "../components/revenue-chart-lazy";
+import { TopCategories } from "../components/top-categories";
+import { getActingStoreId, requireSectionAccess } from "../lib/access";
+import { AnalyticsFilters } from "./analytics-filters";
 import { DashboardCanvas } from "./dashboard-canvas";
+import {
+  getActivity,
+  getCatalogSnapshots,
+  getRecentOrders,
+  getSalesAnalytics,
+  getTopCategories,
+} from "./data";
+import type { CatalogSnapshots, SalesAnalytics } from "./data";
 import type { WidgetId } from "./widgets";
+import {
+  parseAnalyticsRange,
+  type AnalyticsRange,
+  type AnalyticsSearchParams,
+} from "@/lib/analytics/range";
+import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { getViewerLocations } from "@/lib/locations/scope";
 
-// The store's performance dashboard — metrics, revenue, recent activity, all
-// from live store data (scoped by store_id). This used to be the /dashboard
-// landing page; it moved here when Home became a Shopify-style getting-started
-// page. Gated on the `analytics` section.
-//
-// Every card is rendered HERE (server-side, with the data already loaded) and
-// handed to <DashboardCanvas> as a slot. The canvas decides which slots appear
-// and in what order — see widgets.ts. A widget the viewer lacks permission for
-// is simply never put in the map, so it can't be added back from the library
-// either.
-export default async function AnalyticsPage() {
+function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      className={`dash-widget-skeleton${compact ? " is-compact" : ""}`}
+      aria-label="Loading analytics"
+    />
+  );
+}
+
+async function SalesMetric({
+  data,
+  metric,
+}: {
+  data: Promise<SalesAnalytics>;
+  metric: "sales" | "orders";
+}) {
+  const result = await data;
+  return metric === "sales" ? (
+    <MetricCard label="Total sales" stat={result.totalSales} currency />
+  ) : (
+    <MetricCard label="Orders" stat={result.orders} />
+  );
+}
+
+async function SnapshotMetric({
+  data,
+  metric,
+}: {
+  data: Promise<CatalogSnapshots>;
+  metric: "customers" | "products";
+}) {
+  const result = await data;
+  return metric === "customers" ? (
+    <MetricCard label="Total customers" stat={result.customers} />
+  ) : (
+    <MetricCard label="Products listed" stat={result.products} />
+  );
+}
+
+async function SalesChart({ data }: { data: Promise<SalesAnalytics> }) {
+  const result = await data;
+  return (
+    <RevenueChart
+      data={result.series}
+      total={result.totalSales}
+      rangeLabel={result.rangeLabel}
+      comparisonLabel={result.comparisonLabel}
+    />
+  );
+}
+
+async function CategoryWidget({
+  data,
+}: {
+  data: ReturnType<typeof getTopCategories>;
+}) {
+  return <TopCategories items={await data} />;
+}
+
+async function RecentOrdersWidget({
+  data,
+}: {
+  data: ReturnType<typeof getRecentOrders>;
+}) {
+  return <RecentOrdersTable orders={await data} />;
+}
+
+async function ActivityWidget({
+  data,
+}: {
+  data: ReturnType<typeof getActivity>;
+}) {
+  return <ActivityFeed items={await data} />;
+}
+
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<AnalyticsSearchParams>;
+}) {
   const access = await requireSectionAccess("analytics", "view");
   const showBlogApprovals = access.can("blogs", "view");
   const showEnquiries = access.can("enquiries", "view");
+  const [storeId, locationScope, params] = await Promise.all([
+    getActingStoreId(),
+    getViewerLocations(),
+    searchParams,
+  ]);
+  const timeZone = await getStoreAnalyticsTimeZone(storeId);
+  const range: AnalyticsRange = parseAnalyticsRange(params, timeZone);
 
-  const storeId = await getActingStoreId();
-  // ★ null for an unrestricted viewer, so the owner's numbers are unchanged.
-  const locationScope = await getViewerLocations();
-  const data = await getAnalyticsData(storeId, locationScope);
+  // Start every independent data source together. Each slot awaits only its own
+  // promise under Suspense, so a slow activity query cannot hold sales cards.
+  const sales = getSalesAnalytics(storeId, locationScope, range);
+  const catalog = getCatalogSnapshots(storeId);
+  const categories = getTopCategories(storeId, locationScope, range);
+  const recentOrders = getRecentOrders(storeId, locationScope, range);
+  const activity = getActivity(storeId, locationScope, range);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
-      <MetricCard label="Total revenue" stat={data.stats.revenue} currency />
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SalesMetric data={sales} metric="sales" />
+      </Suspense>
     ),
     metric_orders: (
-      <MetricCard label="Orders this month" stat={data.stats.orders} />
-    ),
-    metric_customers: (
-      <MetricCard label="Total customers" stat={data.stats.customers} />
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SalesMetric data={sales} metric="orders" />
+      </Suspense>
     ),
     metric_products: (
-      <MetricCard label="Products listed" stat={data.stats.products} />
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SnapshotMetric data={catalog} metric="products" />
+      </Suspense>
     ),
     revenue_chart: (
-      <RevenueChart
-        series={data.revenueSeries}
-        totalRevenue={data.totalRevenue}
-        trendPct={data.revenueTrendPct}
-        trendUp={data.revenueTrendUp}
-      />
+      <Suspense fallback={<WidgetSkeleton />}>
+        <SalesChart data={sales} />
+      </Suspense>
     ),
-    top_categories: <TopCategories items={data.topCategories} />,
-    recent_orders: <RecentOrdersTable orders={data.recentOrders} />,
-    activity: <ActivityFeed items={data.activity} />,
+    top_categories: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <CategoryWidget data={categories} />
+      </Suspense>
+    ),
+    recent_orders: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <RecentOrdersWidget data={recentOrders} />
+      </Suspense>
+    ),
+    activity: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <ActivityWidget data={activity} />
+      </Suspense>
+    ),
   };
-  if (showBlogApprovals) slots.blog_approvals = <BlogApprovals />;
-  if (showEnquiries) slots.enquiries = <EnquiriesOverview />;
+  if (locationScope === null) {
+    slots.metric_customers = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <SnapshotMetric data={catalog} metric="customers" />
+      </Suspense>
+    );
+  }
+  if (showBlogApprovals) {
+    slots.blog_approvals = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <BlogApprovals />
+      </Suspense>
+    );
+  }
+  if (showEnquiries) {
+    slots.enquiries = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <EnquiriesOverview />
+      </Suspense>
+    );
+  }
 
   return (
     <div className="dash-analytics">
-      {showBlogApprovals && <RealtimeRefresher tables={["blogs"]} />}
-      <DashboardCanvas storeId={storeId} slots={slots} />
+      {showBlogApprovals ? <RealtimeRefresher tables={["blogs"]} /> : null}
+      <DashboardCanvas
+        storeId={storeId}
+        slots={slots}
+        headerExtras={<AnalyticsFilters range={range} />}
+      />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import Link from "next/link";
-import { getViewerAccess } from "@/app/dashboard/lib/access";
+import { getActingStoreId, getViewerAccess } from "@/app/dashboard/lib/access";
 import { SECTIONS } from "@/app/dashboard/lib/permissions";
 import { navIcons } from "@/app/dashboard/nav-icons";
+import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
+import { BusinessTimeZoneForm } from "./business-time-zone-form";
 
 export const metadata = { title: "Settings" };
 
@@ -63,6 +65,10 @@ export default async function SettingsPage() {
   ).map((s) => ({ key: s.key, label: s.label, href: s.href, icon: s.icon }));
 
   const cards = [...own, ...areas];
+  const canManageStoreSettings = access.can("settings", "manage");
+  const timeZone = canManageStoreSettings
+    ? await getStoreAnalyticsTimeZone(await getActingStoreId())
+    : null;
 
   if (!cards.length) {
     return (
@@ -82,6 +88,8 @@ export default async function SettingsPage() {
       <p className="mt-1 text-[14px] text-[#6a6a6a]">
         Everything that configures this store.
       </p>
+
+      {timeZone ? <BusinessTimeZoneForm timeZone={timeZone} /> : null}
 
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         {cards.map((c) => {

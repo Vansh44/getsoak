@@ -19,15 +19,15 @@ export function TopCategories({ items }: { items: TopCategory[] }) {
           <div className="dash-card-title">Sales by category</div>
           <div className="dash-card-sub">
             {items.length === 0
-              ? "By revenue share"
-              : `Product revenue · ${earning} of ${items.length} earning`}
+              ? "By merchandise-sales share"
+              : `Merchandise sales · ${earning} of ${items.length} earning`}
           </div>
         </div>
       </div>
       <div className="dash-card-body">
         {items.length === 0 ? (
           <div className="py-8 text-center text-[13px] text-[var(--dash-text-3)]">
-            No categories yet — add some to see where revenue comes from.
+            No categories yet — add some to see where sales come from.
           </div>
         ) : (
           // Every category is listed, so the list scrolls inside the card
@@ -60,11 +60,11 @@ export function TopCategories({ items }: { items: TopCategory[] }) {
         {items.length > 0 && (
           // Tax and discounts sit on the ORDER, not the line item, so they
           // can't be attributed to a category — which means these bars sum to
-          // order subtotals, not to the Total revenue card. Say so here, where
+          // order subtotals, not to the Total sales card. Say so here, where
           // someone who just added the numbers up will be looking.
           <p className="dash-cat-note">
             Line-item totals, before tax and discounts — so this won&rsquo;t
-            match Total revenue.
+            match Total sales.
           </p>
         )}
       </div>

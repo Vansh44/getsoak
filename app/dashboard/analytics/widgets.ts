@@ -32,15 +32,16 @@ export interface WidgetMeta {
 export const WIDGETS: Record<WidgetId, WidgetMeta> = {
   metric_revenue: {
     id: "metric_revenue",
-    title: "Total revenue",
-    description: "Booked revenue across all non-cancelled orders.",
+    title: "Total sales",
+    description:
+      "Recognized sales less completed refunds in the selected range.",
     group: "Metrics",
     span: 1,
   },
   metric_orders: {
     id: "metric_orders",
-    title: "Orders this month",
-    description: "Orders placed in the current calendar month.",
+    title: "Orders",
+    description: "Recognized orders placed in the selected range.",
     group: "Metrics",
     span: 1,
   },
@@ -60,8 +61,8 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
   },
   revenue_chart: {
     id: "revenue_chart",
-    title: "Revenue over time",
-    description: "Monthly revenue trend with 7M / 1Y / all-time ranges.",
+    title: "Total sales over time",
+    description: "Recognized sales over the dashboard's selected date range.",
     group: "Sales",
     span: 3,
   },

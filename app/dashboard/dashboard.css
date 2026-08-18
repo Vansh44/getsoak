@@ -3287,6 +3287,117 @@ a.customer-detail-field:hover {
   gap: 8px;
 }
 
+.dashboard-shell .dash-an-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboard-shell .dash-an-filters select,
+.dashboard-shell .dash-an-filters input,
+.dashboard-shell .dash-an-filters button,
+.dashboard-shell .dash-an-custom-dates summary {
+  height: 32px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 8px;
+  background: var(--dash-surface);
+  color: var(--dash-text);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.dashboard-shell .dash-an-filters button,
+.dashboard-shell .dash-an-custom-dates summary {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 550;
+}
+
+.dashboard-shell .dash-an-filters button {
+  background: var(--dash-text);
+  color: var(--dash-surface);
+}
+
+.dashboard-shell .dash-an-custom-dates {
+  position: relative;
+}
+
+.dashboard-shell .dash-an-custom-dates summary {
+  list-style: none;
+}
+
+.dashboard-shell .dash-an-custom-dates summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-shell .dash-an-custom-dates > div {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 10px;
+  width: 348px;
+  padding: 12px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 10px;
+  background: var(--dash-surface);
+  box-shadow: var(--dash-shadow-lg);
+}
+
+.dashboard-shell .dash-an-custom-dates label {
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dash-text-2);
+}
+
+.dashboard-shell .dash-an-custom-dates input {
+  min-width: 0;
+  width: 100%;
+}
+
+.dashboard-shell .dash-an-zone {
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--dash-text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .dashboard-shell .dash-an-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .dashboard-shell .dash-an-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .dashboard-shell .dash-an-filters {
+    flex: 1;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-shell .dash-an-filters select {
+    flex: 1 1 140px;
+  }
+  .dashboard-shell .dash-an-zone {
+    display: none;
+  }
+  .dashboard-shell .dash-an-custom-dates > div {
+    right: auto;
+    left: 0;
+    width: min(348px, calc(100vw - 48px));
+    grid-template-columns: 1fr;
+  }
+}
+
 .dashboard-shell .dash-an-btn {
   display: inline-flex;
   align-items: center;
@@ -3332,6 +3443,30 @@ a.customer-detail-field:hover {
 
 .dashboard-shell .dash-widget-body > * {
   height: 100%;
+}
+
+.dashboard-shell .dash-widget-skeleton {
+  min-height: 360px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: var(--dash-radius);
+  background: linear-gradient(
+    100deg,
+    var(--dash-surface) 20%,
+    var(--dash-surface-2) 45%,
+    var(--dash-surface) 70%
+  );
+  background-size: 220% 100%;
+  animation: dash-analytics-loading 1.4s ease-in-out infinite;
+}
+
+.dashboard-shell .dash-widget-skeleton.is-compact {
+  min-height: 82px;
+}
+
+@keyframes dash-analytics-loading {
+  to {
+    background-position: -220% 0;
+  }
 }
 
 .dashboard-shell .dash-widget.span-1 {

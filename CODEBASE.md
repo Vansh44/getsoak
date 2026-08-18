@@ -212,10 +212,9 @@ wholesip/
 │   ├── dashboard/             # ★ STORE ADMIN DASHBOARD (per-store, auth-gated)
 │   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css)
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
-│   │   ├── analytics/         # ★ Performance dashboard (§20): data.ts (live per-store
-│   │   │                      # aggregates), widgets.ts (widget registry + default
-│   │   │                      # layout), dashboard-canvas.tsx (client: "Edit dashboard" —
-│   │   │                      # drag-reorder, remove, add-section, localStorage layout)
+│   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
+│   │   │                      # filters, independently streamed range-aware aggregates,
+│   │   │                      # widgets registry, and client "Edit dashboard" canvas
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
@@ -2193,14 +2192,17 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       draggable-map enhancement. Autofill never locks a field, and a map or
       geocoder failure never blocks the complete plain address form.
 
-20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
+20. **Analytics is a composable, range-aware dashboard
+    (`/dashboard/analytics`).** Every card
     is a WIDGET the merchant can remove, re-order, or add back — Shopify's
     "Edit dashboard". Three pieces: - `analytics/widgets.ts` — the registry (pure data, no JSX, importable from
     both server and client): `WidgetId`, per-widget `{title, description,
 group, span}` (span = columns of the 4-wide desktop grid),
     `DEFAULT_LAYOUT`, plus `normalizeLayout` / `defaultLayoutFor`. Adding a
-    widget = an entry here + a node in the page's `slots` map. - `analytics/page.tsx` — renders EVERY card server-side with the data
-    already loaded and hands them to the canvas as `slots`. A widget the
+    widget = an entry here + a node in the page's `slots` map. - `analytics/page.tsx` — starts the independent widget reads together and
+    hands Suspense-wrapped server nodes to the canvas as `slots`. Sales,
+    catalogue snapshots, categories, recent orders and activity therefore
+    stream independently rather than waiting on one monolithic transaction. A widget the
     viewer lacks permission for is never put in the map, so it can't be
     re-added from the library either — **permission gating stays server-side**,
     the client only picks which of the allowed nodes to show. - `analytics/dashboard-canvas.tsx` (client) — owns edit mode: a dark
@@ -2219,7 +2221,22 @@ group, span}` (span = columns of the 4-wide desktop grid),
     `.dash-card` chrome into the quieter Shopify look (hairline borders,
     dotted-underline titles, monochrome bars/icons, colour reserved for trend
     direction) WITHOUT touching how cards look on any other dashboard page —
-    all in the `/* Analytics (Shopify-style) */` block of `dashboard.css`.
+    all in the `/* Analytics (Shopify-style) */` block of `dashboard.css`. - **Phase 1 range/metric contract (2026-08-18):** filter state is URL-owned
+    (`range`, `from`, `to`, `compare`, `compareFrom`, `compareTo`) and parsed
+    by pure `lib/analytics/range.ts`. Defaults are Last 90 days + previous
+    equal-length period. Local half-open day ranges are converted through the
+    store's validated IANA `settings.business.timeZone`; absent/invalid legacy
+    values use `Asia/Kolkata`. The control to change it lives on Settings and
+    writes through permission-gated `app/actions/analytics-settings.ts`.
+    `analytics/data.ts` has per-widget readers. **Total sales** includes paid
+    online/store-credit, finalized POS and non-cancelled COD orders, excludes
+    pending payment attempts, and subtracts only completed refunds by their
+    settlement date. Charts keep raw rupees (no `₹K` rounding). Location
+    scope is applied to every order-shaped read, including legacy/online
+    orders with `location_id IS NULL`; restricted viewers do not receive the
+    store-wide Total customers slot. Current catalogue snapshots never show a
+    fake period delta. The old unimported hard-coded performance, inventory
+    and operational demo widgets were deleted.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
     docs (Shopify-style).** StoreMink's OWN product docs, NOT per-store data, so

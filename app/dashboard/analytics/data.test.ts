@@ -40,7 +40,20 @@ vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async (fn: any) => fn(chain())),
 }));
 
-import { getAnalyticsData } from "./data";
+import {
+  comparisonTrend,
+  getRecentOrders,
+  getSalesAnalytics,
+  RECOGNIZED_PAYMENT_STATUSES,
+  RECOGNIZED_POS_STATUSES,
+} from "./data";
+import { parseAnalyticsRange } from "@/lib/analytics/range";
+
+const range = parseAnalyticsRange(
+  { range: "7d", compare: "none" },
+  "Asia/Kolkata",
+  new Date("2026-08-18T10:30:00.000Z"),
+);
 
 /**
  * The PARAMETER values across every captured WHERE.
@@ -62,8 +75,7 @@ function params(): unknown[] {
     if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
     if (node.queryChunks) return walk(node.queryChunks, depth + 1);
     // A bound value; anything else is table/column machinery.
-    if ("value" in node && !Array.isArray(node.value))
-      walk(node.value, depth + 1);
+    if ("value" in node) walk(node.value, depth + 1);
   };
   captured.wheres.forEach((w) => walk(w));
   return out;
@@ -74,17 +86,12 @@ beforeEach(() => {
   captured.wheres = [];
 });
 
-describe("getAnalyticsData — location scope", () => {
+describe("analytics data — location scope", () => {
   // ★★ THE OWNER'S VIEW IS UNCHANGED. Running several shops is the reason to
   // want whole-business figures, so an unrestricted viewer must not suddenly be
   // narrowed by a feature aimed at their staff.
   it("adds no location predicate for an unrestricted viewer", async () => {
-    await getAnalyticsData("store-1", null);
-    expect(params()).not.toContain("loc-1");
-  });
-
-  it("defaults to unrestricted when no scope is passed at all", async () => {
-    await getAnalyticsData("store-1");
+    await getRecentOrders("store-1", null, range);
     expect(params()).not.toContain("loc-1");
   });
 
@@ -92,7 +99,7 @@ describe("getAnalyticsData — location scope", () => {
   // other branch's revenue, while the orders list refuses them a single order
   // from it.
   it("bounds a restricted viewer's figures to their shops", async () => {
-    await getAnalyticsData("store-1", ["loc-1", "loc-2"]);
+    await getRecentOrders("store-1", ["loc-1", "loc-2"], range);
     const sent = params();
     expect(sent).toContain("loc-1");
     expect(sent).toContain("loc-2");
@@ -102,9 +109,33 @@ describe("getAnalyticsData — location scope", () => {
   // unrestricted. It must produce a predicate that matches nothing rather than
   // silently widening to the whole store.
   it("still bounds a viewer assigned to nothing that exists", async () => {
-    await getAnalyticsData("store-1", []);
+    await getRecentOrders("store-1", [], range);
     // The store filter is always present; what must NOT happen is the query
     // running with no location predicate at all.
     expect(captured.wheres.length).toBeGreaterThan(0);
+  });
+});
+
+describe("recognized sales", () => {
+  it("uses the settled/COD/POS contract and completed refunds", async () => {
+    await getSalesAnalytics("store-1", null, range);
+    const sent = params();
+    expect(sent).toContain("completed");
+    expect(sent).toContain("cancelled");
+    expect(RECOGNIZED_PAYMENT_STATUSES).toEqual([
+      "paid",
+      "partially_refunded",
+      "refunded",
+    ]);
+    expect(RECOGNIZED_POS_STATUSES).toEqual(["completed", "refunded"]);
+  });
+
+  it("omits a misleading percentage when comparison is absent or zero", () => {
+    expect(comparisonTrend(100, null).trendPct).toBeNull();
+    expect(comparisonTrend(100, 0).trendPct).toBeNull();
+    expect(comparisonTrend(75, 100)).toEqual({
+      trendPct: -25,
+      trendUp: false,
+    });
   });
 });

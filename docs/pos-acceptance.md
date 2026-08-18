@@ -2595,6 +2595,33 @@ erase what checkout recorded and understate what a credit note must reverse.
 
 ---
 
+## 11. Analytics and location scope
+
+**PS-AN.1 ★★ — A location-bound manager cannot infer another shop's sales**
+Assign an admin to Delhi only, then create recognized Delhi and Mumbai sales in
+the same selected dashboard range. Include a pending Razorpay attempt and a
+completed refund.
+**Expect:** `/dashboard/analytics` includes Delhi plus legacy/online orders with
+no physical location, excludes Mumbai and the pending payment attempt, and
+deducts the completed refund on its settlement day. Total sales, Orders, chart,
+categories, recent orders, and activity all use the same server-derived scope.
+
+**PS-AN.2 ★ — A store-wide customer snapshot is not disguised as local data**
+Open Analytics as that Delhi-only admin, including after saving a layout that
+used to contain Total customers.
+**Expect:** Total customers is absent from both the canvas and Add section; the
+Products listed business snapshot remains available. Open as the unrestricted
+owner and Total customers reappears without rebuilding the saved preference.
+
+**PS-AN.3 — Commerce days follow the store, not the server**
+Set Business time zone in Settings, choose Yesterday and a comparison, then
+reload/share the URL. Repeat with a DST-observing zone across its clock change.
+**Expect:** values and chart use local half-open day boundaries, the URL restores
+the selection, and no day is forced to 24 hours. Missing/invalid legacy settings
+fall back to `Asia/Kolkata`.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2634,7 +2661,7 @@ Real and deliberate, so nobody files them as bugs:
 | **The customer claim has never been run in a browser**              | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
 | ~~**Store credit can't be spent at a COLLECTION**~~                 | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                   |
 | **A held sale has no auto-expiry**                                  | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                                                                                       |
-| **Analytics has no location filter**                                | Store-wide figures only                                                                                                                                                                                                                                                                                                |
+| **Analytics has no owner-selectable location filter**               | **PARTLY FIXED (PS-AN.1–AN.2).** Staff scope is enforced across order-shaped cards and store-wide Total customers is hidden from restricted viewers. An unrestricted owner still cannot choose one location as an analytical filter; that ships with the Phase 2 location widget                                       |
 | **`order.pickup_expiring` email only**                              | No in-app pre-expiry banner                                                                                                                                                                                                                                                                                            |
 | **Offline selling**                                                 | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                                                                                            |
 | ~~**Live delivery rates at checkout**~~                             | **FIXED** (PS-SH.19–SH.25). Free/fixed/live policies, free-above, courier choice, ETA, server re-quote and immutable order snapshot are wired                                                                                                                                                                          |
