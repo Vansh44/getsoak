@@ -52,6 +52,10 @@ describe("analytics layout v2 contract", () => {
           "sales_by_location",
         ],
       },
+      {
+        title: "Customers",
+        cards: ["customer_mix", "metric_customers"],
+      },
     ]);
   });
 

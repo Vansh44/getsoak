@@ -2631,6 +2631,24 @@ order-shaped card agrees. The inaccessible or invalid id falls back to all of
 that manager's accessible locations (plus online/unassigned orders); it never
 widens access and never becomes a direct database predicate.
 
+**PS-AN.5 ★★ — Analytics reads the ledgers, not payment summaries**
+Complete a split POS sale (cash + card), an online sale partly funded by store
+credit, and a completed refund to one recorded method. Open Sales by payment
+method for the matching range/location.
+**Expect:** cash and card use their itemized `order_payments` values, store
+credit and the online remainder are separate, the completed refund reduces only
+its recorded method, and there is never a `split` chart row. A manual refund
+whose source tender is unknowable remains an explicit negative Manual refund
+row rather than being guessed.
+
+**PS-AN.6 ★ — Inventory velocity means tracked sale movements**
+Sell tracked and untracked products, return/restock one tracked item, and switch
+the Analytics location filter.
+**Expect:** Inventory velocity ranks only negative `reason = 'sale'` ledger
+movements tied to recognized orders at the selected location. The positive
+return/restock is not another sale, and the untracked product is absent with
+copy explaining that it has no stock-ledger movement.
+
 ---
 
 ## 12. Known gaps

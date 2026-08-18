@@ -44,6 +44,8 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import {
+  buildPaymentBreakdown,
+  classifyCustomerMix,
   comparisonTrend,
   getRecentOrders,
   getSalesAnalytics,
@@ -160,6 +162,65 @@ describe("recognized sales", () => {
     expect(comparisonTrend(75, 100)).toEqual({
       trendPct: -25,
       trendUp: false,
+    });
+  });
+});
+
+describe("payment-method allocation", () => {
+  it("combines itemized POS and online tenders, then subtracts recorded refunds", () => {
+    const rows = buildPaymentBreakdown({
+      pos: [
+        { key: "cash", amount: 100, orders: 1 },
+        { key: "card", amount: 50, orders: 1 },
+      ],
+      online: [
+        { key: "cash_on_delivery", amount: 80, orders: 1 },
+        { key: "split", amount: 999, orders: 1 },
+      ],
+      storeCredit: { amount: 20, orders: 1 },
+      refunds: [
+        { key: "cash", refunds: 30 },
+        { key: "store_credit", refunds: 5 },
+      ],
+    });
+    expect(
+      Object.fromEntries(rows.map((row) => [row.key, row.amount])),
+    ).toEqual({
+      cash: 70,
+      card: 50,
+      cash_on_delivery: 80,
+      store_credit: 15,
+    });
+    expect(rows.some((row) => row.key === "split")).toBe(false);
+  });
+
+  it("keeps a refund-only method visible instead of guessing its source", () => {
+    expect(
+      buildPaymentBreakdown({
+        pos: [],
+        online: [],
+        storeCredit: null,
+        refunds: [{ key: "manual", refunds: 25 }],
+      })[0],
+    ).toMatchObject({ key: "manual", name: "Manual refund", amount: -25 });
+  });
+});
+
+describe("customer mix", () => {
+  it("classifies only customers active in the range by their first accessible order", () => {
+    expect(
+      classifyCustomerMix(
+        [
+          { firstOrderAt: "2026-08-01T00:00:00.000Z", currentOrders: 1 },
+          { firstOrderAt: "2026-08-18T00:00:00.000Z", currentOrders: 2 },
+          { firstOrderAt: "2026-07-01T00:00:00.000Z", currentOrders: 0 },
+        ],
+        new Date("2026-08-10T00:00:00.000Z"),
+      ),
+    ).toEqual({
+      newCustomers: 1,
+      returningCustomers: 1,
+      totalCustomers: 2,
     });
   });
 });

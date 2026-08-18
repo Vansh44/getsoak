@@ -57,6 +57,11 @@ export const WIDGET_SIZE_RULES: Record<
   top_products: { default: "half", min: "half" },
   sales_by_channel: { default: "half", min: "half" },
   sales_by_location: { default: "full", min: "half" },
+  sales_by_payment: { default: "half", min: "half" },
+  customer_mix: { default: "half", min: "half" },
+  discount_impact: { default: "half", min: "half" },
+  returns_refunds: { default: "half", min: "half" },
+  inventory_velocity: { default: "half", min: "half" },
   recent_orders: { default: "half", min: "half" },
   activity: { default: "half", min: "half" },
   blog_approvals: { default: "compact", min: "compact" },
@@ -82,6 +87,11 @@ const DEFAULT_SECTIONS: Array<{
       "sales_by_channel",
       "sales_by_location",
     ],
+  },
+  {
+    id: "customers",
+    title: "Customers",
+    widgets: ["customer_mix", "metric_customers"],
   },
 ];
 

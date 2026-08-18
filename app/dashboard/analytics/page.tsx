@@ -1,8 +1,10 @@
 import { Suspense, type ReactNode } from "react";
 import { ActivityFeed } from "../components/activity-feed";
+import { AnalyticsSummaryCard } from "../components/analytics-summary-card";
 import { BlogApprovals } from "../components/blog-approvals";
 import { CommerceBreakdown } from "../components/commerce-breakdown";
 import { EnquiriesOverview } from "../components/enquiries-overview";
+import { InventoryVelocity } from "../components/inventory-velocity";
 import { MetricCard } from "../components/metric-card";
 import { RealtimeRefresher } from "../components/realtime-refresher";
 import { RecentOrdersTable } from "../components/recent-orders-table";
@@ -16,10 +18,15 @@ import {
   getActivity,
   getAnalyticsLocationOptions,
   getCatalogSnapshots,
+  getCustomerMix,
+  getDiscountImpact,
+  getInventoryVelocity,
   getRecentOrders,
+  getReturnsAndRefunds,
   getSalesAnalytics,
   getSalesByChannel,
   getSalesByLocation,
+  getSalesByPaymentMethod,
   getTopCategories,
   getTopProducts,
 } from "./data";
@@ -124,6 +131,114 @@ async function BreakdownWidget({
   );
 }
 
+async function CustomerMixWidget({
+  data,
+}: {
+  data: ReturnType<typeof getCustomerMix>;
+}) {
+  const result = await data;
+  const newShare =
+    result.totalCustomers > 0
+      ? (result.newCustomers / result.totalCustomers) * 100
+      : 0;
+  return (
+    <AnalyticsSummaryCard
+      title="New vs returning customers"
+      subtitle="Customers with a recognized order in this range"
+      items={[
+        { label: "New customers", value: result.newCustomers },
+        { label: "Returning customers", value: result.returningCustomers },
+        { label: "New-customer share", value: newShare, format: "percent" },
+      ]}
+      note="Guest orders without a customer account are excluded."
+    />
+  );
+}
+
+async function DiscountWidget({
+  data,
+}: {
+  data: ReturnType<typeof getDiscountImpact>;
+}) {
+  const result = await data;
+  return (
+    <AnalyticsSummaryCard
+      title="Discount impact"
+      subtitle="Markdowns on recognized orders"
+      items={[
+        {
+          label: "Total discounts",
+          value: result.totalDiscounts,
+          format: "currency",
+        },
+        {
+          label: "Order discounts",
+          value: result.orderDiscounts,
+          format: "currency",
+        },
+        {
+          label: "Line discounts",
+          value: result.lineDiscounts,
+          format: "currency",
+        },
+        { label: "Coupon orders", value: result.couponOrders },
+      ]}
+    />
+  );
+}
+
+async function ReturnsWidget({
+  data,
+  sales,
+}: {
+  data: ReturnType<typeof getReturnsAndRefunds>;
+  sales: Promise<SalesAnalytics>;
+}) {
+  const [result, salesResult] = await Promise.all([data, sales]);
+  const beforeRefunds = salesResult.totalSales.value + result.completedRefunds;
+  const refundShare =
+    beforeRefunds > 0 ? (result.completedRefunds / beforeRefunds) * 100 : 0;
+  const returnedUnitShare =
+    salesResult.unitsSold.value > 0
+      ? (result.returnedUnits / salesResult.unitsSold.value) * 100
+      : 0;
+  return (
+    <AnalyticsSummaryCard
+      title="Returns and refunds"
+      subtitle="Completed events in this range"
+      items={[
+        { label: "Completed returns", value: result.completedReturns },
+        { label: "Returned units", value: result.returnedUnits },
+        {
+          label: "Returned value",
+          value: result.returnedValue,
+          format: "currency",
+        },
+        {
+          label: "Settled refunds",
+          value: result.completedRefunds,
+          format: "currency",
+        },
+        {
+          label: "Returned-unit share",
+          value: returnedUnitShare,
+          format: "percent",
+        },
+        { label: "Refund share", value: refundShare, format: "percent" },
+      ]}
+      note="Returns use completion date and refunds use settlement date. They stay separate and are never added together as one loss."
+    />
+  );
+}
+
+async function InventoryVelocityWidget({
+  data,
+}: {
+  data: ReturnType<typeof getInventoryVelocity>;
+}) {
+  return <InventoryVelocity items={await data} />;
+}
+
 async function RecentOrdersWidget({
   data,
 }: {
@@ -172,12 +287,17 @@ export default async function AnalyticsPage({
   const categories = getTopCategories(storeId, location, range);
   const topProducts = getTopProducts(storeId, location, range);
   const channelSales = getSalesByChannel(storeId, location, range);
+  const paymentSales = getSalesByPaymentMethod(storeId, location, range);
   const locationSales =
     locationOptions.length > 0
       ? getSalesByLocation(storeId, location, range)
       : Promise.resolve([]);
   const recentOrders = getRecentOrders(storeId, location, range);
   const activity = getActivity(storeId, location, range);
+  const customerMix = getCustomerMix(storeId, location, range);
+  const discounts = getDiscountImpact(storeId, location, range);
+  const returns = getReturnsAndRefunds(storeId, location, range);
+  const velocity = getInventoryVelocity(storeId, location, range);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
@@ -227,6 +347,35 @@ export default async function AnalyticsPage({
           title="Sales by channel"
           subtitle="Recognized sales less completed refunds"
         />
+      </Suspense>
+    ),
+    sales_by_payment: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <BreakdownWidget
+          data={paymentSales}
+          title="Sales by payment method"
+          subtitle="Tender values less completed refunds"
+        />
+      </Suspense>
+    ),
+    customer_mix: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <CustomerMixWidget data={customerMix} />
+      </Suspense>
+    ),
+    discount_impact: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <DiscountWidget data={discounts} />
+      </Suspense>
+    ),
+    returns_refunds: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <ReturnsWidget data={returns} sales={sales} />
+      </Suspense>
+    ),
+    inventory_velocity: (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <InventoryVelocityWidget data={velocity} />
       </Suspense>
     ),
     recent_orders: (

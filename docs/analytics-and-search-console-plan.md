@@ -1,6 +1,6 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** implementation underway — Phase 1 + Phase 2a–2c shipped (2026-08-19) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — Phase 1 + Phase 2a–2d shipped (2026-08-19) · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -29,9 +29,10 @@ sections, visibility/reorder/delete controls, cross-section card movement, and
 semantic `compact`/`half`/`full` sizes. Existing version 1 rows upgrade at the
 read boundary and write version 2 on their next save; no second database
 migration is required. Phase 2c adds a scope-safe URL location filter plus AOV,
-units sold, top products, sales by channel, and sales by location. The advanced
-commerce widgets, Search Console, and first-party traffic phases remain planned
-below. Ledger migration
+units sold, top products, sales by channel, and sales by location. Phase 2d adds
+itemized payment-method allocation, new-vs-returning customers, discount impact,
+returns/refunds, and tracked-stock velocity. Search Console and first-party
+traffic remain planned below. Ledger migration
 `20260818_0005_analytics_dashboard_layouts` is applied.
 
 ---
@@ -743,16 +744,23 @@ document, and it is most of what a merchant means by "Shopify-like".
 | Top products (units + ₹) | `order_items` grouped by `product_id` — replaces the fake one                                                                         | Shipped |
 | Sales by channel         | `orders.sales_channel` — online vs POS, already written                                                                               | Shipped |
 | **Sales by location**    | `orders.location_id` — the roadmap's outstanding item (§510)                                                                          | Shipped |
-| Sales by payment method  | Tender-value allocation: POS `order_payments`; online `store_credit_used` plus the remaining order value under its gateway/COD method | Planned |
-| New vs returning         | first `orders.created_at` per `customer_id`                                                                                           | Planned |
-| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`                                                                          | Planned |
-| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value                                                                          | Planned |
-| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times                                                                           | Planned |
+| Sales by payment method  | Tender-value allocation: POS `order_payments`; online `store_credit_used` plus the remaining order value under its gateway/COD method | Shipped |
+| New vs returning         | first `orders.created_at` per `customer_id`                                                                                           | Shipped |
+| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`                                                                          | Shipped |
+| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value                                                                          | Shipped |
+| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times                                                                           | Shipped |
 
 Phase 2c uses the shared recognized-order contract for all five shipped cards.
 Channel and location values subtract completed refunds by settlement date. Top
 products and units sold remain merchandise/unit measures and do not pretend that
 returned quantities are known before the dedicated returns widget ships.
+
+Phase 2d completes this table. New-vs-returning is based on each customer's
+first accessible recognized order and excludes guest orders. Discount impact
+keeps order-level and line-level markdowns separate. Completed returns and
+settled refunds are shown as separate facts so a return-linked refund is never
+double-counted. Inventory velocity reads only `reason = 'sale'`, negative,
+recognized-order ledger movements; untracked products honestly remain absent.
 
 "Sales by payment method" means currency value by tender, not order count.
 `orders.payment_method = 'split'` is only a summary and must never become a
@@ -761,6 +769,8 @@ virtual store-credit tender for `store_credit_used` and allocate the recognized
 remainder to Razorpay, COD, or pay-at-store. Tender values are reduced only by
 settled refunds to that method; a split refund follows its `order_refunds.method`
 rows rather than being guessed from the order summary.
+The shipped allocator also leaves a refund-only method visible as a negative
+row rather than guessing which original tender a manually recorded refund meant.
 
 **★ Profit/margin is NOT computable and should not be promised.**
 `products.base_price` is labelled **"Base price ₹ (MRP)"**

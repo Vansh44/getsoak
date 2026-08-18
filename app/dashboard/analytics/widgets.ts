@@ -20,12 +20,22 @@ export type WidgetId =
   | "top_products"
   | "sales_by_channel"
   | "sales_by_location"
+  | "sales_by_payment"
+  | "customer_mix"
+  | "discount_impact"
+  | "returns_refunds"
+  | "inventory_velocity"
   | "recent_orders"
   | "activity"
   | "blog_approvals"
   | "enquiries";
 
-export type WidgetGroup = "Metrics" | "Sales" | "Customers" | "Content";
+export type WidgetGroup =
+  | "Metrics"
+  | "Sales"
+  | "Customers"
+  | "Inventory"
+  | "Content";
 
 export interface WidgetMeta {
   id: WidgetId;
@@ -102,6 +112,37 @@ export const WIDGETS: Record<WidgetId, WidgetMeta> = {
     description: "Recognized sales across physical and online locations.",
     group: "Sales",
   },
+  sales_by_payment: {
+    id: "sales_by_payment",
+    title: "Sales by payment method",
+    description: "Tender values less completed refunds to each method.",
+    group: "Sales",
+  },
+  customer_mix: {
+    id: "customer_mix",
+    title: "New vs returning customers",
+    description:
+      "Customers grouped by their first accessible recognized order.",
+    group: "Customers",
+  },
+  discount_impact: {
+    id: "discount_impact",
+    title: "Discount impact",
+    description: "Order and line-item discounts in the selected range.",
+    group: "Sales",
+  },
+  returns_refunds: {
+    id: "returns_refunds",
+    title: "Returns and refunds",
+    description: "Completed returns and settled refunds in the selected range.",
+    group: "Sales",
+  },
+  inventory_velocity: {
+    id: "inventory_velocity",
+    title: "Inventory velocity",
+    description: "Tracked stock units consumed by recognized sales.",
+    group: "Inventory",
+  },
   recent_orders: {
     id: "recent_orders",
     title: "Recent orders",
@@ -132,6 +173,7 @@ export const WIDGET_GROUPS: WidgetGroup[] = [
   "Metrics",
   "Sales",
   "Customers",
+  "Inventory",
   "Content",
 ];
 

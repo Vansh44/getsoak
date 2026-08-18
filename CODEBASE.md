@@ -2242,6 +2242,19 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `commerce-breakdown.tsx` and `top-products.tsx` cards are server-rendered
       under their own Suspense slots. Untouched layouts receive the revised
       Overview/Sales default; customized layouts are not silently changed.
+    - **Phase 2d commerce completion (2026-08-19):** five additional library
+      cards complete the migration-free commerce set. Sales by payment method
+      reads itemized `order_payments` for POS, splits online store credit from
+      the remaining gateway/COD value, subtracts completed refunds by their
+      recorded method, and never charts the `split` order summary. Customer mix
+      classifies account holders by their first accessible recognized order;
+      guests are explicit exclusions. Discount impact keeps order and line
+      markdowns separate. Returns/refunds keeps completed return events and
+      settled money events separate. Inventory velocity ranks only negative
+      `stock_movements(reason='sale')` rows tied to recognized orders and obeys
+      the selected stock location. `analytics-summary-card.tsx` and
+      `inventory-velocity.tsx` render these server results. Untouched layouts
+      now also receive the Customers section; customized layouts remain stable.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
