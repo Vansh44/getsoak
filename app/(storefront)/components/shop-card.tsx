@@ -3,6 +3,7 @@ import Image from "next/image";
 import { ImageIcon } from "lucide-react";
 import { effectivePricing, formatPrice, type PricedLike } from "@/lib/pricing";
 import { productIsSoldOut, productLowStockLeft } from "@/lib/inventory/status";
+import { hoverImageUrl } from "@/lib/products/gallery";
 import { QuickAddButton } from "./quick-add-button";
 
 // Card background falls back to this when a product has no card_color set.
@@ -14,6 +15,9 @@ export type ShopCardProduct = Omit<PricedLike, "variants"> & {
   name: string;
   slug: string;
   image_url: string | null;
+  /** Rest of the gallery. Only [1] is used here — the hover image. Optional so
+   *  a caller that has not been widened to select it simply gets no swap. */
+  images?: string[] | null;
   featured?: boolean;
   card_color?: string | null;
   /** Resolved category name; shown as an eyebrow label when present. */
@@ -53,6 +57,12 @@ export function ShopCard({
   const pr = effectivePricing(p);
   const NameHeading = headingLevel === 2 ? "h2" : "h3";
 
+  // The second photograph, cross-faded in on hover. Rendered ONLY when one
+  // exists — see the `.sm-card-hoverimg` note in storefront-theme.css for why
+  // this is a real conditional render rather than the render-always-and-hide-
+  // with-CSS approach QuickAddButton uses.
+  const hoverSrc = hoverImageUrl(p.image_url, p.images);
+
   // Stock status via the shared resolver so cards, the detail page, and the
   // dashboard agree (sold-out wins over low; low uses the effective threshold).
   const variants = p.variants ?? [];
@@ -72,13 +82,27 @@ export function ShopCard({
     >
       <div className="shop-card-img">
         {p.image_url ? (
-          <Image
-            src={p.image_url}
-            alt={p.name}
-            fill
-            sizes="(max-width: 768px) 50vw, 280px"
-            className="shop-card-img-el"
-          />
+          <>
+            <Image
+              src={p.image_url}
+              alt={p.name}
+              fill
+              sizes="(max-width: 768px) 50vw, 280px"
+              className="shop-card-img-el"
+            />
+            {hoverSrc && (
+              <span className="shop-card-img-hover" aria-hidden>
+                <Image
+                  src={hoverSrc}
+                  alt=""
+                  fill
+                  sizes="(max-width: 768px) 50vw, 280px"
+                  loading="lazy"
+                  className="shop-card-img-el"
+                />
+              </span>
+            )}
+          </>
         ) : (
           <div className="shop-card-img-placeholder">
             <ImageIcon size={28} strokeWidth={1.5} aria-hidden />

@@ -78,3 +78,53 @@ runtime dependencies.
 All derived files are under 500 KiB; `preview.webp` is under the catalog limit
 of 250 KiB. Source PNGs remain in the local ImageGen output store and are not
 runtime dependencies.
+
+## Vitrine `0.1.0` — PENDING
+
+- **Status:** assets **not yet produced**. `lib/themes/definitions/vitrine.ts`
+  is written and passes every non-asset constraint in `themes.test.ts`, but the
+  preset is deliberately absent from `THEME_DEFINITIONS` and `THEME_META` until
+  the ten files below exist — the asset guards run over every registered theme,
+  so registering first turns CI red.
+- **Source (planned):** generate with the built-in ImageGen tool; no
+  third-party photograph, logo, branded product or proprietary theme reference.
+  ⚠ Do **not** trace or reuse imagery from any live retailer's site.
+- **Art direction:** monochrome warm-neutral — off-white `#fbfaf8`, pale grey
+  product bed `#efebe6`, warm brown-black `#2a211f`; contemporary fashion
+  e-commerce; square, evenly-lit studio product photography with soft contact
+  shadows; one tan and one tortoiseshell as the only chromatic notes; text-free
+  and logo-free.
+- **Human inspection required:** check every output for invented branding,
+  watermarks, mismatched left/right shoes, six-fingered hands and duplicated
+  products before processing.
+
+### Source prompts
+
+1. **Hero/editorial still life:** a pale editorial flat-lay of women's and men's
+   leather footwear and two structured handbags arranged on a warm off-white
+   surface with soft directional light; 4:3 landscape; no people, text, logos,
+   branded products, borders or gradients.
+2. **Product sheet A (footwear):** an exact 2×2 studio contact sheet containing
+   one white leather low-top sneaker, one brown penny loafer, one black suede
+   block-heel sandal and one black leather ankle boot; each a single shoe shown
+   side-on; pale grey seamless backdrops with clear centre gutters; no people,
+   text, labels, logos, props or duplicated objects.
+3. **Product sheet B (bags & accessories):** an exact 2×2 studio contact sheet
+   containing one structured tan leather tote, one black quilted crossbody with
+   a chain strap, one reversible black-and-tan leather belt coiled flat and one
+   pair of angular tortoiseshell sunglasses; the same backdrop, lighting,
+   gutters and exclusion constraints as sheet A.
+
+### Derived files
+
+| Files                                                         | Transformation                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `hero.webp`                                                   | Hero source resized/cropped to 1440×1080, WebP quality 82                       |
+| `preview.webp`                                                | Hero source resized/cropped to 1200×900, WebP quality 76                        |
+| `sneaker.webp`, `loafer.webp`, `heel.webp`, `boot.webp`       | Cropped from product sheet A by quadrant, resized to 1000×1000, WebP quality 80 |
+| `tote.webp`, `crossbody.webp`, `belt.webp`, `sunglasses.webp` | Cropped from product sheet B by quadrant, resized to 1000×1000, WebP quality 80 |
+
+Product crops are **square (1000×1000)** rather than 4:3 here, because Vitrine
+renders product cards at a 1:1 ratio; a 4:3 source would be centre-cropped by
+the card and lose the toe or the heel. `preview.webp` must stay 4:3 — the
+catalog test asserts that ratio to a 0.01 tolerance and a 250 KiB ceiling.

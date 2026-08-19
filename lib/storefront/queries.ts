@@ -58,6 +58,10 @@ export interface ProductCardRow {
   base_price: number;
   selling_price: number;
   image_url: string | null;
+  /** Rest of the gallery. Selected for the card's hover image — compose it
+   *  through lib/products/gallery.ts, never by indexing this directly (the
+   *  column defaults to [""] and theme seeds repeat the primary). */
+  images: string[] | null;
   status: string;
   featured: boolean;
   sort_order: number;
@@ -127,6 +131,7 @@ export const getPublishedProducts = unstable_cache(
             base_price: products.basePrice,
             selling_price: products.sellingPrice,
             image_url: products.imageUrl,
+            images: products.images,
             status: products.status,
             featured: products.featured,
             sort_order: products.sortOrder,

@@ -21,6 +21,7 @@ import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import { ShareButtons } from "@/app/(storefront)/components/share-buttons";
 import { ProductDeliveryEstimator } from "@/app/(storefront)/components/delivery/product-delivery-estimator";
 import { RelatedProducts, type RelatedProduct } from "./related-products";
+import { productGallery } from "@/lib/products/gallery";
 import { GroceryProductDetail } from "./grocery-product-detail";
 import ReviewsSection, {
   RatingStars,
@@ -112,13 +113,13 @@ export default function ProductDetailClient({
     ? (product.variants.find((v) => v.id === variantId) ?? product.variants[0])
     : null;
 
-  // Product-level gallery (shared across variants).
-  const productGallery = useMemo(() => {
-    const all = [product.image_url, ...(product.images ?? [])].filter(
-      (u): u is string => !!u,
-    );
-    return Array.from(new Set(all));
-  }, [product.image_url, product.images]);
+  // Product-level gallery (shared across variants). Composed by the shared
+  // resolver so the PDP's second photograph and the card's hover image are
+  // always the same one.
+  const productImages = useMemo(
+    () => productGallery(product.image_url, product.images),
+    [product.image_url, product.images],
+  );
 
   // The gallery shown: the selected variant's OWN photos when it has any,
   // otherwise the shared product gallery.
@@ -126,7 +127,7 @@ export default function ProductDetailClient({
   const gallery =
     variantImages.length > 0
       ? Array.from(new Set(variantImages))
-      : productGallery;
+      : productImages;
 
   // Default image: the first variant's first photo if it has one, else the
   // product gallery lead.
@@ -134,7 +135,7 @@ export default function ProductDetailClient({
     ? (product.variants[0].images ?? []).filter(Boolean)
     : [];
   const [activeImg, setActiveImg] = useState<string | null>(
-    firstVariantImages[0] ?? productGallery[0] ?? null,
+    firstVariantImages[0] ?? productImages[0] ?? null,
   );
 
   // Picking a variant swaps the main image to that variant's first photo (or
@@ -142,7 +143,7 @@ export default function ProductDetailClient({
   const selectVariant = (v: DetailVariant) => {
     setVariantId(v.id);
     const imgs = (v.images ?? []).filter(Boolean);
-    setActiveImg(imgs[0] ?? productGallery[0] ?? null);
+    setActiveImg(imgs[0] ?? productImages[0] ?? null);
   };
 
   const base = selectedVariant

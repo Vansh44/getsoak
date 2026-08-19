@@ -132,10 +132,34 @@ describe("resolveStorefrontAppearance", () => {
       header: "centered",
       card: "classic",
       cardQuickAdd: true,
+      cardHoverImage: false,
       productDetail: "editorial",
       cart: "compact",
       footer: "minimal",
     });
+  });
+
+  it("carries the theme's hover-image opt-in, and ignores card overrides", () => {
+    // Off unless the theme asks for it — no existing storefront changes.
+    expect(resolveStorefrontAppearance({}).cardHoverImage).toBe(false);
+    expect(resolveStorefrontAppearance(undefined).cardHoverImage).toBe(false);
+    expect(
+      resolveStorefrontAppearance({ cardHoverImage: true }).cardHoverImage,
+    ).toBe(true);
+    // Hover-swap is orthogonal to the merchant's card choice: overriding the
+    // card variant must neither enable nor cancel it.
+    expect(
+      resolveStorefrontAppearance(
+        { cardHoverImage: true, card: "framed" },
+        { ...DEFAULT_CHROME.appearance, card: "overlay" },
+      ).cardHoverImage,
+    ).toBe(true);
+    expect(
+      resolveStorefrontAppearance(
+        { card: "framed" },
+        { ...DEFAULT_CHROME.appearance, card: "quick_add" },
+      ).cardHoverImage,
+    ).toBe(false);
   });
 
   it("preserves pinned legacy grocery storefronts", () => {
@@ -163,6 +187,7 @@ describe("resolveStorefrontAppearance", () => {
       header: "minimal",
       card: "overlay",
       cardQuickAdd: false,
+      cardHoverImage: false,
       productDetail: "classic",
       cart: "classic",
       footer: "editorial",

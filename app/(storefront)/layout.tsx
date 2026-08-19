@@ -135,6 +135,7 @@ export default async function StorefrontLayout({
     `sm-header-${appearance.header}`,
     `sm-card-${appearance.card}`,
     appearance.cardQuickAdd ? "sm-card-quickadd" : "",
+    appearance.cardHoverImage ? "sm-card-hoverimg" : "",
     `sm-pdp-${appearance.productDetail}`,
     `sm-cart-${appearance.cart}`,
     `sm-footer-${appearance.footer}`,

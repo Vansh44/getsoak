@@ -140,6 +140,7 @@ async function getRelated(
           base_price: products.basePrice,
           selling_price: products.sellingPrice,
           image_url: products.imageUrl,
+          images: products.images,
           card_color: products.cardColor,
           featured: products.featured,
           track_inventory: products.trackInventory,

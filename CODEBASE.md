@@ -1564,6 +1564,19 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     themes with generated, provenance-logged imagery, available in signup and
     the public catalog after their 2026-08-12 production/demo audits — the
     Arcade/Fresko placeholders were retired 2026-07-04),
+    `definitions/vitrine.ts` (**UNREGISTERED, and deliberately so** — a
+    monochrome fashion preset for footwear/bags/accessories: Jost +
+    Instrument Serif, every `shape` token `0px`, hairline borders instead of
+    cards, and one markdown red as the only hue. It passes every non-asset
+    constraint in `themes.test.ts` but is absent from BOTH `THEME_DEFINITIONS`
+    and `THEME_META`, because the asset guards run over every REGISTERED theme
+    and its ten `public/themes/vitrine/*.webp` files do not exist yet —
+    registering first is a knowingly-red CI. It therefore exports its own
+    `meta` const rather than reading `THEME_META.find(...)!`, which would be
+    `undefined` at import time; the file header carries the three-step
+    registration recipe and docs/theme-assets.md carries the asset manifest +
+    art direction. ⚠ Consequence: nothing imports it, so it reports 0%
+    coverage — that is the unregistered state, not dead code),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
@@ -1609,7 +1622,9 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `palette` (all 14 `--sm-*` colour tokens + `onAccent`/`onInk`/
     `shadowRgb`/`success`/`error`/`star`/`highlight` semantic tokens), `fonts`
     (`body`/`display`, pointing at next/font variables loaded in
-    `app/layout.tsx` — Inter/Fraunces/Space Grotesk/Plus Jakarta alongside the
+    `app/layout.tsx` — Inter/Fraunces/Space Grotesk/Plus Jakarta/Jost/Instrument
+    Serif (all `preload: false`; which one a page uses is decided per request
+    from the store's theme) alongside the
     legacy Outfit/Roboto/Stick), and `shape` (`card`/`control`/`sm`/`pill`
     radii). `designToCssVars(design, brandPrimary)` flattens it to a CSS-var map
     the `(storefront)` layout writes **inline on `.storefront-root`** — inline
@@ -1638,7 +1653,39 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     while `lib/store/storefront-layout.ts` supplies resolved values where
     grocery markup branches are required. `header:"market"` retains its
     theme-controlled colours and `card:"quick_add"` retains safe inline add
-    behavior (multi-variant products fall through to detail). Header search is
+    behavior (multi-variant products fall through to detail).
+    **★ `layout.cardHoverImage` cross-fades a card to the product's SECOND
+    photograph on hover** (root class `sm-card-hoverimg`, CSS in
+    storefront-theme.css). Three things are load-bearing.
+    (1) **The `display: none` default IS the loading strategy, not styling.**
+    The hover layer is hidden and its `<img>` is `loading="lazy"`, so on a
+    storefront that has not opted in the element never gets a layout box, never
+    intersects the viewport, and the browser NEVER FETCHES IT — verified in a
+    browser: opted out, only the primary image appears in the resource list.
+    `opacity: 0` or `visibility: hidden` would both still lay it out and
+    download it.
+    (2) **It is opted into per theme rather than rendered-always-and-hidden,
+    which is what `QuickAddButton` does.** That pattern is free for a button and
+    costs a request per card for a photograph, so this diverges deliberately;
+    the card also renders no layer at all unless the product HAS a second image.
+    (3) **`(hover: hover) and (pointer: fine)` keeps it off touch entirely** —
+    no hover there, so it would be pure wasted bandwidth on the connections
+    least able to spare it (verified under mobile emulation: layer hidden, image
+    NOT fetched, with the theme opted IN). Theme-driven only: a merchant's
+    `card` override neither enables nor cancels it, since hover-swap is a
+    different axis from the card variant. ⚠ The gate depends on browsers not
+    loading a lazy image that never intersects — well-established, and if one
+    ever did the cost is bandwidth, not breakage.
+    **`lib/products/gallery.ts`** is the ONE composer of "which photographs does
+    this product have, in what order" (pure + tested), shared by the card's
+    hover image and the PDP gallery so the two can never disagree about which
+    photograph is second. It exists because `products.images` is `text[] NOT
+    NULL DEFAULT ['']` — a one-element array holding an EMPTY STRING, not an
+    empty array — while the dashboard editor writes additional images only and
+    `applyTheme` seeds presets whose `images` repeats the primary first. A
+    caller that indexes the column directly renders a broken `<img>` for an
+    untouched store and cross-fades a themed product to itself.
+    Header search is
     FUNCTIONAL on all variants — it submits to
     `/shop?q=`, and the shop grid filters by name/description/category
     (`shop-client.tsx`, synced to the deep link).
