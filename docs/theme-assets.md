@@ -128,3 +128,28 @@ Product crops are **square (1000×1000)** rather than 4:3 here, because Vitrine
 renders product cards at a 1:1 ratio; a 4:3 source would be centre-cropped by
 the card and lose the toe or the heel. `preview.webp` must stay 4:3 — the
 catalog test asserts that ratio to a 0.01 tolerance and a 250 KiB ceiling.
+
+### Building the derived files
+
+`scripts/build-theme-assets.mjs` does every transformation in the table above —
+quadrant crops in reading order, resize, WebP encode — and steps quality down
+until each file fits its cap, so a heavier-than-expected source degrades rather
+than failing. Save the three generated sources anywhere, then:
+
+```bash
+node scripts/build-theme-assets.mjs --theme vitrine \
+  --hero ~/art/vitrine-hero.png \
+  --sheet-a ~/art/vitrine-sheet-a.png \
+  --sheet-b ~/art/vitrine-sheet-b.png
+```
+
+Add `--dry-run` to see the numbers without writing, or `--out <dir>` to write
+somewhere other than `public/themes/vitrine/`. It exits non-zero and prints
+`FAIL` against any file still outside the constraints, so it can gate a commit.
+
+⚠ **Quadrant order is reading order** — top-left, top-right, bottom-left,
+bottom-right — matching the order each prompt lists its products in. If a
+generated sheet comes back with the products arranged differently, re-generate
+rather than renaming the outputs: the filenames are referenced by
+`lib/themes/definitions/vitrine.ts` and a silent mismatch produces a catalogue
+where every product shows the wrong photograph.
