@@ -124,7 +124,7 @@ The overview-dashboard parity milestone is done when a seller can:
 
 ## 1. Where we actually are
 
-### Search Console — Phase 3c indexing health built; A8 cleanup next
+### Search Console — Phase 3d lifecycle cleanup built
 
 As of 2026-08-19, migration `20260819_0006_search_metrics` is applied.
 `lib/seo/search-engines.ts` exposes the authenticated Search Analytics query,
@@ -136,13 +136,18 @@ self-chains through POST. The analytics dashboard ships the seven delayed
 Google Search cards, source/freshness disclosure, and all five product states
 from A6. Domain settings now shows the persisted Google ownership, sitemap,
 attempt and error state with a permission-gated retry, and the shared Failures
-feed includes the same errors for merchants and operators. A8 cleanup is next.
+feed includes the same errors for merchants and operators. Phase 3d closes the
+remaining A8 lifecycle gaps: replacing or disconnecting a custom domain now
+deletes its URL-prefix Search Console property and this service account's Site
+Verification ownership after the DB stops serving the META token. Google access
+tokens are cached from the returned `expires_in` or ADC `expiry_date`, with an
+early-refresh skew; tokens without a real expiry are not cached.
 
 What already exists and is reusable as-is:
 
 | Piece                                                                        | Where                               |
 | ---------------------------------------------------------------------------- | ----------------------------------- |
-| `googleAccessToken(scope)` — ADC + JWT, cached 55 min                        | `lib/seo/search-engines.ts:163`     |
+| `googleAccessToken(scope)` — ADC + JWT, cached to Google's real expiry       | `lib/seo/search-engines.ts`         |
 | `WEBMASTERS_SCOPE` = `.../auth/webmasters` (full — **already covers reads**) | `:147`                              |
 | `https://www.googleapis.com/webmasters/v3/sites/{prop}/…` endpoint shape     | `:138`                              |
 | `searchconsole.googleapis.com` enabled in `storemink-prod`                   | `docs/cron-jobs.md:63-77`           |
@@ -513,14 +518,13 @@ Found while mapping; each one degrades the feature above.
    every domain it makes live. Interactive save/verify/disconnect workflows
    record the same source transition, while the daily search-metrics preparation
    remains an idempotent backstop.
-2. **Nothing calls `sites.delete` / `webResource.delete` on disconnect.**
-   `store-domain.ts:461` drops the DB keys and leaves Google's ownership record
-   and URL-prefix property behind. `docs/seo-indexing.md:79-82` documents a
-   1,000-property account limit; without deletion that limit is a one-way
-   ratchet.
-3. **`googleAccessToken` caches on a fixed 55-minute TTL**, not the token's own
-   `expires_in` (`:178-179` admits it). Fine today; it is the kind of thing that
-   fails at 3am once a scope changes.
+2. **Closed in Phase 3d:** domain replacement and disconnect run idempotent
+   `sites.delete` and `webResource.delete` cleanup after the routing/settings
+   write removes the old META token. Google failures are logged but cannot roll
+   back the successful domain mutation.
+3. **Closed in Phase 3d:** `googleAccessToken` uses the JWT response's
+   `expires_in` or the ADC client's `expiry_date`, refreshes slightly early,
+   and declines to cache tokens whose real expiry is unavailable.
 
 ### A9 What to promise, and what not to
 

@@ -81,7 +81,13 @@ When StoreMink's certificate + routing verification flips a domain to verified:
 5. the cron retries any incomplete step and preserves the last error for
    diagnosis.
 
-Changing or disconnecting the domain deletes the old Google verification state.
+Changing or disconnecting the domain first removes the old public verification
+token and routing state, then best-effort deletes both the URL-prefix property
+from Search Console and this service account's Site Verification ownership.
+Missing remote resources count as already clean; API failures are logged without
+rolling back the merchant's successful domain change. Google access tokens are
+cached only to their returned `expires_in`/ADC `expiry_date`, with an early
+refresh margin.
 At larger scale, note Search Console's account limit of 1,000 properties: shard
 custom-domain ownership across service accounts or move to merchant-authorized
 OAuth before approaching that limit. StoreMink subdomains do not consume one

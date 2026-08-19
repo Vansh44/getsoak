@@ -37,6 +37,7 @@ import {
   deriveGoogleIndexingHealth,
   type GoogleIndexingHealth,
 } from "@/lib/seo/indexing-health";
+import { removeGoogleCustomDomain } from "@/lib/seo/search-engines";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -72,6 +73,38 @@ function getResend(): Resend | null {
 function clean(v: string | null | undefined): string | null {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s ? s : null;
+}
+
+async function cleanupDetachedDomain(
+  domain: string,
+  operation: "updateCustomDomain" | "disconnectDomain",
+): Promise<void> {
+  const gone = await deprovision(domain);
+  if (gone.error)
+    logError(`${operation} (deprovision)`, gone.error, { domain });
+
+  // Stop trusting a hostname we no longer serve for Google sign-in.
+  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
+  if (deauth.error)
+    logError(`${operation} (deauthorize)`, deauth.error, { domain });
+
+  // The database write above removed the public META token first. Google can
+  // now safely release both the URL-prefix property and our ownership record.
+  const google = await removeGoogleCustomDomain(domain);
+  if (!google.searchConsole.ok && !google.searchConsole.skipped) {
+    logError(
+      `${operation} (remove Search Console property)`,
+      google.searchConsole.error,
+      { domain, status: google.searchConsole.status },
+    );
+  }
+  if (!google.siteVerification.ok && !google.siteVerification.skipped) {
+    logError(
+      `${operation} (remove Site Verification ownership)`,
+      google.siteVerification.error,
+      { domain, status: google.siteVerification.status },
+    );
+  }
 }
 
 /**
@@ -176,24 +209,7 @@ export async function updateCustomDomain(
   // and a cleanup failure must not fail the change they asked for.
   const previous = store?.custom_domain ?? null;
   if (previous && previous !== cleanDomain) {
-    after(async () => {
-      const gone = await deprovision(previous);
-      if (gone.error) {
-        logError("updateCustomDomain (deprovision old)", gone.error, {
-          previous,
-        });
-      }
-      // Stop trusting it for Google sign-in too. Leaving it listed means a
-      // domain we no longer serve can still host a popup sign-in against our
-      // Identity Platform project — which is precisely what the authorized-domain
-      // check exists to prevent, and matters most if someone else later buys it.
-      const deauth = await removeAuthorizedDomain(previous, ROOT_DOMAIN);
-      if (deauth.error) {
-        logError("updateCustomDomain (deauthorize old)", deauth.error, {
-          previous,
-        });
-      }
-    });
+    after(() => cleanupDetachedDomain(previous, "updateCustomDomain"));
   }
   return { success: true };
 }
@@ -521,15 +537,6 @@ export async function disconnectDomain(): Promise<DomainResult> {
   revalidateTag(STORE_TAG, "max");
   after(() => reconcileStoreSearchSource(storeId));
 
-  const gone = await deprovision(domain);
-  if (gone.error)
-    logError("disconnectDomain (deprovision)", gone.error, { domain });
-
-  // Same reasoning as a domain change: an entry for a host we no longer serve is
-  // standing permission we do not need. Guarded so it can never strip the
-  // platform's own entry (see planRemove).
-  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
-  if (deauth.error)
-    logError("disconnectDomain (deauthorize)", deauth.error, { domain });
+  await cleanupDetachedDomain(domain, "disconnectDomain");
   return { success: true };
 }

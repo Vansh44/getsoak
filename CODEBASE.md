@@ -2363,6 +2363,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `google_indexing_error` values. Merchant reads bind `stores.id` to the
       acting store; only the operator page can request the explicit cross-store
       scope. No schema or duplicated failure table was added.
+    - **Search Console Phase 3d lifecycle cleanup (2026-08-20):**
+      custom-domain replacement and disconnect clear routing plus the public
+      META token in the database before `lib/seo/search-engines.ts` issues
+      idempotent Search Console property and Site Verification ownership
+      deletes for the detached `https://domain/` URL-prefix. The shared cleanup
+      path remains best-effort so remote or certificate failures cannot undo a
+      successful merchant mutation, while each failure is logged separately.
+      Google JWT tokens now use the response's `expires_in`; ADC tokens use the
+      auth client's `expiry_date`. Both refresh slightly early and an unknown
+      expiry disables the local cache instead of assuming 55 minutes.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -6739,7 +6749,10 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   active/launched/non-demo store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
-  sitemap submission. Google's META verification response is a complete HTML
+  sitemap submission. Replacing or disconnecting that domain removes the public
+  token first, then best-effort deletes the old Search Console property and the
+  runtime service account's Site Verification ownership record so detached
+  domains do not accumulate indefinitely. Google's META verification response is a complete HTML
   tag, but Next metadata accepts only its `content` value; the pipeline
   normalizes that value before storage and also repairs legacy full-tag values
   so the tag cannot be escaped inside another tag. Attempt/success/error

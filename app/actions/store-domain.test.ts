@@ -74,6 +74,12 @@ vi.mock("@/lib/seo/store-indexing", () => ({
 vi.mock("@/lib/seo/search-metrics", () => ({
   reconcileStoreSearchSource: vi.fn(async () => {}),
 }));
+vi.mock("@/lib/seo/search-engines", () => ({
+  removeGoogleCustomDomain: vi.fn(async () => ({
+    searchConsole: { ok: true, status: 204 },
+    siteVerification: { ok: true, status: 204 },
+  })),
+}));
 
 import { revalidateTag } from "next/cache";
 import { getManagerUserId, getViewerAccess } from "@/app/dashboard/lib/access";
@@ -88,6 +94,7 @@ import {
 import { logError } from "@/lib/observability/logger";
 import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
 import { ensureGoogleCoverageForStore } from "@/lib/seo/store-indexing";
+import { removeGoogleCustomDomain } from "@/lib/seo/search-engines";
 import { stores } from "@/drizzle/schema";
 import {
   disconnectDomain,
@@ -148,6 +155,10 @@ beforeEach(() => {
   } as any);
   vi.mocked(deprovision).mockResolvedValue({} as any);
   vi.mocked(removeAuthorizedDomain).mockResolvedValue({} as any);
+  vi.mocked(removeGoogleCustomDomain).mockResolvedValue({
+    searchConsole: { ok: true, status: 204 },
+    siteVerification: { ok: true, status: 204 },
+  });
 });
 
 describe("updateCustomDomain", () => {
@@ -203,6 +214,7 @@ describe("updateCustomDomain", () => {
       "old.com",
       "storemink.com",
     );
+    expect(removeGoogleCustomDomain).toHaveBeenCalledWith("old.com");
   });
 
   it("does not deprovision when the normalized domain is unchanged", async () => {
@@ -212,6 +224,7 @@ describe("updateCustomDomain", () => {
     } as any);
     await updateCustomDomain("ACME.COM");
     expect(deprovision).not.toHaveBeenCalled();
+    expect(removeGoogleCustomDomain).not.toHaveBeenCalled();
   });
 
   it("does not touch the database if the current row cannot be read", async () => {
@@ -231,6 +244,7 @@ describe("updateCustomDomain", () => {
     });
     expect(deprovision).not.toHaveBeenCalled();
     expect(removeAuthorizedDomain).not.toHaveBeenCalled();
+    expect(removeGoogleCustomDomain).not.toHaveBeenCalled();
   });
 });
 
@@ -471,6 +485,7 @@ describe("disconnectDomain", () => {
       "old.com",
       "storemink.com",
     );
+    expect(removeGoogleCustomDomain).toHaveBeenCalledWith("old.com");
   });
 
   it("does not deprovision if the routing write fails", async () => {
@@ -481,6 +496,7 @@ describe("disconnectDomain", () => {
       error: "Couldn't disconnect the domain. Please try again.",
     });
     expect(deprovision).not.toHaveBeenCalled();
+    expect(removeGoogleCustomDomain).not.toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith(
       "disconnectDomain (db)",
       expect.any(Error),
@@ -495,6 +511,10 @@ describe("disconnectDomain", () => {
     vi.mocked(removeAuthorizedDomain).mockResolvedValue({
       error: "deauth failed",
     } as any);
+    vi.mocked(removeGoogleCustomDomain).mockResolvedValue({
+      searchConsole: { ok: false, status: 403, error: "property failed" },
+      siteVerification: { ok: false, status: 400, error: "ownership failed" },
+    });
     expect(await disconnectDomain()).toEqual({ success: true });
     expect(logError).toHaveBeenCalledWith(
       "disconnectDomain (deprovision)",
@@ -505,6 +525,16 @@ describe("disconnectDomain", () => {
       "disconnectDomain (deauthorize)",
       "deauth failed",
       { domain: "old.com" },
+    );
+    expect(logError).toHaveBeenCalledWith(
+      "disconnectDomain (remove Search Console property)",
+      "property failed",
+      { domain: "old.com", status: 403 },
+    );
+    expect(logError).toHaveBeenCalledWith(
+      "disconnectDomain (remove Site Verification ownership)",
+      "ownership failed",
+      { domain: "old.com", status: 400 },
     );
   });
 });
