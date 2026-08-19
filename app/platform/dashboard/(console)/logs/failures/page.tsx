@@ -18,7 +18,7 @@ export const metadata = { title: "Failures — StoreMink Admin" };
 // which only ever renders on
 // storemink.com (proxy.ts). A merchant host can't reach this route.
 //
-// ⚠ It still shows only MERCHANT-READABLE failures — the same five sources the
+// ⚠ It still shows only MERCHANT-READABLE failures — the same sources the
 // store view reads. Stack traces and platform internals stay in Cloud Logging
 // / Error Reporting, which already group and alert on them; duplicating them
 // into a table would be a second, worse copy that nobody prunes.

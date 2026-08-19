@@ -3,14 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Copy, CheckCircle2, AlertCircle, Globe, Lock } from "lucide-react";
+import {
+  Copy,
+  CheckCircle2,
+  AlertCircle,
+  Globe,
+  Lock,
+  RefreshCw,
+  Search,
+} from "lucide-react";
 import {
   updateCustomDomain,
   verifyDomain,
   disconnectDomain,
   getDomainConnectionState,
+  retryGoogleIndexing,
   type DomainConnectionState,
 } from "@/app/actions/store-domain";
+import type { GoogleIndexingHealth } from "@/lib/seo/indexing-health";
+import { formatWhen } from "@/lib/dates";
 
 // Poll while the merchant is actually looking, bounded — each check costs API
 // calls. This is a CONVENIENCE, not the mechanism: issuance regularly outlives
@@ -29,9 +40,9 @@ export function DomainSettingsView({
 }) {
   const [state, setState] = useState(initial);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState<"save" | "verify" | "disconnect" | null>(
-    null,
-  );
+  const [busy, setBusy] = useState<
+    "save" | "verify" | "disconnect" | "indexing" | null
+  >(null);
   const polls = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -101,10 +112,27 @@ export function DomainSettingsView({
     setBusy(null);
   }
 
+  async function handleIndexingRetry() {
+    setBusy("indexing");
+    const result = await retryGoogleIndexing();
+    await refresh();
+    if (result.error) toast.error(result.error);
+    else toast.success("Google Search coverage is up to date.");
+    setBusy(null);
+  }
+
+  const indexingCard = (
+    <GoogleIndexingCard
+      health={state.indexing}
+      retrying={busy === "indexing"}
+      onRetry={handleIndexingRetry}
+    />
+  );
+
   // ---- Not configured in this environment ---------------------------------
   if (!state.available) {
     return (
-      <Shell>
+      <Shell indexing={indexingCard}>
         <Card>
           <div className="flex items-start gap-4 p-6">
             <span className="mt-0.5 rounded-lg bg-[#f3f4f6] p-2">
@@ -127,7 +155,7 @@ export function DomainSettingsView({
   // ---- Not on Pro ---------------------------------------------------------
   if (!state.allowed) {
     return (
-      <Shell>
+      <Shell indexing={indexingCard}>
         <Card>
           <div className="flex items-start gap-4 p-6">
             <span className="mt-0.5 rounded-lg bg-[#f3f4f6] p-2">
@@ -172,7 +200,7 @@ export function DomainSettingsView({
     // becomes a support ticket for a fix that was one DNS record away.
     const pending = state.records.filter((r) => r.purpose === "certificate");
     return (
-      <Shell>
+      <Shell indexing={indexingCard}>
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-4 p-6">
             <div className="flex items-center gap-3">
@@ -226,7 +254,7 @@ export function DomainSettingsView({
   // ---- Pending: the records to add ----------------------------------------
   if (state.domain) {
     return (
-      <Shell>
+      <Shell indexing={indexingCard}>
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-4 p-6">
             <div className="flex items-center gap-3">
@@ -303,7 +331,7 @@ export function DomainSettingsView({
 
   // ---- Nothing connected yet ----------------------------------------------
   return (
-    <Shell>
+    <Shell indexing={indexingCard}>
       <Card>
         <form onSubmit={handleConnect} className="p-6">
           <h2 className="text-lg font-semibold text-[#111827]">
@@ -343,7 +371,13 @@ function hostOf(challengeFqdn: string): string {
   return challengeFqdn.replace(/^_acme-challenge\./, "");
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({
+  children,
+  indexing,
+}: {
+  children: React.ReactNode;
+  indexing: React.ReactNode;
+}) {
   return (
     <div className="max-w-4xl space-y-6">
       <div>
@@ -353,6 +387,138 @@ function Shell({ children }: { children: React.ReactNode }) {
         </p>
       </div>
       {children}
+      {indexing}
+    </div>
+  );
+}
+
+function GoogleIndexingCard({
+  health,
+  retrying,
+  onRetry,
+}: {
+  health: GoogleIndexingHealth;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const status = {
+    unavailable: {
+      label: "Unavailable",
+      className: "bg-gray-100 text-gray-700",
+      text: "Google Search coverage is available on the production store.",
+    },
+    not_launched: {
+      label: "Waiting for launch",
+      className: "bg-amber-50 text-amber-800",
+      text: "Publish store content to begin Google verification and sitemap submission.",
+    },
+    waiting: {
+      label: "Setup in progress",
+      className: "bg-blue-50 text-blue-800",
+      text: "StoreMink is verifying your store and submitting its sitemap to Google.",
+    },
+    ready: {
+      label: "Ready",
+      className: "bg-green-50 text-green-700",
+      text: "Your current store address is verified and its sitemap is submitted.",
+    },
+    error: {
+      label: "Needs attention",
+      className: "bg-red-50 text-red-700",
+      text: "Google could not refresh your search coverage. StoreMink will retry daily.",
+    },
+  }[health.state];
+  const canRetry = health.state === "waiting" || health.state === "error";
+  const when = (value: string | null) => formatWhen(value) || "Not yet";
+  const verification =
+    health.verification === "platform"
+      ? "Covered by StoreMink"
+      : health.verification === "verified"
+        ? `Verified ${when(health.verifiedAt)}`
+        : "Waiting for verification";
+  const sitemap =
+    health.sitemap === "submitted"
+      ? `Submitted ${when(health.sitemapSubmittedAt)}`
+      : "Waiting to submit";
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[rgba(17,24,39,0.08)] p-6">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 rounded-lg bg-[#f3f4f6] p-2">
+            <Search className="h-5 w-5 text-[#5b6472]" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-[#111827]">
+              Google Search coverage
+            </h2>
+            <p className="mt-1 text-sm text-[#5b6472]">{status.text}</p>
+          </div>
+        </div>
+        <span
+          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${status.className}`}
+        >
+          {status.label}
+        </span>
+      </div>
+
+      <dl className="grid gap-px bg-[rgba(17,24,39,0.08)] sm:grid-cols-2">
+        <HealthItem
+          label="Store address"
+          value={health.origin ?? "Unavailable"}
+        />
+        <HealthItem label="Google ownership" value={verification} />
+        <HealthItem label="Sitemap" value={sitemap} />
+        <HealthItem label="Last attempt" value={when(health.lastAttemptAt)} />
+      </dl>
+
+      {health.state === "error" && health.error ? (
+        <div className="border-t border-red-200 bg-red-50 px-6 py-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-red-700">
+            Last error
+          </p>
+          <p className="mt-1 break-words text-sm text-red-800">
+            {health.error}
+          </p>
+        </div>
+      ) : null}
+
+      {canRetry ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(17,24,39,0.08)] px-6 py-4">
+          <p className="text-xs text-[#5b6472]">
+            Search results and Search Console metrics can take about two days to
+            appear after setup succeeds.
+          </p>
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={retrying}
+            className="dash-btn shrink-0 disabled:opacity-60"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${retrying ? "animate-spin" : ""}`}
+              aria-hidden
+            />
+            {retrying ? "Checking…" : "Check now"}
+          </button>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function HealthItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 bg-white px-6 py-4">
+      <dt className="text-xs font-medium uppercase tracking-wide text-[#6b7280]">
+        {label}
+      </dt>
+      <dd
+        className="mt-1 truncate text-sm font-medium text-[#111827]"
+        title={value}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 // The Failures log — merge ordering and partial-failure behaviour.
 //
 // The per-source queries are thin drizzle selects and are verified by reading,
@@ -7,6 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const dbHolder = vi.hoisted(() => ({ current: {} as any }));
+
 vi.mock("@/lib/observability/logger", () => ({
   logError: vi.fn(),
   logInfo: vi.fn(),
@@ -15,7 +19,9 @@ vi.mock("@/lib/observability/logger", () => ({
 
 // The module builds drizzle queries at import time; nothing here runs them.
 vi.mock("@/lib/db/client", () => ({
-  withService: vi.fn(async (fn: (db: unknown) => Promise<unknown>) => fn({})),
+  withService: vi.fn(async (fn: (db: unknown) => Promise<unknown>) =>
+    fn(dbHolder.current),
+  ),
 }));
 
 import {
@@ -54,7 +60,20 @@ function source(
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  dbHolder.current = {};
+});
+
+function boundValues(node: any, depth = 0): unknown[] {
+  if (depth > 12 || node === null || node === undefined) return [];
+  if (typeof node !== "object") return [node];
+  if (Array.isArray(node))
+    return node.flatMap((value) => boundValues(value, depth + 1));
+  if (node.queryChunks) return boundValues(node.queryChunks, depth + 1);
+  if ("value" in node) return boundValues(node.value, depth + 1);
+  return [];
+}
 
 describe("mergeFailures", () => {
   it("interleaves sources newest first", () => {
@@ -105,6 +124,50 @@ describe("the two catalogs stay in step", () => {
       expect(source.label).toBe(meta?.label);
       expect(source.blurb).toBe(meta?.blurb);
     }
+  });
+});
+
+describe("Google indexing failure source", () => {
+  it("scopes merchant reads and maps the persisted actionable error", async () => {
+    let whereClause: unknown;
+    const chain: any = {};
+    for (const method of ["from", "orderBy", "limit"]) {
+      chain[method] = vi.fn(() => chain);
+    }
+    chain.where = vi.fn((where: unknown) => {
+      whereClause = where;
+      return chain;
+    });
+    chain.then = (resolve: (rows: unknown[]) => unknown) =>
+      resolve([
+        {
+          storeId: "store-7",
+          slug: "acme",
+          error: "Search Console permission denied",
+          attemptedAt: "2026-08-20T03:00:00.000Z",
+          updatedAt: "2026-08-20T03:05:00.000Z",
+        },
+      ]);
+    dbHolder.current = { select: vi.fn(() => chain) };
+
+    const indexing = FAILURE_SOURCES.find((item) => item.key === "indexing");
+    const rows = await indexing!.fetch(
+      { kind: "store", storeId: "store-7" },
+      10,
+    );
+
+    expect(boundValues(whereClause)).toContain("store-7");
+    expect(rows).toEqual([
+      {
+        id: "indexing:store-7:2026-08-20T03:00:00.000Z",
+        source: "indexing",
+        title: "Google Search coverage update failed",
+        detail: "Search Console permission denied",
+        occurredAt: "2026-08-20T03:00:00.000Z",
+        storeId: "store-7",
+        href: "/dashboard/settings/domain",
+      },
+    ]);
   });
 });
 

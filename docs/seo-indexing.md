@@ -108,6 +108,14 @@ The per-store settings keys are public operational state:
 - `google_indexing_attempted_at`
 - `google_indexing_error`
 
+`/dashboard/settings/domain` presents these keys as one origin-aware Google
+Search coverage card: StoreMink Domain-property ownership or custom-domain META
+verification, current-origin sitemap submission, last attempt, and last error.
+Managers can run the same idempotent reconciliation immediately with **Check
+now**; `/api/cron/seo-refresh` remains the unattended backstop. Current errors
+also appear in the merchant and operator Failures feeds without copying them to
+a second table.
+
 ## Verification
 
 ```bash

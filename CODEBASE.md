@@ -684,7 +684,8 @@ wholesip/
 │   ├── logs/                  # ★ §33: the Failures feed. failure-types.ts is the
 │   │                          # CLIENT-safe half (shapes + FAILURE_SOURCE_META for
 │   │                          # the filter chips); failures.ts is the server half —
-│   │                          # FAILURE_SOURCES, one entry per table it reads. The
+│   │                          # FAILURE_SOURCES, one entry per persisted source it
+│   │                          # reads (including stores.settings indexing health). The
 │   │                          # split is load-bearing: failures.ts imports the db
 │   │                          # client, so a client component importing it drags
 │   │                          # `pg` (and `fs`) into the browser bundle and FAILS
@@ -797,6 +798,8 @@ wholesip/
 │   │                          # hook + idempotent per-store Google reconciliation;
 │   │                          # keeps public token/status/error timestamps in
 │   │                          # stores.settings and retries via seo-refresh cron.
+│   │                          # ★ indexing-health.ts — pure current-origin state
+│   │                          # model shared by Domain settings and failure reads.
 │   │                          # IndexNow key: public/<key>.txt.
 │   │                          # ★ disallow.ts — the ONE list of non-indexable
 │   │                          # storefront/platform paths, read by BOTH app/robots.ts
@@ -2349,6 +2352,17 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       healthy-zero-visibility, ready and actionable source-error states; stale
       successful data stays visible with a warning. Customized layouts remain
       unchanged until the merchant adds the new cards.
+    - **Search Console Phase 3c indexing health (2026-08-20):**
+      `lib/seo/indexing-health.ts` converts the seven existing public Google
+      settings keys into one origin-aware unavailable/unlaunched/waiting/ready/
+      error contract. Domain settings shows ownership, sitemap submission, last
+      attempt and the actionable error for both StoreMink subdomains and custom
+      domains; its permission-gated **Check now** action reuses the idempotent
+      `ensureGoogleCoverageForStore()` path while the daily cron remains the
+      backstop. The shared Failures registry also reads current non-empty
+      `google_indexing_error` values. Merchant reads bind `stores.id` to the
+      acting store; only the operator page can request the explicit cross-store
+      scope. No schema or duplicated failure table was added.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -5416,9 +5430,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `data_jobs` row. A `failures` table would be a second copy of facts we
       hold, a write to forget on every new failure path, and a row that can
       disagree with the thing it describes. So `FAILURE_SOURCES` is a registry
-      of READS (email, notification, refund, import, payment) — add a source =
-      add an entry — and there is nothing to migrate, backfill, or prune (§32
-      already prunes the underlying tables).
+      of READS (email, SMS, notification, refund, import/export, Google
+      indexing, checkout payment, subscription payment) — add a source = add
+      an entry — and there is nothing to migrate, backfill, or prune (§32
+      already prunes the underlying event tables; indexing is current state on
+      the store row).
     - **★ SCOPE IS A DISCRIMINATED UNION, NOT AN OPTIONAL `storeId`.** These
       queries run under `withService`, which BYPASSES RLS, so tenant scoping is
       the caller's job (convention #2). An optional field would make "every

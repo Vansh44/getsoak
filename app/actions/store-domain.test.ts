@@ -60,9 +60,12 @@ vi.mock("@/lib/observability/logger", () => ({ logError: vi.fn() }));
 vi.mock("@/lib/auth/authorized-domains", () => ({
   removeAuthorizedDomain: vi.fn(async () => ({})),
 }));
-vi.mock("@/lib/store/host", () => ({ ROOT_DOMAIN: "storemink.com" }));
+vi.mock("@/lib/store/host", () => ({
+  ROOT_DOMAIN: "storemink.com",
+  SEARCH_INDEXABLE: true,
+}));
 vi.mock("@/lib/seo/store-indexing", () => ({
-  ensureGoogleCoverageForStore: vi.fn(async () => {}),
+  ensureGoogleCoverageForStore: vi.fn(async () => ({ ok: true })),
   GOOGLE_INDEXING_SETTINGS_KEYS: [
     "google_site_verification",
     "google_search_console_property",
@@ -89,6 +92,7 @@ import { stores } from "@/drizzle/schema";
 import {
   disconnectDomain,
   getDomainConnectionState,
+  retryGoogleIndexing,
   updateCustomDomain,
   verifyDomain,
   verifyResendDomain,
@@ -335,6 +339,52 @@ describe("getDomainConnectionState", () => {
       verified: false,
       allowed: true,
     });
+  });
+
+  it("returns indexing health for the store's current canonical origin", async () => {
+    vi.mocked(readStoreDomainRow).mockResolvedValue({
+      slug: "acme",
+      custom_domain: "acme.com",
+      settings: {
+        custom_domain_verified: true,
+        launched: true,
+        google_site_verification_domain: "https://acme.com",
+        google_site_verified_at: "2026-08-20T01:00:00.000Z",
+        google_sitemap_submitted_origin: "https://acme.com",
+        google_sitemap_submitted_at: "2026-08-20T02:00:00.000Z",
+        google_indexing_attempted_at: "2026-08-20T02:00:00.000Z",
+      },
+    } as any);
+
+    expect(await getDomainConnectionState()).toMatchObject({
+      indexing: {
+        state: "ready",
+        origin: "https://acme.com",
+        verification: "verified",
+        sitemap: "submitted",
+      },
+    });
+  });
+});
+
+describe("retryGoogleIndexing", () => {
+  it("requires settings.manage", async () => {
+    vi.mocked(getManagerUserId).mockResolvedValue(null);
+    expect(await retryGoogleIndexing()).toEqual({
+      error: "You don't have permission to manage domain settings.",
+    });
+    expect(ensureGoogleCoverageForStore).not.toHaveBeenCalled();
+  });
+
+  it("runs the existing idempotent Google reconciliation", async () => {
+    vi.mocked(ensureGoogleCoverageForStore).mockResolvedValue({
+      ok: false,
+      error: "permission denied",
+    });
+    expect(await retryGoogleIndexing()).toEqual({
+      error: "permission denied",
+    });
+    expect(ensureGoogleCoverageForStore).toHaveBeenCalledWith("store-1");
   });
 });
 

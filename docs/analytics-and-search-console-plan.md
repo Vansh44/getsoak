@@ -124,7 +124,7 @@ The overview-dashboard parity milestone is done when a seller can:
 
 ## 1. Where we actually are
 
-### Search Console — Phase 3b merchant dashboard built; indexing health next
+### Search Console — Phase 3c indexing health built; A8 cleanup next
 
 As of 2026-08-19, migration `20260819_0006_search_metrics` is applied.
 `lib/seo/search-engines.ts` exposes the authenticated Search Analytics query,
@@ -132,9 +132,11 @@ while `lib/seo/search-performance.ts` and `lib/seo/search-metrics.ts` implement
 the anchored tenant filter, source epochs, bounded row normalization,
 transactional bucket replacement, durable leases and fleet-wide property rate
 limit. `/api/cron/search-metrics` reconciles work on its Scheduler GET and
-self-chains through POST. The analytics dashboard now ships the seven delayed
+self-chains through POST. The analytics dashboard ships the seven delayed
 Google Search cards, source/freshness disclosure, and all five product states
-from A6. Indexing-health surfaces in A7 remain the next phase.
+from A6. Domain settings now shows the persisted Google ownership, sitemap,
+attempt and error state with a permission-gated retry, and the shared Failures
+feed includes the same errors for merchants and operators. A8 cleanup is next.
 
 What already exists and is reusable as-is:
 
@@ -487,15 +489,20 @@ temporary Google outage must not blank the dashboard.
 
 ### A7 Also surface indexing health — near-zero work, real hole
 
-`google_indexing_error` is persisted by `store-indexing.ts` and **shown to
-nobody** — not the merchant, not an operator. Today the only way to learn a
-store's sitemap submission has been failing for a month is a direct DB query.
+**Built 2026-08-20.** Domain settings reads the existing seven keys through the
+origin-aware `indexing-health.ts` model and offers **Check now** through the
+same idempotent reconciliation used by cron. `FAILURE_SOURCES` now includes a
+tenant-scoped Google Search entry; the explicit platform scope provides the
+operator view. No failure table or migration was added.
 
-One card (on `/dashboard/settings/domain`, or a small `/dashboard/seo`) reading
-the seven keys already written: verified state, sitemap submitted at, last
-attempt, last error. Pair it with the operator-side view in
-`/dashboard/failures` (§33) — this is exactly the "everything that didn't work"
-feed, and `FAILURE_SOURCES` is a registry of reads, so it is one entry.
+`google_indexing_error` is persisted by `store-indexing.ts`; before this phase,
+the only way to learn a store's sitemap submission had been failing was a
+direct DB query.
+
+The card lives on `/dashboard/settings/domain` and reads the seven keys already
+written: verified state, sitemap submitted at, last attempt, and last error. It
+is paired with the operator-side `/dashboard/failures` view (§33), where the
+existing `FAILURE_SOURCES` registry supplies the same current errors.
 
 ### A8 Pre-existing gaps this work should close
 

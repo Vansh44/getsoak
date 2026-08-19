@@ -27,12 +27,16 @@ import {
 } from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
 import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
-import { ROOT_DOMAIN } from "@/lib/store/host";
+import { ROOT_DOMAIN, SEARCH_INDEXABLE } from "@/lib/store/host";
 import {
   ensureGoogleCoverageForStore,
   GOOGLE_INDEXING_SETTINGS_KEYS,
 } from "@/lib/seo/store-indexing";
 import { reconcileStoreSearchSource } from "@/lib/seo/search-metrics";
+import {
+  deriveGoogleIndexingHealth,
+  type GoogleIndexingHealth,
+} from "@/lib/seo/indexing-health";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -313,6 +317,8 @@ export interface DomainConnectionState {
   certificateState: string | null;
   /** Companion hosts also serving (the www/apex counterpart). */
   extraHosts: string[];
+  /** Google ownership, sitemap, freshness, and last actionable error. */
+  indexing: GoogleIndexingHealth;
   message?: string;
 }
 
@@ -333,6 +339,7 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     records: [],
     certificateState: null,
     extraHosts: [],
+    indexing: deriveGoogleIndexingHealth({}, null, false),
   };
   if (!access?.can(DOMAIN_SECTION, "view")) return empty;
 
@@ -342,8 +349,20 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
   const domain = row?.custom_domain ?? null;
   const settings = (row?.settings as Record<string, unknown>) ?? {};
   const verified = settings.custom_domain_verified === true;
+  const origin = row?.slug
+    ? verified && allowed && domain
+      ? `https://${domain}`
+      : `https://${row.slug}.${ROOT_DOMAIN}`
+    : null;
+  const indexing = deriveGoogleIndexingHealth(
+    settings,
+    origin,
+    SEARCH_INDEXABLE,
+  );
 
-  if (!domain || !cfg) return { ...empty, domain, verified, allowed };
+  if (!domain || !cfg) {
+    return { ...empty, domain, verified, allowed, indexing };
+  }
 
   // Routing record is known without any network call; the challenge record
   // needs the authorization, which verifyDomain() refreshes.
@@ -384,7 +403,25 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     extraHosts: Array.isArray(settings.domain_extra_hosts)
       ? (settings.domain_extra_hosts as string[])
       : [],
+    indexing,
   };
+}
+
+/** Merchant-triggered retry for the status card. The daily seo-refresh job is
+ * still the backstop; this only avoids making someone wait a day after fixing
+ * a permission or DNS issue. */
+export async function retryGoogleIndexing(): Promise<DomainResult> {
+  if (!(await getManagerUserId(DOMAIN_SECTION))) {
+    return { error: "You don't have permission to manage domain settings." };
+  }
+  if (!SEARCH_INDEXABLE) {
+    return { error: "Google Search coverage only runs in production." };
+  }
+  const storeId = await getActingStoreId();
+  const result = await ensureGoogleCoverageForStore(storeId);
+  return result.ok
+    ? { success: true }
+    : { error: result.error ?? "Google Search coverage could not be updated." };
 }
 
 /**
