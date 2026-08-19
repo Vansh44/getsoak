@@ -1632,7 +1632,24 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     specificity beats the globals.css `:root` defaults, so the whole storefront
     re-skins with zero per-component wiring. Fonts re-point the existing
     `--font-outfit`/`--font-stick-no-bills` slots, so all 64 font call-sites
-    switch with no find-replace. **Defaults = WholeSip**: the `:root` token
+    switch with no find-replace.
+    **★★ BUT THE OTHER HALF OF THE STOREFRONT INHERITED TAILWIND'S DEFAULT.**
+    Those 64 call-sites read the vars; everything ELSE inherited from `<body>`,
+    which Tailwind sets to its own sans. **Nobody noticed for three themes
+    because basket/studio/ritual all set `body: var(--font-inter)`, and Inter is
+    ALSO Tailwind's default — the two halves happened to match.** Vitrine is the
+    first preset with a different body face, and it rendered a live storefront
+    HALF in Jost and half in Inter (measured: 79 elements vs 78). Fixed by
+    `.sm-themed-type` (storefront-theme.css), a root class emitted ONLY when a
+    theme actually resolves, which sets `font-family: var(--font-outfit)` so
+    untokenised descendants inherit the theme font. ⚠ Gated on `design` being
+    non-null so it CANNOT touch an un-themed storefront — the WholeSip fallback
+    and legacy stores keep the font they inherit today (verified live: no class
+    emitted, font census unchanged at Outfit 39 / inherited 48 / Roboto 1). For
+    the three Inter themes it is a no-op in practice (verified live: studio
+    stayed 140/140 Inter); Vitrine went 156/156 Jost. ⚠ The un-themed WholeSip
+    storefront therefore STILL renders in two families — that is pre-existing
+    and deliberately untouched, since fixing it changes a live storefront. **Defaults = WholeSip**: the `:root` token
     values in `globals.css` ARE the WholeSip look, and a store with no real
     `settings.template` (the WholeSip fallback, legacy stores) gets only
     `--brand-primary` — untouched. Storefront component CSS is fully

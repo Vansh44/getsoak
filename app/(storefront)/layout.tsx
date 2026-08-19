@@ -136,6 +136,9 @@ export default async function StorefrontLayout({
     `sm-card-${appearance.card}`,
     appearance.cardQuickAdd ? "sm-card-quickadd" : "",
     appearance.cardHoverImage ? "sm-card-hoverimg" : "",
+    // Only when a theme is installed — see the `.sm-themed-type` note in
+    // storefront-theme.css. An un-themed store keeps today's inherited font.
+    design ? "sm-themed-type" : "",
     `sm-pdp-${appearance.productDetail}`,
     `sm-cart-${appearance.cart}`,
     `sm-footer-${appearance.footer}`,
