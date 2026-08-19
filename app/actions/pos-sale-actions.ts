@@ -41,7 +41,7 @@ import {
   spendCredit,
 } from "@/lib/credit/store-credit";
 import { withService } from "@/lib/db/client";
-import { dbErrorMessage } from "@/lib/db/errors";
+import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   newPosCustomerId,
   splitName,
@@ -89,6 +89,12 @@ import {
   validateTenderShape,
   type PosTender,
 } from "@/lib/pos/tenders";
+import {
+  counterGatewayKeyId,
+  startCounterPayment,
+  verifyCounterPayment,
+  verifyGatewayTenders,
+} from "@/lib/payments/pos-gateway";
 import { isIntraState, isValidGstinFormat, splitGst } from "@/lib/billing/gst";
 import { rowToBillingSettings, rowToTaxClass } from "@/lib/billing/types";
 import { getStoreSettings } from "@/lib/settings/resolve";
@@ -183,6 +189,14 @@ export interface RegisterConfig {
    *  (No override control exists on the register yet — this is what one would
    *  ask.) */
   canOverridePrice: boolean;
+  /** Whether the till may take a VERIFIED gateway payment (Step 12). The same
+   *  `canDiscount` rule: the client gets the ANSWER, never the policy, and a
+   *  control that would always fail in front of a customer never renders. */
+  onlinePayments: boolean;
+  /** Public Razorpay key id — needed by checkout.js, and safe to ship. */
+  gatewayKeyId: string | null;
+  /** Header for the payment modal, so the customer sees who they are paying. */
+  storeName: string;
 }
 
 export async function getRegisterConfig(): Promise<
@@ -191,34 +205,40 @@ export async function getRegisterConfig(): Promise<
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
 
-  const [billingRows, locRows, settings, classRows] = await Promise.all([
-    withService((db) =>
-      db
-        .select({
-          tax_enabled: storeBillingSettings.taxEnabled,
-          prices_include_tax: storeBillingSettings.pricesIncludeTax,
-          gst_enabled: storeBillingSettings.gstEnabled,
-          default_tax_class_id: storeBillingSettings.defaultTaxClassId,
-        })
-        .from(storeBillingSettings)
-        .where(eq(storeBillingSettings.storeId, op.storeId))
-        .limit(1),
-    ).catch(() => []),
-    withService((db) =>
-      db
-        .select({ name: storeLocations.name })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1),
-    ).catch(() => []),
-    getStoreSettings(),
-    withService((db) =>
-      db
-        .select({ id: taxClasses.id, rate: taxClasses.rate })
-        .from(taxClasses)
-        .where(eq(taxClasses.storeId, op.storeId)),
-    ).catch(() => []),
-  ]);
+  const [billingRows, locRows, settings, classRows, gatewayKeyId, brand] =
+    await Promise.all([
+      withService((db) =>
+        db
+          .select({
+            tax_enabled: storeBillingSettings.taxEnabled,
+            prices_include_tax: storeBillingSettings.pricesIncludeTax,
+            gst_enabled: storeBillingSettings.gstEnabled,
+            default_tax_class_id: storeBillingSettings.defaultTaxClassId,
+          })
+          .from(storeBillingSettings)
+          .where(eq(storeBillingSettings.storeId, op.storeId))
+          .limit(1),
+      ).catch(() => []),
+      withService((db) =>
+        db
+          .select({ name: storeLocations.name })
+          .from(storeLocations)
+          .where(eq(storeLocations.id, op.locationId))
+          .limit(1),
+      ).catch(() => []),
+      getStoreSettings(),
+      withService((db) =>
+        db
+          .select({ id: taxClasses.id, rate: taxClasses.rate })
+          .from(taxClasses)
+          .where(eq(taxClasses.storeId, op.storeId)),
+      ).catch(() => []),
+      // Losing this costs the online tender, never the till: a register that
+      // cannot open because the gateway lookup blipped is far worse than one
+      // that quietly offers cash, card and UPI for a minute.
+      counterGatewayKeyId(op.storeId).catch(() => null),
+      getStoreBrandById(op.storeId).catch(() => null),
+    ]);
 
   const taxRates: Record<string, number> = {};
   for (const c of classRows) {
@@ -244,7 +264,79 @@ export async function getRegisterConfig(): Promise<
       settings["pos.allowPriceOverride"] !== false &&
       (settings["pos.ownerOnlyDiscounts"] === false ||
         posCan(op.role, "price_override")),
+    onlinePayments: !!gatewayKeyId,
+    gatewayKeyId,
+    storeName: brand?.name ?? "Store",
   };
+}
+
+// ---- Gateway payments at the counter (Step 12) -----------------------------
+//
+// TWO actions, because the cashier must know the money landed BEFORE the sale
+// completes. `placePosSale` re-verifies anyway — it is independently reachable
+// and cannot assume either of these ran — but discovering a failed payment at
+// "Complete sale", with the customer already walking away, is not a counter
+// flow anyone should ship.
+
+/**
+ * Open a gateway payment for one leg of a sale.
+ *
+ * The amount is the CASHIER's — see `startCounterPayment` for why it is not
+ * re-priced from the cart. Nothing is recorded here: an abandoned modal must
+ * leave no trace, and a Razorpay order that is never paid simply lapses.
+ */
+export async function startPosGatewayPayment(
+  amountPaise: number,
+): Promise<
+  { rzpOrderId: string; keyId: string; amountPaise: number } | { error: string }
+> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "You're signed out. Please sign in again." };
+  if (!posCan(op.role, "sell")) {
+    return { error: "You don't have permission to take payments." };
+  }
+  // Opening gateway orders is cheap for us and noisy on the merchant's
+  // account; a stuck button must not be able to mint hundreds of them.
+  const rl = await rateLimit(`pos-gw:${op.staffId ?? op.storeId}`, {
+    max: 60,
+    windowSeconds: 60,
+  });
+  if (!rl.allowed)
+    return { error: "Too many payment attempts. Wait a moment." };
+
+  const res = await startCounterPayment(op.storeId, {
+    amountPaise,
+    locationId: op.locationId,
+  });
+  return res.ok ? res.data : { error: res.error };
+}
+
+/**
+ * Did that payment actually land? Server-verified, never the modal's word.
+ *
+ * ★ THE CLIENT'S CALLBACK IS AN INPUT, NOT AN ANSWER. It supplies the ids and a
+ * signature; what settles the question is Razorpay's own record of a CAPTURED
+ * INR payment for the exact amount. §34 states the same rule for every
+ * on-session StoreMink payment.
+ */
+export async function confirmPosGatewayPayment(input: {
+  rzpOrderId: string;
+  paymentId: string;
+  signature: string;
+  amountPaise: number;
+}): Promise<{ paymentId: string; amountPaise: number } | { error: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "You're signed out. Please sign in again." };
+  if (!posCan(op.role, "sell")) {
+    return { error: "You don't have permission to take payments." };
+  }
+  const res = await verifyCounterPayment(op.storeId, {
+    paymentId: input?.paymentId,
+    rzpOrderId: input?.rzpOrderId,
+    signature: input?.signature,
+    expectedPaise: input?.amountPaise,
+  });
+  return res.ok ? res.data : { error: res.error };
 }
 
 // ---- Catalog lookup (search + barcode) -------------------------------------
@@ -1178,6 +1270,26 @@ export async function placePosSale(
     }
   }
 
+  // ── Gateway tenders (§18 Step 12) ─────────────────────────────────────────
+  // ★★ VERIFIED HERE, NOT JUST AT confirmPosGatewayPayment. This action is
+  // independently reachable — the register's own JavaScript is not its only
+  // caller, which is exactly how the `managerApproved` boolean was bypassable —
+  // so a `razorpay` tender arriving with any reference at all would otherwise
+  // settle a sale against money nobody took.
+  //
+  // ★ BEFORE the order insert and the stock reserve, deliberately. A refused
+  // payment then costs nothing and unwinds nothing; verifying after would mean
+  // rolling back an order and released stock for what is usually a typo.
+  //
+  // The rule itself lives in lib/payments/pos-gateway.ts because the collection
+  // counter asks the identical question (§23) — one implementation, two
+  // counters.
+  const hasGatewayTender = tenders.some((t) => t.method === "razorpay");
+  if (hasGatewayTender) {
+    const badGateway = await verifyGatewayTenders(op.storeId, tenders);
+    if (badGateway) return { error: badGateway };
+  }
+
   // 8. Allocate a per-location receipt number.
   let receiptNo: string | null = null;
   try {
@@ -1377,9 +1489,23 @@ export async function placePosSale(
       ),
     );
   } catch (err) {
-    // The sale IS recorded and stock is taken; losing the tender breakdown must
-    // not void a completed transaction. Log loudly for reconciliation.
     console.error("placePosSale (payments):", errMsg(err));
+    // ★★ ONE FAILURE HERE IS NOT LIKE THE OTHERS. A unique violation on a sale
+    // carrying a gateway tender is `order_payments_gateway_ref_key` firing:
+    // that payment already settled a different sale, so the app-level check
+    // above lost a race. Swallowing it would leave a sale marked `paid` with NO
+    // payment rows at all — invisible to shift reconciliation, and claiming
+    // money that belongs to another order. Unwind instead.
+    if (hasGatewayTender && isUniqueViolation(err)) {
+      await releaseStock();
+      await deleteOrder();
+      return {
+        error: "That online payment has already been used on another sale.",
+      };
+    }
+    // Everything else keeps the original rule: the sale IS recorded and the
+    // stock is taken, so losing the tender BREAKDOWN must not void a completed
+    // transaction. Logged loudly for reconciliation.
   }
 
   // An in-store sale is a sale. Without this it existed only in the orders

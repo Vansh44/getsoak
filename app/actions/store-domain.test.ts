@@ -68,6 +68,9 @@ vi.mock("@/lib/seo/store-indexing", () => ({
     "google_search_console_property",
   ],
 }));
+vi.mock("@/lib/seo/search-metrics", () => ({
+  reconcileStoreSearchSource: vi.fn(async () => {}),
+}));
 
 import { revalidateTag } from "next/cache";
 import { getManagerUserId, getViewerAccess } from "@/app/dashboard/lib/access";

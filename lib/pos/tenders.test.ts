@@ -27,10 +27,10 @@ describe("the allowlist", () => {
     ).toMatch(/invalid payment method/i);
   });
 
-  // ★★ store_credit IS settleable now (§29) — but only where the spend is
-  // wired. The SELL counter spends it; the COLLECTION counter does not, and
-  // sharing one global list is what would silently mark a collection paid
-  // against a balance nothing deducted.
+  // ★★ store_credit is settleable at BOTH counters now (§29). It was the sell
+  // counter only for as long as markCollected had no spend wired — and sharing
+  // one global list during that window is exactly what would have marked a
+  // collection paid against a balance nothing deducted.
   it("accepts store_credit at the sell counter", () => {
     expect(
       validateTenderShape(
@@ -40,24 +40,50 @@ describe("the allowlist", () => {
     ).toBeNull();
   });
 
-  it("refuses store_credit at the collection counter", () => {
+  it("★★ accepts store_credit at the collection counter too", () => {
+    // It was refused here for exactly as long as markCollected had no spend
+    // wired. That action now spends the balance INSIDE the same transaction as
+    // its hand-over claim, so the shape is settleable at both counters.
     expect(
       validateTenderShape(
         [{ method: "store_credit", amount: 10 }] as never,
         "x",
         COUNTER_TENDER_METHODS,
       ),
-    ).toMatch(/invalid payment method/i);
+    ).toBeNull();
   });
 
-  // The collection counter's list is the sell counter's MINUS the account
-  // tenders. Pinned so a future method added to one is a deliberate decision
-  // about the other, not an oversight.
-  it("the collection list is the sell list minus account tenders", () => {
+  // ★★ THE TWO LISTS ARE EQUAL TODAY, and this asserts it WITHOUT asserting
+  // they must stay equal. Both exclusions were closed in order — razorpay when
+  // markCollected gained gateway verification, store_credit when it gained the
+  // spend — so there is nothing the sell counter can settle that the collection
+  // counter cannot.
+  //
+  // ⚠ The next method added to TENDER_METHODS (a gift card, most likely) will
+  // land on the sell counter first, and this test SHOULD fail then. That is the
+  // point: it forces a deliberate decision about whether markCollected can
+  // settle it, rather than letting a shared constant grant it silently.
+  it("the collection counter can settle everything the sell counter can", () => {
     const extra = TENDER_METHODS.filter(
       (m) => !COUNTER_TENDER_METHODS.includes(m),
     );
-    expect(extra).toEqual(["store_credit"]);
+    expect(extra).toEqual([]);
+  });
+
+  it("★★ accepts a gateway tender now that markCollected verifies one", () => {
+    // It was OFF this list for exactly as long as `placePosSale` was the only
+    // action reading a payment back from Razorpay. Both counters now run the
+    // same verifyGatewayTenders, so the shape is settleable at both.
+    //
+    // ⚠ Being on the list is NOT the gate — it says the SHAPE is settleable.
+    // markCollected still proves the money exists before its claim.
+    expect(
+      validateTenderShape(
+        [{ method: "razorpay", amount: 10, reference: "pay_x" }] as never,
+        "x",
+        COUNTER_TENDER_METHODS,
+      ),
+    ).toBeNull();
   });
 
   it("the collection counter still takes the money instruments", () => {

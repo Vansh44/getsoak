@@ -25,6 +25,13 @@ vi.mock("@/lib/inventory/reservations", () => ({
   commitHold: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("@/lib/settings/resolve", () => ({ getStoreSettings: vi.fn() }));
+vi.mock("@/lib/payments/pos-gateway", () => ({
+  verifyGatewayTenders: vi.fn(),
+}));
+vi.mock("@/lib/credit/store-credit", () => ({
+  getCreditBalance: vi.fn(),
+  spendCredit: vi.fn(),
+}));
 vi.mock("./pos-shift-actions", () => ({
   currentShiftIdFor: vi.fn(async () => null),
 }));
@@ -48,6 +55,8 @@ import {
   markCollected,
   markReadyForPickup,
 } from "./pos-pickup-actions";
+import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
+import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -80,6 +89,9 @@ const UNPAID = {
   payment_method: "pay_at_store",
   payment_status: "pending",
   pickup_status: "ready",
+  // A pickup is placed by a signed-in shopper, so the order always names one.
+  // markCollected reads the customer from HERE, never from the caller.
+  customer_id: "cust-1",
 };
 /** The common case — bought and paid for online, just being picked up. */
 const PREPAID = {
@@ -102,6 +114,12 @@ const cash = (amount: number, tendered = amount) => [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS. null = every gateway
+  // tender checks out; the RULE is tested in lib/payments/pos-gateway.test.ts,
+  // these assert this counter's WIRING.
+  vi.mocked(verifyGatewayTenders).mockResolvedValue(null);
+  vi.mocked(getCreditBalance).mockResolvedValue(1000);
+  vi.mocked(spendCredit).mockResolvedValue(true);
   vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
   vi.mocked(getStoreSettings).mockResolvedValue({
     "pos.requireOpenShift": false,
@@ -266,10 +284,11 @@ describe("markCollected — the money", () => {
   });
 
   it("★ refuses a tender the system cannot settle", async () => {
-    // ★ store_credit is in the SELL counter's allowlist now (§29), but not
-    // this one — no spend is wired here, so accepting it would mark a
-    // collection paid against a balance nothing deducted.
-    for (const method of ["gift_card", "store_credit", "bitcoin"]) {
+    // ★ `gift_card` is the last one left: no ledger stands behind it, so
+    // accepting one would mark a collection paid against money that never
+    // existed. `store_credit` and `razorpay` both left this list only once
+    // markCollected could actually settle them.
+    for (const method of ["gift_card", "bitcoin"]) {
       // Re-seeded per case: each call consumes the queued pre-claim read.
       dbHolder.current = seed(UNPAID);
       const res = await markCollected("ord-1", [
@@ -551,5 +570,133 @@ describe("markCollected — an order that was never marked ready", () => {
     });
     expect(res.success).toBeUndefined();
     expect(res.error).toBeTruthy();
+  });
+});
+
+// ── Gateway payments at the collection counter (roadmap Step 12) ───────────
+// `razorpay` was deliberately kept OFF COUNTER_TENDER_METHODS while
+// placePosSale was the only action that verified one: accepting it here would
+// have marked a collection paid against money nobody checked was taken. These
+// pin the wiring that let it back on.
+
+describe("markCollected — gateway tenders", () => {
+  const online = [
+    { method: "razorpay" as const, amount: 340, reference: "pay_ok" },
+  ];
+
+  it("★★ settles a collection with a verified gateway payment", async () => {
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", online);
+
+    expect(res.success).toBe(true);
+    expect(verifyGatewayTenders).toHaveBeenCalledWith("store-1", online);
+    expect(dbHolder.current.calls.values[0]).toEqual([
+      expect.objectContaining({
+        method: "razorpay",
+        amount: 340,
+        reference: "pay_ok",
+        // Change can only come out of cash — a gateway payment is charged for
+        // an amount somebody typed, so there is nothing to hand back.
+        tendered: null,
+        changeDue: null,
+      }),
+    ]);
+  });
+
+  it("★★ a refused payment does NOT hand the goods over", async () => {
+    // BEFORE the claim, for the reason the money read and the prepared gate
+    // are: a refusal has to land while the parcel is still on the shelf. After
+    // the claim the order reads as collected and the customer is walking away.
+    vi.mocked(verifyGatewayTenders).mockResolvedValue(
+      "That online payment has already been used on another sale.",
+    );
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", online);
+
+    expect(res.error).toMatch(/already been used/i);
+    expect(res.success).toBeUndefined();
+    // Nothing claimed, nothing recorded.
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ a prepaid collection never asks the gateway", async () => {
+    // Nothing is owed, so there is no tender to verify — and a round trip here
+    // would sit on the hand-over of every already-paid parcel.
+    await markCollected("ord-1");
+    expect(verifyGatewayTenders).not.toHaveBeenCalled();
+  });
+});
+
+// ── Store credit at the collection counter (§29) ───────────────────────────
+// The last method that was off COUNTER_TENDER_METHODS. It was excluded for as
+// long as markCollected had no spend wired: accepting it would have marked an
+// order paid against a balance nothing ever deducted.
+
+describe("markCollected — store credit", () => {
+  const credit = (amount: number) =>
+    [{ method: "store_credit" as const, amount }] as never;
+
+  it("★★ spends the balance INSIDE the claim's transaction", async () => {
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", credit(340));
+
+    expect(res.success).toBe(true);
+    // The db handle is passed through, which is what makes claim-and-spend
+    // atomic — spending outside it could take money for a hand-over that then
+    // loses a race, or give the goods away when the balance moved.
+    expect(spendCredit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storeId: "store-1",
+        customerId: "cust-1",
+        amount: 340,
+        orderId: "ord-1",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("★★ records what credit settled, ACCUMULATING onto checkout's", async () => {
+    // Checkout may already have applied credit to this order; assigning would
+    // erase that and understate what the balance has paid for — which is what
+    // a later credit note reverses.
+    dbHolder.current = seed(UNPAID);
+    await markCollected("ord-1", credit(340));
+    expect(dbHolder.current.calls.set[0]).toHaveProperty("storeCreditUsed");
+  });
+
+  it("★★ refuses when the order has no customer to draw from", async () => {
+    // A balance belongs to somebody, and this counter cannot attach anyone —
+    // the order names a customer or it does not.
+    dbHolder.current = seed({ ...UNPAID, customer_id: null });
+    const res = await markCollected("ord-1", credit(340));
+    expect(res.error).toMatch(/no customer account/i);
+    expect(spendCredit).not.toHaveBeenCalled();
+  });
+
+  it("★ refuses early when the balance doesn't cover it, naming the balance", async () => {
+    vi.mocked(getCreditBalance).mockResolvedValue(100);
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", credit(340));
+    expect(res.error).toMatch(/₹100/);
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("★★ a balance that moved rolls the hand-over back", async () => {
+    // The pre-check passed, so a false here means it moved underneath us. The
+    // throw aborts the transaction, so the claim goes with it — the one
+    // outcome that must never leave the parcel handed over unpaid.
+    vi.mocked(spendCredit).mockResolvedValue(false);
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", credit(340));
+    expect(res.error).toMatch(/changed while you were paying/i);
+    expect(res.success).toBeUndefined();
+  });
+
+  it("★ a cash collection never touches the balance", async () => {
+    dbHolder.current = seed(UNPAID);
+    await markCollected("ord-1", cash(340));
+    expect(spendCredit).not.toHaveBeenCalled();
+    expect(getCreditBalance).not.toHaveBeenCalled();
   });
 });

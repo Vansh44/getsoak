@@ -31,7 +31,7 @@
 // resumable, so the next night simply carries on.
 // ---------------------------------------------------------------------------
 
-import { inArray, lt } from "drizzle-orm";
+import { inArray, lt, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   activityEvents,
@@ -40,6 +40,7 @@ import {
   dataJobs,
   emailLogs,
   notifications,
+  storeSearchMetrics,
 } from "@/drizzle/schema";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
@@ -206,6 +207,27 @@ function batchDeleter(
     });
 }
 
+/** Search metrics use the meaningful composite bucket key rather than a
+ * surrogate id. `ctid` is confined to this one statement, where it safely
+ * identifies the bounded page selected and cannot survive a transaction. */
+function searchMetricBatchDeleter(
+  floorIso: string,
+  limit: number,
+): Promise<number> {
+  return withService(async (db) => {
+    const result = await db.execute(sql`
+      DELETE FROM ${storeSearchMetrics}
+       WHERE ctid IN (
+         SELECT ctid
+           FROM ${storeSearchMetrics}
+          WHERE ${storeSearchMetrics.date} < ${floorIso.slice(0, 10)}::date
+          LIMIT ${limit}
+       )
+    `);
+    return result.rowCount ?? 0;
+  });
+}
+
 /**
  * ── ORDER IS LOAD-BEARING ─────────────────────────────────────────────────
  * `notifications.event_id` references `activity_events` ON DELETE CASCADE, so
@@ -294,6 +316,14 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
       billingWebhookEvents.eventId,
       billingWebhookEvents.receivedAt,
     ),
+  },
+  {
+    table: "store_search_metrics",
+    days: 488,
+    reason:
+      "Search Console exposes roughly 16 months. Keeping the same window means " +
+      "StoreMink does not silently show less history than the source product.",
+    deleteBatch: searchMetricBatchDeleter,
   },
 ];
 

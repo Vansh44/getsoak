@@ -18,6 +18,21 @@
 > statements below describe the 2026-07-29 audit baseline and are retained as
 > evidence, not current architecture.
 
+> **Search Console follow-up — 2026-08-17.** The live report exposed seed pages
+> from an unlaunched store that were already indexed before its sitemap was
+> emptied. The launch gate now also emits `noindex, nofollow` on every
+> unlaunched/demo storefront page, while robots permits public-page crawling so
+> Google can see that directive and retire stale copies. Unknown hosts remain
+> fully disallowed. This follows Google's documented rule that a robots.txt
+> block makes an otherwise-correct `noindex` invisible to Googlebot.
+> The same follow-up also found `www.storemink.com` still serving the apex HTML
+> with a 200 response; it now permanently redirects each path/query to the
+> canonical apex instead of relying only on page-level canonical metadata.
+> **Remaining infrastructure action:** plain HTTP currently resets before the
+> request reaches Cloud Run, so `http://storemink.com` and its `www` variant
+> cannot be repaired in application code. Add a port-80 load-balancer frontend
+> whose URL map permanently redirects to HTTPS, then recheck both URLs.
+
 **Goals this plan is graded against:**
 
 1. `storemink.com` ranks #1 for the brand query "storemink".

@@ -34,6 +34,12 @@ vi.mock("@/lib/rate-limit", () => ({
   clientIp: vi.fn(() => "1.2.3.4"),
 }));
 vi.mock("@/lib/settings/resolve", () => ({ getStoreSettings: vi.fn() }));
+vi.mock("@/lib/payments/pos-gateway", () => ({
+  counterGatewayKeyId: vi.fn(async () => null),
+  startCounterPayment: vi.fn(),
+  verifyCounterPayment: vi.fn(),
+  verifyGatewayTenders: vi.fn(),
+}));
 // The drawer lookup is exercised in pos-shift-actions.test.ts; stubbing it here
 // keeps it out of this file's seeded query sequence.
 vi.mock("./pos-shift-actions", () => ({
@@ -69,6 +75,8 @@ import {
   listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
+import { orders, orderPayments } from "@/drizzle/schema";
+import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -177,6 +185,9 @@ beforeEach(() => {
   vi.mocked(getCreditBalance).mockResolvedValue(0);
   vi.mocked(getCreditBalances).mockResolvedValue(new Map());
   vi.mocked(spendCredit).mockResolvedValue(true);
+  // null = every gateway tender checks out. The RULE itself is tested in
+  // lib/payments/pos-gateway.test.ts; these assert the WIRING.
+  vi.mocked(verifyGatewayTenders).mockResolvedValue(null);
   seedHappyPath();
 });
 
@@ -1468,5 +1479,120 @@ describe("listPosSales", () => {
     const { sales } = await listPosSales();
     expect(sales[0].customerName).toBeNull();
     expect(sales[0].refunded).toBe(false);
+  });
+});
+
+// ── Gateway tenders (roadmap Step 12) ───────────────────────────────────────
+// `razorpay` sat in TENDER_METHODS from the start with NO gateway call behind
+// it anywhere, so it was accepted, recorded, and counted in shift
+// reconciliation as money the gateway never received. These pin the boundary
+// that closed it.
+
+describe("placePosSale — gateway tenders", () => {
+  const online = [
+    { method: "razorpay" as const, amount: 118, reference: "pay_ok" },
+  ];
+
+  it("★★ completes only once the gateway verification passes", async () => {
+    seedHappyPath();
+    const r = await placePosSale([line], online);
+    expect(r.error).toBeUndefined();
+    // The tenders go through EXACTLY as posted — the verifier compares each
+    // claimed amount against Razorpay's own record of the payment.
+    expect(verifyGatewayTenders).toHaveBeenCalledWith("store-1", online);
+  });
+
+  it("★★ a refusal blocks the sale, and writes NOTHING", async () => {
+    // Refused BEFORE the order insert and the stock reserve, so nothing has to
+    // unwind. Covers every reason the verifier can refuse: an uncaptured
+    // payment, an amount that doesn't match, a reference already used, or a
+    // gateway it couldn't read.
+    vi.mocked(verifyGatewayTenders).mockResolvedValue(
+      "The amount paid doesn't match what's being recorded.",
+    );
+    seedHappyPath();
+    const r = await placePosSale([line], online);
+    expect(r.error).toMatch(/doesn't match/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+    expect(dbHolder.current.calls.execute).toHaveLength(0);
+  });
+
+  it("★ a cash-only sale never asks the gateway", async () => {
+    seedHappyPath();
+    const r = await placePosSale([line], cash);
+    expect(r.error).toBeUndefined();
+    expect(verifyGatewayTenders).not.toHaveBeenCalled();
+  });
+
+  it("★ a split sends BOTH legs to the verifier, not just the gateway one", async () => {
+    // It filters internally; handing it only the razorpay tenders here would
+    // mean the two counters pass different shapes to the same function.
+    seedHappyPath();
+    const split = [
+      { method: "cash" as const, amount: 18, tendered: 18 },
+      { method: "razorpay" as const, amount: 100, reference: "pay_ok" },
+    ];
+    await placePosSale([line], split);
+    expect(verifyGatewayTenders).toHaveBeenCalledWith("store-1", split);
+  });
+});
+
+describe("placePosSale — the gateway replay CONSTRAINT firing", () => {
+  // The app-level check is read-then-write, so two tills can both pass it.
+  // `order_payments_gateway_ref_key` (pos_15) is what stops the second one —
+  // and it surfaces as a unique violation on the payments insert, AFTER the
+  // order and the stock reserve. Swallowing that (which every other failure
+  // there deliberately does) would leave a sale marked `paid` with no payment
+  // rows at all: invisible to shift reconciliation, and claiming money that
+  // settled a different order.
+  const uniqueViolation = Object.assign(new Error("duplicate key"), {
+    code: "23505",
+  });
+
+  function seedInsertClash() {
+    const mock = makeDbMock({
+      selectQueue: [
+        [PRODUCT],
+        [BILLING],
+        [TAX_CLASS],
+        [{ state_code: "07" }],
+        [], // replay check finds nothing — the race is still open
+        [{ prefix: "DEL" }],
+      ],
+      executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
+      returning: [{ id: "o1", order_ref: "ORD100110006" }],
+    });
+    const realInsert = mock.db.insert;
+    mock.db.insert = (table: any) => {
+      const step = realInsert(table);
+      if (table === orderPayments) {
+        return { values: () => Promise.reject(uniqueViolation) } as any;
+      }
+      return step;
+    };
+    dbHolder.current = mock;
+  }
+
+  it("★★ unwinds the sale rather than completing it unpaid", async () => {
+    seedInsertClash();
+    const res = await placePosSale(
+      [line],
+      [{ method: "razorpay" as const, amount: 118, reference: "pay_taken" }],
+    );
+    expect(res.error).toMatch(/already been used/i);
+    // Stock released and the order deleted — not a paid sale with no payments.
+    expect(sqlText(dbHolder.current.calls.execute.at(-1))).toContain(
+      "release_stock_at(",
+    );
+    expect(dbHolder.current.calls.delete).toContain(orders);
+  });
+
+  it("★ a CASH sale still survives a failed payments insert", async () => {
+    // The original rule, unchanged: the sale is rung and the stock is gone, so
+    // losing only the tender breakdown must not void a completed transaction.
+    seedInsertClash();
+    const res = await placePosSale([line], cash);
+    expect(res.error).toBeUndefined();
+    expect(dbHolder.current.calls.delete).not.toContain(orders);
   });
 });

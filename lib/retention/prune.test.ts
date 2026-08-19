@@ -224,6 +224,7 @@ describe("RETENTION_POLICIES", () => {
     expect(days.activity_events).toBe(365);
     expect(days.notifications).toBe(90);
     expect(days.email_logs).toBe(90);
+    expect(days.store_search_metrics).toBe(488);
   });
 
   it("documents why every window is what it is", () => {

@@ -38,14 +38,15 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 
 ### Host routing — `proxy.ts` (edge middleware, runs on everything except `_next` statics & `/api`)
 
-| Host                                                         | Behavior                                                                                                          |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `help.storemink.com` / `help.localhost`                      | Rewritten to `/help/*`                                                                                            |
-| `pos.storemink.com` / `pos.localhost`                        | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
-| `themes.storemink.com` / `themes.localhost`                  | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
-| `storemink.com`, `www.`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
-| `{slug}.storemink.com`, `{slug}.localhost`                   | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
-| Anything else                                                | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
+| Host                                                 | Behavior                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `help.storemink.com` / `help.localhost`              | Rewritten to `/help/*`                                                                                            |
+| `pos.storemink.com` / `pos.localhost`                | **Public POS product site** — rewritten to `/platform/pos/*`; reserved from merchant slugs                        |
+| `themes.storemink.com` / `themes.localhost`          | **Public theme catalog** — rewritten to `/themes/*`; reserved from merchant slugs                                 |
+| `storemink.com`, `app.`, `localhost`, `*.vercel.app` | **Platform** — all paths rewritten into `/platform/*` (landing, signup, platform login, platform admin dashboard) |
+| `www.storemink.com`                                  | Permanent 308 to the same path/query on canonical `storemink.com`                                                 |
+| `{slug}.storemink.com`, `{slug}.localhost`           | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
+| Anything else                                        | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
 
 `proxy.ts` also gates auth: `/dashboard` requires a valid **Firebase session
 cookie** (`sm_session`; redirect to `/auth/login`), enforces
@@ -108,7 +109,8 @@ wholesip/
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
-│                              # daily seo-refresh and prune-logs (docs/cron-jobs.md)
+│                              # daily seo-refresh, search-metrics, and prune-logs
+│                              # (docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -211,11 +213,12 @@ wholesip/
 │   ├── dashboard/             # ★ STORE ADMIN DASHBOARD (per-store, auth-gated)
 │   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css)
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
-│   │   ├── analytics/         # ★ Performance dashboard (§20): data.ts (live per-store
-│   │   │                      # aggregates), widgets.ts (widget registry + default
-│   │   │                      # layout), dashboard-canvas.tsx (client: "Edit dashboard" —
-│   │   │                      # drag-reorder, remove, add-section, localStorage layout)
+│   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
+│   │   │                      # filters, streamed commerce + tenant-scoped Google
+│   │   │                      # Search aggregates, widget registry, and persisted
+│   │   │                      # per-admin "Edit dashboard" canvas
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
+│   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
 │   │   │                      # feature-toggles (shared settings-group card, convention #9)
 │   │   │                      # ★ A wide list table (`dash-table-wide`) sets an
@@ -425,6 +428,8 @@ wholesip/
 │   │   ├── return-actions.ts  # ★ §28 request flow: getReturnableOrder/requestReturn/
 │   │   │                      # cancelMyReturn (shopper) + getReturnQueue/reviewReturn/
 │   │   │                      # receiveReturn (merchant). Never moves money.
+│   │   │                      # receiveReturn takes WHERE the goods landed and
+│   │   │                      # validates it BEFORE claiming (§28 restock rule).
 │   │   ├── refund-actions.ts  # ★ Money OUT (§26): refundOrder (pending-row-FIRST
 │   │   │                      # idempotency, FOR UPDATE cap, unknown ≠ failure) +
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
@@ -484,6 +489,9 @@ wholesip/
 │       ├── cron/seo-refresh/  # ★ Daily Google reconciliation: platform/help/themes
 │       │                      # sitemaps + every launched store; custom-domain META
 │       │                      # verification/property creation; 503 triggers retries
+│       ├── cron/search-metrics/ # ★ Daily Search Console ingest (§20): GET reconciles
+│       │                      # source epochs + the trailing work window; leased POST
+│       │                      # self-chain replaces one durable PT bucket at a time
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
 │       │                      # whose certificate issued after the merchant closed
 │       │                      # the tab. Without it a domain only ever goes live if
@@ -632,6 +640,21 @@ wholesip/
 │   │                          # ONE answer to "can this come back, and until when";
 │   │                          # the window starts at POSSESSION, and it fails OPEN
 │   │                          # on a dateless legacy row). Both pure + tested.
+│   │                          # ★ restock-location.ts (server-only): WHICH SHELF
+│   │                          # returned goods land on. The till always knew
+│   │                          # (op.locationId); the DESK did not, so every
+│   │                          # posted return credited the store's DEFAULT
+│   │                          # location — a parcel received in Mumbai restocked
+│   │                          # Delhi, both shops wrong by the same quantity with
+│   │                          # nothing to flag it. ⚠ Candidates filter on
+│   │                          # `receive_stock`, NOT `returns`: the latter means
+│   │                          # "handed back AT THIS COUNTER" and `requires:
+│   │                          # ["pos"]`, so it would make the warehouse
+│   │                          # unselectable for exactly the posted returns that
+│   │                          # arrive there. The returns desk only picks the
+│   │                          # DEFAULT (defaultRestockLocation, pure). ONE list
+│   │                          # feeds both the picker and the action's
+│   │                          # validation, so they cannot drift.
 │   ├── orders/                # ★ cancel.ts (§26): the ONE implementation of what
 │   │                          # cancelling DOES to stock — reserved stock released
 │   │                          # AT THE LOCATION THAT RESERVED IT, pickup holds
@@ -818,7 +841,29 @@ wholesip/
 │   │                          # First adopters: lib/ai/gemini.ts + proxy.ts 500 catch. Tested.
 │   ├── payments/              # ★ Online payments (§18): crypto.ts (AES-256-GCM cred
 │   │                          # encryption), razorpay.ts (server fetch client + HMAC verify,
-│   │                          # tested), provider.ts (store/platform cred loaders),
+│   │                          # tested), provider.ts (store/platform cred loaders
+│   │                          # + ★ getLiveStoreGateway — the THREE conditions
+│   │                          # that decide whether a store may charge a card:
+│   │                          # connected, enabled, and an EFFECTIVE plan that
+│   │                          # includes online payments. Was private to
+│   │                          # checkout-actions.ts until the till became a
+│   │                          # second counter (§18 Step 12); one implementation,
+│   │                          # two counters. Fails CLOSED on an unreadable
+│   │                          # store row — an unknown plan is not permission
+│   │                          # to charge somebody),
+│   │                          # ★ pos-gateway.ts (§18 Step 12: startCounterPayment
+│   │                          # + verifyCounterPayment for the TILL. Built only on
+│   │                          # the three Razorpay calls already live in prod —
+│   │                          # no QR-code API, which is unverified surface.
+│   │                          # ⚠ Its verify REFUSES on an unreadable gateway
+│   │                          # where verifyCapturedCheckoutPayment falls back to
+│   │                          # the HMAC: a till sale is born `paid` with no
+│   │                          # pending state to reconcile back from, so an
+│   │                          # unverified completion is money the shop may never
+│   │                          # have received. ★ verifyGatewayTenders is the ONE
+│   │                          # check BOTH counters run — reference present, not
+│   │                          # already used (order_payments), then captured for
+│   │                          # the exact amount),
 │   │                          # razorpay-client.ts (client checkout.js loader + modal),
 │   │                          # ★ issue-refund.ts (§26/§28: THE refund mechanism,
 │   │                          # shared by the dashboard and the till — authorization
@@ -1519,6 +1564,20 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     themes with generated, provenance-logged imagery, available in signup and
     the public catalog after their 2026-08-12 production/demo audits — the
     Arcade/Fresko placeholders were retired 2026-07-04),
+    `definitions/vitrine.ts` (a
+    monochrome fashion preset for footwear/bags/accessories: Jost +
+    Instrument Serif, every `shape` token `0px`, hairline borders instead of
+    cards, and one markdown red as the only hue. REGISTERED, with its ten
+    `public/themes/vitrine/*.webp` assets bundled, but held at
+    `visibility: "hidden"` / `release.status: "draft"` until `demo-vitrine` is
+    seeded and the scored design pass is done — `themes.test.ts` enforces
+    public ⇒ published + a healthy demo, so those three flip TOGETHER.
+    ★ Its product crops are SQUARE (1000×1000), not the 4:3 Studio/Ritual use,
+    because this theme renders cards at 1:1 and a 4:3 source would be
+    centre-cropped through the toe of the shoe. Imagery is rebuilt from three
+    authored sources by `scripts/build-theme-assets.mjs` (quadrant crops in
+    reading order, resize, WebP, quality stepped down until each file fits its
+    cap); provenance + prompts in docs/theme-assets.md),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;
@@ -1564,14 +1623,33 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `palette` (all 14 `--sm-*` colour tokens + `onAccent`/`onInk`/
     `shadowRgb`/`success`/`error`/`star`/`highlight` semantic tokens), `fonts`
     (`body`/`display`, pointing at next/font variables loaded in
-    `app/layout.tsx` — Inter/Fraunces/Space Grotesk/Plus Jakarta alongside the
+    `app/layout.tsx` — Inter/Fraunces/Space Grotesk/Plus Jakarta/Jost/Instrument
+    Serif (all `preload: false`; which one a page uses is decided per request
+    from the store's theme) alongside the
     legacy Outfit/Roboto/Stick), and `shape` (`card`/`control`/`sm`/`pill`
     radii). `designToCssVars(design, brandPrimary)` flattens it to a CSS-var map
     the `(storefront)` layout writes **inline on `.storefront-root`** — inline
     specificity beats the globals.css `:root` defaults, so the whole storefront
     re-skins with zero per-component wiring. Fonts re-point the existing
     `--font-outfit`/`--font-stick-no-bills` slots, so all 64 font call-sites
-    switch with no find-replace. **Defaults = WholeSip**: the `:root` token
+    switch with no find-replace.
+    **★★ BUT THE OTHER HALF OF THE STOREFRONT INHERITED TAILWIND'S DEFAULT.**
+    Those 64 call-sites read the vars; everything ELSE inherited from `<body>`,
+    which Tailwind sets to its own sans. **Nobody noticed for three themes
+    because basket/studio/ritual all set `body: var(--font-inter)`, and Inter is
+    ALSO Tailwind's default — the two halves happened to match.** Vitrine is the
+    first preset with a different body face, and it rendered a live storefront
+    HALF in Jost and half in Inter (measured: 79 elements vs 78). Fixed by
+    `.sm-themed-type` (storefront-theme.css), a root class emitted ONLY when a
+    theme actually resolves, which sets `font-family: var(--font-outfit)` so
+    untokenised descendants inherit the theme font. ⚠ Gated on `design` being
+    non-null so it CANNOT touch an un-themed storefront — the WholeSip fallback
+    and legacy stores keep the font they inherit today (verified live: no class
+    emitted, font census unchanged at Outfit 39 / inherited 48 / Roboto 1). For
+    the three Inter themes it is a no-op in practice (verified live: studio
+    stayed 140/140 Inter); Vitrine went 156/156 Jost. ⚠ The un-themed WholeSip
+    storefront therefore STILL renders in two families — that is pre-existing
+    and deliberately untouched, since fixing it changes a live storefront. **Defaults = WholeSip**: the `:root` token
     values in `globals.css` ARE the WholeSip look, and a store with no real
     `settings.template` (the WholeSip fallback, legacy stores) gets only
     `--brand-primary` — untouched. Storefront component CSS is fully
@@ -1593,7 +1671,39 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     while `lib/store/storefront-layout.ts` supplies resolved values where
     grocery markup branches are required. `header:"market"` retains its
     theme-controlled colours and `card:"quick_add"` retains safe inline add
-    behavior (multi-variant products fall through to detail). Header search is
+    behavior (multi-variant products fall through to detail).
+    **★ `layout.cardHoverImage` cross-fades a card to the product's SECOND
+    photograph on hover** (root class `sm-card-hoverimg`, CSS in
+    storefront-theme.css). Three things are load-bearing.
+    (1) **The `display: none` default IS the loading strategy, not styling.**
+    The hover layer is hidden and its `<img>` is `loading="lazy"`, so on a
+    storefront that has not opted in the element never gets a layout box, never
+    intersects the viewport, and the browser NEVER FETCHES IT — verified in a
+    browser: opted out, only the primary image appears in the resource list.
+    `opacity: 0` or `visibility: hidden` would both still lay it out and
+    download it.
+    (2) **It is opted into per theme rather than rendered-always-and-hidden,
+    which is what `QuickAddButton` does.** That pattern is free for a button and
+    costs a request per card for a photograph, so this diverges deliberately;
+    the card also renders no layer at all unless the product HAS a second image.
+    (3) **`(hover: hover) and (pointer: fine)` keeps it off touch entirely** —
+    no hover there, so it would be pure wasted bandwidth on the connections
+    least able to spare it (verified under mobile emulation: layer hidden, image
+    NOT fetched, with the theme opted IN). Theme-driven only: a merchant's
+    `card` override neither enables nor cancels it, since hover-swap is a
+    different axis from the card variant. ⚠ The gate depends on browsers not
+    loading a lazy image that never intersects — well-established, and if one
+    ever did the cost is bandwidth, not breakage.
+    **`lib/products/gallery.ts`** is the ONE composer of "which photographs does
+    this product have, in what order" (pure + tested), shared by the card's
+    hover image and the PDP gallery so the two can never disagree about which
+    photograph is second. It exists because `products.images` is `text[] NOT
+    NULL DEFAULT ['']` — a one-element array holding an EMPTY STRING, not an
+    empty array — while the dashboard editor writes additional images only and
+    `applyTheme` seeds presets whose `images` repeats the primary first. A
+    caller that indexes the column directly renders a broken `<img>` for an
+    untouched store and cross-fades a themed product to itself.
+    Header search is
     FUNCTIONAL on all variants — it submits to
     `/shop?q=`, and the shop grid filters by name/description/category
     (`shop-client.tsx`, synced to the deep link).
@@ -1993,7 +2103,39 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     claim pending→failed, restock via the reserved→released conditional
     claim (exactly-once, order-actions pattern), release the coupon use,
     cancel the order. Refunds are out of scope v1 (merchant refunds from
-    their own Razorpay dashboard). - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
+    their own Razorpay dashboard). - **★★ THE TILL TAKES GATEWAY PAYMENTS TOO (Step 12).** Split payment was
+    never the gap — `lib/pos/tenders.ts` has always taken six tenders and
+    settled change in paise. The gap was that NOTHING was verified: `card`
+    and `upi` are external-terminal RECORDS by design (§7 of pos-plan), and
+    `razorpay` sat in `TENDER_METHODS` with no gateway call anywhere, so it
+    was accepted, recorded and counted in shift reconciliation as money the
+    gateway never received. `placePosSale` now reads every razorpay tender
+    back with `rzpFetchPayment` and refuses anything that is not a CAPTURED
+    INR payment for the exact tender amount — the check that stops a client
+    claiming ₹500 against a real ₹200 payment. **★ VERIFICATION AND REPLAY
+    ARE DIFFERENT PROBLEMS**: a captured payment stays captured, so
+    re-presenting one verifies perfectly every time; only
+    `order_payments.reference` uniqueness stops it settling two sales, in the
+    action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
+    (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
+    reserve**, so a refused payment unwinds nothing. **★★ BOTH COUNTERS VERIFY,
+    FROM ONE IMPLEMENTATION** — `verifyGatewayTenders` is called by
+    `placePosSale` before its order insert and by `markCollected` before its
+    claim, in each case while a refusal still costs nothing. `razorpay` briefly
+    LEFT `COUNTER_TENDER_METHODS` while only the sell path checked, and rejoined
+    once the collection path did: a method belongs on an allowlist only when the
+    action behind it can SETTLE it. `store_credit` followed it once
+    `markCollected` gained the SPEND — run INSIDE the same transaction as the
+    hand-over claim, because `try_spend_customer_credit` is atomic per call but
+    is NOT deduplicated by its ref, so exactly-once has to come from the claim.
+    Spending before it would take money for a hand-over that then loses a race;
+    after it would give the goods away when the balance moved. A false spend
+    THROWS, rolling the claim back. `getCollectionCredit` reads the balance when
+    the pad OPENS rather than on the 30s queue poll. The two tender lists are
+    equal today and stay SEPARATE constants: the next method (a gift card) will
+    land on the sell counter first and must earn its place here on its own. ⚠ A gateway clash at the collection counter CANNOT
+    unwind the way the sell counter's does — the claim has committed and the
+    parcel is gone — so it is logged distinctly for a human to reconcile. - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
     `lib/payments/store-webhook.ts`, `supabase/payments_02_store_webhook.sql`).
     Reconcile-on-read left a real hole: close the tab on the Razorpay screen
     and the money is captured while the order sits `pending` until the hourly
@@ -2023,9 +2165,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     A paused gateway deliberately stops honouring the webhook, since an
     order marked paid through a channel the merchant switched off is a
     surprise.
-    ⚠ `payments_02_store_webhook.sql` needs the `postgres` role and is NOT yet
-    applied; until it is, `loadPaymentWebhookSecret` fails closed and the route
-    answers 503.
+    `payments_02_store_webhook.sql` is APPLIED (verified 2026-08-18:
+    `store_payment_providers.webhook_secret_enc` exists in both databases). It
+    needed the `postgres` role. Until it was applied,
+    `loadPaymentWebhookSecret` failed closed and the route answered 503 —
+    which is the behaviour to expect again in any environment it has not run
+    in.
 
 19. **Signup wizard (Shopify-style, `app/platform/signup/page.tsx`).** One
     client wizard, one focused screen per step, with a progress stepper. Step
@@ -2118,33 +2263,113 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       draggable-map enhancement. Autofill never locks a field, and a map or
       geocoder failure never blocks the complete plain address form.
 
-20. **Analytics is a composable dashboard (`/dashboard/analytics`).** Every card
-    is a WIDGET the merchant can remove, re-order, or add back — Shopify's
-    "Edit dashboard". Three pieces: - `analytics/widgets.ts` — the registry (pure data, no JSX, importable from
-    both server and client): `WidgetId`, per-widget `{title, description,
-group, span}` (span = columns of the 4-wide desktop grid),
-    `DEFAULT_LAYOUT`, plus `normalizeLayout` / `defaultLayoutFor`. Adding a
-    widget = an entry here + a node in the page's `slots` map. - `analytics/page.tsx` — renders EVERY card server-side with the data
-    already loaded and hands them to the canvas as `slots`. A widget the
-    viewer lacks permission for is never put in the map, so it can't be
-    re-added from the library either — **permission gating stays server-side**,
-    the client only picks which of the allowed nodes to show. - `analytics/dashboard-canvas.tsx` (client) — owns edit mode: a dark
-    contextual save bar (Cancel / Save / Reset to default), per-widget drag
-    handle + remove, and the "Add section" popover library. Drag is dnd-kit
-    (`rectSortingStrategy`); `useSortable` is only called by `SortableWidget`
-    INSIDE the DndContext (read-only mode renders the plain `Widget`, no hook).
-    Edits are a DRAFT (`draft: WidgetId[] | null`) — Cancel discards, Save
-    commits. **Layout lives in localStorage, per store**
-    (`sm.analytics.layout.v1.{storeId}`): it's a personal display preference,
-    so it needs no table, no migration and no round trip, and a lost layout
-    just falls back to the default. `readLayout`/`writeLayout` are the two
-    functions to swap if it should ever follow a user across devices. First
-    paint renders the DEFAULT layout and the saved one is applied in an
-    effect (server/client hydration must agree). - **Visual language**: the page root `.dash-analytics` re-skins the shared
-    `.dash-card` chrome into the quieter Shopify look (hairline borders,
-    dotted-underline titles, monochrome bars/icons, colour reserved for trend
-    direction) WITHOUT touching how cards look on any other dashboard page —
-    all in the `/* Analytics (Shopify-style) */` block of `dashboard.css`.
+20. **Analytics is a composable, range-aware dashboard
+    (`/dashboard/analytics`).** Every card is a widget the merchant can remove,
+    reorder, or add back through the Shopify-like editor.
+    - `analytics/widgets.ts` is the pure registry: `WidgetId`, metadata,
+      `DEFAULT_LAYOUT`, `normalizeLayout`, and `defaultLayoutFor`. Adding a
+      widget means adding one registry entry and one server-rendered slot.
+    - `analytics/page.tsx` starts independent widget reads together and hands
+      Suspense-wrapped server nodes to the canvas. A card the viewer cannot use
+      is never placed in `slots`, so permission gating stays server-side.
+    - `analytics/dashboard-canvas.tsx` owns the draft UI: dnd-kit reorder within
+      and across named sections, section add/rename/hide/reorder/delete,
+      semantic card sizing, keyboard-accessible section/card move controls,
+      remove/add, Cancel, Save, and confirmed Reset. `useSortable` is called
+      only under its DndContext. Saved sections render as a responsive
+      four-column grid; `compact`/`half`/`full` collapse to one column on mobile.
+    - **Phase 2a persistence (2026-08-18):**
+      `supabase/analytics_01_dashboard_layouts.sql` and the matching
+      `analyticsDashboardLayouts` Drizzle model store a bounded, versioned
+      preference by `(store_id, admin_user_id)`; migration id
+      `20260818_0005_analytics_dashboard_layouts` is enrolled in the checksummed
+      `drizzle/migrations/manifest.json` ledger and is applied. No row means follow the current
+      product default; Reset deletes the row. `lib/analytics/layout.ts` owns the
+      pure JSON validator/reader, `layout-store.ts` owns the server read, and
+      permission-gated `app/actions/analytics-layout.ts` owns save/reset. Both
+      key columns come from the authenticated request. Saves lock/read the row
+      and compare `updated_at`, so a stale tab warns instead of overwriting a
+      newer device. Temporarily unavailable cards remain dormant in stored JSON
+      while server rendering filters them. The old
+      `sm.analytics.layout.v1.{storeId}` value is only a one-time migration
+      input when no server row exists, then it is removed.
+    - **Phase 2b layout model (2026-08-18):** the version 2 JSON contract stores
+      at most 12 named sections with stable ids, visibility, ordered cards, and
+      semantic `compact`/`half`/`full` sizes. Charts and tables enforce a minimum
+      half width. The strict write validator rejects duplicate/unknown cards,
+      invalid section metadata, unsupported sizes, and oversized JSON; the
+      lenient read path ignores retired cards. Existing version 1 flat rows are
+      presented as one `Overview` section without losing order and are rewritten
+      as version 2 on the next save, so no additional SQL migration is needed.
+    - **Phase 2c commerce expansion (2026-08-19):**
+      `lib/analytics/location.ts` resolves the URL `location` value only against
+      server-fetched options already intersected with `getViewerLocations()`.
+      Aggregate views include accessible physical locations plus online/
+      unassigned orders; choosing one physical location is exact and excludes
+      NULL-location orders. `analytics/data.ts` applies that resolved contract
+      to every order-shaped query and adds AOV, units sold, top products, sales
+      by channel, and sales by location. Channel/location totals use recognized
+      orders less completed refunds by settlement date. The new reusable
+      `commerce-breakdown.tsx` and `top-products.tsx` cards are server-rendered
+      under their own Suspense slots. Untouched layouts receive the revised
+      Overview/Sales default; customized layouts are not silently changed.
+    - **Phase 2d commerce completion (2026-08-19):** five additional library
+      cards complete the migration-free commerce set. Sales by payment method
+      reads itemized `order_payments` for POS, splits online store credit from
+      the remaining gateway/COD value, subtracts completed refunds by their
+      recorded method, and never charts the `split` order summary. Customer mix
+      classifies account holders by their first accessible recognized order;
+      guests are explicit exclusions. Discount impact keeps order and line
+      markdowns separate. Returns/refunds keeps completed return events and
+      settled money events separate. Inventory velocity ranks only negative
+      `stock_movements(reason='sale')` rows tied to recognized orders and obeys
+      the selected stock location. `analytics-summary-card.tsx` and
+      `inventory-velocity.tsx` render these server results. Untouched layouts
+      now also receive the Customers section; customized layouts remain stable.
+    - **Search Console Phase 3a foundation (2026-08-19; migration applied):**
+      `supabase/search_metrics_01_schema.sql` and migration
+      `20260819_0006_search_metrics` add service-only origin epochs, complete
+      metric buckets, leased `(source, PT date, dimension)` work and a
+      database-serialized per-property rate limiter. `lib/seo/search-performance.ts`
+      owns the anchored tenant page filter, PT dates, row caps and weighted
+      position normalization. `lib/seo/search-metrics.ts` reconciles canonical
+      origins, keeps closed-source correction bounds, replaces each bucket
+      transactionally, and drives `/api/cron/search-metrics` through a resumable
+      self-chain. Domain save/verify/disconnect and the unattended domain cron
+      record source transitions immediately; the daily ingest is the backstop.
+      Search metrics join the 488-day retention sweep.
+    - **Search Console Phase 3b merchant dashboard (2026-08-19):**
+      `analytics/search-data.ts` reads totals, impression-weighted position, and
+      top query/page aggregates with an explicit `store_id` predicate on every
+      service-role query. Seven registry slots render clicks, impressions, CTR,
+      average position, a dual-series trend, top queries and top landing pages
+      in a default **Google Search** section and the editor's Search library.
+      All cards disclose the Google source, Pacific Time dates, the usual
+      two-day lag and last refresh. They distinguish unlaunched, collecting,
+      healthy-zero-visibility, ready and actionable source-error states; stale
+      successful data stays visible with a warning. Customized layouts remain
+      unchanged until the merchant adds the new cards.
+    - **Visual language**: the page root `.dash-analytics` re-skins the shared
+      `.dash-card` chrome into the quieter Shopify look (hairline borders,
+      dotted-underline titles, monochrome bars/icons, colour reserved for trend
+      direction) WITHOUT touching how cards look on any other dashboard page —
+      all in the `/* Analytics (Shopify-style) */` block of `dashboard.css`.
+    - **Phase 1 range/metric contract (2026-08-18):** filter state is URL-owned
+      (`range`, `from`, `to`, `compare`, `compareFrom`, `compareTo`) and parsed
+      by pure `lib/analytics/range.ts`. Defaults are Last 90 days + previous
+      equal-length period. Local half-open day ranges are converted through the
+      store's validated IANA `settings.business.timeZone`; absent/invalid legacy
+      values use `Asia/Kolkata`. The control to change it lives on Settings and
+      writes through permission-gated `app/actions/analytics-settings.ts`.
+      `analytics/data.ts` has per-widget readers. **Total sales** includes paid
+      online/store-credit, finalized POS and non-cancelled COD orders, excludes
+      pending payment attempts, and subtracts only completed refunds by their
+      settlement date. Charts keep raw rupees (no `₹K` rounding). Location
+      scope is applied to every order-shaped read, including legacy/online
+      orders with `location_id IS NULL`; restricted viewers do not receive the
+      store-wide Total customers slot. Current catalogue snapshots never show a
+      fake period delta. The old unimported hard-coded performance, inventory
+      and operational demo widgets were deleted.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
     docs (Shopify-style).** StoreMink's OWN product docs, NOT per-store data, so
@@ -2732,7 +2957,7 @@ group, span}` (span = columns of the 4-wide desktop grid),
         per cancellation. Online orders reserve against the default and keep the
         wrapper. Both branches are regression-tested.
       - **★★ HOLD A SALE** (`lib/pos/park.ts` pure, `pos-park-actions.ts`,
-        `supabase/pos_14_parked_sales.sql` — ⚠ **not applied**). Suspend the
+        `supabase/pos_14_parked_sales.sql`, applied). Suspend the
         cart, serve the next customer, bring it back.
         - **★ A TABLE, NOT localStorage.** A park has to survive the thing it
           exists for: the till IDLE-LOCKS after ten minutes and `posLock` clears
@@ -5744,9 +5969,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the wrong order succeeds and then fails at runtime. `billing_06` was a
       no-op: `store_subscriptions` was empty in production, so there was nothing
       to migrate.
-      **⚠ `billing_09_attempt_mandate_ceiling.sql` MUST BE APPLIED before this
-      autopay build** on both databases. It adds the durable authorisation
-      ceiling; deploying code first makes enrolment attempt inserts fail.
+      **`billing_09_attempt_mandate_ceiling.sql` is APPLIED** to both databases
+      (verified 2026-08-18). It adds the durable authorisation ceiling the
+      autopay build depends on — shipping that code against a database without
+      it makes every enrolment attempt insert fail, which is why it was a
+      prerequisite rather than a follow-up.
     - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
       `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
       in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
@@ -6058,7 +6285,8 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **★ BYO PER STORE, decided 2026-08-15** (owner). Merchants connect their
       own Twilio account in **Channels → Twilio SMS**; StoreMink never fronts
       the carrier bill and never carries their spam risk. Schema in
-      `supabase/sms_01_schema.sql` (⚠ **not applied**): `store_sms_providers`
+      `supabase/sms_01_schema.sql` (applied, incl. the separately-appended
+      `sms_suppressions` block): `store_sms_providers`
       (the `store_payment_providers` shape — service-role only, auth token
       AES-256-GCM under `PAYMENT_CRED_KEY`, encrypted rather than hashed
       because it is PRESENTED on every request), `store_sms_templates`,
@@ -6239,8 +6467,8 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       writes a platform row, because there is no platform Twilio account.
     - **★★ ANNOUNCEMENTS — StoreMink telling its MERCHANTS something**
       (`/dashboard/announcements`, `lib/announcements/`,
-      `supabase/announcements_01_schema.sql` — ⚠ **not applied**; run as
-      `postgres` before deploying). Distinct from every other messaging table
+      `supabase/announcements_01_schema.sql`, applied — it needs the
+      `postgres` role). Distinct from every other messaging table
       here: `notification_email_queue` is an EVENT fanned out to identified
       recipients, `email_campaigns` is a MERCHANT mailing THEIR shoppers, this
       is the PLATFORM mailing its merchants.
@@ -6503,6 +6731,16 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   successful stores are refreshed at most weekly, failures retry daily and make
   the cron return 503 so Cloud Scheduler's three retries engage. Full setup and
   Google-controlled limitations: `docs/seo-indexing.md`.
+  Search performance collection is a separate failure domain:
+  `/api/cron/search-metrics` runs after sitemap reconciliation, queries the
+  Search Analytics API, and never makes a metrics failure look like a sitemap
+  failure. Platform subdomains all query the root Domain property through an
+  anchored, regex-escaped page filter; custom domains query their URL-prefix
+  property. Every response must be page-aggregated. CTR is derived, while
+  position is stored as `position × impressions`. Source epochs preserve
+  history and enforce inclusive PT ownership bounds when canonical domains
+  change. The schema is service-role only; dashboard reads will use typed
+  tenant-gated aggregates rather than direct table access.
   **A store's public origin is always selected by `storeOrigin(store)`.** Never
   use `custom_domain ?? subdomain`. The custom domain counts only once
   `settings.custom_domain_verified === true` and the effective plan is still
@@ -6529,16 +6767,21 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   per purchase. Pages use `published_at`, not `updated_at`, because draft
   autosave advances `updated_at` while public HTML remains unchanged.
 - **A NEW STORE IS NOT INDEXABLE UNTIL ITS OWNER PUBLISHES SOMETHING**
-  (`lib/store/launch.ts`). At creation a store is pure theme seed — the same
+  (`lib/store/launch.ts`). `isStoreSearchIndexable()` is the one shared gate for
+  storefront metadata, robots, sitemaps and search-engine notifications. At
+  creation a store is pure theme seed — the same
   homepage, ~17 content pages and sample catalogue as every other store on that
   template — and `createStore` used to submit exactly that to Google + IndexNow
   the moment it existed. Mass-submitting near-duplicate placeholder stores spends
-  the whole `*.storemink.com` domain's reputation, and `robots.txt` cannot undo
-  it (Disallow stops crawling, not indexing). `stores.settings.launched` gates
-  `robots.ts` + `sitemap.ts`; `notifyStoreContentPublished()` launches from all
+  the whole `*.storemink.com` domain's reputation. `stores.settings.launched`
+  gates metadata + `sitemap.ts`; `notifyStoreContentPublished()` launches from all
   page/product/blog publication paths (including bulk products, bulk blogs,
   customer direct-publish and approval), not just the single-row editors, then
-  performs IndexNow + Google coverage out of band. **Absence of the flag means
+  performs IndexNow + Google coverage out of band. Unlaunched/demo storefront
+  pages emit `noindex, nofollow` and stay out of their empty sitemap, while
+  `robots.ts` permits crawling of public pages so Google can observe `noindex`
+  and remove stale seed URLs; unknown hosts still use `Disallow: /`.
+  **Absence of the flag means
   LAUNCHED** —
   pre-existing stores have no key and treating them as unlaunched would deindex
   live shops; `createStore` writes `launched: false` explicitly. Demo stores

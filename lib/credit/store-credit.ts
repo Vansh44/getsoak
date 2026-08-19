@@ -13,7 +13,7 @@ import "server-only";
 // refunds — it is the same thing pointed the other way.
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { withService } from "@/lib/db/client";
+import { withService, type Db } from "@/lib/db/client";
 import {
   customerCreditBalances,
   customerCreditLedger,
@@ -163,28 +163,48 @@ export async function issueCredit(input: {
  *
  * Returns false when the balance moved underneath us, which is a normal race,
  * not an error: the caller charges the full amount instead.
+ *
+ * ★★ `db` LETS A CALLER PUT THIS IN ITS OWN TRANSACTION, and one does for a
+ * reason worth stating. `try_spend_customer_credit` is atomic per CALL but is
+ * NOT deduplicated by `p_ref` — unlike `add_ai_credits`, which is idempotent
+ * per purchase, and `reinstateCreditForOrder`, which is keyed on the order.
+ * Calling it twice for one order deducts twice. So exactly-once has to come
+ * from the caller, and `markCollected` gets it by running this INSIDE the same
+ * transaction as its hand-over claim: either the collection is claimed and the
+ * balance moves, or neither happens. Without that, spending before the claim
+ * can take money for a hand-over that loses a race, and spending after it can
+ * give the goods away for free.
+ *
+ * The runner pattern is `lib/orders/cancel.ts`'s; omitting `db` keeps the
+ * original behaviour of opening a transaction of its own.
  */
-export async function spendCredit(input: {
-  storeId: string;
-  customerId: string;
-  amount: number;
-  orderId: string;
-  note?: string | null;
-}): Promise<boolean> {
+export async function spendCredit(
+  input: {
+    storeId: string;
+    customerId: string;
+    amount: number;
+    orderId: string;
+    note?: string | null;
+  },
+  db?: Db,
+): Promise<boolean> {
   const amount = toRupees(toPaise(input.amount));
   if (!(amount > 0)) return false;
-  try {
-    const res = await withService((db) =>
-      db.execute(
-        sql`select try_spend_customer_credit(p_store => ${input.storeId}, p_customer => ${input.customerId}, p_amount => ${amount}, p_ref => ${input.orderId}, p_note => ${input.note ?? null}) as ok`,
-      ),
+  const run = (handle: Db) =>
+    handle.execute(
+      sql`select try_spend_customer_credit(p_store => ${input.storeId}, p_customer => ${input.customerId}, p_amount => ${amount}, p_ref => ${input.orderId}, p_note => ${input.note ?? null}) as ok`,
     );
+  try {
+    const res = db ? await run(db) : await withService(run);
     return (res.rows[0] as { ok?: boolean } | undefined)?.ok === true;
   } catch (err) {
     logError("credit.spend", err, {
       storeId: input.storeId,
       orderId: input.orderId,
     });
+    // ⚠ A caller that passed its own `db` is inside a transaction that Postgres
+    // has now ABORTED, so it must treat false as fatal and unwind rather than
+    // carrying on. markCollected throws on false, which does exactly that.
     return false;
   }
 }

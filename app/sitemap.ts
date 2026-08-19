@@ -16,7 +16,7 @@ import {
   isPlatformHost,
   isThemesHost,
 } from "@/lib/store/host";
-import { isStoreLaunched } from "@/lib/store/launch";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 import {
   getPublishedProducts,
   getPublishedBlogCards,
@@ -194,7 +194,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // its own to offer. Mirrors the same branch in app/robots.ts; see
   // lib/store/launch.ts for why submitting these harms every other store on
   // the domain.
-  if (store && (!isStoreLaunched(store) || store.settings?.demo === true)) {
+  if (store && !isStoreSearchIndexable(store)) {
     return [];
   }
 

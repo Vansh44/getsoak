@@ -23,7 +23,7 @@
 import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
-import { dbErrorMessage } from "@/lib/db/errors";
+import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   orderItems,
   orderPayments,
@@ -43,11 +43,14 @@ import {
 } from "@/lib/fulfilment/collection-code";
 import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
 import {
+  accountTenderTotal,
   settleTenders,
   validateTenderShape,
   COUNTER_TENDER_METHODS,
   type PosTender,
 } from "@/lib/pos/tenders";
+import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
+import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { handoverGate } from "@/lib/pos/collection-state";
@@ -181,6 +184,7 @@ export async function getPickupQueue(
   }
 }
 
+const CREDIT_MOVED = "sm:credit-moved";
 const NOT_WAITING =
   "That order isn't waiting for collection here. It may already have been collected.";
 
@@ -224,6 +228,7 @@ export async function markCollected(
         payment_method: string | null;
         payment_status: string | null;
         pickup_status: string | null;
+        customer_id: string | null;
       }
     | undefined;
   try {
@@ -234,6 +239,10 @@ export async function markCollected(
           payment_method: orders.paymentMethod,
           payment_status: orders.paymentStatus,
           pickup_status: orders.pickupStatus,
+          // ★ A BALANCE BELONGS TO SOMEBODY, and that somebody is whoever the
+          // ORDER is for. markCollected takes no customer id, deliberately —
+          // accepting one would let a counter spend a stranger's credit.
+          customer_id: orders.customerId,
         })
         .from(orders)
         .where(
@@ -280,19 +289,57 @@ export async function markCollected(
 
   let shiftId: string | null = null;
   let change = 0;
+  let creditAsked = 0;
   if (due > 0) {
     const bad = validateTenderShape(
       tenders,
       `Take the ₹${due.toLocaleString("en-IN")} owed on this order before handing it over.`,
-      // ★ NARROWER than the sell counter: no store-credit spend is wired here,
-      // so accepting one would mark a collection paid against a balance nothing
-      // deducted.
+      // ★ STILL narrower than the sell counter: no store-credit spend is wired
+      // here, so accepting one would mark a collection paid against a balance
+      // nothing deducted. `razorpay` REJOINED it once the verify below existed.
       COUNTER_TENDER_METHODS,
     );
     if (bad) return { error: bad };
     const settled = settleTenders(tenders, due);
     if ("error" in settled) return { error: settled.error };
     change = settled.change;
+
+    // ── Gateway tenders (§18 Step 12) ──────────────────────────────────────
+    // ★★ THE SAME CHECK THE SELL COUNTER RUNS, from the same module. Until this
+    // existed, `razorpay` was kept out of COUNTER_TENDER_METHODS entirely,
+    // because accepting it here would have marked a collection paid against
+    // money nobody had confirmed was taken.
+    //
+    // ★ BEFORE THE CLAIM, for the reason the money read and the prepared gate
+    // are: a refusal has to land while the goods are still on the shelf. After
+    // the claim the order reads as collected and the customer is walking away.
+    const badGateway = await verifyGatewayTenders(op.storeId, tenders);
+    if (badGateway) return { error: badGateway };
+
+    // ── Store credit (§29) ─────────────────────────────────────────────────
+    // ★ A BALANCE BELONGS TO SOMEBODY. A walk-in cannot have one, and this
+    // counter has no way to attach a customer — the order already names one or
+    // it does not — so a credit tender on an anonymous order is refused rather
+    // than silently ignored.
+    creditAsked = accountTenderTotal(tenders, "store_credit");
+    if (creditAsked > 0) {
+      if (!owed.customer_id) {
+        return {
+          error:
+            "This order has no customer account to draw store credit from.",
+        };
+      }
+      // A PRE-check, purely so the cashier gets a message with the real balance
+      // in it. The GUARANTEE is the conditional UPDATE inside the claim below,
+      // which re-proves the balance at the moment it moves — the same split
+      // placePosSale makes.
+      const balance = await getCreditBalance(op.storeId, owed.customer_id);
+      if (balance + 0.0001 < creditAsked) {
+        return {
+          error: `That customer has ₹${balance.toLocaleString("en-IN")} in store credit, which doesn't cover ₹${creditAsked.toLocaleString("en-IN")}.`,
+        };
+      }
+    }
 
     // Which drawer this money belongs to. Stamped on the order in the SAME
     // statement as the claim, so a collection cannot be recorded without its
@@ -338,8 +385,14 @@ export async function markCollected(
       }
     | undefined;
   try {
-    const rows = await withService((db) =>
-      db
+    // ★★ THE CLAIM AND THE SPEND ARE ONE TRANSACTION, and that is the whole
+    // design. `try_spend_customer_credit` is atomic per CALL but is NOT
+    // deduplicated by its ref, so exactly-once has to come from the claim.
+    // Spending BEFORE it would take money for a hand-over that then loses the
+    // race to a second tap; spending AFTER it would give the goods away for
+    // free when the balance moved. Inside it, either both happen or neither.
+    const rows = await withService(async (db) => {
+      const claimedRows = await db
         .update(orders)
         .set({
           pickupStatus: "collected",
@@ -366,6 +419,17 @@ export async function markCollected(
           // drawer, and stamping it would pull its whole total into the
           // Z-report's gross as takings the till never took.
           ...(due > 0 && shiftId ? { shiftId } : {}),
+          // ★ CREDIT IS A PAYMENT, NOT A DISCOUNT (§29). `total` stays the full
+          // goods value; this records how much of it a balance settled.
+          //
+          // ★★ IT ACCUMULATES. Checkout may ALREADY have applied credit to this
+          // order, so an assignment would erase that and understate what the
+          // balance has paid for — which is what a later credit note reverses.
+          ...(creditAsked > 0
+            ? {
+                storeCreditUsed: sql`coalesce(${orders.storeCreditUsed}, 0) + ${creditAsked}`,
+              }
+            : {}),
         })
         .where(
           and(
@@ -384,10 +448,36 @@ export async function markCollected(
           order_ref: orders.orderRef,
           customer_id: orders.customerId,
           ...pickupShopColumns,
-        }),
-    );
+        });
+
+      // Nothing was claimed — a second tap, or someone else got there first.
+      // Returning empty leaves the balance untouched, which is the point.
+      if (!claimedRows.length || creditAsked <= 0) return claimedRows;
+
+      const spent = await spendCredit(
+        {
+          storeId: op.storeId,
+          customerId: claimedRows[0].customer_id ?? "",
+          amount: creditAsked,
+          orderId,
+          note: "Collection",
+        },
+        db,
+      );
+      // ★ THROW TO ROLL THE CLAIM BACK. The pre-check said the balance covered
+      // this, so a false here means it moved underneath us — rare, and the one
+      // outcome that must NOT leave the parcel handed over unpaid.
+      if (!spent) throw new Error(CREDIT_MOVED);
+      return claimedRows;
+    });
     claimed = rows[0];
   } catch (err) {
+    if (err instanceof Error && err.message === CREDIT_MOVED) {
+      return {
+        error:
+          "That customer's store credit changed while you were paying. Check the balance and take it again.",
+      };
+    }
     return { error: dbErrorMessage(err, "Couldn't complete the collection.") };
   }
 
@@ -417,7 +507,19 @@ export async function markCollected(
       // The customer has paid and is holding the goods; the collection is NOT
       // undone. Log loudly — this is the one path that can still leave cash
       // unrecorded, and it is now an error rather than the design.
-      console.error("markCollected (payments):", err);
+      //
+      // ⚠ A UNIQUE VIOLATION HERE MEANS SOMETHING SHARPER than a lost
+      // breakdown: `order_payments_gateway_ref_key` fired, so that gateway
+      // payment already settled a different order and the verify above lost a
+      // race. Unlike the sell counter this CANNOT unwind — the claim committed
+      // and the parcel is gone — so it is logged distinctly for a human to
+      // reconcile rather than dressed up as the ordinary case.
+      console.error(
+        isUniqueViolation(err)
+          ? "markCollected (payments): gateway reference already settled another order"
+          : "markCollected (payments):",
+        err,
+      );
     }
   }
 
@@ -636,5 +738,49 @@ export async function findPickupByCode(
     };
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't look that code up.") };
+  }
+}
+
+/**
+ * How much store credit the customer on this collection can spend (§29).
+ *
+ * ★ FETCHED WHEN THE TENDER PAD OPENS, not carried on the queue row. The queue
+ * is POLLED every 30s and its whole design is one cheap indexed read (§22); a
+ * balance lookup per row would put a query on that hot path for a figure almost
+ * no collection uses. One read, on demand, for the one order being settled.
+ *
+ * ★ DISPLAY AND A CAP, NEVER THE AUTHORITY. `markCollected` re-reads the
+ * balance and spends it through a conditional UPDATE inside its claim, so a
+ * figure that goes stale between here and there costs a clear refusal, not an
+ * overdraw — the same split the sell counter makes.
+ *
+ * Fails to 0, which simply hides the option: a blip must not stop a cashier
+ * taking payment by some other means.
+ */
+export async function getCollectionCredit(orderId: string): Promise<number> {
+  const op = await resolvePosOperator();
+  if (!op || !posCan(op.role, "sell")) return 0;
+  if (typeof orderId !== "string" || !orderId) return 0;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({ customer_id: orders.customerId })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, op.storeId),
+            // The operator's own shop — never a location from the client.
+            eq(orders.pickupLocationId, op.locationId),
+          ),
+        )
+        .limit(1),
+    );
+    const customerId = rows[0]?.customer_id;
+    if (!customerId) return 0;
+    return await getCreditBalance(op.storeId, customerId);
+  } catch (err) {
+    console.error("getCollectionCredit:", err);
+    return 0;
   }
 }

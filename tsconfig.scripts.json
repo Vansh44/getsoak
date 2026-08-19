@@ -3,7 +3,8 @@
   "compilerOptions": {
     "paths": {
       "@/*": ["./*"],
-      "server-only": ["./scripts/_stubs/server-only.ts"]
+      "server-only": ["./scripts/_stubs/server-only.ts"],
+      "next/cache": ["./scripts/_stubs/next-cache.ts"]
     }
   },
   "include": ["scripts/**/*.ts", "lib/**/*.ts", "drizzle/**/*.ts"]

@@ -10,6 +10,12 @@
 // 2. ★ FAULT CLAIMS ARE FLAGGED. "Arrived damaged" waives every fee and is the
 //    one a merchant most needs to see quickly, so it carries a marker rather
 //    than sitting as one more row of identical text.
+// 3. ★ WHERE THE GOODS LANDED IS ASKED, NOT GUESSED (roadmap Step 13). Booking
+//    a return in used to credit the store's DEFAULT location whatever the
+//    parcel's actual journey, so a shop and a warehouse ended up wrong by the
+//    same quantity with nothing to flag it. With one obvious shelf this states
+//    which; with several it makes the merchant choose, because silently
+//    picking one is the original bug with a nicer implementation.
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
@@ -30,6 +36,7 @@ import {
   reviewReturn,
   type ReturnQueueRow,
 } from "@/app/actions/return-actions";
+import type { RestockLocation } from "@/lib/returns/restock-location";
 
 const TABS: { key: string; label: string }[] = [
   { key: "", label: "Open" },
@@ -66,17 +73,33 @@ export function ReturnsQueueView({
   status,
   error,
   canManage,
+  locations,
+  defaultLocationId,
 }: {
   rows: ReturnQueueRow[];
   status: string;
   error?: string;
   canManage: boolean;
+  /** Shelves this viewer may book goods onto — already scoped and
+   *  capability-filtered server-side. Empty for a store with nothing to
+   *  choose between, which keeps the pre-Step-13 one-click flow. */
+  locations: RestockLocation[];
+  /** null means genuinely ambiguous — ask rather than assume. */
+  defaultLocationId: string | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [, startTransition] = useTransition();
+
+  // Per row: a merchant may work down a queue of parcels that arrived at
+  // different shops, so one shared selection would carry the wrong shelf onto
+  // the next return.
+  const [whereById, setWhereById] = useState<Record<string, string>>({});
+  const chosenFor = (id: string) => whereById[id] ?? defaultLocationId ?? "";
+  // Nothing to choose between (0 or 1 shelf) never blocks the button.
+  const mustChoose = locations.length > 1;
 
   function decide(id: string, decision: "approve" | "reject") {
     if (decision === "reject" && !note.trim()) {
@@ -109,20 +132,30 @@ export function ReturnsQueueView({
   }
 
   function receive(id: string) {
+    const where = chosenFor(id);
+    if (mustChoose && !where) {
+      toast.error("Choose where the goods arrived.");
+      return;
+    }
+    const shelf = locations.find((l) => l.id === where);
     setBusy(id);
     startTransition(async () => {
       try {
         // v1 books everything back in as sellable. Per-line damaged marking is
         // the next increment; defaulting to sellable here matches what the
         // till already does and never silently destroys stock.
-        const res = await receiveReturn(id, []);
+        const res = await receiveReturn(id, [], where || undefined);
         if (res.error) toast.error(res.error);
         else {
+          // ★ The toast NAMES the shelf. This is the one moment the merchant
+          // can still catch a wrong choice cheaply — afterwards it is a stock
+          // discrepancy at two locations that nothing explains.
+          const at = shelf ? ` at ${shelf.name}` : "";
           toast.success(
             res.exchangeOrderId
               ? "Booked in — the replacement order is on its way."
               : res.restocked
-                ? `Booked in. ${res.restocked} line${res.restocked === 1 ? "" : "s"} back on the shelf.`
+                ? `Booked in. ${res.restocked} line${res.restocked === 1 ? "" : "s"} back on the shelf${at}.`
                 : "Booked in.",
           );
           router.refresh();
@@ -295,19 +328,53 @@ export function ReturnsQueueView({
                         </>
                       )}
                       {r.status === "approved" && (
-                        <button
-                          type="button"
-                          disabled={busy === r.id}
-                          onClick={() => receive(r.id)}
-                          className="dash-btn dash-btn-primary"
-                        >
-                          {busy === r.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <PackageCheck className="h-4 w-4" />
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {/* Several shelves ⇒ ask. One ⇒ say which, below. */}
+                          {mustChoose && (
+                            <select
+                              value={chosenFor(r.id)}
+                              onChange={(e) =>
+                                setWhereById((m) => ({
+                                  ...m,
+                                  [r.id]: e.target.value,
+                                }))
+                              }
+                              aria-label="Where the goods arrived"
+                              className="dash-input h-9 max-w-[13rem] text-sm"
+                            >
+                              <option value="">Where did it arrive?</option>
+                              {locations.map((l) => (
+                                <option key={l.id} value={l.id}>
+                                  {l.name}
+                                  {l.acceptsReturns ? " · returns desk" : ""}
+                                </option>
+                              ))}
+                            </select>
                           )}
-                          Goods received
-                        </button>
+                          <button
+                            type="button"
+                            disabled={
+                              busy === r.id || (mustChoose && !chosenFor(r.id))
+                            }
+                            onClick={() => receive(r.id)}
+                            className="dash-btn dash-btn-primary"
+                          >
+                            {busy === r.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <PackageCheck className="h-4 w-4" />
+                            )}
+                            Goods received
+                          </button>
+                          {/* ★ One shelf still SAYS which. The merchant should
+                              never have to open Locations to find out where
+                              their stock just went. */}
+                          {!mustChoose && locations.length === 1 && (
+                            <p className="w-full text-right text-xs text-muted-foreground">
+                              Back on the shelf at {locations[0]!.name}
+                            </p>
+                          )}
+                        </div>
                       )}
                       {r.status === "received" && (
                         <Link

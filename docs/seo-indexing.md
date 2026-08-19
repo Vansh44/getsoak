@@ -18,18 +18,19 @@ The general-purpose Indexing API cannot be used here: it is restricted to
 
 ## Automatic pipeline
 
-| Piece              | File                                              | Behaviour                                                                                                                                                                                                                                                           |
-| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Host gate          | `lib/store/host.ts`                               | Only the real `storemink.com` production build is indexable. Staging, previews, and local dev emit noindex/empty sitemaps and never notify engines.                                                                                                                 |
-| `robots.txt`       | `app/robots.ts`                                   | Per host, shares the same disallow registry as the sitemap and advertises the host's canonical sitemap. Unknown, demo, and unlaunched stores are closed.                                                                                                            |
-| `sitemap.xml`      | `app/sitemap.ts`                                  | Per host: platform marketing/legal pages, the dedicated POS product page, help content, themes, or the current store's homepage, product/blog hubs, products, blogs, and published custom pages. `lastmod` is derived from real content timestamps.                 |
-| Canonicals         | route metadata + `lib/site.ts`                    | Uses a verified **and currently entitled** custom domain; otherwise `{slug}.storemink.com`. This matches the serving gate, including timed-plan expiry.                                                                                                             |
-| Merchant identity  | `app/(storefront)/components/structured-data.tsx` | Organization/WebSite graph using merchant name, legal name, logo, description, email, phone, and valid social profile URLs. Product and blog nodes point to the same Organization `@id`.                                                                            |
-| StoreMink identity | `lib/seo/brand-identity.ts`                       | One StoreMink Organization entity shared by the apex and help host, with alternate spellings, official profiles, contact point, and visible matching links.                                                                                                         |
-| Publish hook       | `lib/seo/store-indexing.ts`                       | Products (including bulk publish), blogs (editor, bulk, customer direct-publish, approval), and builder pages all launch the store, notify IndexNow, and ensure Google coverage after the content write commits.                                                    |
-| IndexNow           | `lib/seo/search-engines.ts`                       | Groups URLs by host and notifies participating engines. This does **not** reach Google.                                                                                                                                                                             |
-| Google             | `lib/seo/store-indexing.ts`                       | StoreMink subdomains submit under `sc-domain:storemink.com`. Verified custom domains are META-verified automatically, added as URL-prefix properties, and get their own sitemap submission. Success/error timestamps are stored in `stores.settings`.               |
-| Reconciliation     | `app/api/cron/seo-refresh/route.ts`               | Daily, authenticated repair pass for the platform, help, POS, and themes sitemaps plus every active, launched, non-demo store. A partial failure returns HTTP 503 so Cloud Scheduler retries it. Successful per-store submissions refresh at most every seven days. |
+| Piece              | File                                              | Behaviour                                                                                                                                                                                                                                                                |
+| ------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Host gate          | `lib/store/host.ts` + `proxy.ts`                  | Only the real `storemink.com` production build is indexable; `www` permanently redirects to the apex. Staging, previews, and local dev emit noindex/empty sitemaps and never notify engines.                                                                             |
+| Search eligibility | `lib/store/launch.ts`                             | `isStoreSearchIndexable()` is the one gate shared by storefront metadata, robots, sitemaps, and Google/IndexNow notifications. It requires a launched, non-demo store.                                                                                                   |
+| `robots.txt`       | `app/robots.ts`                                   | Per host, shares the same utility/private-path disallow registry as the sitemap and advertises the host's canonical sitemap. Unknown hosts are closed. Demo and unlaunched public pages remain crawlable so bots can observe their `noindex`; they advertise no sitemap. |
+| `sitemap.xml`      | `app/sitemap.ts`                                  | Per host: platform marketing/legal pages, the dedicated POS product page, help content, themes, or the current store's homepage, product/blog hubs, products, blogs, and published custom pages. `lastmod` is derived from real content timestamps.                      |
+| Canonicals         | route metadata + `lib/site.ts`                    | Uses a verified **and currently entitled** custom domain; otherwise `{slug}.storemink.com`. This matches the serving gate, including timed-plan expiry.                                                                                                                  |
+| Merchant identity  | `app/(storefront)/components/structured-data.tsx` | Organization/WebSite graph using merchant name, legal name, logo, description, email, phone, and valid social profile URLs. Product and blog nodes point to the same Organization `@id`.                                                                                 |
+| StoreMink identity | `lib/seo/brand-identity.ts`                       | One StoreMink Organization entity shared by the apex and help host, with alternate spellings, official profiles, contact point, and visible matching links.                                                                                                              |
+| Publish hook       | `lib/seo/store-indexing.ts`                       | Products (including bulk publish), blogs (editor, bulk, customer direct-publish, approval), and builder pages all launch the store, notify IndexNow, and ensure Google coverage after the content write commits.                                                         |
+| IndexNow           | `lib/seo/search-engines.ts`                       | Groups URLs by host and notifies participating engines. This does **not** reach Google.                                                                                                                                                                                  |
+| Google             | `lib/seo/store-indexing.ts`                       | StoreMink subdomains submit under `sc-domain:storemink.com`. Verified custom domains are META-verified automatically, added as URL-prefix properties, and get their own sitemap submission. Success/error timestamps are stored in `stores.settings`.                    |
+| Reconciliation     | `app/api/cron/seo-refresh/route.ts`               | Daily, authenticated repair pass for the platform, help, POS, and themes sitemaps plus every active, launched, non-demo store. A partial failure returns HTTP 503 so Cloud Scheduler retries it. Successful per-store submissions refresh at most every seven days.      |
 
 The Google verification token is deliberately public: it must appear as
 `<meta name="google-site-verification">` on the custom-domain storefront. No
@@ -38,11 +39,14 @@ OAuth token or service-account credential is stored in the database.
 ## Launch/readiness rule
 
 A newly created store is shared theme seed, not an indexable business. Signup
-writes `settings.launched: false`; robots closes the host and the sitemap is
-empty. Publishing the first real product, blog, or builder page calls the
+writes `settings.launched: false`; its storefront metadata is `noindex,
+nofollow` and its sitemap is empty. Public routes remain crawlable because a
+robots.txt block would prevent Google from observing `noindex` and could leave
+previously discovered seed URLs in results. Utility/private paths remain
+disallowed. Publishing the first real product, blog, or builder page calls the
 unified publish hook and marks it launched. Legacy stores with no flag are
 treated as launched so the rollout cannot deindex existing shops. Demo stores
-remain permanently excluded.
+remain permanently excluded by the same metadata/empty-sitemap path.
 
 ## Production Google setup (one time)
 

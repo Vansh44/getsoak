@@ -35,7 +35,11 @@ vi.mock("@/lib/db/client", () => ({
 
 import { decryptSecret } from "./crypto";
 import { logError } from "@/lib/observability/logger";
-import { getPlatformRazorpayCreds, getStoreGateway } from "./provider";
+import {
+  getLiveStoreGateway,
+  getPlatformRazorpayCreds,
+  getStoreGateway,
+} from "./provider";
 
 const STORE = "store-1";
 const ROW = {
@@ -213,5 +217,83 @@ describe("getPlatformRazorpayCreds", () => {
     const store = await getStoreGateway(STORE);
     expect(platform!.keyId).not.toBe(store!.creds.keyId);
     expect(platform!.keySecret).not.toBe(store!.creds.keySecret);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getLiveStoreGateway — the THREE conditions that decide whether a store may
+// charge a card at all.
+//
+// This lived privately in checkout-actions.ts until the POS till became a
+// second counter taking gateway payments (§18 Step 12). Two callers now share
+// it, so the rule gets tested once, here, rather than at each counter — and a
+// second hand-written copy is how one counter keeps charging cards for a store
+// whose plan lapsed.
+// ---------------------------------------------------------------------------
+
+/** Provider row first, then the store's plan. */
+function seedLive(
+  provider: Record<string, unknown> | null,
+  plan: Record<string, unknown> | null,
+) {
+  dbHolder.current = makeDbMock({
+    selectQueue: [provider ? [provider] : [], plan ? [plan] : []],
+  });
+}
+
+describe("getLiveStoreGateway", () => {
+  it("returns the creds when all three conditions hold", async () => {
+    seedLive(ROW, { plan: "basic", plan_expires_at: null });
+    expect(await getLiveStoreGateway(STORE)).toEqual({
+      keyId: "rzp_live_merchant",
+      keySecret: "plaintext-secret",
+    });
+  });
+
+  it("★ refuses when no gateway is connected", async () => {
+    seedLive(null, { plan: "pro", plan_expires_at: null });
+    expect(await getLiveStoreGateway(STORE)).toBeNull();
+  });
+
+  it("★ refuses when the merchant has PAUSED the channel", async () => {
+    // Pausing stops charges without discarding the stored credentials — that
+    // is the whole difference between pause and disconnect (§18).
+    seedLive(
+      { ...ROW, enabled: false },
+      { plan: "pro", plan_expires_at: null },
+    );
+    expect(await getLiveStoreGateway(STORE)).toBeNull();
+  });
+
+  it("★★ refuses on a plan that doesn't include online payments", async () => {
+    // A lapsed plan silently reverts the store to offline-only WITHOUT
+    // touching the stored credentials, so re-subscribing restores it.
+    seedLive(ROW, { plan: "free", plan_expires_at: null });
+    expect(await getLiveStoreGateway(STORE)).toBeNull();
+  });
+
+  it("★★ refuses on an EXPIRED timed grant, not just a stored free plan", async () => {
+    // effectivePlan is what every other gate reads; using the STORED plan here
+    // would keep charging cards for a store whose Pro grant ran out.
+    seedLive(ROW, {
+      plan: "pro",
+      plan_expires_at: new Date(Date.now() - 86_400_000).toISOString(),
+    });
+    expect(await getLiveStoreGateway(STORE)).toBeNull();
+  });
+
+  it("honours a timed grant that has not expired yet", async () => {
+    seedLive(ROW, {
+      plan: "pro",
+      plan_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    expect(await getLiveStoreGateway(STORE)).not.toBeNull();
+  });
+
+  it("★★ FAILS CLOSED when the store row can't be read", async () => {
+    // Unlike getViewerLocations, which fails OPEN. An unreadable plan is not an
+    // entitlement to charge somebody's card.
+    seedLive(ROW, null);
+    expect(await getLiveStoreGateway(STORE)).toBeNull();
   });
 });

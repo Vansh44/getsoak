@@ -17,6 +17,7 @@ import {
   pgView,
   bigint,
   pgSequence,
+  date,
 } from "drizzle-orm/pg-core";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -3269,6 +3270,233 @@ export const posLayouts = pgTable(
       foreignColumns: [storeLocations.id],
       name: "pos_layouts_location_id_fkey",
     }).onDelete("cascade"),
+  ],
+);
+
+// Personal Analytics dashboard preferences (analytics_01_dashboard_layouts.sql).
+// No row means "follow the current product default". The JSON remains bounded
+// and validated in app/actions/analytics-layout.ts; it is never authorization.
+export const analyticsDashboardLayouts = pgTable(
+  "analytics_dashboard_layouts",
+  {
+    storeId: uuid("store_id").notNull(),
+    adminUserId: text("admin_user_id").notNull(),
+    schemaVersion: integer("schema_version").default(1).notNull(),
+    layout: jsonb().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminUserId] }),
+    index("analytics_dashboard_layouts_admin_idx").using(
+      "btree",
+      table.adminUserId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "analytics_dashboard_layouts_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "analytics_dashboard_layouts_schema_version_check",
+      sql`${table.schemaVersion} > 0`,
+    ),
+    check(
+      "analytics_dashboard_layouts_layout_is_object",
+      sql`jsonb_typeof(${table.layout}) = 'object'`,
+    ),
+  ],
+);
+
+// Google Search Console Phase 3a (search_metrics_01_schema.sql). Source epochs
+// preserve origin history; metrics are complete replaceable PT-day buckets;
+// jobs are the durable cursor used by the self-chaining cron.
+export const storeSearchSources = pgTable(
+  "store_search_sources",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    kind: text().notNull(),
+    origin: text().notNull(),
+    property: text().notNull(),
+    pageFilter: text("page_filter"),
+    activeFrom: timestamp("active_from", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    inactiveAt: timestamp("inactive_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    firstDataDate: date("first_data_date", { mode: "string" }).notNull(),
+    finalDataDate: date("final_data_date", { mode: "string" }),
+    correctionUntil: date("correction_until", { mode: "string" }),
+    lastSyncedAt: timestamp("last_synced_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastDataDate: date("last_data_date", { mode: "string" }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("store_search_sources_store_origin_epoch_key").on(
+      table.storeId,
+      table.origin,
+      table.activeFrom,
+    ),
+    unique("store_search_sources_id_store_key").on(table.id, table.storeId),
+    uniqueIndex("store_search_sources_one_active_idx")
+      .on(table.storeId)
+      .where(sql`${table.inactiveAt} IS NULL`),
+    index("store_search_sources_correction_idx")
+      .on(table.correctionUntil)
+      .where(sql`${table.inactiveAt} IS NOT NULL`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_search_sources_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_sources_kind_check",
+      sql`${table.kind} = ANY (ARRAY['platform_subdomain'::text, 'custom_domain'::text])`,
+    ),
+    check(
+      "store_search_sources_origin_check",
+      sql`${table.origin} ~ '^https://[^/]+$'`,
+    ),
+    check(
+      "store_search_sources_filter_check",
+      sql`(${table.kind} = 'platform_subdomain' AND ${table.pageFilter} IS NOT NULL) OR (${table.kind} = 'custom_domain' AND ${table.pageFilter} IS NULL)`,
+    ),
+    check(
+      "store_search_sources_dates_check",
+      sql`${table.finalDataDate} IS NULL OR ${table.finalDataDate} >= ${table.firstDataDate}`,
+    ),
+    check(
+      "store_search_sources_inactive_bounds_check",
+      sql`(${table.inactiveAt} IS NULL AND ${table.finalDataDate} IS NULL AND ${table.correctionUntil} IS NULL) OR (${table.inactiveAt} IS NOT NULL AND ${table.finalDataDate} IS NOT NULL AND ${table.correctionUntil} IS NOT NULL AND ${table.correctionUntil} >= ${table.finalDataDate})`,
+    ),
+  ],
+);
+
+export const storeSearchMetrics = pgTable(
+  "store_search_metrics",
+  {
+    sourceId: uuid("source_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    dimension: text().notNull(),
+    key: text().default("").notNull(),
+    clicks: integer().default(0).notNull(),
+    impressions: integer().default(0).notNull(),
+    positionSum: numeric("position_sum", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "store_search_metrics_pkey",
+      columns: [table.sourceId, table.date, table.dimension, table.key],
+    }),
+    index("store_search_metrics_store_date_idx").on(
+      table.storeId,
+      table.date.desc(),
+    ),
+    index("store_search_metrics_retention_idx").on(table.date),
+    foreignKey({
+      columns: [table.sourceId, table.storeId],
+      foreignColumns: [storeSearchSources.id, storeSearchSources.storeId],
+      name: "store_search_metrics_source_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_metrics_dimension_check",
+      sql`${table.dimension} = ANY (ARRAY['total'::text, 'query'::text, 'page'::text, 'country'::text, 'device'::text])`,
+    ),
+    check(
+      "store_search_metrics_values_check",
+      sql`${table.clicks} >= 0 AND ${table.impressions} >= 0 AND ${table.positionSum} >= 0`,
+    ),
+    check(
+      "store_search_metrics_total_key_check",
+      sql`${table.dimension} <> 'total' OR ${table.key} = ''`,
+    ),
+  ],
+);
+
+export const storeSearchSyncJobs = pgTable(
+  "store_search_sync_jobs",
+  {
+    sourceId: uuid("source_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    dimension: text().notNull(),
+    status: text().default("queued").notNull(),
+    attempts: integer().default(0).notNull(),
+    leaseUntil: timestamp("lease_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "store_search_sync_jobs_pkey",
+      columns: [table.sourceId, table.date, table.dimension],
+    }),
+    index("store_search_sync_jobs_claim_idx")
+      .on(table.updatedAt, table.sourceId, table.date)
+      .where(
+        sql`${table.status} = ANY (ARRAY['queued'::text, 'running'::text])`,
+      ),
+    foreignKey({
+      columns: [table.sourceId, table.storeId],
+      foreignColumns: [storeSearchSources.id, storeSearchSources.storeId],
+      name: "store_search_sync_jobs_source_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_sync_jobs_dimension_check",
+      sql`${table.dimension} = ANY (ARRAY['total'::text, 'query'::text, 'page'::text, 'country'::text, 'device'::text])`,
+    ),
+    check(
+      "store_search_sync_jobs_status_check",
+      sql`${table.status} = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text])`,
+    ),
+    check("store_search_sync_jobs_attempts_check", sql`${table.attempts} >= 0`),
+  ],
+);
+
+export const storeSearchRateLimits = pgTable(
+  "store_search_rate_limits",
+  {
+    property: text().primaryKey().notNull(),
+    windowStartedAt: timestamp("window_started_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    requestCount: integer("request_count").default(0).notNull(),
+  },
+  (table) => [
+    check(
+      "store_search_rate_limits_count_check",
+      sql`${table.requestCount} >= 0`,
+    ),
   ],
 );
 

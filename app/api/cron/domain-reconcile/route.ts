@@ -30,6 +30,9 @@ import { sweepPendingDomains } from "@/lib/domains/reconcile";
 import { recordEvent } from "@/lib/notifications/record";
 import { getStoreOriginById } from "@/lib/site";
 import { logError } from "@/lib/observability/logger";
+import { after } from "next/server";
+import { ensureGoogleCoverageForStore } from "@/lib/seo/store-indexing";
+import { reconcileStoreSearchSource } from "@/lib/seo/search-metrics";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,6 +84,17 @@ async function handle(request: Request): Promise<Response> {
         subject,
         payload: { domain: store.domain ?? "" },
       });
+    }
+
+    if (result.becameLive.length) {
+      after(() =>
+        Promise.allSettled(
+          result.becameLive.flatMap((store) => [
+            ensureGoogleCoverageForStore(store.storeId),
+            reconcileStoreSearchSource(store.storeId),
+          ]),
+        ),
+      );
     }
 
     // A domain that FELL OVER. The store's public address just changed under the

@@ -7,6 +7,8 @@ import {
   Fraunces,
   Space_Grotesk,
   Plus_Jakarta_Sans,
+  Jost,
+  Instrument_Serif,
 } from "next/font/google";
 import NextTopLoader from "nextjs-toploader";
 import { PLATFORM_URL } from "@/lib/site";
@@ -65,6 +67,25 @@ const jakarta = Plus_Jakarta_Sans({
   variable: "--font-jakarta",
   preload: false,
 });
+// Jost is a geometric (Futura-lineage) sans and carries a whole storefront on
+// its own — Vitrine sets body AND most headings in it, leaning on the 300/400/
+// 500 range rather than on a second family. Weights are listed explicitly
+// because the light end does the display work.
+const jost = Jost({
+  subsets: ["latin"],
+  weight: ["300", "400", "500"],
+  variable: "--font-jost",
+  preload: false,
+});
+// Display only: a single high-contrast serif weight used for listing headlines
+// against Jost's geometry. One face, one weight — it is an accent, not a
+// text family.
+const instrumentSerif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: "400",
+  variable: "--font-instrument-serif",
+  preload: false,
+});
 
 // Neutral platform-level fallback. The (storefront) layout overrides this per
 // store (brand name + canonical origin); the (platform) layout sets its own.
@@ -88,7 +109,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${outfit.variable} ${roboto.variable} ${stickNoBills.variable} ${inter.variable} ${fraunces.variable} ${spaceGrotesk.variable} ${jakarta.variable}`}
+      className={`${outfit.variable} ${roboto.variable} ${stickNoBills.variable} ${inter.variable} ${fraunces.variable} ${spaceGrotesk.variable} ${jakarta.variable} ${jost.variable} ${instrumentSerif.variable}`}
     >
       <body className="antialiased">
         <NextTopLoader color="#1a1a1a" showSpinner={false} />

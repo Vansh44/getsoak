@@ -10,7 +10,6 @@ import {
   productVariants,
   products,
   storeBillingSettings,
-  stores,
   taxClasses,
 } from "@/drizzle/schema";
 import type { OrderInsert } from "@/drizzle/schema";
@@ -19,8 +18,7 @@ import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
-import { effectivePlan, limitsFor } from "@/lib/plans";
-import { getStoreGateway } from "@/lib/payments/provider";
+import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   getCreditBalance,
   spendCredit,
@@ -509,29 +507,11 @@ export async function getCartTaxRates(
 
 // ---- Online payments (BYO Razorpay — CODEBASE §18) -------------------------
 
-// The store's usable online gateway, or null. Three server-side conditions,
-// re-checked on EVERY call (never trusted from the client): credentials are
-// connected, the merchant has the channel enabled, and the store's EFFECTIVE
-// plan includes online payments (a lapsed plan silently reverts to COD-only
-// without touching the stored credentials).
-async function onlineGateway(
-  storeId: string,
-): Promise<{ keyId: string; keySecret: string } | null> {
-  const [gateway, storeRows] = await Promise.all([
-    getStoreGateway(storeId),
-    withService((db) =>
-      db
-        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
-        .from(stores)
-        .where(eq(stores.id, storeId))
-        .limit(1),
-    ),
-  ]);
-  const store = storeRows[0];
-  if (!gateway?.enabled) return null;
-  if (!limitsFor(effectivePlan(store ?? {})).onlinePayments) return null;
-  return gateway.creds;
-}
+// The store's usable online gateway, or null — see `getLiveStoreGateway`
+// (lib/payments/provider.ts) for the three conditions. It moved there when the
+// POS till became a second counter taking gateway payments (§18 Step 12); this
+// alias is kept so the call sites below read the same as they always did.
+const onlineGateway = getLiveStoreGateway;
 
 export interface CheckoutConfig {
   /** True when the "Pay online" option should render at checkout. */

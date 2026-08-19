@@ -14,7 +14,7 @@ import {
 } from "@/lib/seo/search-engines";
 import { storeOrigin } from "@/lib/site";
 import { ROOT_DOMAIN, SEARCH_INDEXABLE } from "@/lib/store/host";
-import { isStoreLaunched, markStoreLaunched } from "@/lib/store/launch";
+import { isStoreSearchIndexable, markStoreLaunched } from "@/lib/store/launch";
 import { STORE_TAG, type Store } from "@/lib/store/resolve";
 
 // Public verification/status data lives in stores.settings. The Google meta
@@ -149,12 +149,7 @@ export async function ensureGoogleCoverageForStore(
   const attemptedAt = new Date().toISOString();
   try {
     const store = await readStore(storeId);
-    if (
-      !store ||
-      store.status !== "active" ||
-      !isStoreLaunched(store) ||
-      store.settings?.demo === true
-    ) {
+    if (!store || store.status !== "active" || !isStoreSearchIndexable(store)) {
       return { ok: true, skipped: true };
     }
 

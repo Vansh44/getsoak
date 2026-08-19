@@ -148,6 +148,33 @@ export const WEBMASTERS_SCOPE = "https://www.googleapis.com/auth/webmasters";
 export const SITE_VERIFICATION_SCOPE =
   "https://www.googleapis.com/auth/siteverification";
 
+export interface GoogleSearchAnalyticsRequest {
+  startDate: string;
+  endDate: string;
+  dimensions: string[];
+  dimensionFilterGroups?: Array<{
+    filters: Array<{
+      dimension: "page";
+      operator: "includingRegex";
+      expression: string;
+    }>;
+  }>;
+  aggregationType: "auto" | "byPage";
+  rowLimit: number;
+  dataState: "final";
+}
+
+export interface GoogleSearchAnalyticsResponse {
+  rows?: Array<{
+    keys?: string[];
+    clicks?: number;
+    impressions?: number;
+    ctr?: number;
+    position?: number;
+  }>;
+  responseAggregationType?: string;
+}
+
 const googleTokenCache = new Map<
   string,
   { token: string; expiresAt: number }
@@ -223,6 +250,38 @@ export async function googleAccessToken(
     });
   }
   return data.access_token ?? null;
+}
+
+/** Query Search Analytics with the same service-account credential path used
+ * by sitemap and ownership calls. Unlike notification helpers this throws:
+ * ingestion owns a durable retry row and must distinguish no data from a failed
+ * Google request. */
+export async function queryGoogleSearchAnalytics(
+  property: string,
+  request: GoogleSearchAnalyticsRequest,
+): Promise<GoogleSearchAnalyticsResponse> {
+  const token = await googleAccessToken();
+  if (!token) throw new Error("No Google Search Console access token");
+
+  const response = await fetchWithTimeout(
+    `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}/searchAnalytics/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+    15_000,
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Search Console analytics query rejected (${response.status})${body ? `: ${body.slice(0, 300)}` : ""}`,
+    );
+  }
+  return (await response.json()) as GoogleSearchAnalyticsResponse;
 }
 
 // Submit a store's sitemap to Google Search Console. Dormant (no-op) until

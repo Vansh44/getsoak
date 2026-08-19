@@ -5,6 +5,7 @@ import {
   isPosHost,
   isThemesHost,
   IS_PRODUCTION_PLATFORM,
+  ROOT_DOMAIN,
 } from "@/lib/store/host";
 import { canonicalHostForSlug } from "@/lib/store/canonical";
 import { logError } from "@/lib/observability/logger";
@@ -29,6 +30,21 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const host =
     request.headers.get("x-forwarded-host") || request.headers.get("host");
+
+  // --- One canonical platform host: www.storemink.com -> storemink.com ---
+  // Search Console found the www homepage as a duplicate because it served the
+  // same 200 HTML as the apex. The page-level canonical is still useful, but a
+  // permanent host redirect prevents duplicate crawling and consolidates every
+  // path/query before rendering. Production-only keeps local/staging host
+  // routing untouched.
+  const hostname = host?.split(":", 1)[0]?.toLowerCase();
+  if (IS_PRODUCTION_PLATFORM && hostname === `www.${ROOT_DOMAIN}`) {
+    const url = request.nextUrl.clone();
+    url.host = ROOT_DOMAIN;
+    url.port = "";
+    url.protocol = "https:";
+    return NextResponse.redirect(url, 308);
+  }
 
   // --- Static public assets (e.g. /themes/arcade/preview.webp, svgs) ---
   // Serve them as-is on EVERY host. Without this, the platform/help rewrites

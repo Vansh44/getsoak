@@ -42,6 +42,20 @@ export function isStoreLaunched(
 }
 
 /**
+ * Is this store eligible to appear in search at all?
+ *
+ * Keep this as the one gate shared by page metadata, robots, sitemaps and the
+ * notification pipeline. A demo may be fully populated and a legacy store may
+ * have no `launched` key, so neither `isStoreLaunched()` nor `settings.demo`
+ * alone answers the search-indexability question.
+ */
+export function isStoreSearchIndexable(
+  store: Pick<Store, "settings"> | null | undefined,
+): boolean {
+  return isStoreLaunched(store) && store?.settings?.demo !== true;
+}
+
+/**
  * Mark a store launched. Idempotent, best-effort, and deliberately unable to
  * fail its caller — it runs after a publish that has already succeeded, and a
  * merchant must never see their page fail to publish because a search-engine

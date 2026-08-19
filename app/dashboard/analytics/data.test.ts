@@ -30,7 +30,10 @@ function chain(): any {
   // crash rather than on the query.
   const row = new Proxy(
     {},
-    { get: (_t, k) => (k === "then" ? undefined : (0 as never)) },
+    {
+      get: (_t, k) =>
+        k === "then" ? undefined : k === "key" ? "online" : (0 as never),
+    },
   );
   c.then = (res: (v: unknown[]) => unknown) => res([row]);
   return c;
@@ -40,7 +43,34 @@ vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async (fn: any) => fn(chain())),
 }));
 
-import { getAnalyticsData } from "./data";
+import {
+  buildPaymentBreakdown,
+  classifyCustomerMix,
+  comparisonTrend,
+  getRecentOrders,
+  getSalesAnalytics,
+  getSalesByChannel,
+  RECOGNIZED_PAYMENT_STATUSES,
+  RECOGNIZED_POS_STATUSES,
+} from "./data";
+import { parseAnalyticsRange } from "@/lib/analytics/range";
+
+const range = parseAnalyticsRange(
+  { range: "7d", compare: "none" },
+  "Asia/Kolkata",
+  new Date("2026-08-18T10:30:00.000Z"),
+);
+
+const allLocations = {
+  locationIds: null,
+  includeUnassigned: true,
+  selectedId: null,
+} as const;
+const scopedLocations = (locationIds: string[]) => ({
+  locationIds,
+  includeUnassigned: true,
+  selectedId: null,
+});
 
 /**
  * The PARAMETER values across every captured WHERE.
@@ -62,8 +92,7 @@ function params(): unknown[] {
     if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
     if (node.queryChunks) return walk(node.queryChunks, depth + 1);
     // A bound value; anything else is table/column machinery.
-    if ("value" in node && !Array.isArray(node.value))
-      walk(node.value, depth + 1);
+    if ("value" in node) walk(node.value, depth + 1);
   };
   captured.wheres.forEach((w) => walk(w));
   return out;
@@ -74,17 +103,12 @@ beforeEach(() => {
   captured.wheres = [];
 });
 
-describe("getAnalyticsData — location scope", () => {
+describe("analytics data — location scope", () => {
   // ★★ THE OWNER'S VIEW IS UNCHANGED. Running several shops is the reason to
   // want whole-business figures, so an unrestricted viewer must not suddenly be
   // narrowed by a feature aimed at their staff.
   it("adds no location predicate for an unrestricted viewer", async () => {
-    await getAnalyticsData("store-1", null);
-    expect(params()).not.toContain("loc-1");
-  });
-
-  it("defaults to unrestricted when no scope is passed at all", async () => {
-    await getAnalyticsData("store-1");
+    await getRecentOrders("store-1", allLocations, range);
     expect(params()).not.toContain("loc-1");
   });
 
@@ -92,19 +116,111 @@ describe("getAnalyticsData — location scope", () => {
   // other branch's revenue, while the orders list refuses them a single order
   // from it.
   it("bounds a restricted viewer's figures to their shops", async () => {
-    await getAnalyticsData("store-1", ["loc-1", "loc-2"]);
+    await getRecentOrders(
+      "store-1",
+      scopedLocations(["loc-1", "loc-2"]),
+      range,
+    );
     const sent = params();
     expect(sent).toContain("loc-1");
     expect(sent).toContain("loc-2");
+  });
+
+  it("applies the same scope to Phase 2 commerce widgets", async () => {
+    await getSalesByChannel("store-1", scopedLocations(["loc-2"]), range);
+    expect(params()).toContain("loc-2");
   });
 
   // ⚠ EMPTY is "assigned to nothing that still exists" — a real state, NOT
   // unrestricted. It must produce a predicate that matches nothing rather than
   // silently widening to the whole store.
   it("still bounds a viewer assigned to nothing that exists", async () => {
-    await getAnalyticsData("store-1", []);
+    await getRecentOrders("store-1", scopedLocations([]), range);
     // The store filter is always present; what must NOT happen is the query
     // running with no location predicate at all.
     expect(captured.wheres.length).toBeGreaterThan(0);
+  });
+});
+
+describe("recognized sales", () => {
+  it("uses the settled/COD/POS contract and completed refunds", async () => {
+    await getSalesAnalytics("store-1", allLocations, range);
+    const sent = params();
+    expect(sent).toContain("completed");
+    expect(sent).toContain("cancelled");
+    expect(RECOGNIZED_PAYMENT_STATUSES).toEqual([
+      "paid",
+      "partially_refunded",
+      "refunded",
+    ]);
+    expect(RECOGNIZED_POS_STATUSES).toEqual(["completed", "refunded"]);
+  });
+
+  it("omits a misleading percentage when comparison is absent or zero", () => {
+    expect(comparisonTrend(100, null).trendPct).toBeNull();
+    expect(comparisonTrend(100, 0).trendPct).toBeNull();
+    expect(comparisonTrend(75, 100)).toEqual({
+      trendPct: -25,
+      trendUp: false,
+    });
+  });
+});
+
+describe("payment-method allocation", () => {
+  it("combines itemized POS and online tenders, then subtracts recorded refunds", () => {
+    const rows = buildPaymentBreakdown({
+      pos: [
+        { key: "cash", amount: 100, orders: 1 },
+        { key: "card", amount: 50, orders: 1 },
+      ],
+      online: [
+        { key: "cash_on_delivery", amount: 80, orders: 1 },
+        { key: "split", amount: 999, orders: 1 },
+      ],
+      storeCredit: { amount: 20, orders: 1 },
+      refunds: [
+        { key: "cash", refunds: 30 },
+        { key: "store_credit", refunds: 5 },
+      ],
+    });
+    expect(
+      Object.fromEntries(rows.map((row) => [row.key, row.amount])),
+    ).toEqual({
+      cash: 70,
+      card: 50,
+      cash_on_delivery: 80,
+      store_credit: 15,
+    });
+    expect(rows.some((row) => row.key === "split")).toBe(false);
+  });
+
+  it("keeps a refund-only method visible instead of guessing its source", () => {
+    expect(
+      buildPaymentBreakdown({
+        pos: [],
+        online: [],
+        storeCredit: null,
+        refunds: [{ key: "manual", refunds: 25 }],
+      })[0],
+    ).toMatchObject({ key: "manual", name: "Manual refund", amount: -25 });
+  });
+});
+
+describe("customer mix", () => {
+  it("classifies only customers active in the range by their first accessible order", () => {
+    expect(
+      classifyCustomerMix(
+        [
+          { firstOrderAt: "2026-08-01T00:00:00.000Z", currentOrders: 1 },
+          { firstOrderAt: "2026-08-18T00:00:00.000Z", currentOrders: 2 },
+          { firstOrderAt: "2026-07-01T00:00:00.000Z", currentOrders: 0 },
+        ],
+        new Date("2026-08-10T00:00:00.000Z"),
+      ),
+    ).toEqual({
+      newCustomers: 1,
+      returningCustomers: 1,
+      totalCustomers: 2,
+    });
   });
 });

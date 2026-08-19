@@ -70,6 +70,9 @@ export interface ResolvedStorefrontAppearance {
   header: HeaderVariant;
   card: Exclude<CardVariant, "quick_add">;
   cardQuickAdd: boolean;
+  /** Theme-driven only: hover-swap is orthogonal to the merchant's card
+   *  choice, so a `card` override neither enables nor cancels it. */
+  cardHoverImage: boolean;
   productDetail: ProductDetailVariant;
   cart: CartVariant;
   footer: FooterVariant;
@@ -373,6 +376,7 @@ export function resolveStorefrontAppearance(
         : overrides.header,
     card,
     cardQuickAdd,
+    cardHoverImage: theme?.cardHoverImage === true,
     productDetail:
       overrides.productDetail === "theme"
         ? (theme?.productDetail ?? (legacyGrocery ? "grocery" : "classic"))

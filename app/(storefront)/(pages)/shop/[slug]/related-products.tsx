@@ -12,6 +12,7 @@ export interface RelatedProduct {
   base_price: number;
   selling_price: number;
   image_url: string | null;
+  images: string[] | null;
   card_color: string | null;
   featured: boolean;
   /** Resolved category name (flattened in the page query). */

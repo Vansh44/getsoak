@@ -8,7 +8,7 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("@/lib/store/launch", () => ({
-  isStoreLaunched: vi.fn(() => true),
+  isStoreSearchIndexable: vi.fn(() => true),
   markStoreLaunched: vi.fn(),
 }));
 vi.mock("@/lib/seo/search-engines", () => ({

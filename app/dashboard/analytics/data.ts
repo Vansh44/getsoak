@@ -1,40 +1,120 @@
 import "server-only";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import type { LocationScope } from "@/lib/locations/scope";
-import { withService } from "@/lib/db/client";
+
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import {
   blogs,
   categories,
   enquiries,
   orderItems,
+  orderPayments,
+  orderRefunds,
+  orderReturnItems,
+  orderReturns,
   orders,
   products,
+  stockMovements,
+  storeLocations,
   users,
 } from "@/drizzle/schema";
-
-// Real store analytics for /dashboard/analytics. Everything is scoped by
-// store_id and derived from live tables — no hardcoded figures. Empty stores
-// (no orders yet) resolve to zeros/empty lists, which the components render as
-// intentional empty states. Revenue counts NON-CANCELLED orders (booked
-// revenue, COD + online); "this month" = current calendar month.
+import type {
+  AnalyticsLocationOption,
+  AnalyticsLocationSelection,
+} from "@/lib/analytics/location";
+import type { AnalyticsRange, AnalyticsWindow } from "@/lib/analytics/range";
+import { withService } from "@/lib/db/client";
+import type { LocationScope } from "@/lib/locations/scope";
 
 export interface Stat {
   value: number;
-  trendPct: number; // vs previous month
+  /** Null means there is no meaningful comparison (disabled or zero baseline). */
+  trendPct: number | null;
   trendUp: boolean;
-  spark: number[]; // trailing 12-month series (shape only)
+  spark: number[];
 }
 
-export interface MonthPoint {
-  label: string; // e.g. "Jun"
-  revenue: number; // in thousands of rupees (chart shows "K")
+export interface SalesPoint {
+  key: string;
+  label: string;
+  /** Raw store-currency units; never rounded to thousands. */
+  sales: number;
   orders: number;
+  units: number;
+}
+
+export interface SalesAnalytics {
+  totalSales: Stat;
+  orders: Stat;
+  averageOrderValue: Stat;
+  unitsSold: Stat;
+  series: SalesPoint[];
+  rangeLabel: string;
+  comparisonLabel: string | null;
+}
+
+export interface CatalogSnapshots {
+  customers: Stat;
+  products: Stat;
 }
 
 export interface TopCategory {
   name: string;
   amount: number;
-  share: number; // % of item revenue
+  share: number;
+}
+
+export interface TopProduct {
+  id: string;
+  name: string;
+  units: number;
+  amount: number;
+}
+
+export interface CommerceBreakdown {
+  key: string;
+  name: string;
+  amount: number;
+  orders: number;
+  share: number;
+}
+
+export interface CustomerMix {
+  newCustomers: number;
+  returningCustomers: number;
+  totalCustomers: number;
+}
+
+export interface DiscountImpact {
+  orderDiscounts: number;
+  lineDiscounts: number;
+  totalDiscounts: number;
+  couponOrders: number;
+}
+
+export interface ReturnsAndRefunds {
+  completedReturns: number;
+  returnedUnits: number;
+  returnedValue: number;
+  completedRefunds: number;
+}
+
+export interface InventoryVelocityItem {
+  id: string;
+  name: string;
+  units: number;
 }
 
 export interface RecentOrder {
@@ -52,212 +132,353 @@ export interface ActivityItem {
   createdAt: string;
 }
 
-export interface AnalyticsData {
-  stats: { revenue: Stat; orders: Stat; customers: Stat; products: Stat };
-  totalRevenue: number;
-  revenueSeries: { m7: MonthPoint[]; m12: MonthPoint[]; all: MonthPoint[] };
-  revenueTrendPct: number;
-  revenueTrendUp: boolean;
-  topCategories: TopCategory[];
-  recentOrders: RecentOrder[];
-  activity: ActivityItem[];
+export const RECOGNIZED_PAYMENT_STATUSES = [
+  "paid",
+  "partially_refunded",
+  "refunded",
+] as const;
+export const RECOGNIZED_POS_STATUSES = ["completed", "refunded"] as const;
+
+function locationCondition(
+  selection: AnalyticsLocationSelection,
+): SQL | undefined {
+  if (selection.locationIds === null) return undefined;
+  const physical =
+    selection.locationIds.length > 0
+      ? inArray(orders.locationId, selection.locationIds)
+      : sql`false`;
+  // Aggregate accessible views include online/unrouted orders. Selecting one
+  // physical shop is intentionally exact and excludes those NULL rows.
+  return selection.includeUnassigned
+    ? or(isNull(orders.locationId), physical)
+    : physical;
 }
 
-const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-/** "YYYY-MM" key for a Date's month (UTC-agnostic — uses local month parts). */
-function ymOf(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+function inventoryLocationCondition(
+  selection: AnalyticsLocationSelection,
+): SQL | undefined {
+  if (selection.locationIds === null) return undefined;
+  const physical =
+    selection.locationIds.length > 0
+      ? inArray(stockMovements.locationId, selection.locationIds)
+      : sql`false`;
+  return selection.includeUnassigned
+    ? or(isNull(stockMovements.locationId), physical)
+    : physical;
 }
 
-/** The list of "YYYY-MM" keys for the `count` months ending at (and including) now. */
-function trailingMonths(count: number): string[] {
-  const out: string[] = [];
-  const now = new Date();
-  for (let i = count - 1; i >= 0; i--) {
-    out.push(ymOf(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+export async function getAnalyticsLocationOptions(
+  storeId: string,
+  viewerScope: LocationScope,
+): Promise<AnalyticsLocationOption[]> {
+  const rows = await withService((db) =>
+    db
+      .select({ id: storeLocations.id, name: storeLocations.name })
+      .from(storeLocations)
+      .where(eq(storeLocations.storeId, storeId))
+      .orderBy(storeLocations.sortOrder, storeLocations.name),
+  );
+  if (viewerScope === null) return rows;
+  const allowed = new Set(viewerScope);
+  return rows.filter((row) => allowed.has(row.id));
+}
+
+/** The single recognized-sale contract shared by all Phase 1 commerce cards. */
+function recognizedOrder(): SQL {
+  return and(
+    ne(orders.status, "cancelled"),
+    or(
+      eq(orders.paymentMethod, "cash_on_delivery"),
+      inArray(orders.paymentStatus, [...RECOGNIZED_PAYMENT_STATUSES]),
+      and(
+        eq(orders.salesChannel, "pos"),
+        inArray(orders.status, [...RECOGNIZED_POS_STATUSES]),
+      ),
+    ),
+  ) as SQL;
+}
+
+function orderWindow(window: AnalyticsWindow): SQL {
+  return and(
+    gte(orders.createdAt, window.from.toISOString()),
+    lt(orders.createdAt, window.to.toISOString()),
+  ) as SQL;
+}
+
+function refundWindow(window: AnalyticsWindow): SQL {
+  return and(
+    gte(orderRefunds.createdAt, window.from.toISOString()),
+    lt(orderRefunds.createdAt, window.to.toISOString()),
+  ) as SQL;
+}
+
+export function comparisonTrend(
+  current: number,
+  previous: number | null,
+): Pick<Stat, "trendPct" | "trendUp"> {
+  if (previous === null || previous === 0) {
+    return { trendPct: null, trendUp: current >= 0 };
   }
-  return out;
+  return {
+    trendPct:
+      Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10,
+    trendUp: current >= previous,
+  };
 }
 
-function labelForYm(ym: string): string {
-  const m = Number(ym.slice(5, 7));
-  return MONTH_LABELS[m - 1] ?? ym;
+function grainFor(window: AnalyticsWindow): "day" | "week" | "month" {
+  const days = (window.to.getTime() - window.from.getTime()) / 86_400_000;
+  if (days <= 45) return "day";
+  if (days <= 210) return "week";
+  return "month";
 }
 
-function pctChange(cur: number, prev: number): { pct: number; up: boolean } {
-  if (prev <= 0) return { pct: cur > 0 ? 100 : 0, up: cur >= 0 };
-  const pct = Math.round(((cur - prev) / prev) * 1000) / 10;
-  return { pct, up: cur >= prev };
+function pointLabel(key: string, grain: "day" | "week" | "month") {
+  const date = new Date(`${key}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return key;
+  return new Intl.DateTimeFormat("en-IN", {
+    day: grain === "month" ? undefined : "numeric",
+    month: "short",
+    year: grain === "month" ? "2-digit" : undefined,
+    timeZone: "UTC",
+  }).format(date);
 }
 
-type MonthAgg = Map<string, { rev: number; ord: number }>;
+export async function getSalesAnalytics(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<SalesAnalytics> {
+  const scoped = locationCondition(location);
+  const grain = grainFor(range.current);
 
-/** Build MonthPoints for a set of "YYYY-MM" keys, zero-filling gaps. */
-function pointsFor(yms: string[], agg: MonthAgg): MonthPoint[] {
-  return yms.map((ym) => {
-    const a = agg.get(ym);
+  return withService(async (db) => {
+    const totalsFor = async (window: AnalyticsWindow) => {
+      const [[orderRow], [refundRow], [unitRow]] = await Promise.all([
+        db
+          .select({
+            sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(orders)
+          .where(
+            and(
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(window),
+              ...(scoped ? [scoped] : []),
+            ),
+          ),
+        db
+          .select({
+            refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+          })
+          .from(orderRefunds)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderRefunds.orderId),
+              eq(orders.storeId, storeId),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .where(
+            and(
+              eq(orderRefunds.storeId, storeId),
+              eq(orderRefunds.status, "completed"),
+              refundWindow(window),
+            ),
+          ),
+        db
+          .select({
+            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+          })
+          .from(orderItems)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderItems.orderId),
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(window),
+              ...(scoped ? [scoped] : []),
+            ),
+          ),
+      ]);
+      return {
+        sales: Number(orderRow?.sales ?? 0) - Number(refundRow?.refunds ?? 0),
+        orders: Number(orderRow?.count ?? 0),
+        units: Number(unitRow?.units ?? 0),
+      };
+    };
+
+    const bucket = sql`date_trunc(${grain}, ${orders.createdAt} at time zone ${range.timeZone})`;
+    const refundBucket = sql`date_trunc(${grain}, ${orderRefunds.createdAt} at time zone ${range.timeZone})`;
+    const [current, previous, orderRows, refundRows, unitRows] =
+      await Promise.all([
+        totalsFor(range.current),
+        range.compare ? totalsFor(range.compare) : Promise.resolve(null),
+        db
+          .select({
+            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+            sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(orders)
+          .where(
+            and(
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(range.current),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .groupBy(bucket)
+          .orderBy(bucket),
+        db
+          .select({
+            key: sql<string>`to_char(${refundBucket}, 'YYYY-MM-DD')`,
+            refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+          })
+          .from(orderRefunds)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderRefunds.orderId),
+              eq(orders.storeId, storeId),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .where(
+            and(
+              eq(orderRefunds.storeId, storeId),
+              eq(orderRefunds.status, "completed"),
+              refundWindow(range.current),
+            ),
+          )
+          .groupBy(refundBucket)
+          .orderBy(refundBucket),
+        db
+          .select({
+            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+          })
+          .from(orderItems)
+          .innerJoin(
+            orders,
+            and(
+              eq(orders.id, orderItems.orderId),
+              eq(orders.storeId, storeId),
+              recognizedOrder(),
+              orderWindow(range.current),
+              ...(scoped ? [scoped] : []),
+            ),
+          )
+          .groupBy(bucket)
+          .orderBy(bucket),
+      ]);
+
+    const points = new Map<
+      string,
+      { sales: number; orders: number; units: number }
+    >();
+    for (const row of orderRows) {
+      points.set(row.key, {
+        sales: Number(row.sales),
+        orders: Number(row.count),
+        units: 0,
+      });
+    }
+    for (const row of refundRows) {
+      const point = points.get(row.key) ?? { sales: 0, orders: 0, units: 0 };
+      point.sales -= Number(row.refunds);
+      points.set(row.key, point);
+    }
+    for (const row of unitRows) {
+      const point = points.get(row.key) ?? { sales: 0, orders: 0, units: 0 };
+      point.units = Number(row.units);
+      points.set(row.key, point);
+    }
+    const series = [...points.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, point]) => ({
+        key,
+        label: pointLabel(key, grain),
+        ...point,
+      }));
+
     return {
-      label: labelForYm(ym),
-      revenue: Math.round((a?.rev ?? 0) / 1000), // thousands for the "K" chart
-      orders: a?.ord ?? 0,
+      totalSales: {
+        value: current.sales,
+        ...comparisonTrend(current.sales, previous?.sales ?? null),
+        spark: series.map((point) => point.sales),
+      },
+      orders: {
+        value: current.orders,
+        ...comparisonTrend(current.orders, previous?.orders ?? null),
+        spark: series.map((point) => point.orders),
+      },
+      averageOrderValue: {
+        value: current.orders > 0 ? current.sales / current.orders : 0,
+        ...comparisonTrend(
+          current.orders > 0 ? current.sales / current.orders : 0,
+          previous && previous.orders > 0
+            ? previous.sales / previous.orders
+            : null,
+        ),
+        spark: series.map((point) =>
+          point.orders > 0 ? point.sales / point.orders : 0,
+        ),
+      },
+      unitsSold: {
+        value: current.units,
+        ...comparisonTrend(current.units, previous?.units ?? null),
+        spark: series.map((point) => point.units),
+      },
+      series,
+      rangeLabel: range.label,
+      comparisonLabel: range.comparisonLabel,
     };
   });
 }
 
-/** Spark helper: pull one numeric field over the trailing 12 months. */
-function spark12(agg: Map<string, number>): number[] {
-  return trailingMonths(12).map((ym) => agg.get(ym) ?? 0);
+export async function getCatalogSnapshots(
+  storeId: string,
+): Promise<CatalogSnapshots> {
+  return withService(async (db) => {
+    const [[customers], [published]] = await Promise.all([
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(users)
+        .where(eq(users.storeId, storeId)),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(products)
+        .where(
+          and(eq(products.storeId, storeId), eq(products.status, "published")),
+        ),
+    ]);
+    const snapshot = (value: number): Stat => ({
+      value,
+      trendPct: null,
+      trendUp: true,
+      spark: [],
+    });
+    return {
+      customers: snapshot(Number(customers?.count ?? 0)),
+      products: snapshot(Number(published?.count ?? 0)),
+    };
+  });
 }
 
-export async function getAnalyticsData(
+export async function getTopCategories(
   storeId: string,
-  /**
-   * ★★ SCOPED ONLY FOR A RESTRICTED VIEWER. `null` — an owner, a superadmin, an
-   * admin nobody has assigned anywhere — keeps the whole-business figures, which
-   * is the entire point of running several shops. A restricted admin sees only
-   * their own, because otherwise the one screen they land on first would hand
-   * them every other branch's revenue while the orders list refuses them a
-   * single order from it.
-   *
-   * ⚠ ORDER-SHAPED FIGURES ONLY. Products and customers are store-wide by
-   * decision (a product is not IN a shop; a customer belongs to the business),
-   * so their counts stay whole even for a scoped viewer — the numbers a Delhi
-   * manager sees are "Delhi's sales, the store's catalogue".
-   */
-  locationScope: LocationScope = null,
-): Promise<AnalyticsData> {
-  // Built once: `inArray(col, [])` is how "assigned to nothing that still
-  // exists" is expressed, so an EMPTY scope must match nothing rather than be
-  // skipped.
-  const scoped =
-    locationScope === null ? null : inArray(orders.locationId, locationScope);
-
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<TopCategory[]> {
+  const scoped = locationCondition(location);
   return withService(async (db) => {
-    const thisYm = ymOf(new Date());
-    const prevYm = ymOf(
-      new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
-    );
-
-    // --- monthly order revenue + count (non-cancelled), all history ---
-    const orderMonthRows = await db
-      .select({
-        ym: sql<string>`to_char(date_trunc('month', ${orders.createdAt}), 'YYYY-MM')`,
-        rev: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-        ord: sql<number>`count(*)::int`,
-      })
-      .from(orders)
-      .where(
-        and(
-          eq(orders.storeId, storeId),
-          ne(orders.status, "cancelled"),
-          ...(scoped ? [scoped] : []),
-        ),
-      )
-      .groupBy(sql`1`)
-      .orderBy(sql`1`);
-
-    const orderAgg: MonthAgg = new Map();
-    for (const r of orderMonthRows)
-      orderAgg.set(r.ym, { rev: Number(r.rev), ord: Number(r.ord) });
-
-    // --- new customers + new products per month (for trend + sparkline) ---
-    const [custMonthRows, prodMonthRows] = await Promise.all([
-      db
-        .select({
-          ym: sql<string>`to_char(date_trunc('month', ${users.createdAt}), 'YYYY-MM')`,
-          n: sql<number>`count(*)::int`,
-        })
-        .from(users)
-        .where(eq(users.storeId, storeId))
-        .groupBy(sql`1`),
-      db
-        .select({
-          ym: sql<string>`to_char(date_trunc('month', ${products.createdAt}), 'YYYY-MM')`,
-          n: sql<number>`count(*)::int`,
-        })
-        .from(products)
-        .where(eq(products.storeId, storeId))
-        .groupBy(sql`1`),
-    ]);
-    const custAgg = new Map<string, number>(
-      custMonthRows.map((r) => [r.ym, Number(r.n)]),
-    );
-    const prodAgg = new Map<string, number>(
-      prodMonthRows.map((r) => [r.ym, Number(r.n)]),
-    );
-
-    // --- scalar totals ---
-    const [[{ c: totalCustomers }], [{ c: productsPublished }]] =
-      await Promise.all([
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(users)
-          .where(eq(users.storeId, storeId)),
-        db
-          .select({ c: sql<number>`count(*)::int` })
-          .from(products)
-          .where(
-            and(
-              eq(products.storeId, storeId),
-              eq(products.status, "published"),
-            ),
-          ),
-      ]);
-
-    const totalRevenue = orderMonthRows.reduce((s, r) => s + Number(r.rev), 0);
-
-    // --- trends (current vs previous calendar month) ---
-    const revThis = orderAgg.get(thisYm)?.rev ?? 0;
-    const revPrev = orderAgg.get(prevYm)?.rev ?? 0;
-    const ordThis = orderAgg.get(thisYm)?.ord ?? 0;
-    const ordPrev = orderAgg.get(prevYm)?.ord ?? 0;
-    const custThis = custAgg.get(thisYm) ?? 0;
-    const custPrev = custAgg.get(prevYm) ?? 0;
-    const prodThis = prodAgg.get(thisYm) ?? 0;
-    const prodPrev = prodAgg.get(prevYm) ?? 0;
-
-    const revTrend = pctChange(revThis, revPrev);
-    const ordTrend = pctChange(ordThis, ordPrev);
-    const custTrend = pctChange(custThis, custPrev);
-    const prodTrend = pctChange(prodThis, prodPrev);
-
-    // --- sparklines (trailing 12 months) ---
-    const revSpark = trailingMonths(12).map((ym) =>
-      Math.round((orderAgg.get(ym)?.rev ?? 0) / 1000),
-    );
-    const ordSpark = trailingMonths(12).map((ym) => orderAgg.get(ym)?.ord ?? 0);
-
-    // --- revenue chart series (7M / 12M / all history) ---
-    const firstYm = orderMonthRows[0]?.ym;
-    const allYms = firstYm
-      ? monthsBetween(firstYm, thisYm)
-      : trailingMonths(12);
-    const revenueSeries = {
-      m7: pointsFor(trailingMonths(7), orderAgg),
-      m12: pointsFor(trailingMonths(12), orderAgg),
-      all: pointsFor(allYms, orderAgg),
-    };
-
-    // --- revenue by category ---
-    // EVERY category the store has is reported, not just the sellers: two
-    // queries (earners + the full category list) merged below, so a category
-    // with no sales yet shows as ₹0 instead of silently vanishing. "Uncategorized"
-    // is appended only when products without a category actually earned.
-    const [catRows, allCatRows] = await Promise.all([
+    const [earnedRows, categoryRows] = await Promise.all([
       db
         .select({
           name: sql<string>`coalesce(${categories.name}, 'Uncategorized')`,
@@ -269,8 +490,9 @@ export async function getAnalyticsData(
           and(
             eq(orders.id, orderItems.orderId),
             eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
             ...(scoped ? [scoped] : []),
-            ne(orders.status, "cancelled"),
           ),
         )
         .leftJoin(products, eq(products.id, orderItems.productId))
@@ -282,27 +504,634 @@ export async function getAnalyticsData(
         .from(categories)
         .where(eq(categories.storeId, storeId)),
     ]);
-
-    const earned = new Map<string, number>(
-      catRows.map((r) => [r.name, Number(r.amount)]),
+    const earned = new Map(
+      earnedRows.map((row) => [row.name, Number(row.amount)]),
     );
-    const catTotal = catRows.reduce((s, r) => s + Number(r.amount), 0);
-    const catNames = allCatRows.map((r) => r.name).filter(Boolean) as string[];
-    if ((earned.get("Uncategorized") ?? 0) > 0) catNames.push("Uncategorized");
-
-    const topCategories: TopCategory[] = catNames
+    const total = earnedRows.reduce((sum, row) => sum + Number(row.amount), 0);
+    const names = categoryRows
+      .map((row) => row.name)
+      .filter(Boolean) as string[];
+    if ((earned.get("Uncategorized") ?? 0) > 0) names.push("Uncategorized");
+    return names
       .map((name) => ({ name, amount: earned.get(name) ?? 0 }))
-      // Earners first (biggest down), then the rest alphabetically.
       .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name))
-      .map((r) => ({
-        name: r.name,
-        amount: Number(r.amount),
-        share:
-          catTotal > 0 ? Math.round((Number(r.amount) / catTotal) * 100) : 0,
+      .map((item) => ({
+        ...item,
+        share: total > 0 ? Math.round((item.amount / total) * 100) : 0,
       }));
+  });
+}
 
-    // --- recent orders ---
-    const recentRows = await db
+export async function getTopProducts(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<TopProduct[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const rows = await db
+      .select({
+        id: orderItems.productId,
+        name: sql<string>`max(${orderItems.name})`,
+        units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+        amount: sql<number>`coalesce(sum(${orderItems.total}), 0)::float8`,
+      })
+      .from(orderItems)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderItems.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(orderItems.productId)
+      .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}), 0)`))
+      .limit(10);
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      units: Number(row.units),
+      amount: Number(row.amount),
+    }));
+  });
+}
+
+function channelName(key: string): string {
+  if (key === "pos") return "Point of sale";
+  if (key === "online") return "Online store";
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function finalizeBreakdown(
+  earnedRows: Array<{
+    key: string;
+    name: string;
+    amount: number;
+    orders: number;
+  }>,
+  refundRows: Array<{ key: string; name?: string; refunds: number }>,
+): CommerceBreakdown[] {
+  const net = new Map(
+    earnedRows.map((row) => [
+      row.key,
+      {
+        key: row.key,
+        name: row.name,
+        amount: Number(row.amount),
+        orders: Number(row.orders),
+      },
+    ]),
+  );
+  for (const refund of refundRows) {
+    const row = net.get(refund.key) ?? {
+      key: refund.key,
+      name: refund.name ?? refund.key,
+      amount: 0,
+      orders: 0,
+    };
+    row.amount -= Number(refund.refunds);
+    net.set(refund.key, row);
+  }
+  const rows = [...net.values()];
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  return rows
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name))
+    .map((row) => ({
+      ...row,
+      share:
+        total > 0 ? Math.max(0, Math.round((row.amount / total) * 100)) : 0,
+    }));
+}
+
+export async function getSalesByChannel(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CommerceBreakdown[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [earnedRows, refundRows] = await Promise.all([
+      db
+        .select({
+          key: orders.salesChannel,
+          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .groupBy(orders.salesChannel),
+      db
+        .select({
+          key: orders.salesChannel,
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        )
+        .groupBy(orders.salesChannel),
+    ]);
+    return finalizeBreakdown(
+      earnedRows.map((row) => ({ ...row, name: channelName(row.key) })),
+      refundRows.map((row) => ({ ...row, name: channelName(row.key) })),
+    );
+  });
+}
+
+export async function getSalesByLocation(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CommerceBreakdown[]> {
+  const scoped = locationCondition(location);
+  const key = sql<string>`coalesce(${orders.locationId}::text, 'online')`;
+  const name = sql<string>`coalesce(${storeLocations.name}, 'Online / unassigned')`;
+  return withService(async (db) => {
+    const [earnedRows, refundRows] = await Promise.all([
+      db
+        .select({
+          key,
+          name,
+          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .groupBy(key, name),
+      db
+        .select({
+          key,
+          name,
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        )
+        .groupBy(key, name),
+    ]);
+    return finalizeBreakdown(earnedRows, refundRows);
+  });
+}
+
+function paymentMethodName(key: string): string {
+  const known: Record<string, string> = {
+    cash: "Cash",
+    card: "Card terminal",
+    upi: "UPI",
+    razorpay: "Razorpay",
+    store_credit: "Store credit",
+    gift_card: "Gift card",
+    cash_on_delivery: "Cash on delivery",
+    pay_at_store: "Pay at store",
+    manual: "Manual refund",
+  };
+  return known[key] ?? channelName(key);
+}
+
+interface PaymentAmountRow {
+  key: string;
+  amount: number;
+  orders: number;
+}
+
+export function buildPaymentBreakdown(input: {
+  pos: PaymentAmountRow[];
+  online: PaymentAmountRow[];
+  storeCredit: { amount: number; orders: number } | null;
+  refunds: Array<{ key: string; refunds: number }>;
+}): CommerceBreakdown[] {
+  const earned = new Map<
+    string,
+    { key: string; name: string; amount: number; orders: number }
+  >();
+  const add = (key: string, amount: number, orderCount: number) => {
+    // `split` is only an order-level summary. Valid POS rows are itemized above
+    // and valid online rows retain their actual gateway/COD method.
+    if (key === "split") return;
+    const row = earned.get(key) ?? {
+      key,
+      name: paymentMethodName(key),
+      amount: 0,
+      orders: 0,
+    };
+    row.amount += Number(amount);
+    row.orders += Number(orderCount);
+    earned.set(key, row);
+  };
+  for (const row of input.pos) add(row.key, row.amount, row.orders);
+  if (Number(input.storeCredit?.amount ?? 0) > 0) {
+    add(
+      "store_credit",
+      Number(input.storeCredit?.amount ?? 0),
+      Number(input.storeCredit?.orders ?? 0),
+    );
+  }
+  for (const row of input.online) add(row.key, row.amount, row.orders);
+  return finalizeBreakdown(
+    [...earned.values()],
+    input.refunds.map((row) => ({
+      ...row,
+      name: paymentMethodName(row.key),
+    })),
+  );
+}
+
+export async function getSalesByPaymentMethod(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CommerceBreakdown[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [posRows, [creditRow], onlineRows, refundRows] = await Promise.all([
+      db
+        .select({
+          key: orderPayments.method,
+          amount: sql<number>`coalesce(sum(${orderPayments.amount}), 0)::float8`,
+          orders: sql<number>`count(distinct ${orderPayments.orderId})::int`,
+        })
+        .from(orderPayments)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderPayments.orderId),
+            eq(orders.storeId, storeId),
+            eq(orders.salesChannel, "pos"),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(eq(orderPayments.storeId, storeId))
+        .groupBy(orderPayments.method),
+      db
+        .select({
+          amount: sql<number>`coalesce(sum(${orders.storeCreditUsed}), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            ne(orders.salesChannel, "pos"),
+            gt(orders.storeCreditUsed, 0),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        ),
+      db
+        .select({
+          key: orders.paymentMethod,
+          amount: sql<number>`coalesce(sum(greatest(${orders.total} - ${orders.storeCreditUsed}, 0)), 0)::float8`,
+          orders: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            ne(orders.salesChannel, "pos"),
+            gt(
+              sql`greatest(${orders.total} - ${orders.storeCreditUsed}, 0)`,
+              0,
+            ),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .groupBy(orders.paymentMethod),
+      db
+        .select({
+          key: orderRefunds.method,
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        )
+        .groupBy(orderRefunds.method),
+    ]);
+
+    return buildPaymentBreakdown({
+      pos: posRows,
+      online: onlineRows,
+      storeCredit: creditRow ?? null,
+      refunds: refundRows,
+    });
+  });
+}
+
+export async function getCustomerMix(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<CustomerMix> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const rows = await db
+      .select({
+        customerId: orders.customerId,
+        firstOrderAt: sql<string>`min(${orders.createdAt})`,
+        currentOrders: sql<number>`count(*) filter (where ${orders.createdAt} >= ${range.current.from.toISOString()} and ${orders.createdAt} < ${range.current.to.toISOString()})::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          isNotNull(orders.customerId),
+          recognizedOrder(),
+          lt(orders.createdAt, range.current.to.toISOString()),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(orders.customerId);
+    return classifyCustomerMix(rows, range.current.from);
+  });
+}
+
+export function classifyCustomerMix(
+  rows: Array<{ firstOrderAt: string; currentOrders: number }>,
+  currentFrom: Date,
+): CustomerMix {
+  let newCustomers = 0;
+  let returningCustomers = 0;
+  for (const row of rows) {
+    if (Number(row.currentOrders) <= 0) continue;
+    if (new Date(row.firstOrderAt) >= currentFrom) newCustomers += 1;
+    else returningCustomers += 1;
+  }
+  return {
+    newCustomers,
+    returningCustomers,
+    totalCustomers: newCustomers + returningCustomers,
+  };
+}
+
+export async function getDiscountImpact(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<DiscountImpact> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [[orderRow], [lineRow]] = await Promise.all([
+      db
+        .select({
+          discounts: sql<number>`coalesce(sum(${orders.discount}), 0)::float8`,
+          couponOrders: sql<number>`count(*) filter (where ${orders.appliedCouponCode} is not null)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        ),
+      db
+        .select({
+          discounts: sql<number>`coalesce(sum(${orderItems.lineDiscount}), 0)::float8`,
+        })
+        .from(orderItems)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderItems.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        ),
+    ]);
+    const orderDiscounts = Number(orderRow?.discounts ?? 0);
+    const lineDiscounts = Number(lineRow?.discounts ?? 0);
+    return {
+      orderDiscounts,
+      lineDiscounts,
+      totalDiscounts: orderDiscounts + lineDiscounts,
+      couponOrders: Number(orderRow?.couponOrders ?? 0),
+    };
+  });
+}
+
+export async function getReturnsAndRefunds(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<ReturnsAndRefunds> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [[returnRow], [itemRow], [refundRow]] = await Promise.all([
+      db
+        .select({
+          count: sql<number>`count(*)::int`,
+          value: sql<number>`coalesce(sum(${orderReturns.total}), 0)::float8`,
+        })
+        .from(orderReturns)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderReturns.orderId),
+            eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(
+          and(
+            eq(orderReturns.storeId, storeId),
+            eq(orderReturns.status, "completed"),
+            gte(orderReturns.createdAt, range.current.from.toISOString()),
+            lt(orderReturns.createdAt, range.current.to.toISOString()),
+          ),
+        ),
+      db
+        .select({
+          units: sql<number>`coalesce(sum(${orderReturnItems.quantity}), 0)::int`,
+        })
+        .from(orderReturnItems)
+        .innerJoin(
+          orderReturns,
+          and(
+            eq(orderReturns.id, orderReturnItems.returnId),
+            eq(orderReturns.storeId, storeId),
+            eq(orderReturns.status, "completed"),
+            gte(orderReturns.createdAt, range.current.from.toISOString()),
+            lt(orderReturns.createdAt, range.current.to.toISOString()),
+          ),
+        )
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderReturns.orderId),
+            eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
+          ),
+        ),
+      db
+        .select({
+          value: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(range.current),
+          ),
+        ),
+    ]);
+    return {
+      completedReturns: Number(returnRow?.count ?? 0),
+      returnedUnits: Number(itemRow?.units ?? 0),
+      returnedValue: Number(returnRow?.value ?? 0),
+      completedRefunds: Number(refundRow?.value ?? 0),
+    };
+  });
+}
+
+export async function getInventoryVelocity(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<InventoryVelocityItem[]> {
+  const scoped = inventoryLocationCondition(location);
+  return withService(async (db) => {
+    const rows = await db
+      .select({
+        id: stockMovements.productId,
+        name: sql<string>`max(${products.name})`,
+        units: sql<number>`coalesce(sum(abs(${stockMovements.delta})), 0)::int`,
+      })
+      .from(stockMovements)
+      .innerJoin(
+        products,
+        and(
+          eq(products.id, stockMovements.productId),
+          eq(products.storeId, storeId),
+        ),
+      )
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, stockMovements.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+        ),
+      )
+      .where(
+        and(
+          eq(stockMovements.storeId, storeId),
+          eq(stockMovements.reason, "sale"),
+          lt(stockMovements.delta, 0),
+          gte(stockMovements.createdAt, range.current.from.toISOString()),
+          lt(stockMovements.createdAt, range.current.to.toISOString()),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(stockMovements.productId)
+      .orderBy(desc(sql`coalesce(sum(abs(${stockMovements.delta})), 0)`))
+      .limit(10);
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      units: Number(row.units),
+    }));
+  });
+}
+
+export async function getRecentOrders(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<RecentOrder[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const rows = await db
       .select({
         ref: orders.orderRef,
         total: orders.total,
@@ -312,19 +1141,50 @@ export async function getAnalyticsData(
         last: sql<string>`${orders.shippingAddress}->>'lastName'`,
       })
       .from(orders)
-      .where(and(eq(orders.storeId, storeId), ...(scoped ? [scoped] : [])))
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
       .orderBy(desc(orders.createdAt))
       .limit(5);
-    const recentOrders: RecentOrder[] = recentRows.map((r) => ({
-      ref: r.ref,
-      name: `${r.first ?? ""} ${r.last ?? ""}`.trim() || "Guest",
-      total: Number(r.total),
-      status: r.status,
-      createdAt: r.createdAt,
+    return rows.map((row) => ({
+      ref: row.ref,
+      name: `${row.first ?? ""} ${row.last ?? ""}`.trim() || "Guest",
+      total: Number(row.total),
+      status: row.status,
+      createdAt: row.createdAt,
     }));
+  });
+}
 
-    // --- activity feed (recent orders + enquiries + blog submissions) ---
-    const [enqRows, blogRows] = await Promise.all([
+export async function getActivity(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<ActivityItem[]> {
+  const scoped = locationCondition(location);
+  return withService(async (db) => {
+    const [orderRows, enquiryRows, blogRows] = await Promise.all([
+      db
+        .select({
+          ref: orders.orderRef,
+          createdAt: orders.createdAt,
+          first: sql<string>`${orders.shippingAddress}->>'firstName'`,
+          last: sql<string>`${orders.shippingAddress}->>'lastName'`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            orderWindow(range.current),
+            ...(scoped ? [scoped] : []),
+          ),
+        )
+        .orderBy(desc(orders.createdAt))
+        .limit(5),
       db
         .select({
           name: enquiries.name,
@@ -332,7 +1192,13 @@ export async function getAnalyticsData(
           createdAt: enquiries.createdAt,
         })
         .from(enquiries)
-        .where(eq(enquiries.storeId, storeId))
+        .where(
+          and(
+            eq(enquiries.storeId, storeId),
+            gte(enquiries.createdAt, range.current.from.toISOString()),
+            lt(enquiries.createdAt, range.current.to.toISOString()),
+          ),
+        )
         .orderBy(desc(enquiries.createdAt))
         .limit(5),
       db
@@ -343,90 +1209,40 @@ export async function getAnalyticsData(
           createdAt: blogs.createdAt,
         })
         .from(blogs)
-        .where(eq(blogs.storeId, storeId))
+        .where(
+          and(
+            eq(blogs.storeId, storeId),
+            gte(blogs.createdAt, range.current.from.toISOString()),
+            lt(blogs.createdAt, range.current.to.toISOString()),
+          ),
+        )
         .orderBy(desc(blogs.createdAt))
         .limit(5),
     ]);
-    const activity: ActivityItem[] = [
-      ...recentOrders.map((o) => ({
+    return [
+      ...orderRows.map((row) => ({
         kind: "order" as const,
-        who: o.name,
-        detail: `placed order ${o.ref}`,
-        createdAt: o.createdAt,
+        who: `${row.first ?? ""} ${row.last ?? ""}`.trim() || "Guest",
+        detail: `placed order ${row.ref}`,
+        createdAt: row.createdAt,
       })),
-      ...enqRows.map((e) => ({
+      ...enquiryRows.map((row) => ({
         kind: "enquiry" as const,
-        who: e.name,
-        detail: e.subject ? `enquired: ${e.subject}` : "sent an enquiry",
-        createdAt: e.createdAt,
+        who: row.name,
+        detail: row.subject ? `enquired: ${row.subject}` : "sent an enquiry",
+        createdAt: row.createdAt,
       })),
-      ...blogRows.map((b) => ({
+      ...blogRows.map((row) => ({
         kind: "blog" as const,
-        who: b.author,
+        who: row.author,
         detail:
-          b.status === "published"
-            ? `published "${b.title}"`
-            : `submitted "${b.title}"`,
-        createdAt: b.createdAt,
+          row.status === "published"
+            ? `published "${row.title}"`
+            : `submitted "${row.title}"`,
+        createdAt: row.createdAt,
       })),
     ]
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
       .slice(0, 6);
-
-    return {
-      stats: {
-        revenue: {
-          value: totalRevenue,
-          trendPct: revTrend.pct,
-          trendUp: revTrend.up,
-          spark: revSpark,
-        },
-        orders: {
-          value: ordThis,
-          trendPct: ordTrend.pct,
-          trendUp: ordTrend.up,
-          spark: ordSpark,
-        },
-        customers: {
-          value: totalCustomers,
-          trendPct: custTrend.pct,
-          trendUp: custTrend.up,
-          spark: spark12(custAgg),
-        },
-        products: {
-          value: productsPublished,
-          trendPct: prodTrend.pct,
-          trendUp: prodTrend.up,
-          spark: spark12(prodAgg),
-        },
-      },
-      totalRevenue,
-      revenueSeries,
-      revenueTrendPct: revTrend.pct,
-      revenueTrendUp: revTrend.up,
-      topCategories,
-      recentOrders,
-      activity,
-    };
   });
-}
-
-/** Inclusive list of "YYYY-MM" keys from `startYm` to `endYm`. */
-function monthsBetween(startYm: string, endYm: string): string[] {
-  const out: string[] = [];
-  let y = Number(startYm.slice(0, 4));
-  let m = Number(startYm.slice(5, 7));
-  const ey = Number(endYm.slice(0, 4));
-  const em = Number(endYm.slice(5, 7));
-  // Safety cap so a very old first order can't explode the array.
-  let guard = 0;
-  while ((y < ey || (y === ey && m <= em)) && guard++ < 120) {
-    out.push(`${y}-${String(m).padStart(2, "0")}`);
-    m++;
-    if (m > 12) {
-      m = 1;
-      y++;
-    }
-  }
-  return out;
 }

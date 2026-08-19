@@ -15,10 +15,16 @@ import { changeDue, coversTotal } from "@/lib/pos/totals";
 // Before that, `total` was the pre-tax subtotal: the panel would say "Paid in
 // full ₹238" and the server would answer "the payment doesn't cover the total".
 
-const METHODS: { id: PosTenderMethod; label: string }[] = [
+// ★ CARD AND UPI ARE RECORDS, NOT CHARGES. The shop swipes on their own
+// terminal and the cashier types what it said (docs/pos-plan.md §7) — StoreMink
+// never sees that money. "Online" is the one method here that is actually
+// charged and verified against the gateway, so the three must not look alike:
+// a cashier reading three identical buttons has no way to know that only one of
+// them proves anything.
+const METHODS: { id: PosTenderMethod; label: string; hint?: string }[] = [
   { id: "cash", label: "Cash" },
-  { id: "card", label: "Card" },
-  { id: "upi", label: "UPI" },
+  { id: "card", label: "Card", hint: "Recorded from your own terminal" },
+  { id: "upi", label: "UPI", hint: "Recorded from your own terminal" },
 ];
 
 /** Quick cash buttons: exact, then the next sensible round notes above it. */
@@ -41,6 +47,7 @@ export function TenderPanel({
   receiptEmail,
   onReceiptEmail,
   storeCredit,
+  onTakeOnline,
 }: {
   total: number;
   /** The collection counter is settling an order bought weeks ago, not ringing
@@ -80,6 +87,22 @@ export function TenderPanel({
    * refusal, not an overdraw.
    */
   storeCredit?: number | null;
+  /**
+   * Take a VERIFIED gateway payment for `amount` (roadmap Step 12).
+   *
+   * ★ OPT-IN VIA THE HANDLER, like `onVerifyManager` — so the method appears
+   * only where it can actually settle. The collection counter shares this panel
+   * and `markCollected` has no gateway verification wired, so it passes nothing
+   * and is untouched; that is the same rule `COUNTER_TENDER_METHODS` states for
+   * store credit.
+   *
+   * The parent owns the whole start → modal → confirm dance and hands back the
+   * gateway's payment id. The panel never talks to Razorpay itself, and never
+   * decides that money arrived.
+   */
+  onTakeOnline?: (
+    amount: number,
+  ) => Promise<{ reference?: string; error?: string }>;
 }) {
   const [method, setMethod] = useState<PosTenderMethod>("cash");
   const [amount, setAmount] = useState<string>("");
@@ -105,10 +128,58 @@ export function TenderPanel({
     .filter((t) => t.method === "store_credit")
     .reduce((sum, t) => sum + t.amount, 0);
   const creditLeft = Math.max(0, creditAvailable - creditStaged);
-  const methods =
-    creditLeft > 0
-      ? [...METHODS, { id: "store_credit" as const, label: "Store credit" }]
-      : METHODS;
+  const methods: { id: PosTenderMethod; label: string; hint?: string }[] = [
+    ...METHODS,
+    ...(onTakeOnline
+      ? [
+          {
+            id: "razorpay" as const,
+            label: "Online",
+            hint: "Charged and verified with the gateway",
+          },
+        ]
+      : []),
+    ...(creditLeft > 0
+      ? [{ id: "store_credit" as const, label: "Store credit" }]
+      : []),
+  ];
+  const activeHint = methods.find((m) => m.id === method)?.hint;
+
+  /**
+   * Charge `value` through the gateway, and stage it ONLY once the server says
+   * the money is really there.
+   *
+   * ★★ THE TENDER IS ADDED AFTER CONFIRMATION, NEVER BEFORE. Staging it
+   * optimistically would let a cashier complete a sale on a payment that never
+   * captured — the till would be balanced against money the shop does not have,
+   * and the goods are already across the counter.
+   *
+   * ★ A DISMISSED MODAL IS A NORMAL OUTCOME, not an error to recover from: the
+   * customer changed their mind, or the card failed. Nothing is staged, the
+   * other tenders on this sale survive untouched, and the cashier can take the
+   * amount another way — which is the half-tendered exit a counter needs.
+   */
+  const takeOnline = async (value: number) => {
+    if (!onTakeOnline || value <= 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await onTakeOnline(value);
+      if (res.error || !res.reference) {
+        setError(res.error ?? "That payment didn't go through.");
+        return;
+      }
+      setTaken((t) => [
+        ...t,
+        { method: "razorpay", amount: value, reference: res.reference },
+      ]);
+      setAmount("");
+    } catch {
+      setError("Couldn't reach the payment gateway.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const addTender = (value: number) => {
     if (value <= 0) return;
@@ -327,6 +398,11 @@ export function TenderPanel({
                   </div>
                 )}
 
+                {/* Says which of these StoreMink actually charges. */}
+                {activeHint && (
+                  <p className="mb-2 text-xs text-white/40">{activeHint}</p>
+                )}
+
                 <div className="mb-2 flex gap-2">
                   <input
                     value={amount}
@@ -339,21 +415,39 @@ export function TenderPanel({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        addTender(entered || remaining);
+                        if (method === "razorpay")
+                          takeOnline(entered || remaining);
+                        else addTender(entered || remaining);
                       }
                     }}
                     className="flex-1 rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm outline-none focus:border-white/40"
                   />
-                  <button
-                    type="button"
-                    onClick={() => addTender(entered || remaining)}
-                    className="rounded-xl bg-white/10 px-4 text-sm font-medium hover:bg-white/20"
-                  >
-                    Add
-                  </button>
+                  {method === "razorpay" ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => takeOnline(entered || remaining)}
+                      className="flex items-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-medium hover:bg-white/20 disabled:opacity-40"
+                    >
+                      {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                      Charge
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => addTender(entered || remaining)}
+                      className="rounded-xl bg-white/10 px-4 text-sm font-medium hover:bg-white/20"
+                    >
+                      Add
+                    </button>
+                  )}
                 </div>
 
-                {method !== "cash" && (
+                {/* ★ NOT for a gateway payment: its reference is the gateway's
+                    own payment id, returned by the server after verification.
+                    A typed box here would invite a cashier to hand-enter one,
+                    which is precisely the unverified tender Step 12 removes. */}
+                {method !== "cash" && method !== "razorpay" && (
                   <input
                     value={reference}
                     placeholder="Approval / reference code (optional)"
