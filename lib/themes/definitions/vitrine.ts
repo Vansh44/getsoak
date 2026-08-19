@@ -1,5 +1,5 @@
+import { THEME_META } from "../meta";
 import type { ThemeDefinition, ThemePreset } from "../types";
-import type { ThemeMeta } from "../meta";
 
 // ---------------------------------------------------------------------------
 // VITRINE — a fashion preset for footwear, bags and accessories shops.
@@ -10,78 +10,18 @@ import type { ThemeMeta } from "../meta";
 // everywhere, hairline rules instead of cards, a geometric sans (Jost) doing
 // almost all the work, and exactly one hue reserved for markdown.
 //
-// ⚠ NOT REGISTERED YET — this preset is deliberately absent from
-// THEME_DEFINITIONS (index.ts) and THEME_META (meta.ts) because its ten image
-// assets do not exist under public/themes/vitrine/ yet, and themes.test.ts
-// asserts that every referenced asset is present, WebP/AVIF, >= 800px wide and
-// under 500 KiB. Registering before the imagery lands turns CI red.
+// Registered but NOT yet catalog-visible: `catalog.visibility` is "hidden" and
+// `release.status` is "draft" until demo-vitrine is seeded and the scored
+// design/accessibility pass in docs/theme-acceptance.md is done. themes.test.ts
+// enforces that pairing (public => published + a healthy demo), so flip all
+// three together, never one at a time.
 //
-// TO REGISTER, once public/themes/vitrine/*.webp exist:
-//   1. move `meta` below into the THEME_META array in ../meta.ts
-//      (and drop the local `ThemeMeta` import + const here, replacing the
-//      export with the house pattern: `...THEME_META.find(t => t.id ===
-//      "vitrine")!`);
-//   2. add `vitrine` to THEME_DEFINITIONS in ../index.ts;
-//   3. flip release.status → "published" and catalog.visibility → "public"
-//      only after the demo store is seeded and healthy — themes.test.ts
-//      enforces that pairing.
-// The required asset manifest and art direction are in docs/theme-assets.md.
+// Imagery is bundled under public/themes/vitrine/ and is rebuilt from three
+// authored sources with `node scripts/build-theme-assets.mjs --theme vitrine`;
+// provenance and the source prompts are in docs/theme-assets.md.
 // ---------------------------------------------------------------------------
 
 const img = (name: string) => `/themes/vitrine/${name}.webp`;
-
-/** Move into THEME_META (../meta.ts) at registration — see the header note. */
-export const meta: ThemeMeta = {
-  id: "vitrine",
-  name: "Vitrine",
-  description:
-    "A monochrome fashion preset for footwear, bags and accessories — square product photography in a hairline grid, zero corner radius and one colour reserved for markdown.",
-  engine: { id: "storefront-classic", version: 1 },
-  release: {
-    version: "0.1.0",
-    status: "draft",
-    notes: [
-      "Initial preset: Jost + Instrument Serif, zero-radius shape scale, monochrome palette with a single markdown red.",
-      "Homepage seeds three interchangeable editorial splits so a merchant can re-merchandise each season without touching layout.",
-      "Awaiting bundled imagery and a design/accessibility pass before catalog release.",
-    ],
-  },
-  catalog: {
-    visibility: "hidden",
-    industries: ["clothing", "shoes", "jewelry-and-accessories"],
-    catalogSizes: ["medium", "large"],
-    features: [
-      "product-filtering",
-      "variant-picker",
-      "promo-tiles",
-      "category-navigation",
-      "cart-drawer",
-    ],
-    keywords: [
-      "fashion",
-      "footwear",
-      "shoes",
-      "handbags",
-      "accessories",
-      "monochrome",
-      "minimal",
-      "editorial",
-    ],
-    previewImage: "/themes/vitrine/preview.webp",
-    screenshots: [
-      {
-        src: "/themes/vitrine/preview.webp",
-        viewport: "desktop",
-        alt: "Vitrine homepage with a split hero and a four-column product grid",
-      },
-    ],
-  },
-  demo: {
-    slug: "demo-vitrine",
-    status: "unavailable",
-    unavailableReason: "Demo store not seeded yet.",
-  },
-};
 
 const preset: ThemePreset = {
   brand: {
@@ -849,6 +789,6 @@ const preset: ThemePreset = {
 };
 
 export const vitrine: ThemeDefinition = {
-  ...meta,
+  ...THEME_META.find((theme) => theme.id === "vitrine")!,
   preset,
 };

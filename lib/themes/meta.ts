@@ -258,6 +258,59 @@ export const THEME_META: readonly ThemeMeta[] = [
       checkedAt: "2026-08-12",
     },
   },
+  {
+    id: "vitrine",
+    name: "Vitrine",
+    description:
+      "A monochrome fashion preset for footwear, bags and accessories \u2014 square product photography in a hairline grid, zero corner radius and one colour reserved for markdown.",
+    engine: { id: "storefront-classic", version: 1 },
+    release: {
+      version: "0.1.0",
+      status: "draft",
+      notes: [
+        "Initial preset: Jost + Instrument Serif, zero-radius shape scale, monochrome palette with a single markdown red.",
+        "Homepage seeds three interchangeable editorial splits so a merchant can re-merchandise each season without touching layout.",
+        "Imagery bundled; awaiting a seeded demo store and a design/accessibility pass before catalog release.",
+      ],
+    },
+    catalog: {
+      // Hidden until demo-vitrine is seeded and the design pass is scored --
+      // themes.test.ts enforces public => published + healthy demo.
+      visibility: "hidden",
+      industries: ["clothing", "shoes", "jewelry-and-accessories"],
+      catalogSizes: ["medium", "large"],
+      features: [
+        "product-filtering",
+        "variant-picker",
+        "promo-tiles",
+        "category-navigation",
+        "cart-drawer",
+      ],
+      keywords: [
+        "fashion",
+        "footwear",
+        "shoes",
+        "handbags",
+        "accessories",
+        "monochrome",
+        "minimal",
+        "editorial",
+      ],
+      previewImage: "/themes/vitrine/preview.webp",
+      screenshots: [
+        {
+          src: "/themes/vitrine/preview.webp",
+          viewport: "desktop",
+          alt: "Vitrine fashion storefront preview with footwear and bags",
+        },
+      ],
+    },
+    demo: {
+      slug: "demo-vitrine",
+      status: "unavailable",
+      unavailableReason: "Demo store not seeded yet.",
+    },
+  },
 ] as const;
 
 export const DEFAULT_THEME_ID = "basket";

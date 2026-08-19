@@ -5,6 +5,7 @@ import { DEFAULT_THEME_ID, THEME_META } from "./meta";
 import { basket } from "./definitions/basket";
 import { ritual } from "./definitions/ritual";
 import { studio } from "./definitions/studio";
+import { vitrine } from "./definitions/vitrine";
 import type { ThemeDefinition } from "./types";
 
 /** Keep older immutable releases here when a preset version advances. */
@@ -12,6 +13,7 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = [
   basket,
   studio,
   ritual,
+  vitrine,
 ];
 
 const BY_RELEASE = new Map(

@@ -1564,19 +1564,20 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     themes with generated, provenance-logged imagery, available in signup and
     the public catalog after their 2026-08-12 production/demo audits — the
     Arcade/Fresko placeholders were retired 2026-07-04),
-    `definitions/vitrine.ts` (**UNREGISTERED, and deliberately so** — a
+    `definitions/vitrine.ts` (a
     monochrome fashion preset for footwear/bags/accessories: Jost +
     Instrument Serif, every `shape` token `0px`, hairline borders instead of
-    cards, and one markdown red as the only hue. It passes every non-asset
-    constraint in `themes.test.ts` but is absent from BOTH `THEME_DEFINITIONS`
-    and `THEME_META`, because the asset guards run over every REGISTERED theme
-    and its ten `public/themes/vitrine/*.webp` files do not exist yet —
-    registering first is a knowingly-red CI. It therefore exports its own
-    `meta` const rather than reading `THEME_META.find(...)!`, which would be
-    `undefined` at import time; the file header carries the three-step
-    registration recipe and docs/theme-assets.md carries the asset manifest +
-    art direction. ⚠ Consequence: nothing imports it, so it reports 0%
-    coverage — that is the unregistered state, not dead code),
+    cards, and one markdown red as the only hue. REGISTERED, with its ten
+    `public/themes/vitrine/*.webp` assets bundled, but held at
+    `visibility: "hidden"` / `release.status: "draft"` until `demo-vitrine` is
+    seeded and the scored design pass is done — `themes.test.ts` enforces
+    public ⇒ published + a healthy demo, so those three flip TOGETHER.
+    ★ Its product crops are SQUARE (1000×1000), not the 4:3 Studio/Ritual use,
+    because this theme renders cards at 1:1 and a 4:3 source would be
+    centre-cropped through the toe of the shoe. Imagery is rebuilt from three
+    authored sources by `scripts/build-theme-assets.mjs` (quadrant crops in
+    reading order, resize, WebP, quality stepped down until each file fits its
+    cap); provenance + prompts in docs/theme-assets.md),
     `apply.ts` `applyTheme(storeId, themeId,
     {publish, reset?})` — service-role, idempotent upserts keyed on
     (store_id, slug), best-effort per entity with an errors accumulator;

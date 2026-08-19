@@ -79,24 +79,31 @@ All derived files are under 500 KiB; `preview.webp` is under the catalog limit
 of 250 KiB. Source PNGs remain in the local ImageGen output store and are not
 runtime dependencies.
 
-## Vitrine `0.1.0` — PENDING
+## Vitrine `0.1.0`
 
-- **Status:** assets **not yet produced**. `lib/themes/definitions/vitrine.ts`
-  is written and passes every non-asset constraint in `themes.test.ts`, but the
-  preset is deliberately absent from `THEME_DEFINITIONS` and `THEME_META` until
-  the ten files below exist — the asset guards run over every registered theme,
-  so registering first turns CI red.
-- **Source (planned):** generate with the built-in ImageGen tool; no
-  third-party photograph, logo, branded product or proprietary theme reference.
-  ⚠ Do **not** trace or reuse imagery from any live retailer's site.
+- **Created:** 2026-08-19
+- **Status:** assets built and bundled; the preset is registered in
+  `THEME_DEFINITIONS` and `THEME_META` but held at `visibility: "hidden"` /
+  `release.status: "draft"` until `demo-vitrine` is seeded and the scored design
+  pass is done. This log is release evidence, not a statement that the theme has
+  passed storefront, accessibility, performance or human review.
+- **Source:** generated with an image-generation tool from the prompts below; no
+  third-party photograph, logo, branded product or proprietary theme reference
+  was used. ⚠ Do **not** trace or reuse imagery from any live retailer's site.
 - **Art direction:** monochrome warm-neutral — off-white `#fbfaf8`, pale grey
   product bed `#efebe6`, warm brown-black `#2a211f`; contemporary fashion
   e-commerce; square, evenly-lit studio product photography with soft contact
   shadows; one tan and one tortoiseshell as the only chromatic notes; text-free
   and logo-free.
-- **Human inspection required:** check every output for invented branding,
-  watermarks, mismatched left/right shoes, six-fingered hands and duplicated
-  products before processing.
+- **Human inspection:** all three sources were checked before processing for
+  invented branding, watermarks, mismatched left/right shoes and duplicated
+  products, and every derived file was checked afterwards for correct
+  quadrant-to-filename mapping. All clean.
+- ⚠ **Source resolution:** the contact sheets were 1254×1254, so each quadrant
+  is 627px and the 1000×1000 product crops are upscaled ~1.6×. Not visible at
+  the sizes the storefront renders (cards ~280–308px, so ~616px at 2× DPI), but
+  regenerate the sheets at 2048px or above if the product pages ever need
+  genuinely larger art.
 
 ### Source prompts
 
