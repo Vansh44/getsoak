@@ -1638,7 +1638,13 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     by `proxy.ts` to `app/themes/`, never resolved as merchant tenancy. The
     server-rendered catalog imports only client-safe `THEME_META`, so its
     industry filters, plan badges, release labels, preview image, demo health,
-    and signup CTA share the exact source used by onboarding. It has its own
+    and signup CTA share the exact source used by onboarding. The hero and
+    closing galleries receive a small serializable projection of every
+    selectable manifest entry and rotate automatically in the narrow
+    `theme-showcases.tsx` client boundary; manual controls pause rotation, and
+    reduced-motion visitors keep a stable composition. Publishing another
+    selectable theme therefore updates both galleries without page-specific
+    image wiring. The catalog has its own
     canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
     one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
     demos render an honest unavailable state rather than a broken live link.
