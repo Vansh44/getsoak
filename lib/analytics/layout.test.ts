@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WIDGETS, type WidgetId } from "@/app/dashboard/analytics/widgets";
 import {
+  analyticsWidgetGridRows,
   availableWidgetSizes,
   defaultAnalyticsSections,
   layoutForViewer,
@@ -24,6 +25,16 @@ describe("analytics layout v2 contract", () => {
       },
     ]);
     expect(availableWidgetSizes("revenue_chart")).toEqual(["half", "full"]);
+  });
+
+  it("gives every editor card a stable vertical grid footprint", () => {
+    const all = Object.keys(WIDGETS) as WidgetId[];
+    expect(all.every((widgetId) => analyticsWidgetGridRows(widgetId) > 0)).toBe(
+      true,
+    );
+    expect(analyticsWidgetGridRows("metric_revenue")).toBe(2);
+    expect(analyticsWidgetGridRows("blog_approvals")).toBe(6);
+    expect(analyticsWidgetGridRows("revenue_chart")).toBe(7);
   });
 
   it("uses the seller-performance cards for untouched dashboards", () => {

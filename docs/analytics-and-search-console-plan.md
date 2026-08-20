@@ -588,12 +588,18 @@ the viewer later becomes unrestricted.
   than a per-section popup. A card can be clicked into the first visible section
   or dragged directly to a dotted landing area; added cards stay visible but
   disabled in the rail so the complete catalogue does not jump while editing.
-  Add/remove feedback includes an Undo action.
+  Add/remove feedback includes an Undo action. The normal StoreMink dashboard
+  navigation is hidden while this workspace is open, so two unrelated left
+  rails are never shown together.
 - Cards drag within or across sections. Sections can be added, renamed, hidden,
   reordered, and deleted. A section title is 1–60 trimmed characters.
-- Cards support `compact`, `half`, and `full` sizes. The renderer maps these
-  semantic sizes to the current four-column grid; raw column counts are not
-  persisted. Tables and multi-series charts have a minimum `half` size.
+- Cards support `compact`, `half`, and `full` sizes. The editor maps these to
+  3/6/12 columns on a fixed 12-column grid, and each widget has a defined row
+  span. Empty landing pills therefore remain equal-sized even beside tall
+  widgets, and the card footprint makes its occupied area unambiguous. Raw grid
+  counts are not persisted; the saved semantic sizes still render through the
+  normal responsive viewing grid. Tables and multi-series charts have a minimum
+  `half` size.
 - A widget can appear once. Adding it marks it as already added in the library;
   removing it makes it available again.
 - The library is searchable and grouped by Metrics, Sales, Customers, Inventory,

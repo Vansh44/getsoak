@@ -2284,11 +2284,17 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       full workspace with a sticky searchable/grouped card rail, click-or-drag
       insertion, dotted landing slots, compact card option menus, section
       add/rename/hide/reorder/delete controls, an unsaved-changes save bar, and
-      add/remove undo toasts. dnd-kit reorders cards within/across named sections
+      add/remove undo toasts. The normal dashboard navigation is hidden for the
+      duration of editing, leaving the card catalogue as the workspace's only
+      left rail. The editor canvas is a fixed 12-column unit grid: every dotted
+      landing cell stays the same size, while `layout.ts` assigns each widget a
+      stable vertical row footprint and semantic `compact`/`half`/`full` widths
+      occupy 3/6/12 columns. dnd-kit reorders cards within/across named sections
       and accepts new cards dragged from the rail; keyboard and non-drag controls
       remain available. `useSortable`/`useDraggable` are called only under their
-      DndContext. Saved sections render as a responsive four-column grid;
-      semantic `compact`/`half`/`full` sizes collapse to one column on mobile.
+      DndContext. Saved sections still render as the responsive four-column
+      viewing grid; editor units collapse to 8 columns on tablets and one card
+      per row on mobile.
     - **Phase 2a persistence (2026-08-18):**
       `supabase/analytics_01_dashboard_layouts.sql` and the matching
       `analyticsDashboardLayouts` Drizzle model store a bounded, versioned

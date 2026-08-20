@@ -8,6 +8,45 @@ export const MAX_ANALYTICS_SECTION_TITLE = 60;
 export const ANALYTICS_WIDGET_SIZES = ["compact", "half", "full"] as const;
 export type AnalyticsWidgetSize = (typeof ANALYTICS_WIDGET_SIZES)[number];
 
+/**
+ * The editor uses a fixed-height grid so a tall card cannot stretch the empty
+ * landing cells beside it. Each widget owns a stable vertical footprint; the
+ * saved compact/half/full preference controls only its width.
+ */
+export const ANALYTICS_WIDGET_GRID_ROWS: Record<WidgetId, number> = {
+  metric_revenue: 2,
+  metric_orders: 2,
+  metric_aov: 2,
+  metric_units: 2,
+  metric_customers: 2,
+  metric_products: 2,
+  revenue_chart: 7,
+  top_categories: 7,
+  top_products: 7,
+  sales_by_channel: 6,
+  sales_by_location: 6,
+  sales_by_payment: 6,
+  customer_mix: 6,
+  discount_impact: 6,
+  returns_refunds: 7,
+  inventory_velocity: 6,
+  recent_orders: 7,
+  activity: 7,
+  blog_approvals: 6,
+  enquiries: 5,
+  search_clicks: 4,
+  search_impressions: 4,
+  search_ctr: 4,
+  search_position: 4,
+  search_trend: 7,
+  search_queries: 7,
+  search_pages: 7,
+};
+
+export function analyticsWidgetGridRows(widgetId: WidgetId): number {
+  return ANALYTICS_WIDGET_GRID_ROWS[widgetId];
+}
+
 export interface AnalyticsLayoutItem {
   widgetId: WidgetId;
   size: AnalyticsWidgetSize;

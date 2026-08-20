@@ -1,13 +1,13 @@
 "use client";
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   useTransition,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -51,6 +51,7 @@ import {
 } from "@/app/actions/analytics-layout";
 import {
   MAX_ANALYTICS_SECTIONS,
+  analyticsWidgetGridRows,
   availableWidgetSizes,
   defaultAnalyticsSections,
   legacyLayoutFromWidgetIds,
@@ -73,6 +74,14 @@ interface DashboardCanvasProps {
   slots: Partial<Record<WidgetId, ReactNode>>;
   headerExtras?: ReactNode;
   initialLayout: AnalyticsLayoutView;
+}
+
+const EDITOR_GUIDE_CELLS = 36;
+
+function editorWidgetStyle(widgetId: WidgetId): CSSProperties {
+  return {
+    "--dash-editor-row-span": analyticsWidgetGridRows(widgetId),
+  } as CSSProperties;
 }
 
 function cloneSections(
@@ -155,13 +164,11 @@ export function DashboardCanvas({
   const [draft, setDraft] = useState<AnalyticsLayoutSection[] | null>(null);
   const [reorderingSections, setReorderingSections] = useState(false);
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
-  const [lastAddedWidgetId, setLastAddedWidgetId] = useState<WidgetId | null>(
-    null,
-  );
   const [resetRequested, setResetRequested] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const legacyAttempted = useRef(false);
+  const editorRootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (legacyAttempted.current) return;
@@ -189,6 +196,14 @@ export function DashboardCanvas({
   }, [allowed, layoutConfigured, storeId]);
 
   const editing = draft !== null;
+
+  useEffect(() => {
+    const frame = editorRootRef.current?.closest(".dashboard-frame");
+    if (!frame) return;
+    frame.classList.toggle("is-analytics-editing", editing);
+    return () => frame.classList.remove("is-analytics-editing");
+  }, [editing]);
+
   const sections = draft ?? layout;
   const placed = new Set(
     sections.flatMap((section) => section.items.map((item) => item.widgetId)),
@@ -200,14 +215,12 @@ export function DashboardCanvas({
   const startEditing = () => {
     setSaveError(null);
     setResetRequested(false);
-    setLastAddedWidgetId(null);
     setDraft(cloneSections(layout));
   };
   const cancelEditing = () => {
     setDraft(null);
     setReorderingSections(false);
     setActiveDragId(null);
-    setLastAddedWidgetId(null);
     setResetRequested(false);
     setSaveError(null);
   };
@@ -233,7 +246,6 @@ export function DashboardCanvas({
       setDraft(null);
       setReorderingSections(false);
       setActiveDragId(null);
-      setLastAddedWidgetId(null);
       setResetRequested(false);
       removeLegacyLayout(storeId);
     });
@@ -258,7 +270,6 @@ export function DashboardCanvas({
     setDraft(defaultAnalyticsSections(allowed));
     setResetRequested(true);
     setReorderingSections(false);
-    setLastAddedWidgetId(null);
     setSaveError(null);
   };
   const addSection = () => {
@@ -299,12 +310,10 @@ export function DashboardCanvas({
           : section,
       ),
     );
-    setLastAddedWidgetId(widgetId);
     toast("Card added", {
       action: {
         label: "Undo",
         onClick: () => {
-          setLastAddedWidgetId(null);
           removeCard(widgetId, false);
         },
       },
@@ -324,7 +333,6 @@ export function DashboardCanvas({
         items: section.items.filter((item) => item.widgetId !== widgetId),
       })),
     );
-    if (lastAddedWidgetId === widgetId) setLastAddedWidgetId(null);
     if (announce && removedItem && removedSectionId && location) {
       toast("Card removed", {
         action: {
@@ -435,12 +443,11 @@ export function DashboardCanvas({
   const activeWidgetId = activeDragId?.startsWith("library:")
     ? (activeDragId.slice("library:".length) as WidgetId)
     : (activeDragId as WidgetId | null);
-  const lastAddedLocation = lastAddedWidgetId
-    ? itemLocation(sections, lastAddedWidgetId)
-    : null;
-
   return (
-    <div className={editing ? "dash-editor-mode" : undefined}>
+    <div
+      ref={editorRootRef}
+      className={editing ? "dash-editor-mode" : undefined}
+    >
       {editing ? (
         <div className="dash-savebar">
           <div className="dash-savebar-msg">
@@ -547,14 +554,6 @@ export function DashboardCanvas({
                     showInsertionGuides={
                       hasChanges ||
                       activeDragId?.startsWith("library:") === true
-                    }
-                    insertionGuideIndex={
-                      lastAddedLocation?.sectionIndex === index
-                        ? lastAddedLocation.itemIndex + 1
-                        : 4
-                    }
-                    insertionGuideCount={
-                      lastAddedLocation?.sectionIndex === index ? 7 : 8
                     }
                     onRemove={removeCard}
                     onResize={resizeCard}
@@ -680,8 +679,6 @@ function EditableSection({
   sections,
   reordering,
   showInsertionGuides,
-  insertionGuideIndex,
-  insertionGuideCount,
   onRemove,
   onResize,
   onMoveCard,
@@ -696,8 +693,6 @@ function EditableSection({
   sections: AnalyticsLayoutSection[];
   reordering: boolean;
   showInsertionGuides: boolean;
-  insertionGuideIndex: number;
-  insertionGuideCount: number;
   onRemove: (id: WidgetId) => void;
   onResize: (id: WidgetId, size: AnalyticsWidgetSize) => void;
   onMoveCard: (id: WidgetId, sectionId: string) => void;
@@ -787,41 +782,30 @@ function EditableSection({
       </div>
       {!collapsed ? (
         <SectionGrid section={section}>
-          {section.items.map((item, itemIndex) => (
-            <Fragment key={item.widgetId}>
-              {showInsertionGuides && itemIndex === insertionGuideIndex
-                ? Array.from({ length: insertionGuideCount }).map(
-                    (_, guideIndex) => (
-                      <InsertionSlot
-                        key={`insert-${guideIndex}`}
-                        sectionId={section.id}
-                        index={insertionGuideIndex + guideIndex}
-                      />
-                    ),
-                  )
-                : null}
-              <SortableWidget
-                item={item}
-                node={slots[item.widgetId]}
-                sections={sections}
-                currentSectionId={section.id}
-                onRemove={() => onRemove(item.widgetId)}
-                onResize={(size) => onResize(item.widgetId, size)}
-                onMove={(sectionId) => onMoveCard(item.widgetId, sectionId)}
-              />
-            </Fragment>
+          {section.items.map((item) => (
+            <SortableWidget
+              key={item.widgetId}
+              item={item}
+              node={slots[item.widgetId]}
+              sections={sections}
+              currentSectionId={section.id}
+              onRemove={() => onRemove(item.widgetId)}
+              onResize={(size) => onResize(item.widgetId, size)}
+              onMove={(sectionId) => onMoveCard(item.widgetId, sectionId)}
+            />
           ))}
-          {showInsertionGuides && section.items.length <= insertionGuideIndex
-            ? Array.from({ length: insertionGuideCount }).map(
-                (_, guideIndex) => (
-                  <InsertionSlot
-                    key={`insert-${guideIndex}`}
-                    sectionId={section.id}
-                    index={insertionGuideIndex + guideIndex}
-                  />
-                ),
-              )
-            : null}
+          {Array.from({
+            length:
+              showInsertionGuides || section.items.length === 0
+                ? EDITOR_GUIDE_CELLS
+                : 0,
+          }).map((_, guideIndex) => (
+            <InsertionSlot
+              key={`insert-${guideIndex}`}
+              sectionId={section.id}
+              index={section.items.length + guideIndex}
+            />
+          ))}
         </SectionGrid>
       ) : null}
     </section>
@@ -848,15 +832,6 @@ function SectionGrid({
         className={`dash-canvas${isOver ? " is-drop-target" : ""}`}
       >
         {children}
-        {Array.from({ length: Math.max(4, 8 - section.items.length) }).map(
-          (_, index) => (
-            <div
-              key={`placeholder-${index}`}
-              className="dash-slot-placeholder"
-              aria-hidden
-            />
-          ),
-        )}
         {section.items.length === 0 ? (
           <span className="sr-only">Drop or add a card here</span>
         ) : null}
@@ -913,8 +888,13 @@ function SortableWidget({
   return (
     <div
       ref={setNodeRef}
+      data-widget-id={item.widgetId}
       className={`dash-widget size-${item.size}${isDragging ? " is-dragging" : ""}`}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{
+        ...editorWidgetStyle(item.widgetId),
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
     >
       <div className="dash-widget-bar">
         <button
