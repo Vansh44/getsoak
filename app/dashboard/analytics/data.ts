@@ -111,6 +111,39 @@ export interface ReturnsAndRefunds {
   completedRefunds: number;
 }
 
+export interface GrossMarginAnalytics {
+  merchandiseSales: number;
+  costedSales: number;
+  costOfGoods: number;
+  grossProfit: number;
+  marginPercent: number;
+  coveragePercent: number;
+  costedUnits: number;
+  totalUnits: number;
+}
+
+export function grossMarginFromTotals(input: {
+  merchandiseSales: number;
+  costedSales: number;
+  costOfGoods: number;
+  totalUnits: number;
+  costedUnits: number;
+}): GrossMarginAnalytics {
+  const grossProfit = input.costedSales - input.costOfGoods;
+  return {
+    ...input,
+    grossProfit,
+    marginPercent:
+      input.costedSales > 0 ? (grossProfit / input.costedSales) * 100 : 0,
+    coveragePercent:
+      input.merchandiseSales > 0
+        ? (input.costedSales / input.merchandiseSales) * 100
+        : input.totalUnits > 0
+          ? (input.costedUnits / input.totalUnits) * 100
+          : 100,
+  };
+}
+
 export interface InventoryVelocityItem {
   id: string;
   name: string;
@@ -436,6 +469,52 @@ export async function getSalesAnalytics(
       rangeLabel: range.label,
       comparisonLabel: range.comparisonLabel,
     };
+  });
+}
+
+/**
+ * Gross margin over recognized merchandise lines, before returns/refunds.
+ * Unknown costs are excluded from both the numerator and denominator rather
+ * than being treated as free inventory. coveragePercent makes incompleteness
+ * explicit to the merchant.
+ */
+export async function getGrossMarginAnalytics(
+  storeId: string,
+  location: AnalyticsLocationSelection,
+  range: AnalyticsRange,
+): Promise<GrossMarginAnalytics> {
+  const scoped = locationCondition(location);
+  const [row] = await withService((db) =>
+    db
+      .select({
+        merchandiseSales: sql<number>`coalesce(sum(${orderItems.total}), 0)::float8`,
+        costedSales: sql<number>`coalesce(sum(case when ${orderItems.unitCost} is not null then ${orderItems.total} else 0 end), 0)::float8`,
+        costOfGoods: sql<number>`coalesce(sum(case when ${orderItems.unitCost} is not null then ${orderItems.unitCost} * ${orderItems.quantity} else 0 end), 0)::float8`,
+        totalUnits: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+        costedUnits: sql<number>`coalesce(sum(case when ${orderItems.unitCost} is not null then ${orderItems.quantity} else 0 end), 0)::int`,
+      })
+      .from(orderItems)
+      .innerJoin(orders, eq(orderItems.orderId, orders.id))
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          scoped,
+        ),
+      ),
+  );
+  const merchandiseSales = Number(row?.merchandiseSales ?? 0);
+  const costedSales = Number(row?.costedSales ?? 0);
+  const costOfGoods = Number(row?.costOfGoods ?? 0);
+  const totalUnits = Number(row?.totalUnits ?? 0);
+  const costedUnits = Number(row?.costedUnits ?? 0);
+  return grossMarginFromTotals({
+    merchandiseSales,
+    costedSales,
+    costOfGoods,
+    costedUnits,
+    totalUnits,
   });
 }
 

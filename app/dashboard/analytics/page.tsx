@@ -1,4 +1,5 @@
 import { Suspense, type ReactNode } from "react";
+import Link from "next/link";
 import { ActivityFeed } from "../components/activity-feed";
 import { AnalyticsSummaryCard } from "../components/analytics-summary-card";
 import { BlogApprovals } from "../components/blog-approvals";
@@ -26,6 +27,7 @@ import {
   getCustomerMix,
   getDiscountImpact,
   getInventoryVelocity,
+  getGrossMarginAnalytics,
   getRecentOrders,
   getReturnsAndRefunds,
   getSalesAnalytics,
@@ -36,6 +38,7 @@ import {
   getTopProducts,
 } from "./data";
 import type { CatalogSnapshots, SalesAnalytics } from "./data";
+import type { GrossMarginAnalytics } from "./data";
 import { getSearchAnalytics, type SearchAnalytics } from "./search-data";
 import { isWidgetId, type WidgetId } from "./widgets";
 import {
@@ -48,6 +51,13 @@ import { getAnalyticsDashboardLayout } from "@/lib/analytics/layout-store";
 import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { analyticsReportHref } from "@/lib/analytics/reports";
 import { getViewerLocations } from "@/lib/locations/scope";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
+import {
+  getStorefrontAnalytics,
+  storeHasProAnalytics,
+  type StorefrontAnalytics,
+} from "./storefront-data";
 
 function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
   return (
@@ -312,6 +322,111 @@ async function SearchRanking({
   );
 }
 
+async function StorefrontMetric({
+  data,
+  metric,
+}: {
+  data: Promise<StorefrontAnalytics>;
+  metric: "visitors" | "sessions" | "pageViews";
+}) {
+  const result = await data;
+  const labels = {
+    visitors: "Storefront visitors",
+    sessions: "Storefront sessions",
+    pageViews: "Storefront page views",
+  } as const;
+  return <MetricCard label={labels[metric]} stat={result[metric]} />;
+}
+
+async function StorefrontFunnel({
+  data,
+}: {
+  data: Promise<StorefrontAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <AnalyticsSummaryCard
+      title="Storefront conversion funnel"
+      subtitle="Consented sessions with steps completed in order"
+      items={[
+        { label: "Sessions", value: result.sessions.value },
+        { label: "Viewed a product", value: result.productSessions },
+        { label: "Added to cart", value: result.cartSessions },
+        { label: "Reached checkout", value: result.checkoutSessions },
+        { label: "Converted sessions", value: result.convertedSessions },
+        {
+          label: "Conversion rate",
+          value: result.conversionRate,
+          format: "percent",
+        },
+      ]}
+      note="Visitors who reject analytics and filtered automated traffic are not counted. Aggregates refresh hourly."
+    />
+  );
+}
+
+async function GrossProfitMetric({
+  data,
+}: {
+  data: Promise<GrossMarginAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <MetricCard
+      label="Gross profit"
+      stat={{
+        value: result.grossProfit,
+        trendPct: null,
+        trendUp: result.grossProfit >= 0,
+        spark: [],
+      }}
+      currency
+    />
+  );
+}
+
+async function GrossMarginWidget({
+  data,
+}: {
+  data: Promise<GrossMarginAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <AnalyticsSummaryCard
+      title="Gross margin"
+      subtitle="Recognized merchandise lines with a cost snapshot"
+      items={[
+        {
+          label: "Costed sales",
+          value: result.costedSales,
+          format: "currency",
+        },
+        {
+          label: "Cost of goods",
+          value: result.costOfGoods,
+          format: "currency",
+        },
+        {
+          label: "Gross profit",
+          value: result.grossProfit,
+          format: "currency",
+        },
+        {
+          label: "Gross margin",
+          value: result.marginPercent,
+          format: "percent",
+        },
+        {
+          label: "Cost coverage",
+          value: result.coveragePercent,
+          format: "percent",
+        },
+      ]}
+      note="Before returns and refunds. Missing costs are excluded, never counted as zero. Add costs in Products to improve coverage."
+    />
+  );
+}
+
 export default async function AnalyticsPage({
   searchParams,
 }: {
@@ -320,11 +435,28 @@ export default async function AnalyticsPage({
   const access = await requireSectionAccess("analytics", "view");
   const showBlogApprovals = access.can("blogs", "view");
   const showEnquiries = access.can("enquiries", "view");
-  const [storeId, locationScope, params] = await Promise.all([
+  const [storeId, locationScope, params, platformFeatures] = await Promise.all([
     getActingStoreId(),
     getViewerLocations(),
     searchParams,
+    getPlatformAnalyticsFeatures(),
   ]);
+  if (!platformFeatures.coreDashboard) {
+    return (
+      <div className="dash-analytics">
+        <header className="dash-an-head">
+          <h1>Analytics</h1>
+        </header>
+        <div className="dash-card p-8 text-center">
+          <h2 className="text-base font-semibold">Analytics is unavailable</h2>
+          <p className="mt-2 text-sm text-[var(--dash-text-3)]">
+            StoreMink has temporarily disabled the Analytics dashboard. Your
+            store data is unchanged.
+          </p>
+        </div>
+      </div>
+    );
+  }
   const [timeZone, locationOptions] = await Promise.all([
     getStoreAnalyticsTimeZone(storeId),
     getAnalyticsLocationOptions(storeId, locationScope),
@@ -354,11 +486,29 @@ export default async function AnalyticsPage({
   const discounts = getDiscountImpact(storeId, location, range);
   const returns = getReturnsAndRefunds(storeId, location, range);
   const velocity = getInventoryVelocity(storeId, location, range);
-  const search = getSearchAnalytics(storeId, range);
-  const totalSalesReport = analyticsReportHref("total-sales", params);
-  const salesOverTimeReport = analyticsReportHref("sales-over-time", params);
-  const topProductsReport = analyticsReportHref("top-products", params);
-  const searchQueriesReport = analyticsReportHref("search-queries", params);
+  const search = platformFeatures.googleSearchConsole
+    ? getSearchAnalytics(storeId, range)
+    : null;
+  const storefront =
+    platformFeatures.storefrontConversion &&
+    (await storeHasProAnalytics(storeId))
+      ? getStorefrontAnalytics(storeId, range)
+      : null;
+  const margin = (await storeHasAnalyticsFeature(storeId, "grossMargin"))
+    ? getGrossMarginAnalytics(storeId, location, range)
+    : null;
+  const totalSalesReport = platformFeatures.drilldownReports
+    ? analyticsReportHref("total-sales", params)
+    : undefined;
+  const salesOverTimeReport = platformFeatures.drilldownReports
+    ? analyticsReportHref("sales-over-time", params)
+    : undefined;
+  const topProductsReport = platformFeatures.drilldownReports
+    ? analyticsReportHref("top-products", params)
+    : undefined;
+  const searchQueriesReport = platformFeatures.drilldownReports
+    ? analyticsReportHref("search-queries", params)
+    : undefined;
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
@@ -453,32 +603,34 @@ export default async function AnalyticsPage({
         <ActivityWidget data={activity} />
       </Suspense>
     ),
-    search_clicks: (
+  };
+  if (search) {
+    slots.search_clicks = (
       <Suspense fallback={<WidgetSkeleton compact />}>
         <SearchMetricWidget data={search} metric="clicks" />
       </Suspense>
-    ),
-    search_impressions: (
+    );
+    slots.search_impressions = (
       <Suspense fallback={<WidgetSkeleton compact />}>
         <SearchMetricWidget data={search} metric="impressions" />
       </Suspense>
-    ),
-    search_ctr: (
+    );
+    slots.search_ctr = (
       <Suspense fallback={<WidgetSkeleton compact />}>
         <SearchMetricWidget data={search} metric="ctr" />
       </Suspense>
-    ),
-    search_position: (
+    );
+    slots.search_position = (
       <Suspense fallback={<WidgetSkeleton compact />}>
         <SearchMetricWidget data={search} metric="position" />
       </Suspense>
-    ),
-    search_trend: (
+    );
+    slots.search_trend = (
       <Suspense fallback={<WidgetSkeleton />}>
         <SearchTrend data={search} />
       </Suspense>
-    ),
-    search_queries: (
+    );
+    slots.search_queries = (
       <Suspense fallback={<WidgetSkeleton />}>
         <SearchRanking
           data={search}
@@ -486,13 +638,47 @@ export default async function AnalyticsPage({
           reportHref={searchQueriesReport}
         />
       </Suspense>
-    ),
-    search_pages: (
+    );
+    slots.search_pages = (
       <Suspense fallback={<WidgetSkeleton />}>
         <SearchRanking data={search} kind="page" />
       </Suspense>
-    ),
-  };
+    );
+  }
+  if (storefront) {
+    slots.traffic_visitors = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="visitors" />
+      </Suspense>
+    );
+    slots.traffic_sessions = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="sessions" />
+      </Suspense>
+    );
+    slots.traffic_page_views = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="pageViews" />
+      </Suspense>
+    );
+    slots.traffic_funnel = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <StorefrontFunnel data={storefront} />
+      </Suspense>
+    );
+  }
+  if (margin) {
+    slots.metric_gross_profit = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <GrossProfitMetric data={margin} />
+      </Suspense>
+    );
+    slots.gross_margin_overview = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <GrossMarginWidget data={margin} />
+      </Suspense>
+    );
+  }
   if (locationOptions.length > 0) {
     slots.sales_by_location = (
       <Suspense fallback={<WidgetSkeleton />}>
@@ -540,13 +726,19 @@ export default async function AnalyticsPage({
         storeId={storeId}
         slots={slots}
         headerExtras={
-          <AnalyticsFilters
-            range={range}
-            locations={locationOptions}
-            selectedLocationId={location.selectedId}
-          />
+          <>
+            <AnalyticsFilters
+              range={range}
+              locations={locationOptions}
+              selectedLocationId={location.selectedId}
+            />
+            <Link href="/dashboard/settings/analytics" className="dash-an-btn">
+              Tracking settings
+            </Link>
+          </>
         }
         initialLayout={initialLayout}
+        canCustomize={platformFeatures.dashboardCustomization}
       />
     </div>
   );

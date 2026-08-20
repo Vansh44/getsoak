@@ -123,7 +123,8 @@ wholesip/
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
 │   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
-│   │   │                      # delivery-location providers
+│   │   │                      # delivery-location providers; mounts the Pro merchant
+│   │   │                      # tracking consent boundary outside builder previews
 │   │   ├── page.tsx           # Store homepage = store_pages row with slug "" (the
 │   │   │                      # "homepage sentinel"); reads published/preview sections
 │   │   │                      # just like [pageSlug]. Edited in /dashboard/builder (§11)
@@ -220,7 +221,9 @@ wholesip/
 │   │   │                      # Search aggregates, widget registry, and persisted
 │   │   │                      # per-admin "Edit dashboard" canvas. reports/[report]
 │   │   │                      # provides tenant/location-safe drill-down tables for
-│   │   │                      # total sales, sales over time, products and Search queries
+│   │   │                      # total sales, sales over time, products and Search queries;
+│   │   │                      # platform availability gates live in lib/analytics/features;
+│   │   │                      # Pro gross-margin cards use immutable order-line costs
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
@@ -323,7 +326,9 @@ wholesip/
 │   │   │                      # ★ failures/ = everything that DIDN'T work, read
 │   │   │                      # across the other tables (§33). FIVE logs, ONE
 │   │   │                      # `activity` permission
-│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) + ★ notifications/ (§22 CONSOLE:
+│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) +
+│   │                          # ★ analytics/ (Pro GA4 + Meta IDs and enable switches) +
+│   │                          # ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
@@ -351,7 +356,7 @@ wholesip/
 │   │                          # (ONE merchant, fully described), email-logs/,
 │   │                          # failures/ (the SAME feed as a store's, scoped
 │   │                          # { kind: "platform" } across every store, §33);
-│   │                          # ADMINISTRATION = help/, themes/, pricing/,
+│   │                          # ADMINISTRATION = help/, themes/, pricing/, analytics/,
 │   │                          # operators/, billing/. require-operator.ts is the
 │   │                          # per-PAGE gate — the layout's redirect does not abort a
 │   │                          # concurrently-rendering page, and these reads run under
@@ -388,6 +393,7 @@ wholesip/
 │   │   │                      # marks Firebase emailVerified only on success
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
+│   │   ├── merchant-analytics-settings.ts # Pro/platform-gated GA4 + Meta settings
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
 │   │   ├── subscribe-actions.ts # ★ §34 dashboard-only subscription path:
 │   │                      # startSubscribe / confirmSubscribe plus manual
@@ -615,6 +621,11 @@ wholesip/
 │   │                          # NOT in the "use server" file, or the sweep would be
 │   │                          # a public unauthenticated endpoint). Tested, plus a
 │   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
+│   ├── analytics/             # ★ §20 dashboard contracts plus platform feature gates;
+│   │                          # merchant-pixels.ts validates/fail-closes the GA4 + Meta
+│   │                          # settings stored under stores.settings.marketing;
+│   │                          # store-entitlement.ts combines operator availability
+│   │                          # with the store's effective plan for server reads/writes
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
 │   ├── credit/                # ★ §29: store credit — apply.ts (PURE: how much
 │   │                          # credit goes on an order, incl. the unpayable-
@@ -1209,7 +1220,8 @@ wholesip/
 │                              # 0003 adds orders.pickup_prepared_at so actual
 │                              # packing is distinct from the checkout promise;
 │                              # 0004 repairs paid AI-credit invoices left open
-│                              # and therefore falsely presented as plan debt.
+│                              # and therefore falsely presented as plan debt; 0010
+│                              # enables merchant pixels and publishes their setup guides.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
@@ -1626,7 +1638,13 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     by `proxy.ts` to `app/themes/`, never resolved as merchant tenancy. The
     server-rendered catalog imports only client-safe `THEME_META`, so its
     industry filters, plan badges, release labels, preview image, demo health,
-    and signup CTA share the exact source used by onboarding. It has its own
+    and signup CTA share the exact source used by onboarding. The hero and
+    closing galleries receive a small serializable projection of every
+    selectable manifest entry and rotate automatically in the narrow
+    `theme-showcases.tsx` client boundary; manual controls pause rotation, and
+    reduced-motion visitors keep a stable composition. Publishing another
+    selectable theme therefore updates both galleries without page-specific
+    image wiring. The catalog has its own
     canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
     one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
     demos render an honest unavailable state rather than a broken live link.
@@ -2404,6 +2422,71 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `analytics.view` and scope gates, rate-limits downloads, caps result sets,
       and uses the shared BOM/formula-safe CSV serializer. The page shows the
       first 250 rows while CSV supports up to 10,000. No schema was added.
+    - **Platform Analytics controls + Pro contract (2026-08-20):**
+      `/platform/dashboard/(console)/analytics` lets platform operators control
+      global module availability. `platform_analytics_settings` is a singleton,
+      service-only table enrolled as migration
+      `20260820_0007_platform_analytics_controls`; shipped modules default on,
+      while optional collection modules default off. `lib/analytics/features.ts`
+      is the pure registry/default/entitlement layer and
+      `platform-feature-store.ts` owns fail-safe reads. Core dashboard,
+      customization, drill-down/CSV and Google Search switches are enforced at
+      merchant render/action/export boundaries. GA4, Meta Pixel, and storefront
+      conversion and gross margin are available Pro-only modules;
+      `PLAN_LIMITS.advancedAnalytics` is the independent entitlement gate, so a
+      global switch can never grant a lower plan. `app/actions/platform-analytics-settings.ts`
+      rechecks superadmin authorization and validates the full fixed setting
+      shape before upsert.
+    - **Phase 8 merchant pixels (2026-08-20):**
+      `/dashboard/settings/analytics` lets settings viewers inspect and settings
+      managers save a GA4 Measurement ID and Meta Pixel ID under the store's
+      existing `settings.marketing` object. `app/actions/merchant-analytics-settings.ts`
+      re-derives the store, effective plan, permission, and current platform
+      switches before every write; invalid IDs fail closed and unavailable
+      integrations are preserved rather than overwritten. The Analytics page
+      links to this settings screen. On the public store,
+      `merchant-tracking.tsx` loads neither provider until the shopper explicitly
+      permits its separate Analytics or Marketing category, stores the choice in
+      that browser, supports later withdrawal, and sends route-aware page views.
+      Lower plans, disabled operator switches, invalid legacy settings, and
+      builder previews render no provider script. Migration
+      `20260820_0010_merchant_pixels` enables the two platform modules and
+      publishes their previously drafted Help Centre setup guides. These pixels
+      send data to the merchant's own provider account; they do not populate the
+      StoreMink dashboard or replace Phase 9 first-party conversion analytics.
+    - **Phase 9 storefront conversion (2026-08-20):** Pro storefronts can
+      collect first-party `page_view`, `product_view`, `add_to_cart`, and
+      `checkout_start` events through the same explicit Analytics consent used
+      by GA4. `POST /api/t` resolves the store from the request host, accepts no
+      client store id or purchase event, validates same-origin payloads, filters
+      common bots, rate-limits a server-derived daily visitor key, and relies on
+      `(store_id,event_id)` uniqueness for retry safety. The HMAC key rotates at
+      local midnight and uses `STOREFRONT_ANALYTICS_SECRET` when present, falling
+      back to the already-required `CRON_SECRET`; no visitor/device id is stored
+      in the browser. `merchant-tracking.tsx` owns consent and route events,
+      while `CartProvider` emits successful add-to-cart actions.
+      `lib/analytics/storefront-purchase.ts` creates temporary attribution only
+      when the same consented daily key reached checkout in the preceding 30
+      minutes; recognized COD/store-credit orders and the atomic Razorpay paid
+      claimant promote it to a server-only, order-idempotent purchase event.
+      Migration `20260820_0011_storefront_conversion` adds service-only raw,
+      attribution and daily tables, enables the platform module, and publishes
+      the privacy/metric Help guide. `/api/cron/analytics-rollup` rebuilds the
+      14-day correction window into 30-minute ordered sessions and durable daily
+      funnel totals; Cloud Scheduler must invoke it hourly at `:40`. Raw events
+      and attribution are pruned after 14 days by `prune-logs`. Pro merchants
+      receive Visitors, Sessions, Page views, and ordered Funnel cards; lower
+      plans and a disabled platform switch receive neither collection nor cards.
+    - **Phase 10 gross margin (2026-08-20):** migration
+      `20260820_0012_gross_margin` adds nullable `products.cost_price`, optional
+      variant overrides, and immutable `order_items.unit_cost` snapshots, then
+      enables the Pro/platform-gated module and publishes its Help guide. The
+      product Pricing editor is the backfill surface: the first supplied cost
+      fills only older lines with no snapshot; later edits affect future online,
+      POS, and exchange lines without rewriting history. Analytics reports
+      costed merchandise sales, COGS, gross profit, margin, and explicit cost
+      coverage before returns/refunds. Unknown costs are excluded—not treated
+      as zero—so an incomplete catalog cannot inflate profit silently.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2443,7 +2526,7 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     `SECURITY DEFINER` RPCs (`help_article_view`, `help_article_vote`) so no
     write policy opens to anon (hardened to `search_path=''` +
     schema-qualified refs in `help_centre_02_rpc_search_path.sql`; the public
-    `voteHelpArticle` action deliberately does NOT `revalidateTag` — an
+    `voteHelpArticle` action deliberately does NOT invalidate the Help tag — an
     anon-triggerable global cache bust — so helpful counts are
     eventual-consistency). Drizzle tables added to `drizzle/schema.ts`
     (`helpCategories`, `helpArticles`; the generated `search` column is
@@ -2458,14 +2541,31 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       "was this helpful?" + related; **operator-only `?preview=1`** renders a
       draft via the uncached, `getPlatformViewer`-gated `lib/help/preview.ts` —
       non-operators fall through to published/404, so a leaked URL leaks
-      nothing), `/help/search` (FTS, noindex). Reads via
+      nothing), `/help/search` (noindex) plus `search/loading.tsx`. The sticky
+      header carries a compact search field and visible Search button on every
+      Help page. Live typeahead stays on fast English Postgres FTS; submitting a
+      full query calls `searchPublishedHelpWithAi`, which gives Gemini only the
+      published title/excerpt/category catalogue and accepts only validated
+      catalogue slugs plus short English query expansions. It then retrieves
+      final rows through the published-only database search. Exact document
+      titles bypass AI; throttling, malformed output, missing AI config, or
+      service errors fall back to keyword results. The model never generates an
+      answer or URL, so multilingual interpretation cannot invent a StoreMink
+      feature. Reads via
       cached `lib/help/queries.ts` (`withAnon`, tag `TAGS.help`); types +
       mappers in `lib/help/types.ts`. SEO: per-page `generateMetadata` +
       canonical on `HELP_URL` (`lib/site.ts`), `helpArticleSchema` (TechArticle)
       - `breadcrumbSchema` JSON-LD, and a \*\*help-host branch in `app/sitemap.ts`
-      - `app/robots.ts`\*\* (both were previously store-only). IndexNow pings on
-        publish (prod only). The old static `app/help/page.tsx` (hardcoded topic
-        cards) is retired.
+      - `app/robots.ts`\*\* (both were previously store-only). A publish
+        immediately notifies IndexNow and re-submits the canonical Help sitemap
+        to Google Search Console (prod only); the daily SEO cron is the durable
+        retry. Migration `20260820_0009_help_article_indexability` repairs
+        legacy published orphans to drafts and adds a database constraint
+        requiring a category for every published article, matching the
+        canonical URL contract. The Help sitemap derives category + article
+        URLs from one joined published query and throws on database failure
+        instead of serving a false empty sitemap. The old static
+        `app/help/page.tsx` (hardcoded topic cards) is retired.
     - **Management console** at **`/dashboard/help`** (platform host; nav entry
       in `app/platform/dashboard/(console)/layout.tsx`, `faq` icon), gated by
       `getPlatformViewer()`. `app/actions/help-actions.ts` holds public actions
@@ -2497,6 +2597,20 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       stays a dialog) + `help-admin.css`. Body sanitized on write AND render
       (`sanitizeBlogContent` — which now also permits table `colspan`/`rowspan`
       - cell width so tables survive; the blog trust model).
+    - **Analytics Help Centre guides (2026-08-20):** migration
+      `20260820_0007_platform_analytics_controls` adds the Analytics & reports
+      category and its initial rows;
+      `20260820_0008_analytics_help_documents` expands them into eight
+      published guides covering the dashboard, metric definitions and sources,
+      sales/orders, customers/inventory/activity, Google Search, reports/CSV,
+      dashboard customization, and troubleshooting. It also installs detailed
+      GA4 and Meta Pixel setup guides, including official external setup links,
+      consent, testing, and subdomain/custom-domain limitations. Migration
+      `20260820_0010_merchant_pixels` publishes those two guides alongside the
+      shipped Pro integrations. `20260820_0011_storefront_conversion` and
+      `20260820_0012_gross_margin` add the first-party conversion and gross-margin
+      guides. All rows remain editable through the operator Help
+      Centre console; no second static docs source exists.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.

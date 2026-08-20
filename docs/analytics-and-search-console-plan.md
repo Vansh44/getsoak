@@ -1,6 +1,8 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** implementation underway — Phase 1 + Phase 2a–2d shipped (2026-08-19) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — dashboard, Search Console, drill-down,
+> platform controls, and consent-aware merchant pixels shipped through
+> 2026-08-20 · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -22,7 +24,7 @@ Search storage, explicit business time zones, and session/purchase semantics.
 IANA-zone ranges and comparisons, store time-zone settings, recognized Total
 sales less completed refunds, raw-rupee adaptive charts, staff location scope,
 restricted customer-card omission, and independent Suspense widget reads. The
-The Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
+Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
 optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
 one-time import/removal of the legacy localStorage order, versioned named
 sections, visibility/reorder/delete controls, cross-section card movement, and
@@ -31,9 +33,10 @@ read boundary and write version 2 on their next save; no second database
 migration is required. Phase 2c adds a scope-safe URL location filter plus AOV,
 units sold, top products, sales by channel, and sales by location. Phase 2d adds
 itemized payment-method allocation, new-vs-returning customers, discount impact,
-returns/refunds, and tracked-stock velocity. Search Console and first-party
-traffic remain planned below. Ledger migration
-`20260818_0005_analytics_dashboard_layouts` is applied.
+returns/refunds, and tracked-stock velocity. Search Console is shipped;
+consent-aware Pro GA4 and Meta Pixel connections are shipped; first-party
+StoreMink traffic remains planned below. Ledger migration
+`20260820_0010_merchant_pixels` is the latest required migration.
 
 ---
 
@@ -68,6 +71,10 @@ traffic remain planned below. Ledger migration
 8. **No forced upgrade of saved layouts:** when a new widget ships, existing
    customized layouts remain unchanged and the widget receives a "New" badge in
    the library. Only untouched/default layouts receive revised defaults.
+9. **Advanced analytics is Pro-only:** GA4, Meta Pixel, first-party storefront
+   conversion, and gross-margin analytics require both an effective Pro plan
+   and an enabled platform feature switch. Operator availability never replaces
+   plan entitlement.
 
 ### 0.1 Shopify baseline checked on 2026-08-14
 
@@ -100,7 +107,7 @@ CSV export. First-party traffic metrics remain a separate later release.
 | Card -> detailed report             | Yes                         | First four reports + CSV shipped   | Expand incrementally                 |
 | Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker  |
 | Targets and generated insights      | Yes                         | No                                 | Later                                |
-| Google Search Console cards         | Not native to Shopify admin | No                                 | Release 2 differentiator             |
+| Google Search Console cards         | Not native to Shopify admin | Yes; seven delayed-data cards      | Shipped differentiator               |
 | First-party sessions/conversion     | Yes                         | No event pipeline                  | Release 3                            |
 
 ### 0.2 Definition of done for dashboard parity
@@ -158,9 +165,10 @@ So: **no new dependency, no new OAuth scope, no new API to enable, no new auth
 code.** `searchAnalytics.query` sits on the identical host and version prefix as
 the sitemap call we already make.
 
-### Analytics — order data, all-time, no date range
+### Analytics — original baseline (now replaced)
 
-`app/dashboard/analytics/` is 4 files / 1,075 lines. One exported function,
+Before this plan shipped, `app/dashboard/analytics/` was 4 files / 1,075 lines.
+It had one exported function,
 `getAnalyticsData(storeId)` (`data.ts:125`) — a single `withService` transaction
 running 10 queries, none of which takes a date range. 10 widgets, a dnd-kit
 canvas, layout in `localStorage`.
@@ -884,8 +892,9 @@ fake it. **Conversion rate = orders / sessions**, and sessions do not exist.
 - **★ Bot filtering is not optional.** Without a UA denylist and a per-hash rate
   limit, every number is inflated and the conversion rate is quietly wrong —
   worse than absent, because people act on it.
-- **Plan-gate this one** (basic+ or pro, `lib/plans.ts`). Unlike Part A it is a
-  genuine per-request cost centre.
+- **Plan-gate this one to Pro** (`PLAN_LIMITS.advancedAnalytics`). Unlike Part A
+  it is a genuine per-request cost centre. This product decision was closed on
+  2026-08-20.
 - **Skip Live View.** Shopify's real-time globe is mostly theatre and needs a
   streaming path nothing else here would use.
 
@@ -896,7 +905,9 @@ A `marketing.ga4MeasurementId` / `marketing.metaPixelId` setting
 of work. It does not put numbers in our dashboard and it hands the merchant
 relationship to Google — so it is **not** a substitute for Phase 3 — but many
 merchants already want GA4, and it is a real answer to "where are my analytics?"
-for the whole time Phase 3 is unbuilt.
+for the whole time Phase 3 is unbuilt. Both settings are **Pro-only**, require
+the corresponding operator feature to be enabled, and must not load before the
+applicable visitor consent.
 
 ---
 
@@ -904,17 +915,18 @@ for the whole time Phase 3 is unbuilt.
 
 Ordered by value per unit of work, and each step is shippable alone.
 
-| #   | Release               | Step                                                                                                                                         | Rough size |
-| --- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 1   | Dashboard foundation  | Business-time-zone setting, metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes      | M          |
-| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import                                   | L          |
-| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                     | M          |
-| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                        | L          |
-| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                                    | S          |
-| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                         | M/L        |
-| 7   | Merchant pixels       | GA4 and Meta Pixel settings with consent-policy integration                                                                                  | S          |
-| 8   | Storefront conversion | Beacon, raw-event retention, 30-minute sessionization, recognized-purchase attribution, daily rollup, funnel, bot controls, conversion cards | L          |
-| 9   | Margin                | `cost_price`, backfill UX, gross margin reporting                                                                                            | M          |
+| #   | Release               | Step                                                                                                                                                                                     | Rough size |
+| --- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 1   | Dashboard foundation  | Business-time-zone setting, metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes                                                  | M          |
+| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import                                                                               | L          |
+| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                                                                 | M          |
+| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                                                                    | L          |
+| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                                                                                | S          |
+| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                                                                     | M/L        |
+| 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set                                                      | S          |
+| 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                                                                 | S          |
+| 9   | Storefront conversion | **Built 2026-08-20; migration/Scheduler pending:** Pro-only consented beacon, 14-day retention, 30-minute sessions, purchase attribution, hourly rollup, funnel, bot controls, and cards | L          |
+| 10  | Margin                | **Built 2026-08-20; migration pending:** Pro-only product/variant `cost_price`, immutable order-line snapshots, safe first-cost backfill, explicit coverage, and gross-margin cards      | M          |
 
 Steps 1–3 form overview-dashboard parity. Step 4 is independent once the global
 range contract exists and is StoreMink's differentiator. Do not start the
@@ -927,10 +939,21 @@ first-party traffic pipeline before its privacy/consent decision is recorded.
 The headline sales definition, layout scope, default range, custom-domain
 history, and unlaunched-store state are decided above. These remain:
 
-- **First-party traffic plan gate:** Basic and Pro, or Pro only? Cost data from a
-  small production pilot should decide; do not guess from positioning.
-- **Consent model for StoreMink traffic and merchant pixels:** jurisdiction and
-  storefront policy work must precede event collection.
+- **Closed 2026-08-20 — advanced Analytics plan gate:** Pro only. GA4, Meta
+  Pixel, first-party conversion, and margin require
+  `PLAN_LIMITS.advancedAnalytics` plus their platform switch.
+- **Closed 2026-08-20 — merchant-pixel consent:** optional providers are global
+  opt-in only. Analytics and Marketing are separate choices, rejection leaves
+  shopping usable, the choice is stored per browser, and a persistent control
+  supports withdrawal. No provider script loads in builder previews. Phase 9
+  must separately document the policy for StoreMink's own first-party events
+  before collection starts.
+- **Closed 2026-08-20 — first-party conversion consent and retention:** use the
+  same explicit Analytics opt-in as GA4, create no persistent device/browser
+  identifier, rotate the server-side pseudonymous key each business-local day,
+  retain raw events and temporary order attribution for 14 days, and keep only
+  non-identifying daily totals long term. The published Help guide states these
+  rules and the merchant's obligation to obtain market-appropriate legal advice.
 - **Closed 2026-08-20 — detailed-report scope:** the first four are Total
   sales, Sales over time, Top products, and Google Search queries. Each keeps
   the global range contract; commerce reports additionally keep the resolved

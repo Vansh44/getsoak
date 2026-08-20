@@ -66,6 +66,7 @@ import {
   comparisonTrend,
   getRecentOrders,
   getSalesAnalytics,
+  grossMarginFromTotals,
   getSalesByChannel,
   RECOGNIZED_PAYMENT_STATUSES,
   RECOGNIZED_POS_STATUSES,
@@ -125,6 +126,24 @@ beforeEach(() => {
   captured.groups = [];
   captured.activeQueries = 0;
   captured.maxActiveQueries = 0;
+});
+
+describe("analytics data — gross margin", () => {
+  it("excludes unknown costs instead of treating them as zero", () => {
+    expect(
+      grossMarginFromTotals({
+        merchandiseSales: 1_000,
+        costedSales: 600,
+        costOfGoods: 360,
+        totalUnits: 10,
+        costedUnits: 6,
+      }),
+    ).toMatchObject({
+      grossProfit: 240,
+      marginPercent: 40,
+      coveragePercent: 60,
+    });
+  });
 });
 
 describe("analytics data — location scope", () => {

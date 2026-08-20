@@ -35,7 +35,13 @@ export type WidgetId =
   | "search_position"
   | "search_trend"
   | "search_queries"
-  | "search_pages";
+  | "search_pages"
+  | "traffic_visitors"
+  | "traffic_sessions"
+  | "traffic_page_views"
+  | "traffic_funnel"
+  | "metric_gross_profit"
+  | "gross_margin_overview";
 
 export type WidgetGroup =
   | "Metrics"
@@ -43,7 +49,9 @@ export type WidgetGroup =
   | "Customers"
   | "Inventory"
   | "Content"
-  | "Search";
+  | "Search"
+  | "Traffic"
+  | "Profit";
 
 export interface WidgetMeta {
   id: WidgetId;
@@ -53,6 +61,43 @@ export interface WidgetMeta {
 }
 
 export const WIDGETS: Record<WidgetId, WidgetMeta> = {
+  metric_gross_profit: {
+    id: "metric_gross_profit",
+    title: "Gross profit",
+    description: "Sales less snapshotted product costs on costed order lines.",
+    group: "Profit",
+  },
+  gross_margin_overview: {
+    id: "gross_margin_overview",
+    title: "Gross margin",
+    description:
+      "Costed merchandise sales, COGS, profit, margin, and coverage.",
+    group: "Profit",
+  },
+  traffic_visitors: {
+    id: "traffic_visitors",
+    title: "Storefront visitors",
+    description: "Consented daily visitors to your storefront.",
+    group: "Traffic",
+  },
+  traffic_sessions: {
+    id: "traffic_sessions",
+    title: "Storefront sessions",
+    description: "Consented visits separated by 30 minutes of inactivity.",
+    group: "Traffic",
+  },
+  traffic_page_views: {
+    id: "traffic_page_views",
+    title: "Storefront page views",
+    description: "Pages viewed during consented storefront sessions.",
+    group: "Traffic",
+  },
+  traffic_funnel: {
+    id: "traffic_funnel",
+    title: "Storefront conversion funnel",
+    description: "Ordered product, cart, checkout, and purchase steps.",
+    group: "Traffic",
+  },
   metric_revenue: {
     id: "metric_revenue",
     title: "Total sales",
@@ -226,6 +271,8 @@ export const WIDGET_GROUPS: WidgetGroup[] = [
   "Inventory",
   "Content",
   "Search",
+  "Traffic",
+  "Profit",
 ];
 
 /** The out-of-the-box dashboard, in render order. Lays out as four tidy rows. */

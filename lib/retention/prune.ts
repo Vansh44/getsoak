@@ -40,6 +40,8 @@ import {
   dataJobs,
   emailLogs,
   notifications,
+  storefrontEvents,
+  storefrontOrderAttribution,
   storeSearchMetrics,
 } from "@/drizzle/schema";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -185,7 +187,9 @@ function batchDeleter(
     | typeof emailLogs
     | typeof dataJobs
     | typeof dataJobIssues
-    | typeof billingWebhookEvents,
+    | typeof billingWebhookEvents
+    | typeof storefrontEvents
+    | typeof storefrontOrderAttribution,
   key: AnyPgColumn,
   ts: AnyPgColumn,
 ): (floorIso: string, limit: number) => Promise<number> {
@@ -242,6 +246,28 @@ function searchMetricBatchDeleter(
  * another. See docs/cron-jobs.md.
  */
 export const RETENTION_POLICIES: RetentionPolicy[] = [
+  {
+    table: "storefront_order_attribution",
+    days: 14,
+    reason:
+      "A temporary anonymous bridge exists only to attach a delayed online payment to its original consented session.",
+    deleteBatch: batchDeleter(
+      storefrontOrderAttribution,
+      storefrontOrderAttribution.orderId,
+      storefrontOrderAttribution.createdAt,
+    ),
+  },
+  {
+    table: "storefront_events",
+    days: 14,
+    reason:
+      "Raw storefront analytics is needed only for corrections and session rollups; durable reports use non-identifying daily counts.",
+    deleteBatch: batchDeleter(
+      storefrontEvents,
+      storefrontEvents.id,
+      storefrontEvents.createdAt,
+    ),
+  },
   {
     table: "notifications",
     days: 90,

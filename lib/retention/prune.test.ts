@@ -207,6 +207,14 @@ describe("runRetentionSweep", () => {
 });
 
 describe("RETENTION_POLICIES", () => {
+  it("keeps raw storefront events and attribution for only 14 days", () => {
+    const byTable = new Map(
+      RETENTION_POLICIES.map((policy) => [policy.table, policy.days]),
+    );
+    expect(byTable.get("storefront_events")).toBe(14);
+    expect(byTable.get("storefront_order_attribution")).toBe(14);
+  });
+
   it("prunes notifications before activity_events", () => {
     // notifications.event_id → activity_events ON DELETE CASCADE, so doing it
     // the other way round leaves the event sweep cascading through rows the

@@ -74,6 +74,7 @@ interface DashboardCanvasProps {
   slots: Partial<Record<WidgetId, ReactNode>>;
   headerExtras?: ReactNode;
   initialLayout: AnalyticsLayoutView;
+  canCustomize?: boolean;
 }
 
 const EDITOR_GUIDE_CELLS = 36;
@@ -149,6 +150,7 @@ export function DashboardCanvas({
   slots,
   headerExtras,
   initialLayout,
+  canCustomize = true,
 }: DashboardCanvasProps) {
   const allowed = useMemo(
     () => Object.keys(slots).filter((id): id is WidgetId => id in WIDGETS),
@@ -614,13 +616,15 @@ export function DashboardCanvas({
             <h1>Analytics</h1>
             <div className="dash-an-actions">
               {headerExtras}
-              <button
-                type="button"
-                className="dash-an-btn"
-                onClick={startEditing}
-              >
-                Edit dashboard
-              </button>
+              {canCustomize ? (
+                <button
+                  type="button"
+                  className="dash-an-btn"
+                  onClick={startEditing}
+                >
+                  Edit dashboard
+                </button>
+              ) : null}
             </div>
           </header>
           <div className="dash-sections">
@@ -642,13 +646,15 @@ export function DashboardCanvas({
           {renderedSections.length === 0 ? (
             <div className="dash-canvas-empty">
               <p>Your dashboard is empty.</p>
-              <button
-                type="button"
-                className="dash-an-btn"
-                onClick={startEditing}
-              >
-                <Plus /> Edit dashboard
-              </button>
+              {canCustomize ? (
+                <button
+                  type="button"
+                  className="dash-an-btn"
+                  onClick={startEditing}
+                >
+                  <Plus /> Edit dashboard
+                </button>
+              ) : null}
             </div>
           ) : null}
         </>

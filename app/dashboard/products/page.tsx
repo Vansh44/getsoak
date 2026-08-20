@@ -21,6 +21,7 @@ import {
 } from "../lib/list-params";
 import { ProductsManagementView } from "./products-management-view";
 import { RealtimeRefresher } from "../components/realtime-refresher";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 export type ProductFilter = "all" | "published" | "drafts" | "featured";
 const PRODUCT_FILTERS: ProductFilter[] = [
@@ -43,6 +44,7 @@ export interface ProductVariant {
   name: string;
   base_price: number;
   selling_price: number;
+  cost_price: number | null;
   special_price: number | null;
   stock: number;
   sku: string | null;
@@ -73,6 +75,7 @@ export interface Product {
   category_id: string | null;
   base_price: number;
   selling_price: number;
+  cost_price: number | null;
   image_url: string | null;
   images: string[];
   status: "draft" | "published";
@@ -142,6 +145,10 @@ export default async function ProductsPage({
   const from = (page - 1) * pageSize;
 
   const storeId = await getActingStoreId();
+  const canUseGrossMargin = await storeHasAnalyticsFeature(
+    storeId,
+    "grossMargin",
+  );
 
   const conds = [eq(products.storeId, storeId)];
   if (filter === "published") conds.push(eq(products.status, "published"));
@@ -164,6 +171,7 @@ export default async function ProductsPage({
   let total: number;
   let counts: ProductCounts;
   let categoryOptions: CategoryOption[];
+  let missingCostCount = 0;
   try {
     const result = await withService(async (db) => {
       const rows = await db
@@ -193,6 +201,14 @@ export default async function ProductsPage({
         .select({ n: count() })
         .from(products)
         .where(and(eq(products.storeId, storeId), eq(products.featured, true)));
+      const missingCostRows = canUseGrossMargin
+        ? await db
+            .select({ n: count() })
+            .from(products)
+            .where(
+              and(eq(products.storeId, storeId), isNull(products.costPrice)),
+            )
+        : [{ n: 0 }];
       const categoryRows = await db
         .select({
           id: categories.id,
@@ -223,6 +239,7 @@ export default async function ProductsPage({
         total: countRows[0]?.n ?? 0,
         statusRows,
         featuredCount: featuredRows[0]?.n ?? 0,
+        missingCostCount: missingCostRows[0]?.n ?? 0,
         categoryRows,
         variantIds,
       };
@@ -246,6 +263,7 @@ export default async function ProductsPage({
       };
     }) as unknown as Product[];
     total = result.total;
+    missingCostCount = result.missingCostCount;
 
     counts = {
       all: 0,
@@ -291,6 +309,8 @@ export default async function ProductsPage({
         query={q}
         filter={filter}
         categoryFilter={categoryFilter}
+        canUseGrossMargin={canUseGrossMargin}
+        missingCostCount={missingCostCount}
       />
     </>
   );

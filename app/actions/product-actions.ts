@@ -1,17 +1,17 @@
 "use server";
 
-import { and, eq, inArray, like, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, ne } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
 import { readFile } from "fs/promises";
 import path from "path";
-import { withUser, type UserIdentity } from "@/lib/db/client";
+import { withService, withUser, type UserIdentity } from "@/lib/db/client";
 import {
   isUniqueViolation,
   pgErrorCode,
   dbErrorMessage,
 } from "@/lib/db/errors";
-import { productVariants, products } from "@/drizzle/schema";
+import { orderItems, productVariants, products } from "@/drizzle/schema";
 import {
   getManagerIdentity,
   getActingStoreId,
@@ -23,6 +23,7 @@ import { TAGS } from "@/lib/storefront/tags";
 import { callGemini, brandSystemText } from "@/lib/ai/gemini";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
 import { consumeAiQuota } from "@/lib/ai/quota";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +35,7 @@ export interface VariantFormData {
   name: string;
   base_price: number;
   selling_price: number;
+  cost_price?: number | null;
   // Optional sale price for this variant. When set (> 0) it overrides
   // selling_price for the variant AND triggers a "best value" tag badge on
   // the storefront chip. 0 / null means no special price.
@@ -59,6 +61,7 @@ export interface ProductFormData {
   category_id: string | null;
   base_price: number;
   selling_price: number;
+  cost_price?: number | null;
   image_url: string;
   images: string[];
   status: "draft" | "published";
@@ -169,9 +172,15 @@ function positiveOrNull(value: unknown, max = 1_000_000): number | null {
   return Math.min(max, n);
 }
 
+function costOrNull(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(99_999_999, Math.round(n * 100) / 100);
+}
+
 // Keep only valid variant rows (a name is required) and normalise numbers.
 // Preserves `id` so the reconcile can match existing DB rows.
-function sanitizeVariants(variants: VariantFormData[]) {
+function sanitizeVariants(variants: VariantFormData[], costsEnabled: boolean) {
   return (variants ?? [])
     .filter((v) => v.name && v.name.trim())
     .map((v, i) => {
@@ -195,6 +204,7 @@ function sanitizeVariants(variants: VariantFormData[]) {
         id: v.id || undefined, // pass through existing variant id for reconcile
         name: v.name.trim(),
         ...prices,
+        ...(costsEnabled ? { costPrice: costOrNull(v.cost_price) } : {}),
         specialPrice: special,
         stock: Number.isFinite(v.stock) ? Math.trunc(v.stock) : 0,
         // SKU is system-generated & locked — set by the DB trigger on insert
@@ -225,8 +235,9 @@ async function replaceVariants(
   productId: string,
   variants: VariantFormData[],
   storeId: string,
+  costsEnabled: boolean,
 ): Promise<string | null> {
-  const rows = sanitizeVariants(variants);
+  const rows = sanitizeVariants(variants, costsEnabled);
 
   // 1. Fetch existing variant ids for this product.
   let existingIds: Set<string>;
@@ -312,6 +323,50 @@ async function replaceVariants(
   }
 
   return null;
+}
+
+/**
+ * Fill only missing historical order-line costs after a merchant supplies a
+ * product cost. Existing snapshots are immutable, so later edits affect only
+ * future sales. Variant cost overrides the parent; null inherits it.
+ */
+async function backfillMissingOrderCosts(
+  productId: string,
+  productCost: number | null,
+  variants: VariantFormData[],
+) {
+  if (productCost !== null) {
+    await withService((db) =>
+      db
+        .update(orderItems)
+        .set({ unitCost: productCost })
+        .where(
+          and(
+            eq(orderItems.productId, productId),
+            isNull(orderItems.variantId),
+            isNull(orderItems.unitCost),
+          ),
+        ),
+    );
+  }
+
+  for (const variant of variants) {
+    if (!variant.id) continue;
+    const effectiveCost = costOrNull(variant.cost_price) ?? productCost;
+    if (effectiveCost === null) continue;
+    await withService((db) =>
+      db
+        .update(orderItems)
+        .set({ unitCost: effectiveCost })
+        .where(
+          and(
+            eq(orderItems.productId, productId),
+            eq(orderItems.variantId, variant.id!),
+            isNull(orderItems.unitCost),
+          ),
+        ),
+    );
+  }
 }
 
 function revalidateProduct(slug?: string) {
@@ -418,6 +473,7 @@ export async function createProduct(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
+  const costsEnabled = await storeHasAnalyticsFeature(storeId, "grossMargin");
 
   if (!formData.name.trim()) return { error: "Name is required." };
   if (!formData.category_id) return { error: "Category is required." };
@@ -436,6 +492,7 @@ export async function createProduct(
     description: formData.description.trim() || null,
     categoryId: formData.category_id || null,
     ...normalizePrices(formData.base_price, formData.selling_price),
+    ...(costsEnabled ? { costPrice: costOrNull(formData.cost_price) } : {}),
     imageUrl: formData.image_url || null,
     images: formData.images ?? [],
     status: formData.status,
@@ -501,6 +558,7 @@ export async function createProduct(
       inserted.id as string,
       formData.variants,
       storeId,
+      costsEnabled,
     );
     if (variantError) {
       console.error("createProduct variants error:", variantError);
@@ -537,6 +595,7 @@ export async function updateProduct(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
+  const costsEnabled = await storeHasAnalyticsFeature(storeId, "grossMargin");
 
   if (!formData.name.trim()) return { error: "Name is required." };
   if (!formData.category_id) return { error: "Category is required." };
@@ -569,6 +628,7 @@ export async function updateProduct(
     description: formData.description.trim() || null,
     categoryId: formData.category_id || null,
     ...normalizePrices(formData.base_price, formData.selling_price),
+    ...(costsEnabled ? { costPrice: costOrNull(formData.cost_price) } : {}),
     imageUrl: formData.image_url || null,
     images: formData.images ?? [],
     status: formData.status,
@@ -626,12 +686,20 @@ export async function updateProduct(
       id,
       formData.variants,
       storeId,
+      costsEnabled,
     );
     if (variantError) {
       console.error("updateProduct variants error:", variantError);
       return {
         error: `Product saved but variants failed: ${variantError}`,
       };
+    }
+    if (costsEnabled) {
+      await backfillMissingOrderCosts(
+        id,
+        costOrNull(formData.cost_price),
+        formData.variants,
+      );
     }
     // Purge files that are no longer referenced after the save.
     const kept = new Set(await fetchProductImageUrls(admin, id));

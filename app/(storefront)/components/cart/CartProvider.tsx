@@ -16,6 +16,7 @@ import {
   type AppliedCoupon,
 } from "@/app/actions/coupon-actions";
 import { cartLineMax } from "@/lib/inventory/status";
+import { useStorefrontTracking } from "@/app/(storefront)/components/merchant-tracking";
 
 export interface CartItem {
   productId: string;
@@ -103,6 +104,7 @@ export function useCart() {
 }
 
 export default function CartProvider({ children }: { children: ReactNode }) {
+  const trackStorefrontEvent = useStorefrontTracking();
   const [items, setItems] = useState<CartItem[]>([]);
   const [appliedCoupon, setAppliedCoupon] = useState<AppliedCoupon | null>(
     null,
@@ -165,34 +167,38 @@ export default function CartProvider({ children }: { children: ReactNode }) {
     }
   }, [appliedCoupon, hydrated]);
 
-  const addItem = useCallback((item: AddItemInput, quantity = 1) => {
-    if (quantity < 1) return;
-    setItems((prev) => {
-      const key = lineKey(item.productId, item.variantId);
-      const existing = prev.find(
-        (i) => lineKey(i.productId, i.variantId) === key,
-      );
-      // The incoming item carries the freshest stock snapshot (its card/detail
-      // page just rendered), so cap against IT — never let repeated adds pile
-      // quantity past what the shopper could actually buy.
-      const max = cartLineMax(item);
-      if (existing) {
-        // Refresh the line's stock snapshot from the fresh add, then clamp.
-        return prev.map((i) =>
-          lineKey(i.productId, i.variantId) === key
-            ? {
-                ...i,
-                trackInventory: item.trackInventory,
-                stock: item.stock,
-                allowBackorder: item.allowBackorder,
-                quantity: Math.min(i.quantity + quantity, max),
-              }
-            : i,
+  const addItem = useCallback(
+    (item: AddItemInput, quantity = 1) => {
+      if (quantity < 1 || cartLineMax(item) < 1) return;
+      trackStorefrontEvent("add_to_cart", { productId: item.productId });
+      setItems((prev) => {
+        const key = lineKey(item.productId, item.variantId);
+        const existing = prev.find(
+          (i) => lineKey(i.productId, i.variantId) === key,
         );
-      }
-      return [...prev, { ...item, quantity: Math.min(quantity, max) }];
-    });
-  }, []);
+        // The incoming item carries the freshest stock snapshot (its card/detail
+        // page just rendered), so cap against IT — never let repeated adds pile
+        // quantity past what the shopper could actually buy.
+        const max = cartLineMax(item);
+        if (existing) {
+          // Refresh the line's stock snapshot from the fresh add, then clamp.
+          return prev.map((i) =>
+            lineKey(i.productId, i.variantId) === key
+              ? {
+                  ...i,
+                  trackInventory: item.trackInventory,
+                  stock: item.stock,
+                  allowBackorder: item.allowBackorder,
+                  quantity: Math.min(i.quantity + quantity, max),
+                }
+              : i,
+          );
+        }
+        return [...prev, { ...item, quantity: Math.min(quantity, max) }];
+      });
+    },
+    [trackStorefrontEvent],
+  );
 
   const removeItem = useCallback((key: string) => {
     setItems((prev) =>

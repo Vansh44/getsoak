@@ -21,6 +21,11 @@ import { getThemeDefinition } from "@/lib/themes";
 import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
+import { MerchantTracking } from "@/app/(storefront)/components/merchant-tracking";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { analyticsFeatureAllowed } from "@/lib/analytics/features";
+import { resolveMerchantPixelSettings } from "@/lib/analytics/merchant-pixels";
+import { effectivePlan } from "@/lib/plans";
 import {
   GOOGLE_VERIFICATION_TOKEN_KEY,
   normalizeGoogleVerificationToken,
@@ -99,12 +104,35 @@ export default async function StorefrontLayout({
   // runs the same getManagerUserId("builder") gate as the page-draft loader and
   // returns null for everyone else, so forging it leaks nothing.
   const previewing = (await headers()).get("x-sm-preview") === "1";
-  const [brand, publishedChrome, draftChrome] = await Promise.all([
-    getStoreBrand(),
-    getStoreChrome(store.id),
-    previewing ? getDraftChromeForPreview(store.id) : Promise.resolve(null),
-  ]);
+  const [brand, publishedChrome, draftChrome, analyticsFeatures] =
+    await Promise.all([
+      getStoreBrand(),
+      getStoreChrome(store.id),
+      previewing ? getDraftChromeForPreview(store.id) : Promise.resolve(null),
+      getPlatformAnalyticsFeatures(),
+    ]);
   const chrome = draftChrome ?? publishedChrome;
+
+  // Merchant pixels are independently gated by platform rollout, the store's
+  // effective plan (including expiry), its saved enable switch, and finally the
+  // visitor's browser-side consent. Builder previews never collect analytics.
+  const pixelSettings = resolveMerchantPixelSettings(store.settings);
+  const plan = effectivePlan(store);
+  const ga4MeasurementId =
+    !previewing &&
+    pixelSettings.ga4Enabled &&
+    analyticsFeatureAllowed(analyticsFeatures, "googleAnalytics4", plan)
+      ? pixelSettings.ga4MeasurementId
+      : null;
+  const metaPixelId =
+    !previewing &&
+    pixelSettings.metaPixelEnabled &&
+    analyticsFeatureAllowed(analyticsFeatures, "metaPixel", plan)
+      ? pixelSettings.metaPixelId
+      : null;
+  const firstPartyEnabled =
+    !previewing &&
+    analyticsFeatureAllowed(analyticsFeatures, "storefrontConversion", plan);
 
   // The visual skin: resolve the store's pinned theme release (falling back to
   // the legacy settings.template id) and flatten
@@ -154,24 +182,31 @@ export default async function StorefrontLayout({
   return (
     <AuthProvider initialHasSession={hasCustomerSession}>
       <DeliveryLocationProvider>
-        <CartProvider>
-          <BrandProvider brand={brand}>
-            <ChromeProvider
-              chrome={chrome}
-              themeLayout={design?.layout}
-              live={previewing}
-            >
-              <div className={rootClass} style={themeVars as CSSProperties}>
-                <Header />
-                {children}
-                <Footer />
-              </div>
-            </ChromeProvider>
-          </BrandProvider>
-          <AuthModalLoader />
-          <CartDrawer />
-          <Toaster richColors />
-        </CartProvider>
+        <MerchantTracking
+          storeName={store.name}
+          ga4MeasurementId={ga4MeasurementId}
+          metaPixelId={metaPixelId}
+          firstPartyEnabled={firstPartyEnabled}
+        >
+          <CartProvider>
+            <BrandProvider brand={brand}>
+              <ChromeProvider
+                chrome={chrome}
+                themeLayout={design?.layout}
+                live={previewing}
+              >
+                <div className={rootClass} style={themeVars as CSSProperties}>
+                  <Header />
+                  {children}
+                  <Footer />
+                </div>
+              </ChromeProvider>
+            </BrandProvider>
+            <AuthModalLoader />
+            <CartDrawer />
+            <Toaster richColors />
+          </CartProvider>
+        </MerchantTracking>
       </DeliveryLocationProvider>
     </AuthProvider>
   );

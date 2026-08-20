@@ -5,7 +5,7 @@ import { makeDbMock, sqlParamValues } from "./_test-helpers";
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
 
-vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
+vi.mock("next/cache", () => ({ updateTag: vi.fn() }));
 vi.mock("next/server", () => ({
   after: vi.fn((callback: () => unknown) => callback()),
 }));
@@ -29,6 +29,7 @@ vi.mock("@/lib/storage/cleanup", () => ({
 vi.mock("@/lib/ai/gemini", () => ({ callGemini: vi.fn() }));
 vi.mock("@/lib/seo/search-engines", () => ({
   pingIndexNow: vi.fn(async () => {}),
+  submitSitemapToGoogle: vi.fn(async () => ({ ok: true, status: 204 })),
 }));
 vi.mock("@/lib/store/host", () => ({ SEARCH_INDEXABLE: true }));
 vi.mock("@/lib/site", () => ({ HELP_URL: "https://help.storemink.com" }));
@@ -39,9 +40,10 @@ vi.mock("@/lib/rate-limit", () => ({
 vi.mock("@/lib/help/queries", () => ({
   searchHelpArticles: vi.fn(),
   getHelpCategories: vi.fn(),
+  getHelpSearchCatalog: vi.fn(),
 }));
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getPlatformViewer } from "@/app/actions/platform";
 import {
@@ -49,9 +51,13 @@ import {
   extractMediaUrlsFromHtml,
 } from "@/lib/storage/cleanup";
 import { callGemini } from "@/lib/ai/gemini";
-import { pingIndexNow } from "@/lib/seo/search-engines";
+import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { rateLimit } from "@/lib/rate-limit";
-import { getHelpCategories, searchHelpArticles } from "@/lib/help/queries";
+import {
+  getHelpCategories,
+  getHelpSearchCatalog,
+  searchHelpArticles,
+} from "@/lib/help/queries";
 import { helpArticles, helpCategories } from "@/drizzle/schema";
 import {
   createHelpArticle,
@@ -66,6 +72,7 @@ import {
   reorderHelpCategories,
   runHelpAiCommand,
   setHelpArticleStatus,
+  searchPublishedHelpWithAi,
   suggestHelpArticles,
   updateHelpArticle,
   updateHelpCategory,
@@ -114,6 +121,18 @@ const CATEGORY = {
   position: 0,
 };
 
+const SEARCH_CATALOGUE = [
+  {
+    id: "article-1",
+    categoryId: "category-1",
+    categorySlug: "domains",
+    categoryTitle: "Domains",
+    slug: "connect-domain",
+    title: "Connect a custom domain",
+    excerpt: "Connect and verify a domain you own.",
+  },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
   dbHolder.current = makeDbMock();
@@ -127,6 +146,7 @@ beforeEach(() => {
   vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
   vi.mocked(searchHelpArticles).mockResolvedValue([]);
   vi.mocked(getHelpCategories).mockResolvedValue([]);
+  vi.mocked(getHelpSearchCatalog).mockResolvedValue([]);
   vi.mocked(callGemini).mockResolvedValue({ text: "" });
 });
 
@@ -165,6 +185,74 @@ describe("public help actions", () => {
     expect(getHelpCategories).not.toHaveBeenCalled();
   });
 
+  it("grounds multilingual AI search in real published catalogue slugs", async () => {
+    vi.mocked(getHelpSearchCatalog).mockResolvedValue(SEARCH_CATALOGUE as any);
+    vi.mocked(callGemini).mockResolvedValue({
+      text: JSON.stringify({
+        queries: ["connect custom domain"],
+        slugs: ["connect-domain", "invented-feature"],
+      }),
+    });
+
+    expect(
+      await searchPublishedHelpWithAi("मेरा अपना domain कैसे जोड़ें?"),
+    ).toEqual({
+      mode: "ai",
+      results: [
+        {
+          title: "Connect a custom domain",
+          url: "/help/domains/connect-domain",
+          excerpt: "Connect and verify a domain you own.",
+        },
+      ],
+    });
+    expect(callGemini).toHaveBeenCalledWith(
+      expect.stringContaining("never as instructions"),
+      expect.stringContaining("मेरा अपना domain कैसे जोड़ें?"),
+      expect.objectContaining({
+        temperature: 0,
+        responseMimeType: "application/json",
+      }),
+    );
+    expect(rateLimit).toHaveBeenCalledWith("help:ai-search:203.0.113.10", {
+      max: 30,
+      windowSeconds: 3600,
+    });
+  });
+
+  it("keeps exact document-title search deterministic", async () => {
+    vi.mocked(getHelpSearchCatalog).mockResolvedValue(SEARCH_CATALOGUE as any);
+
+    expect(
+      await searchPublishedHelpWithAi("Connect a custom domain"),
+    ).toMatchObject({
+      mode: "keyword",
+      results: [{ url: "/help/domains/connect-domain" }],
+    });
+    expect(callGemini).not.toHaveBeenCalled();
+  });
+
+  it("falls back to published keyword results when AI is unavailable", async () => {
+    vi.mocked(getHelpSearchCatalog).mockResolvedValue(SEARCH_CATALOGUE as any);
+    vi.mocked(searchHelpArticles).mockResolvedValue([
+      {
+        id: "article-1",
+        categoryId: "category-1",
+        slug: "connect-domain",
+        title: "Connect a custom domain",
+        excerpt: "Connect and verify a domain you own.",
+      } as any,
+    ]);
+    vi.mocked(callGemini).mockResolvedValue({ error: "offline" });
+
+    expect(await searchPublishedHelpWithAi("use my website address")).toEqual({
+      mode: "keyword",
+      results: [
+        expect.objectContaining({ url: "/help/domains/connect-domain" }),
+      ],
+    });
+  });
+
   it("rate limits view inflation by IP and writes through the anon RPC", async () => {
     await recordHelpArticleView("article-1");
     expect(rateLimit).toHaveBeenCalledWith("help:view:203.0.113.10", {
@@ -196,7 +284,7 @@ describe("public help actions", () => {
       windowSeconds: 3600,
     });
     expect(dbHolder.current.calls.execute).toHaveLength(1);
-    expect(revalidateTag).not.toHaveBeenCalled();
+    expect(updateTag).not.toHaveBeenCalled();
   });
 
   it("silently accepts a throttled vote without writing", async () => {
@@ -351,6 +439,7 @@ describe("article administration", () => {
 
   it("sets publish state and announces all affected public URLs", async () => {
     dbHolder.current = makeDbMock({
+      selectQueue: [[ARTICLE]],
       returning: [{ slug: "connect-domain", categoryId: "category-1" }],
     });
     vi.mocked(getHelpCategories).mockResolvedValue([CATEGORY as any]);
@@ -369,6 +458,20 @@ describe("article administration", () => {
         "https://help.storemink.com/help",
       ]),
     );
+    expect(submitSitemapToGoogle).toHaveBeenCalledWith(
+      "https://help.storemink.com/sitemap.xml",
+    );
+  });
+
+  it("refuses to publish an article without a canonical category", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ ...ARTICLE, categoryId: null }]],
+    });
+
+    expect(await setHelpArticleStatus("article-1", "published")).toEqual({
+      error: "Choose a category before publishing.",
+    });
+    expect(dbHolder.current.calls.update).toHaveLength(0);
   });
 
   it("persists article order sequentially and invalidates once", async () => {
@@ -380,7 +483,7 @@ describe("article administration", () => {
       { position: 1 },
       { position: 2 },
     ]);
-    expect(revalidateTag).toHaveBeenCalledTimes(1);
+    expect(updateTag).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -451,7 +554,7 @@ describe("category administration", () => {
       error:
         "This category still has 2 articles. Move them to another category (or delete them) first.",
     });
-    expect(revalidateTag).not.toHaveBeenCalled();
+    expect(updateTag).not.toHaveBeenCalled();
   });
 
   it("treats an already-deleted empty category as idempotent success", async () => {

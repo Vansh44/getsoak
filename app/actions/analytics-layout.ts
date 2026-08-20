@@ -17,6 +17,7 @@ import {
 import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { getViewerLocations } from "@/lib/locations/scope";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
 
 export interface AnalyticsLayoutActionResult {
   success?: boolean;
@@ -31,8 +32,17 @@ async function actionContext() {
   if (!can(viewer.permissions, "analytics", "view", viewer.isSuperadmin)) {
     return null;
   }
-  const scope = await getViewerLocations();
+  const [scope, features] = await Promise.all([
+    getViewerLocations(),
+    getPlatformAnalyticsFeatures(),
+  ]);
+  if (!features.coreDashboard || !features.dashboardCustomization) return null;
   const allowed = new Set<WidgetId>(Object.keys(WIDGETS) as WidgetId[]);
+  if (!features.googleSearchConsole) {
+    for (const id of allowed) {
+      if (WIDGETS[id].group === "Search") allowed.delete(id);
+    }
+  }
   if (scope !== null) allowed.delete("metric_customers");
   if (!can(viewer.permissions, "blogs", "view", viewer.isSuperadmin)) {
     allowed.delete("blog_approvals");

@@ -103,6 +103,11 @@ export default async function PlatformDashboardLayout({
           icon: "plans" as const,
         },
         {
+          href: "/dashboard/analytics",
+          label: "Analytics",
+          icon: "analytics" as const,
+        },
+        {
           href: "/dashboard/operators",
           label: "Operators",
           icon: "roles" as const,

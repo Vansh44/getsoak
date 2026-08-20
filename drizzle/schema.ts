@@ -1678,6 +1678,10 @@ export const orderItems = pgTable(
     price: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
+    // Immutable cost basis captured when the order line is created. Nullable
+    // means the merchant had not supplied a cost; reports must never treat it
+    // as zero. Product cost edits do not rewrite this snapshot.
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2, mode: "number" }),
     quantity: integer().default(1).notNull(),
     total: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -2204,6 +2208,36 @@ export const platformBillingSettings = pgTable(
   ],
 );
 
+/**
+ * Platform-wide Analytics feature controls. This is availability, not plan
+ * entitlement: Pro-only checks still happen through lib/plans.ts.
+ */
+export const platformAnalyticsSettings = pgTable(
+  "platform_analytics_settings",
+  {
+    id: boolean().default(true).primaryKey().notNull(),
+    coreDashboard: boolean("core_dashboard").default(true).notNull(),
+    dashboardCustomization: boolean("dashboard_customization")
+      .default(true)
+      .notNull(),
+    drilldownReports: boolean("drilldown_reports").default(true).notNull(),
+    googleSearchConsole: boolean("google_search_console")
+      .default(true)
+      .notNull(),
+    googleAnalytics4: boolean("google_analytics_4").default(false).notNull(),
+    metaPixel: boolean("meta_pixel").default(false).notNull(),
+    storefrontConversion: boolean("storefront_conversion")
+      .default(false)
+      .notNull(),
+    grossMargin: boolean("gross_margin").default(false).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  () => [check("platform_analytics_settings_id_check", sql`id`)],
+);
+
 export const productReviews = pgTable(
   "product_reviews",
   {
@@ -2312,6 +2346,12 @@ export const productVariants = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost. Null inherits the parent product cost.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     imageUrl: text("image_url"),
     images: text().array().default([""]).notNull(),
     specialPrice: numeric("special_price", {
@@ -2451,6 +2491,12 @@ export const products = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost used for future order-line snapshots.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     cardColor: text("card_color"),
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),
@@ -3309,6 +3355,122 @@ export const analyticsDashboardLayouts = pgTable(
       "analytics_dashboard_layouts_layout_is_object",
       sql`jsonb_typeof(${table.layout}) = 'object'`,
     ),
+  ],
+);
+
+// Phase 9 first-party storefront analytics. Raw rows and the attribution
+// bridge are short-lived; storefrontDaily is the durable reporting surface.
+export const storefrontEvents = pgTable(
+  "storefront_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    eventId: uuid("event_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    eventType: text("event_type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    path: text(),
+    productId: uuid("product_id"),
+    orderId: uuid("order_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("storefront_events_store_event_key").on(
+      table.storeId,
+      table.eventId,
+    ),
+    uniqueIndex("storefront_events_purchase_order_key")
+      .on(table.storeId, table.orderId)
+      .where(
+        sql`${table.eventType} = 'purchase' AND ${table.orderId} IS NOT NULL`,
+      ),
+    index("storefront_events_store_date_idx").on(
+      table.storeId,
+      table.eventDate,
+      table.visitorKey,
+      table.occurredAt,
+    ),
+    index("storefront_events_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_events_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_events_order_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "storefront_events_type_check",
+      sql`${table.eventType} IN ('page_view', 'product_view', 'add_to_cart', 'checkout_start', 'purchase')`,
+    ),
+  ],
+);
+
+export const storefrontOrderAttribution = pgTable(
+  "storefront_order_attribution",
+  {
+    orderId: uuid("order_id").primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    occurredAt: timestamp("occurred_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    convertedAt: timestamp("converted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("storefront_order_attribution_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_order_attribution_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_order_attribution_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const storefrontDaily = pgTable(
+  "storefront_daily",
+  {
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    visitors: integer().default(0).notNull(),
+    sessions: integer().default(0).notNull(),
+    pageViews: integer("page_views").default(0).notNull(),
+    productSessions: integer("product_sessions").default(0).notNull(),
+    cartSessions: integer("cart_sessions").default(0).notNull(),
+    checkoutSessions: integer("checkout_sessions").default(0).notNull(),
+    convertedSessions: integer("converted_sessions").default(0).notNull(),
+    purchases: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.date] }),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_daily_store_id_fkey",
+    }).onDelete("cascade"),
   ],
 );
 
@@ -5000,6 +5162,10 @@ export const helpArticles = pgTable(
     check(
       "help_articles_status_check",
       sql`status = ANY (ARRAY['draft'::text, 'published'::text])`,
+    ),
+    check(
+      "help_articles_published_has_category",
+      sql`status <> 'published'::text OR category_id IS NOT NULL`,
     ),
     pgPolicy("Read help_articles", {
       for: "select",

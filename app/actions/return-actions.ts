@@ -877,8 +877,15 @@ async function createExchangeOrder(
     // which is why that one is frozen.
     const variantRows = await withService((db) =>
       db
-        .select({ id: productVariants.id, name: productVariants.name })
+        .select({
+          id: productVariants.id,
+          name: productVariants.name,
+          cost: sql<
+            number | null
+          >`coalesce(${productVariants.costPrice}, ${products.costPrice})`,
+        })
         .from(productVariants)
+        .innerJoin(products, eq(products.id, productVariants.productId))
         .where(
           inArray(
             productVariants.id,
@@ -887,6 +894,7 @@ async function createExchangeOrder(
         ),
     );
     const variantName = new Map(variantRows.map((v) => [v.id, v.name]));
+    const variantCost = new Map(variantRows.map((v) => [v.id, v.cost]));
 
     const subtotal = swaps.reduce(
       (sum, l) => sum + (Number(l.price) || 0) * l.quantity,
@@ -929,6 +937,7 @@ async function createExchangeOrder(
           variantName: variantName.get(l.variant_id!) ?? null,
           quantity: l.quantity,
           price: Number(l.price) || 0,
+          unitCost: variantCost.get(l.variant_id!) ?? null,
           total: (Number(l.price) || 0) * l.quantity,
         })),
       );

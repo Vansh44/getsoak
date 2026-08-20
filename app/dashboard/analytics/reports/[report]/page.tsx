@@ -20,6 +20,7 @@ import { parseAnalyticsRange } from "@/lib/analytics/range";
 import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { getViewerLocations } from "@/lib/locations/scope";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
 
 const PAGE_ROW_LIMIT = 250;
 
@@ -55,13 +56,17 @@ export default async function AnalyticsReportPage({
   searchParams: Promise<AnalyticsSearchParams>;
 }) {
   await requireSectionAccess("analytics", "view");
-  const [{ report }, query, storeId, locationScope] = await Promise.all([
-    params,
-    searchParams,
-    getActingStoreId(),
-    getViewerLocations(),
-  ]);
+  const [{ report }, query, storeId, locationScope, features] =
+    await Promise.all([
+      params,
+      searchParams,
+      getActingStoreId(),
+      getViewerLocations(),
+      getPlatformAnalyticsFeatures(),
+    ]);
   if (!isAnalyticsReportId(report)) notFound();
+  if (!features.coreDashboard || !features.drilldownReports) notFound();
+  if (report === "search-queries" && !features.googleSearchConsole) notFound();
 
   const timeZone = await getStoreAnalyticsTimeZone(storeId);
   const range = parseAnalyticsRange(query, timeZone);

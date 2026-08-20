@@ -42,15 +42,46 @@ sequence AND the spec for everything still to build.
 | **2**  | Cancellation & refund flow                                     | M    | ✅ done |
 | **3**  | Pickup end to end: collection code, QR, role split             | L    | ✅ done |
 | **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ✅ done |
-| **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**   | M    | ⏭ next |
 | **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
 | **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
+| **14** | **Money-event audit — who discounted, overrode, refunded**     | M    | ⏭ next |
+| **15** | Hourly sweep + held sales expire                               | S    | ⏳      |
+| **16** | A counter gateway payment holds stock                          | M    | ⏳      |
+| **17** | Dashboard POS reporting — shifts, Z-reports, sales by shop     | M    | ⏳      |
+| **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
+| **19** | Catalogue delta sync                                           | M    | ⏳      |
+| **20** | `placePosSale` round trips (11 → few)                          | M    | ⏳      |
+| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)       | M    | ⏳      |
 | **6**  | Channel stock policy, per location and configurable (LOC H)    | M    | ⏳      |
 | **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state) | S    | ⏳      |
 | **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
 | **9**  | Gift cards                                                     | M    | ⏳      |
+| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)             | L    | ⏳      |
 | **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
 | **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
+
+**★★ HOW STEPS 14–21 ARE ORDERED (added 2026-08-18).** They fold the POS gap
+list into this table rather than starting a second plan — one ordered plan is
+the rule, and a rival list drifts. The ordering is deliberate and worth arguing
+with rather than following blindly:
+
+1. **14–16 come first because they are about TRUST, not features.** An audit
+   trail cannot be retrofitted onto history that was never recorded, so every
+   day it is missing is a day of un-attributable money events. 15 is nearly
+   free. 16 closes a window that costs a captured payment when it bites.
+2. **17–18 next because a merchant cannot currently RUN the business from the
+   dashboard** — shift figures live only at the till, so an owner cannot see
+   yesterday, or compare two shops.
+3. **19–20 are performance.** Real, measured, and not urgent until a shop has a
+   big catalogue or a slow connection.
+4. **5–9 are the remaining product features**, unchanged in substance.
+5. **21, 10 and 11 are last** because each is large and none blocks a shop
+   trading today.
+
+⚠ The judgement call is 14 vs 17. If the goal is SELLING POS, dashboard
+reporting is the more visible gap; if the goal is running it safely in a shop
+with staff, the audit trail is. Ordered for the second, because the first is
+recoverable later and the second is not.
 
 **★ THE NUMBER IS A STABLE ID, NOT A SEQUENCE.** Row ORDER is the priority; the
 number only names the step. Steps 12 and 13 are newer than 6–11 and sit above
@@ -627,6 +658,187 @@ till.
 
 ---
 
+## Step 14 — Money-event audit: who discounted, overrode, refunded
+
+**The gap.** `posAudit` has six call sites and every one is auth or device:
+authorized, revoked, clone detected, operator login, failed login. Not one money
+event is recorded. Discount AMOUNTS live on the order (`orders.discount`,
+`order_items.line_discount`) so the data is not lost — but **who** gave it,
+**who** approved it, and **why** are nowhere.
+
+**★★ THE APPROVER IS THE POINT, AND IT IS ALREADY IN HAND.** An over-cap
+discount carries a signed approval token naming the manager who keyed their PIN
+(`lib/pos/approval.ts`). `placePosSale` verifies it and then THROWS THE IDENTITY
+AWAY. Persisting `approverId` is most of this step's value for almost none of
+its work — and it is the one fact nobody can reconstruct afterwards.
+
+**Ships.** `posAudit` entries for: order + line discount, price override, till
+refund, gateway tender accepted, cash movement. Each carries actor, approver
+(where one exists), amount and reason. Surfaced as a Money tab beside the
+existing device activity on `/dashboard/pos/devices`, location-scoped.
+
+**★ BEST-EFFORT, NEVER BLOCKING** — the existing `posAudit` rule. A logging
+failure must not refuse a sale in front of a customer.
+
+**★ NOT `activity_events`.** That is the store-wide audit feed and already
+carries `order.placed`. This is till-specific, read by a shop owner
+reconciling a drawer, and belongs with the other POS audit rows.
+
+**Acceptance:** PS-AU.1–8. **Effort: M.**
+
+---
+
+## Step 15 — Hourly sweep, and held sales that expire
+
+Two cheap fixes with one theme: things that should lapse currently do not.
+
+**15a — the sweep runs daily.** `storemink-expire-pending-payments` is
+`30 1 * * *`, and it carries `sweepExpiredPickups` AND `sweepPickupReminders`.
+So an expired collection sits in the queue up to 24h, an unpaid gateway order
+holds stock up to 24h, and `PICKUP_WARN_HOURS` (48) sits exactly at its
+documented minimum of 2× the interval. The daily cadence was a Vercel Hobby
+constraint that no longer applies.
+
+**Ships:** hourly. Config, not code.
+**⚠ CONFIRM THE JOB EXISTS FIRST.** This repo has had "documented but never
+created" happen three times, caught only by diffing `docs/cron-jobs.md` against
+`gcloud scheduler jobs list`. Do that diff as part of this step.
+
+**15b — a held sale never expires.** Capped at 20 per counter and discardable
+by hand; nothing sweeps a cart held and forgotten.
+
+**★ DISCARDING IS SAFE, which is why this is small.** A park holds NO stock and
+stores NO prices (`pos_14`), so expiring one costs a re-scan and nothing else.
+Contrast a pickup hold, where expiry has to release stock.
+
+**Ships:** a retention entry in `lib/retention/prune.ts` — that is the existing
+home for "rows that should stop existing", and it already batches per table.
+
+**Acceptance:** PS-PK.13, PS-8.32. **Effort: S.**
+
+---
+
+## Step 16 — A counter gateway payment holds stock
+
+**The gap**, and it is one this branch introduced. Stock is reserved when the
+sale COMPLETES, not when the customer pays. Between `confirmPosGatewayPayment`
+and Complete sale, another till can take the last unit — the sale then fails
+with "only N left" against a **captured payment**, which the merchant has to
+refund from the dashboard.
+
+**Ships.** `holdStock` at confirm, `commitHold` at `placePosSale`, release on
+abandon, and a sweep for holds nobody released.
+
+**★★ THE SWEEP IS NOT OPTIONAL HERE, unlike parking.** §22 records why a park
+holds nothing: an abandoned hold strands stock, a cashier could empty a shelf on
+paper, and the shop reorders goods it has. A payment hold has the same hazard —
+so it may only exist WITH an expiry, and that is most of the work.
+
+**★ HOLD AT CONFIRM, NOT AT START.** Holding when the modal opens would strand
+stock for every dismissed payment, which is an ordinary counter outcome. At
+confirm the money is already captured, so the customer is committed.
+
+**★ THE FAILURE MESSAGE MUST STILL NAME THE PAYMENT.** The window narrows to
+near-zero; it does not close, because a hold can still lapse. Whatever the
+sale says when it fails after capture has to be actionable.
+
+**Acceptance:** PS-GW.16–19. **Effort: M.**
+
+---
+
+## Step 17 — Dashboard POS reporting
+
+**The gap.** Shift figures exist only at the till: `/pos/shift` shows the live
+X-report and the Z-report of the shift being closed. An owner cannot see
+yesterday's, cannot compare two shops, and cannot see POS sales split by cashier
+or tender anywhere in the dashboard.
+
+**Ships.** `/dashboard/pos/reports`: shifts list (per location, with variance),
+one shift's Z-report, and POS sales by location / cashier / tender over a date
+range.
+
+**★ LOCATION-SCOPED, like every other order read** (`admin_locations`, §23). A
+branch manager sees their own shop. This is also where the scope story gets its
+first real test, since the till path never needed it.
+
+**★ READ THE SNAPSHOT, NOT THE LIVE FIGURES.** A closed shift reports what was
+recorded at close (§22) — recomputing would let an old Z-report drift when an
+order is later edited.
+
+**⚠ THIS OVERLAPS THE ANALYTICS REBUILD.** `docs/analytics-and-search-console-plan.md`
+covers commerce widgets and the missing location filter. Decide once whether POS
+reporting lives there or here; two homes for "how did the shop do" is the split
+this codebase keeps paying for.
+
+**Effort: M.**
+
+---
+
+## Step 18 — Collection counter: part payment, discount, expiry banner
+
+Three small gaps at one counter, worth doing together because they touch the
+same screen and the same action.
+
+- **A collection cannot be part-paid.** The tender pad must cover the full
+  amount owed. A customer who wants to pay half now has no path.
+- **A collection cannot be discounted.** The price was agreed at checkout and
+  discounting is owner-only (§22) — so this needs the same approval machinery
+  the sell counter has, not an exception.
+- **`order.pickup_expiring` is email-only.** No in-app banner, so a shop working
+  the queue cannot see which parcels are about to lapse.
+
+**★ PART PAYMENT IS THE HARD ONE, and not because of the UI.** `markCollected`
+claims awaiting → collected in one statement; a part-paid collection is neither.
+It needs a state the order model does not have today, or a deliberate decision
+that partial payment leaves the parcel unhanded-over. Settle that before
+building.
+
+**Effort: M.**
+
+---
+
+## Step 19 — Catalogue delta sync
+
+Every register re-pulls the WHOLE catalogue every 5 minutes, keyset-paged at 300
+products a page — O(catalogue) per till, forever. A 20,000-SKU shop with four
+tills does that 48 times an hour.
+
+**Ships.** A watermark (`max(updated_at)`) per store, and a sync that asks for
+what changed since the last one.
+
+**★ THE CACHE IS NOT AUTHORITATIVE, and that is what makes this safe.**
+`placePosSale` re-reads price and re-reserves, so a delta that misses something
+is a wrong label at worst, never a wrong charge. A full re-sync stays available
+as the recovery path.
+
+**⚠ DELETES ARE THE TRAP.** A watermark sync never sees a removed product, so
+the register would keep selling something the catalogue dropped. Needs either a
+tombstone or a periodic full reconcile.
+
+**Effort: M.**
+
+---
+
+## Step 20 — `placePosSale` round trips
+
+The sale path makes **11 separate transactions** — 11 × RTT on the one code path
+whose whole design goal is "least checkout time". Against Mumbai Cloud SQL at
+~46ms that is half a second of pure network.
+
+**Ships.** Fold the independent reads into one round trip and the write chain
+into fewer, without weakening the rollback discipline.
+
+**★★ THE ROLLBACK CHAIN IS WHY IT LOOKS LIKE THIS.** `placeOrder` and
+`placePosSale` both unwind in reverse on failure because there is no
+cross-statement transaction over the pool. Collapsing steps that must unwind
+INDEPENDENTLY would trade latency for a half-committed sale. The safe wins are
+the READS (prices, billing, tax classes, location, prefix), which can be one
+query, and the receipt-number allocation.
+
+**Effort: M.**
+
+---
+
 ## Step 5 — Receipts
 
 **Email is DONE** — it shipped with Step 4, because capturing an address that
@@ -823,6 +1035,21 @@ a redeemable code and a purchase flow.
 **Watch for:** a balance is money. Append-only ledger, atomic spend via a
 conditional UPDATE — the `ai_credit_ledger` pattern, which already solves this
 exact problem in this codebase.
+
+---
+
+## Step 21 — Differentiators _(POS 10)_
+
+Raw **ESC/POS** printing (WebUSB or a local print agent, for one-tap dialog-free
+receipts), **serial / lot tracking**, **composite bundles**, an **AI cashier
+copilot**, a WhatsApp reorder portal, and bulk barcode CSV import. Specified in
+`docs/pos-plan.md` §11 Phase 10.
+
+**★ NONE OF THESE BLOCK A SHOP TRADING**, which is the whole reason they sit
+here. Printing already works through the OS driver on any driver-backed thermal
+printer; ESC/POS removes a print dialog, it does not enable printing.
+
+**Effort: L**, and genuinely separable — each is its own piece.
 
 ---
 
@@ -1133,13 +1360,14 @@ hand, which was the step that mattered.
 
 ## Also outstanding — unglamorous, worth scheduling
 
-| Item                           | Why it matters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Catalogue **delta** sync       | Every register re-pulls the whole catalogue every 5 min — O(catalogue), forever                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Money-event **audit**          | All 6 `posAudit` sites are auth-only; discounts, overrides and till refunds leave none                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Analytics **remaining phases** | Phase 1, Phase 2a–2d, Search Console Phase 3a–3d, and the first report/CSV release shipped through 2026-08-20. The Phase 2 editor now has the intended Shopify-like focused workspace: persistent card rail, dashboard-nav takeover, equal 12-column landing units with defined card footprints, global section controls, save bar, and add/remove Undo feedback. Total sales, sales over time, top products, and Google Search queries have card-linked, tenant/location-safe detail pages and formula-safe CSV. Migration `20260819_0006_search_metrics` is applied; Cloud Scheduler still needs deployment-time creation/verification. Next product build: merchant pixels with a consent-policy decision, or first-party traffic only after its privacy/plan-gate decisions. Spec: `docs/analytics-and-search-console-plan.md` |
-| Sale round trips               | `placePosSale` makes 11 separate transactions — 11 × RTT on the fastest path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Live **Razorpay** run          | Refunds and metered billing have never touched a real account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+⚠ Catalogue delta sync, the money-event audit and `placePosSale`'s round trips
+were PROMOTED out of this table into Steps 19, 14 and 20 on 2026-08-18. An item
+in two places is an item nobody owns.
+
+| Item                           | Why it matters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics **remaining phases** | Phase 1, Phase 2a–2d, Search Console Phase 3a–3d, the first report/CSV release, platform feature controls, the complete Analytics Help Centre guide set, and Phase 8 merchant pixels shipped through 2026-08-20. GA4 and Meta Pixel are Pro-only, independently operator-controlled, configured at Settings → Analytics tracking, and blocked on the storefront until the visitor explicitly allows the matching Analytics or Marketing category; rejection and later withdrawal remain available. Migration `20260820_0010_merchant_pixels` enables those modules and publishes their detailed setup guides. Cloud Scheduler still needs deployment-time creation/verification. Next product build: Phase 9 Pro-only first-party storefront conversion analytics, followed by Phase 10 margin. Spec: `docs/analytics-and-search-console-plan.md` |
+| Live **Razorpay** run          | Refunds and metered billing have never touched a real account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ---
 
@@ -1176,6 +1404,17 @@ and the pickup machinery. Specs: `docs/pos-plan.md`,
 - **COD is not a dead button:** the merchant picks per refund from {store
   credit, manual transfer (recorded), cash at counter}. RazorpayX drops in later
   as one more `method`, no schema change.
+
+### Help Centre discovery and indexing
+
+The public Help Centre now has persistent header search with a visible submit
+button and grounded multilingual AI interpretation. AI can translate intent and
+rank real published guides but cannot write answers, invent URLs, or surface
+drafts; exact titles and all AI failure paths remain deterministic keyword
+search. Published articles are required to have a canonical category, appear in
+the production Help sitemap with real update dates, notify IndexNow, and trigger
+an immediate Google Search Console sitemap submission. The daily SEO job remains
+the durable retry, while Google retains final control over crawl and indexing.
 
 ### Returns, exchanges, BORIS, credit notes
 

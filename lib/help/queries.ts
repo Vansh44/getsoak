@@ -16,7 +16,7 @@ import {
 // Cached PUBLIC help-centre reads (help.storemink.com). All run through the
 // anonymous DB scope (withAnon) so RLS returns only published articles, then
 // wrap in `unstable_cache` tagged TAGS.help — operator edits call
-// revalidateTag(TAGS.help) so changes appear near-instantly; the time-based
+// updateTag(TAGS.help) so changes appear immediately; the time-based
 // revalidate is just a safety net. Reads tolerate a missing table / transient
 // error by returning empty so a cold deploy never crashes the help site.
 //
@@ -98,6 +98,56 @@ export interface HelpNavCategory {
   title: string;
   articles: { slug: string; title: string }[];
 }
+
+/** Compact, published-only catalogue exposed to the grounded AI search
+ * interpreter. It deliberately excludes article bodies: title + excerpt +
+ * category are enough to choose search terms without sending the whole Help
+ * Centre to the model on every query. The database search remains the source
+ * of truth for the final results. */
+export interface HelpSearchCatalogEntry {
+  id: string;
+  categoryId: string;
+  categorySlug: string;
+  categoryTitle: string;
+  slug: string;
+  title: string;
+  excerpt: string | null;
+}
+
+export const getHelpSearchCatalog = unstable_cache(
+  async (): Promise<HelpSearchCatalogEntry[]> => {
+    try {
+      return await withAnon((db) =>
+        db
+          .select({
+            id: helpArticles.id,
+            categoryId: helpCategories.id,
+            categorySlug: helpCategories.slug,
+            categoryTitle: helpCategories.title,
+            slug: helpArticles.slug,
+            title: helpArticles.title,
+            excerpt: helpArticles.excerpt,
+          })
+          .from(helpArticles)
+          .innerJoin(
+            helpCategories,
+            eq(helpArticles.categoryId, helpCategories.id),
+          )
+          .where(PUBLISHED)
+          .orderBy(
+            asc(helpCategories.position),
+            asc(helpArticles.position),
+            asc(helpArticles.title),
+          )
+          .limit(500),
+      );
+    } catch {
+      return [];
+    }
+  },
+  ["help-search-catalog"],
+  { tags: [TAGS.help], revalidate: REVALIDATE },
+);
 
 /** The full Topics tree — every category with its published articles, ordered.
  *  Powers the left docs sidebar. */
@@ -249,29 +299,30 @@ export const getPublishedHelpArticleParams = unstable_cache(
   async (): Promise<
     { categorySlug: string; slug: string; updatedAt: string | null }[]
   > => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select({
-            slug: helpArticles.slug,
-            updatedAt: helpArticles.updatedAt,
-            categorySlug: helpCategories.slug,
-          })
-          .from(helpArticles)
-          .innerJoin(
-            helpCategories,
-            eq(helpArticles.categoryId, helpCategories.id),
-          )
-          .where(PUBLISHED),
-      );
-      return rows.map((r) => ({
-        categorySlug: r.categorySlug,
-        slug: r.slug,
-        updatedAt: r.updatedAt,
-      }));
-    } catch {
-      return [];
-    }
+    // Unlike reader-facing cards, sitemap discovery must fail closed. Returning
+    // [] on a transient database problem serves Google a valid but suddenly
+    // empty sitemap, which looks like every published article was deleted.
+    // Throw instead so the sitemap request is retried and its previous known
+    // URLs are not replaced by a false empty set.
+    const rows = await withAnon((db) =>
+      db
+        .select({
+          slug: helpArticles.slug,
+          updatedAt: helpArticles.updatedAt,
+          categorySlug: helpCategories.slug,
+        })
+        .from(helpArticles)
+        .innerJoin(
+          helpCategories,
+          eq(helpArticles.categoryId, helpCategories.id),
+        )
+        .where(PUBLISHED),
+    );
+    return rows.map((r) => ({
+      categorySlug: r.categorySlug,
+      slug: r.slug,
+      updatedAt: r.updatedAt,
+    }));
   },
   ["help-articles-params"],
   { tags: [TAGS.help], revalidate: REVALIDATE },

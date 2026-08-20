@@ -1,0 +1,282 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Check, ExternalLink, Lock, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
+import {
+  saveMerchantAnalyticsSettings,
+  type MerchantAnalyticsSettingsEditor,
+} from "@/app/actions/merchant-analytics-settings";
+import type { MerchantPixelSettings } from "@/lib/analytics/merchant-pixels";
+import { Button } from "@/components/ui/button";
+
+function Switch({
+  checked,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+        checked ? "bg-emerald-500" : "bg-slate-300"
+      } disabled:cursor-not-allowed disabled:opacity-50`}
+    >
+      <span
+        className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          checked ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
+  );
+}
+
+function IntegrationCard({
+  kind,
+  title,
+  description,
+  idLabel,
+  placeholder,
+  value,
+  enabled,
+  available,
+  platformEnabled,
+  plan,
+  canManage,
+  helpUrl,
+  pending,
+  onIdChange,
+  onEnabledChange,
+}: {
+  kind: "ga4" | "meta";
+  title: string;
+  description: string;
+  idLabel: string;
+  placeholder: string;
+  value: string;
+  enabled: boolean;
+  available: boolean;
+  platformEnabled: boolean;
+  plan: string;
+  canManage: boolean;
+  helpUrl: string;
+  pending: boolean;
+  onIdChange: (value: string) => void;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
+  const lockedByPlan = plan !== "pro";
+  const disabled = !available || !canManage || pending;
+  const status = enabled
+    ? "Enabled"
+    : value
+      ? "Saved, but disabled"
+      : "Not connected";
+
+  return (
+    <section className="dash-card">
+      <div className="dash-card-header items-start">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="dash-card-title">{title}</h2>
+            <span className="dash-badge-amber rounded-full px-2 py-0.5 text-[11px] font-semibold">
+              Pro
+            </span>
+            {enabled ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                <Check className="h-3 w-3" /> Active
+              </span>
+            ) : null}
+          </div>
+          <p className="dash-card-sub mt-1 max-w-2xl">{description}</p>
+        </div>
+        <Switch
+          checked={enabled}
+          disabled={disabled || !value}
+          label={`${enabled ? "Disable" : "Enable"} ${title}`}
+          onChange={onEnabledChange}
+        />
+      </div>
+      <div className="dash-card-body space-y-4">
+        {!available ? (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {lockedByPlan
+                ? `${title} requires the Pro plan.`
+                : !platformEnabled
+                  ? `StoreMink has not enabled ${title} for merchants yet.`
+                  : `${title} is currently unavailable.`}
+            </span>
+          </div>
+        ) : null}
+
+        <label className="block max-w-xl">
+          <span className="mb-1.5 block text-sm font-semibold text-slate-900">
+            {idLabel}
+          </span>
+          <input
+            className="dash-input w-full font-mono uppercase"
+            value={value}
+            placeholder={placeholder}
+            disabled={disabled}
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
+            inputMode={kind === "meta" ? "numeric" : "text"}
+            onChange={(event) => onIdChange(event.target.value)}
+          />
+        </label>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-sm">
+          <span className="text-slate-500">Status: {status}</span>
+          <Link
+            href={helpUrl}
+            target="_blank"
+            className="inline-flex items-center gap-1 font-semibold text-violet-700 hover:underline"
+          >
+            Setup guide <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function MerchantAnalyticsSettingsView({
+  initial,
+  ga4HelpUrl,
+  metaHelpUrl,
+}: {
+  initial: MerchantAnalyticsSettingsEditor;
+  ga4HelpUrl: string;
+  metaHelpUrl: string;
+}) {
+  const router = useRouter();
+  const [saved, setSaved] = useState(initial.settings);
+  const [values, setValues] = useState(initial.settings);
+  const [pending, startTransition] = useTransition();
+  const dirty = JSON.stringify(values) !== JSON.stringify(saved);
+
+  function update(patch: Partial<MerchantPixelSettings>) {
+    setValues((current) => ({ ...current, ...patch }));
+  }
+
+  function save() {
+    startTransition(async () => {
+      const result = await saveMerchantAnalyticsSettings(values);
+      if ("error" in result) {
+        toast.error(result.error);
+        return;
+      }
+      setValues(result.settings);
+      setSaved(result.settings);
+      toast.success("Analytics tracking settings saved.");
+      router.refresh();
+    });
+  }
+
+  return (
+    <div className="max-w-4xl space-y-5 p-6">
+      <header>
+        <h1 className="text-[22px] font-semibold text-slate-950">
+          Analytics tracking
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm text-slate-600">
+          Connect your own Google Analytics and Meta accounts. StoreMink loads
+          optional tracking only after the visitor makes a privacy choice.
+        </p>
+      </header>
+
+      <div className="flex items-start gap-3 rounded-xl border border-violet-200 bg-violet-50 p-4 text-sm text-violet-950">
+        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0" />
+        <div>
+          <strong>Consent is enforced automatically.</strong>
+          <p className="mt-1 text-violet-800">
+            GA4 waits for analytics consent. Meta Pixel waits for marketing
+            consent. Rejecting optional tracking keeps both scripts unloaded.
+          </p>
+        </div>
+      </div>
+
+      <IntegrationCard
+        kind="ga4"
+        title="Google Analytics 4"
+        description="Send consenting storefront page views to your GA4 web data stream."
+        idLabel="GA4 Measurement ID"
+        placeholder="G-XXXXXXXXXX"
+        value={values.ga4MeasurementId}
+        enabled={values.ga4Enabled}
+        available={initial.ga4Available}
+        platformEnabled={initial.ga4PlatformEnabled}
+        plan={initial.plan}
+        canManage={initial.canManage}
+        helpUrl={ga4HelpUrl}
+        pending={pending}
+        onIdChange={(value) =>
+          update({
+            ga4MeasurementId: value.toUpperCase(),
+            ...(value.trim() ? {} : { ga4Enabled: false }),
+          })
+        }
+        onEnabledChange={(ga4Enabled) => update({ ga4Enabled })}
+      />
+
+      <IntegrationCard
+        kind="meta"
+        title="Meta Pixel"
+        description="Send consenting storefront page views to your Meta web dataset."
+        idLabel="Meta Pixel ID"
+        placeholder="123456789012345"
+        value={values.metaPixelId}
+        enabled={values.metaPixelEnabled}
+        available={initial.metaAvailable}
+        platformEnabled={initial.metaPlatformEnabled}
+        plan={initial.plan}
+        canManage={initial.canManage}
+        helpUrl={metaHelpUrl}
+        pending={pending}
+        onIdChange={(value) =>
+          update({
+            metaPixelId: value.replace(/\D/g, ""),
+            ...(value.trim() ? {} : { metaPixelEnabled: false }),
+          })
+        }
+        onEnabledChange={(metaPixelEnabled) => update({ metaPixelEnabled })}
+      />
+
+      <div className="flex items-center justify-end gap-3">
+        {!initial.canManage ? (
+          <p className="text-sm text-slate-500">
+            You can view these settings but cannot change them.
+          </p>
+        ) : (
+          <>
+            <Button
+              variant="outline"
+              disabled={!dirty || pending}
+              onClick={() => setValues(saved)}
+            >
+              Discard
+            </Button>
+            <Button disabled={!dirty || pending} onClick={save}>
+              {pending ? "Saving…" : "Save tracking settings"}
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

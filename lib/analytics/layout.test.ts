@@ -68,6 +68,10 @@ describe("analytics layout v2 contract", () => {
         cards: ["customer_mix", "metric_customers"],
       },
       {
+        title: "Profit",
+        cards: ["metric_gross_profit", "gross_margin_overview"],
+      },
+      {
         title: "Google Search",
         cards: [
           "search_clicks",
@@ -77,6 +81,15 @@ describe("analytics layout v2 contract", () => {
           "search_trend",
           "search_queries",
           "search_pages",
+        ],
+      },
+      {
+        title: "Storefront traffic",
+        cards: [
+          "traffic_visitors",
+          "traffic_sessions",
+          "traffic_page_views",
+          "traffic_funnel",
         ],
       },
     ]);

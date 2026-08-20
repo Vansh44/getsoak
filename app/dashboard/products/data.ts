@@ -19,6 +19,7 @@ import type {
   CardColorOption,
   TaxClassOption,
 } from "./page";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 /**
  * The option lists (categories, card colours, tax classes) + the store default
@@ -31,8 +32,13 @@ export async function getProductCreateData(): Promise<{
   colors: CardColorOption[];
   taxClasses: TaxClassOption[];
   defaultTrackInventory: boolean;
+  canUseGrossMargin: boolean;
 }> {
   const storeId = await getActingStoreId();
+  const canUseGrossMargin = await storeHasAnalyticsFeature(
+    storeId,
+    "grossMargin",
+  );
 
   return await withService(async (db) => {
     const categoryRows = await db
@@ -75,6 +81,7 @@ export async function getProductCreateData(): Promise<{
       colors: colorRows as CardColorOption[],
       taxClasses: taxClassRows as TaxClassOption[],
       defaultTrackInventory: Boolean(settings["inventory.simpleTrackDefault"]),
+      canUseGrossMargin,
     };
   });
 }
@@ -91,8 +98,13 @@ export async function getProductEditData(id: string): Promise<{
   categories: CategoryOption[];
   colors: CardColorOption[];
   taxClasses: TaxClassOption[];
+  canUseGrossMargin: boolean;
 } | null> {
   const storeId = await getActingStoreId();
+  const canUseGrossMargin = await storeHasAnalyticsFeature(
+    storeId,
+    "grossMargin",
+  );
 
   try {
     return await withService(async (db) => {
@@ -166,6 +178,7 @@ export async function getProductEditData(id: string): Promise<{
         categories: categoryRows as CategoryOption[],
         colors: colorRows as CardColorOption[],
         taxClasses: taxClassRows as TaxClassOption[],
+        canUseGrossMargin,
       };
     });
   } catch (err) {
