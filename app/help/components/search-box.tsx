@@ -11,21 +11,30 @@ import {
 export function HelpSearchBox({
   autoFocus = false,
   initialQuery = "",
+  compact = false,
 }: {
   autoFocus?: boolean;
   initialQuery?: string;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [q, setQ] = useState(initialQuery);
   const [suggestions, setSuggestions] = useState<HelpSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
+  // A results page starts with the submitted query already populated. Do not
+  // immediately reopen its autocomplete dropdown over the completed results;
+  // suggestions resume as soon as the reader edits the query.
+  const [suggestionsEnabled, setSuggestionsEnabled] = useState(
+    !initialQuery.trim(),
+  );
   const boxRef = useRef<HTMLDivElement>(null);
   const seq = useRef(0);
 
   // Debounced suggestions. All state updates happen inside the timeout (async),
   // never synchronously in the effect body.
   useEffect(() => {
+    if (!suggestionsEnabled) return;
     const term = q.trim();
     const id = ++seq.current;
     const t = setTimeout(async () => {
@@ -43,7 +52,7 @@ export function HelpSearchBox({
       setActive(-1);
     }, 180);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, suggestionsEnabled]);
 
   // Close on outside click.
   useEffect(() => {
@@ -56,6 +65,10 @@ export function HelpSearchBox({
   }, []);
 
   function go(url: string) {
+    // Invalidate an autocomplete request that may still be in flight so it
+    // cannot reopen the menu while navigation is starting.
+    ++seq.current;
+    setSuggestionsEnabled(false);
     setOpen(false);
     router.push(url);
   }
@@ -86,24 +99,37 @@ export function HelpSearchBox({
   }
 
   return (
-    <div className="hc-search" ref={boxRef}>
+    <div
+      className={`hc-search${compact ? " hc-search-compact" : ""}`}
+      ref={boxRef}
+    >
       <Search className="icon" size={20} aria-hidden />
       <input
         type="search"
         autoFocus={autoFocus}
         value={q}
-        onChange={(e) => setQ(e.target.value)}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setSuggestionsEnabled(true);
+        }}
         onKeyDown={onKeyDown}
         onFocus={() => suggestions.length > 0 && setOpen(true)}
-        placeholder="Search for help — payments, domains, products…"
+        placeholder={
+          compact
+            ? "Search help or ask a question…"
+            : "Ask in any language — payments, domains, products…"
+        }
         aria-label="Search the help centre"
         enterKeyHint="search"
       />
+      <button type="button" className="hc-search-submit" onClick={submit}>
+        Search
+      </button>
       {open && (
         <div className="hc-suggest" role="listbox">
           {suggestions.length === 0 ? (
             <div className="s-empty">
-              No matches. Press Enter to search all articles.
+              No title match. Select Search for AI-assisted results.
             </div>
           ) : (
             suggestions.map((s, i) => (

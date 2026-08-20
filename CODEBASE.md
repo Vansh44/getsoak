@@ -2459,7 +2459,7 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     `SECURITY DEFINER` RPCs (`help_article_view`, `help_article_vote`) so no
     write policy opens to anon (hardened to `search_path=''` +
     schema-qualified refs in `help_centre_02_rpc_search_path.sql`; the public
-    `voteHelpArticle` action deliberately does NOT `revalidateTag` — an
+    `voteHelpArticle` action deliberately does NOT invalidate the Help tag — an
     anon-triggerable global cache bust — so helpful counts are
     eventual-consistency). Drizzle tables added to `drizzle/schema.ts`
     (`helpCategories`, `helpArticles`; the generated `search` column is
@@ -2474,14 +2474,31 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       "was this helpful?" + related; **operator-only `?preview=1`** renders a
       draft via the uncached, `getPlatformViewer`-gated `lib/help/preview.ts` —
       non-operators fall through to published/404, so a leaked URL leaks
-      nothing), `/help/search` (FTS, noindex). Reads via
+      nothing), `/help/search` (noindex) plus `search/loading.tsx`. The sticky
+      header carries a compact search field and visible Search button on every
+      Help page. Live typeahead stays on fast English Postgres FTS; submitting a
+      full query calls `searchPublishedHelpWithAi`, which gives Gemini only the
+      published title/excerpt/category catalogue and accepts only validated
+      catalogue slugs plus short English query expansions. It then retrieves
+      final rows through the published-only database search. Exact document
+      titles bypass AI; throttling, malformed output, missing AI config, or
+      service errors fall back to keyword results. The model never generates an
+      answer or URL, so multilingual interpretation cannot invent a StoreMink
+      feature. Reads via
       cached `lib/help/queries.ts` (`withAnon`, tag `TAGS.help`); types +
       mappers in `lib/help/types.ts`. SEO: per-page `generateMetadata` +
       canonical on `HELP_URL` (`lib/site.ts`), `helpArticleSchema` (TechArticle)
       - `breadcrumbSchema` JSON-LD, and a \*\*help-host branch in `app/sitemap.ts`
-      - `app/robots.ts`\*\* (both were previously store-only). IndexNow pings on
-        publish (prod only). The old static `app/help/page.tsx` (hardcoded topic
-        cards) is retired.
+      - `app/robots.ts`\*\* (both were previously store-only). A publish
+        immediately notifies IndexNow and re-submits the canonical Help sitemap
+        to Google Search Console (prod only); the daily SEO cron is the durable
+        retry. Migration `20260820_0009_help_article_indexability` repairs
+        legacy published orphans to drafts and adds a database constraint
+        requiring a category for every published article, matching the
+        canonical URL contract. The Help sitemap derives category + article
+        URLs from one joined published query and throws on database failure
+        instead of serving a false empty sitemap. The old static
+        `app/help/page.tsx` (hardcoded topic cards) is retired.
     - **Management console** at **`/dashboard/help`** (platform host; nav entry
       in `app/platform/dashboard/(console)/layout.tsx`, `faq` icon), gated by
       `getPlatformViewer()`. `app/actions/help-actions.ts` holds public actions

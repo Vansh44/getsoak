@@ -218,6 +218,23 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260820_0009_help_article_indexability",
+      "description": "Require every published Help article to have the category needed by its canonical URL",
+      "file": "sql/20260820_0009_help_article_indexability.sql",
+      "transaction": true,
+      "requires": ["20260820_0008_analytics_help_documents"],
+      "verify": {
+        "constraints": ["help_articles_published_has_category"],
+        "queries": [
+          {
+            "name": "no published Help article is missing its canonical category",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and category_id is null",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

@@ -1177,6 +1177,17 @@ and the pickup machinery. Specs: `docs/pos-plan.md`,
   credit, manual transfer (recorded), cash at counter}. RazorpayX drops in later
   as one more `method`, no schema change.
 
+### Help Centre discovery and indexing
+
+The public Help Centre now has persistent header search with a visible submit
+button and grounded multilingual AI interpretation. AI can translate intent and
+rank real published guides but cannot write answers, invent URLs, or surface
+drafts; exact titles and all AI failure paths remain deterministic keyword
+search. Published articles are required to have a canonical category, appear in
+the production Help sitemap with real update dates, notify IndexNow, and trigger
+an immediate Google Search Console sitemap submission. The daily SEO job remains
+the durable retry, while Google retains final control over crawl and indexing.
+
 ### Returns, exchanges, BORIS, credit notes
 
 Spec: `docs/returns-exchanges-plan.md`. The twelve `returns.*` settings,

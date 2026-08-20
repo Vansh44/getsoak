@@ -5031,6 +5031,10 @@ export const helpArticles = pgTable(
       "help_articles_status_check",
       sql`status = ANY (ARRAY['draft'::text, 'published'::text])`,
     ),
+    check(
+      "help_articles_published_has_category",
+      sql`status <> 'published'::text OR category_id IS NOT NULL`,
+    ),
     pgPolicy("Read help_articles", {
       for: "select",
       to: ["public"],
