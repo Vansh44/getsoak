@@ -235,6 +235,30 @@ describe("RETENTION_POLICIES", () => {
     expect(days.store_search_metrics).toBe(488);
   });
 
+  it("★★ expires held sales, because the CAP is what runs out", () => {
+    // pos_parked_sales allows 20 per LOCATION. Abandoned carts do not merely
+    // accumulate — they fill the list and eventually stop a counter parking a
+    // real one. A ceiling with nothing ageing out of it becomes a wall.
+    const byTable = new Map(
+      RETENTION_POLICIES.map((policy) => [policy.table, policy.days]),
+    );
+    expect(byTable.get("pos_parked_sales")).toBe(7);
+  });
+
+  it("★ a held sale is the shortest-lived thing here", () => {
+    // Deliberate: it holds no stock and no prices, so discarding one costs a
+    // re-scan. Everything else in this registry is history somebody may need.
+    const days = Object.fromEntries(
+      RETENTION_POLICIES.map((p) => [p.table, p.days]),
+    );
+    const others = Object.entries(days)
+      .filter(([t]) => t !== "pos_parked_sales")
+      .map(([, d]) => d as number);
+    expect(Math.min(...others)).toBeGreaterThan(
+      days.pos_parked_sales as number,
+    );
+  });
+
   it("documents why every window is what it is", () => {
     // The number and its reason live together so they cannot drift apart.
     for (const policy of RETENTION_POLICIES) {

@@ -364,11 +364,20 @@ export async function sweepExpiredPickups(limit = 200): Promise<number> {
  * At 48 hours against the same daily run, every order gets between 24 and 48
  * hours — a full day of notice in the worst case rather than the best.
  *
- * ⚠ Raise this if `expire-pending-payments` ever moves to a longer interval;
- * halve-and-check if it moves to a shorter one. A merchant on a very short
- * `fulfilment.pickupHoldDays` (the minimum is 1) will see the nudge land close
- * to order time, because with a one-day window and a daily run there is no
- * later moment to send it — early is the only alternative to silent.
+ * ⚠ Raise this if `expire-pending-payments` ever moves to a longer interval.
+ *
+ * ★ IT MOVED TO HOURLY (Step 15), and this number deliberately did NOT change.
+ * The constraint relaxed rather than binding: at a daily interval an order was
+ * warned somewhere in (24, 48] hours out, and hourly narrows that to (47, 48] —
+ * the SAME promise, kept far more precisely. Lowering the window as well would
+ * change what every existing merchant's customers receive, which a scheduling
+ * fix has no business doing (invariant 1).
+ *
+ * ⚠ What hourly does NOT fix: a merchant on `fulfilment.pickupHoldDays` = 1
+ * still sees the nudge land at roughly order time, because a 24h deadline is
+ * already inside a 48h window the moment it is created. The honest fix is a
+ * window that scales with the hold (min(48, hold/2)) rather than a constant —
+ * a deliberate notification change, not a side effect of a cron edit.
  */
 export const PICKUP_WARN_HOURS = 48;
 

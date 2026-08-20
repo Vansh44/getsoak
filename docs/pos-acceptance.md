@@ -2708,6 +2708,25 @@ worse.
 
 ---
 
+**PS-PK.13 ★ — A held sale expires after 7 days**
+Park a cart, age its `created_at` past 7 days, run `/api/cron/prune-logs`.
+**Expect:** the row is gone and the response counts it under
+`pos_parked_sales`. Discarding is safe — a park holds no stock and no prices, so
+it costs a re-scan.
+
+**PS-PK.14 ★ — A recent hold is untouched**
+Park a cart, run the sweep.
+**Expect:** still in the list. The window is 7 days, not "the next sweep".
+
+**PS-8.32 ★★ — The pickup sweep runs hourly**
+Let a collection lapse, then wait for the next run.
+**Expect:** it expires within the hour, not the next day — and the reminder for
+an order 48h from expiry lands in (47, 48] rather than anywhere in (24, 48].
+⚠ Requires the Cloud Scheduler job itself to be updated; `vercel.json` and
+`docs/cron-jobs.md` are records, not the running schedule.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2746,7 +2765,7 @@ Real and deliberate, so nobody files them as bugs:
 | **A walk-in with NO record can't get an emailed receipt**           | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt                                                                 |
 | **The customer claim has never been run in a browser**              | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
 | ~~**Store credit can't be spent at a COLLECTION**~~                 | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                   |
-| **A held sale has no auto-expiry**                                  | PS-PK.9. Capped at 20 per counter and discardable by hand; nothing sweeps a cart held and forgotten for a week. §32 retention would be the place                                                                                                                                                                       |
+| ~~**A held sale has no auto-expiry**~~                              | **FIXED** (PS-PK.13). `pos_parked_sales` joined the §32 retention sweep at 7 days. The CAP was the problem, not the disk: abandoned carts filled the 20-slot list and eventually stopped a counter parking a real one                                                                                                  |
 | ~~**Analytics has no owner-selectable location filter**~~           | **FIXED (PS-AN.1–AN.4).** Staff scope remains the authority; owners and eligible staff can select one accessible physical location through the URL-owned global filter, and an exact shop view excludes online/unassigned orders                                                                                       |
 | **`order.pickup_expiring` email only**                              | No in-app pre-expiry banner                                                                                                                                                                                                                                                                                            |
 | **Offline selling**                                                 | The catalogue is cached; completing a sale needs the server                                                                                                                                                                                                                                                            |

@@ -40,6 +40,7 @@ import {
   dataJobs,
   emailLogs,
   notifications,
+  posParkedSales,
   storefrontEvents,
   storefrontOrderAttribution,
   storeSearchMetrics,
@@ -189,7 +190,8 @@ function batchDeleter(
     | typeof dataJobIssues
     | typeof billingWebhookEvents
     | typeof storefrontEvents
-    | typeof storefrontOrderAttribution,
+    | typeof storefrontOrderAttribution
+    | typeof posParkedSales,
   key: AnyPgColumn,
   ts: AnyPgColumn,
 ): (floorIso: string, limit: number) => Promise<number> {
@@ -326,6 +328,34 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
       "nothing bounded the number of jobs. The uploaded file is already dropped " +
       "when a job finishes, so what is left is a history line.",
     deleteBatch: batchDeleter(dataJobs, dataJobs.id, dataJobs.createdAt),
+  },
+  // ── Held (parked) sales ────────────────────────────────────────────────
+  // ★★ THE CAP IS WHY THIS MATTERS, not the disk. `pos_parked_sales` allows 20
+  // per LOCATION (MAX_PARKED_SALES), so abandoned carts do not merely
+  // accumulate — they fill the list and eventually stop a counter parking a
+  // real one. A ceiling with nothing ageing out of it becomes a wall.
+  //
+  // ★ DISCARDING IS SAFE, which is what makes this a retention entry rather
+  // than a feature. A park holds NO stock and stores NO prices (pos_14), so
+  // expiring one costs a re-scan and nothing else. Contrast a pickup hold,
+  // where expiry has to release reserved units — that is a sweep of its own,
+  // in expire-pending-payments, and deliberately not here.
+  //
+  // `created_at` is the only clock there is: parking inserts and resuming
+  // DELETES, so a row is never touched between the two. pos_14 already ships
+  // the created_at-only index this needs, anticipating exactly this entry.
+  {
+    table: "pos_parked_sales",
+    days: 7,
+    reason:
+      "A park is a note to self for the shift, not a promise — it holds no stock and " +
+      "no prices, so a resumed cart re-prices anyway. 7 days covers 'the customer is " +
+      "coming back Saturday' and still keeps the 20-per-counter cap usable.",
+    deleteBatch: batchDeleter(
+      posParkedSales,
+      posParkedSales.id,
+      posParkedSales.createdAt,
+    ),
   },
   // ── Gateway webhook receipts ───────────────────────────────────────────
   {

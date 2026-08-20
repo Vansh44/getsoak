@@ -45,8 +45,8 @@ sequence AND the spec for everything still to build.
 | **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
 | **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
 | **14** | Money-event audit — who discounted, overrode, refunded         | M    | ✅ done |
-| **15** | **Hourly sweep + held sales expire**                           | S    | ⏭ next |
-| **16** | A counter gateway payment holds stock                          | M    | ⏳      |
+| **15** | Hourly sweep + held sales expire                               | S    | ✅ done |
+| **16** | **A counter gateway payment holds stock**                      | M    | ⏭ next |
 | **17** | Dashboard POS reporting — shifts, Z-reports, sales by shop     | M    | ⏳      |
 | **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
 | **19** | Catalogue delta sync                                           | M    | ⏳      |
@@ -711,7 +711,7 @@ reconciling a drawer, and belongs with the other POS audit rows.
 
 ---
 
-## Step 15 — Hourly sweep, and held sales that expire
+## Step 15 — Hourly sweep, and held sales that expire ✅ DONE
 
 Two cheap fixes with one theme: things that should lapse currently do not.
 
@@ -722,10 +722,30 @@ holds stock up to 24h, and `PICKUP_WARN_HOURS` (48) sits exactly at its
 documented minimum of 2× the interval. The daily cadence was a Vercel Hobby
 constraint that no longer applies.
 
-**Ships:** hourly. Config, not code.
-**⚠ CONFIRM THE JOB EXISTS FIRST.** This repo has had "documented but never
-created" happen three times, caught only by diffing `docs/cron-jobs.md` against
-`gcloud scheduler jobs list`. Do that diff as part of this step.
+**✅ Shipped:** `30 * * * *` in `vercel.json` (the inert schedule record) and in
+`docs/cron-jobs.md` (the doc of record).
+
+**⚠ THE CLOUD SCHEDULER JOB ITSELF IS NOT CHANGED — that needs you.** `gcloud`
+CLI auth wants an interactive reauth, so the running job is still daily until:
+
+```bash
+gcloud scheduler jobs update http storemink-expire-pending-payments \
+  --location=asia-south1 --schedule="30 * * * *"
+```
+
+**★ THE FLEET DIFF IS NOW A COMMAND, not an instruction.** `docs/cron-jobs.md`
+gained a runnable `diff` of the documented job list against
+`gcloud scheduler jobs list` — three times a job has been documented here and
+absent from Scheduler, and every time diffing is what found it. Reading the
+table has never once caught it.
+
+**★ `PICKUP_WARN_HOURS` DELIBERATELY DID NOT CHANGE.** The constraint relaxed
+rather than binding: daily warned an order somewhere in (24, 48] hours out,
+hourly narrows that to (47, 48] — the same promise kept more precisely. Lowering
+the window too would change what every existing merchant's customers receive,
+which a scheduling fix has no business doing (invariant 1). ⚠ Hourly does NOT
+fix a 1-day `pickupHoldDays`, where the nudge still lands at roughly order time;
+that needs a window scaling with the hold, as a deliberate notification change.
 
 **15b — a held sale never expires.** Capped at 20 per counter and discardable
 by hand; nothing sweeps a cart held and forgotten.
@@ -734,8 +754,21 @@ by hand; nothing sweeps a cart held and forgotten.
 stores NO prices (`pos_14`), so expiring one costs a re-scan and nothing else.
 Contrast a pickup hold, where expiry has to release stock.
 
-**Ships:** a retention entry in `lib/retention/prune.ts` — that is the existing
-home for "rows that should stop existing", and it already batches per table.
+**✅ Shipped:** a `pos_parked_sales` entry in `lib/retention/prune.ts` at **7
+days** — long enough for "the customer is coming back Saturday", short enough
+that the 20-per-counter cap stays usable.
+
+**★ NO MIGRATION NEEDED — `pos_14` already anticipated this.** It ships a
+`created_at`-ONLY index with the comment that retention "would filter on
+created_at alone, which the composite above cannot serve". The index was waiting
+for this entry.
+
+**★ `created_at` IS THE ONLY CLOCK.** Parking inserts and resuming DELETES, so a
+row is never touched between the two — there is no `updated_at` to prefer.
+
+**★ THE CAP IS WHY THIS MATTERS, not the disk.** Abandoned carts do not merely
+accumulate; they fill the 20-slot list and eventually stop a counter parking a
+real one. A ceiling with nothing ageing out of it becomes a wall.
 
 **Acceptance:** PS-PK.13, PS-8.32. **Effort: S.**
 

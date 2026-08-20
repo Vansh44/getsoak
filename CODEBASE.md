@@ -523,7 +523,9 @@ wholesip/
 │       │                      # still ISSUES invoices payable on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
-│       │                      # activity_events 365d, email_logs 90d — windows
+│       │                      # activity_events 365d, email_logs 90d (+ pos_parked_sales 7d,
+│                              # Step 15 — the 20-per-counter CAP is what runs
+│                              # out, not the disk) — windows
 │       │                      # that were documented for months and enforced by
 │       │                      # nothing. 503 on a failed table (seo-refresh
 │       │                      # contract), 200 while a backlog drains
