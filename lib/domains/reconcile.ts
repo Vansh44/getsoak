@@ -94,6 +94,7 @@ export async function readStoreDomainRow(storeId: string) {
   const rows = await withService((db) =>
     db
       .select({
+        slug: stores.slug,
         custom_domain: stores.customDomain,
         settings: stores.settings,
       })

@@ -139,7 +139,7 @@ export const RECOGNIZED_PAYMENT_STATUSES = [
 ] as const;
 export const RECOGNIZED_POS_STATUSES = ["completed", "refunded"] as const;
 
-function locationCondition(
+export function locationCondition(
   selection: AnalyticsLocationSelection,
 ): SQL | undefined {
   if (selection.locationIds === null) return undefined;
@@ -184,7 +184,7 @@ export async function getAnalyticsLocationOptions(
 }
 
 /** The single recognized-sale contract shared by all Phase 1 commerce cards. */
-function recognizedOrder(): SQL {
+export function recognizedOrder(): SQL {
   return and(
     ne(orders.status, "cancelled"),
     or(
@@ -198,14 +198,14 @@ function recognizedOrder(): SQL {
   ) as SQL;
 }
 
-function orderWindow(window: AnalyticsWindow): SQL {
+export function orderWindow(window: AnalyticsWindow): SQL {
   return and(
     gte(orders.createdAt, window.from.toISOString()),
     lt(orders.createdAt, window.to.toISOString()),
   ) as SQL;
 }
 
-function refundWindow(window: AnalyticsWindow): SQL {
+export function refundWindow(window: AnalyticsWindow): SQL {
   return and(
     gte(orderRefunds.createdAt, window.from.toISOString()),
     lt(orderRefunds.createdAt, window.to.toISOString()),
@@ -254,57 +254,55 @@ export async function getSalesAnalytics(
 
   return withService(async (db) => {
     const totalsFor = async (window: AnalyticsWindow) => {
-      const [[orderRow], [refundRow], [unitRow]] = await Promise.all([
-        db
-          .select({
-            sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-            count: sql<number>`count(*)::int`,
-          })
-          .from(orders)
-          .where(
-            and(
-              eq(orders.storeId, storeId),
-              recognizedOrder(),
-              orderWindow(window),
-              ...(scoped ? [scoped] : []),
-            ),
+      const [orderRow] = await db
+        .select({
+          sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(window),
+            ...(scoped ? [scoped] : []),
           ),
-        db
-          .select({
-            refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-          })
-          .from(orderRefunds)
-          .innerJoin(
-            orders,
-            and(
-              eq(orders.id, orderRefunds.orderId),
-              eq(orders.storeId, storeId),
-              ...(scoped ? [scoped] : []),
-            ),
-          )
-          .where(
-            and(
-              eq(orderRefunds.storeId, storeId),
-              eq(orderRefunds.status, "completed"),
-              refundWindow(window),
-            ),
+        );
+      const [refundRow] = await db
+        .select({
+          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+        })
+        .from(orderRefunds)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderRefunds.orderId),
+            eq(orders.storeId, storeId),
+            ...(scoped ? [scoped] : []),
           ),
-        db
-          .select({
-            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
-          })
-          .from(orderItems)
-          .innerJoin(
-            orders,
-            and(
-              eq(orders.id, orderItems.orderId),
-              eq(orders.storeId, storeId),
-              recognizedOrder(),
-              orderWindow(window),
-              ...(scoped ? [scoped] : []),
-            ),
+        )
+        .where(
+          and(
+            eq(orderRefunds.storeId, storeId),
+            eq(orderRefunds.status, "completed"),
+            refundWindow(window),
           ),
-      ]);
+        );
+      const [unitRow] = await db
+        .select({
+          units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+        })
+        .from(orderItems)
+        .innerJoin(
+          orders,
+          and(
+            eq(orders.id, orderItems.orderId),
+            eq(orders.storeId, storeId),
+            recognizedOrder(),
+            orderWindow(window),
+            ...(scoped ? [scoped] : []),
+          ),
+        );
       return {
         sales: Number(orderRow?.sales ?? 0) - Number(refundRow?.refunds ?? 0),
         orders: Number(orderRow?.count ?? 0),
@@ -314,69 +312,68 @@ export async function getSalesAnalytics(
 
     const bucket = sql`date_trunc(${grain}, ${orders.createdAt} at time zone ${range.timeZone})`;
     const refundBucket = sql`date_trunc(${grain}, ${orderRefunds.createdAt} at time zone ${range.timeZone})`;
-    const [current, previous, orderRows, refundRows, unitRows] =
-      await Promise.all([
-        totalsFor(range.current),
-        range.compare ? totalsFor(range.compare) : Promise.resolve(null),
-        db
-          .select({
-            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
-            sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-            count: sql<number>`count(*)::int`,
-          })
-          .from(orders)
-          .where(
-            and(
-              eq(orders.storeId, storeId),
-              recognizedOrder(),
-              orderWindow(range.current),
-              ...(scoped ? [scoped] : []),
-            ),
-          )
-          .groupBy(bucket)
-          .orderBy(bucket),
-        db
-          .select({
-            key: sql<string>`to_char(${refundBucket}, 'YYYY-MM-DD')`,
-            refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-          })
-          .from(orderRefunds)
-          .innerJoin(
-            orders,
-            and(
-              eq(orders.id, orderRefunds.orderId),
-              eq(orders.storeId, storeId),
-              ...(scoped ? [scoped] : []),
-            ),
-          )
-          .where(
-            and(
-              eq(orderRefunds.storeId, storeId),
-              eq(orderRefunds.status, "completed"),
-              refundWindow(range.current),
-            ),
-          )
-          .groupBy(refundBucket)
-          .orderBy(refundBucket),
-        db
-          .select({
-            key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
-            units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
-          })
-          .from(orderItems)
-          .innerJoin(
-            orders,
-            and(
-              eq(orders.id, orderItems.orderId),
-              eq(orders.storeId, storeId),
-              recognizedOrder(),
-              orderWindow(range.current),
-              ...(scoped ? [scoped] : []),
-            ),
-          )
-          .groupBy(bucket)
-          .orderBy(bucket),
-      ]);
+    const current = await totalsFor(range.current);
+    const previous = range.compare ? await totalsFor(range.compare) : null;
+    const orderRows = await db
+      .select({
+        key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+        sales: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      // Reusing `bucket` here produces fresh bind placeholders in Drizzle, so
+      // PostgreSQL no longer sees the GROUP BY expression as the selected one.
+      .groupBy(sql`1`)
+      .orderBy(sql`1`);
+    const refundRows = await db
+      .select({
+        key: sql<string>`to_char(${refundBucket}, 'YYYY-MM-DD')`,
+        refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+      })
+      .from(orderRefunds)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderRefunds.orderId),
+          eq(orders.storeId, storeId),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .where(
+        and(
+          eq(orderRefunds.storeId, storeId),
+          eq(orderRefunds.status, "completed"),
+          refundWindow(range.current),
+        ),
+      )
+      .groupBy(sql`1`)
+      .orderBy(sql`1`);
+    const unitRows = await db
+      .select({
+        key: sql<string>`to_char(${bucket}, 'YYYY-MM-DD')`,
+        units: sql<number>`coalesce(sum(${orderItems.quantity}), 0)::int`,
+      })
+      .from(orderItems)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderItems.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(sql`1`)
+      .orderBy(sql`1`);
 
     const points = new Map<
       string,
@@ -446,18 +443,16 @@ export async function getCatalogSnapshots(
   storeId: string,
 ): Promise<CatalogSnapshots> {
   return withService(async (db) => {
-    const [[customers], [published]] = await Promise.all([
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(users)
-        .where(eq(users.storeId, storeId)),
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(products)
-        .where(
-          and(eq(products.storeId, storeId), eq(products.status, "published")),
-        ),
-    ]);
+    const [customers] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(users)
+      .where(eq(users.storeId, storeId));
+    const [published] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(products)
+      .where(
+        and(eq(products.storeId, storeId), eq(products.status, "published")),
+      );
     const snapshot = (value: number): Stat => ({
       value,
       trendPct: null,
@@ -478,32 +473,30 @@ export async function getTopCategories(
 ): Promise<TopCategory[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [earnedRows, categoryRows] = await Promise.all([
-      db
-        .select({
-          name: sql<string>`coalesce(${categories.name}, 'Uncategorized')`,
-          amount: sql<number>`coalesce(sum(${orderItems.total}), 0)::float8`,
-        })
-        .from(orderItems)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderItems.orderId),
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .leftJoin(products, eq(products.id, orderItems.productId))
-        .leftJoin(categories, eq(categories.id, products.categoryId))
-        .groupBy(sql`coalesce(${categories.name}, 'Uncategorized')`)
-        .orderBy(desc(sql`coalesce(sum(${orderItems.total}), 0)`)),
-      db
-        .select({ name: categories.name })
-        .from(categories)
-        .where(eq(categories.storeId, storeId)),
-    ]);
+    const earnedRows = await db
+      .select({
+        name: sql<string>`coalesce(${categories.name}, 'Uncategorized')`,
+        amount: sql<number>`coalesce(sum(${orderItems.total}), 0)::float8`,
+      })
+      .from(orderItems)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderItems.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .leftJoin(products, eq(products.id, orderItems.productId))
+      .leftJoin(categories, eq(categories.id, products.categoryId))
+      .groupBy(sql`coalesce(${categories.name}, 'Uncategorized')`)
+      .orderBy(desc(sql`coalesce(sum(${orderItems.total}), 0)`));
+    const categoryRows = await db
+      .select({ name: categories.name })
+      .from(categories)
+      .where(eq(categories.storeId, storeId));
     const earned = new Map(
       earnedRows.map((row) => [row.name, Number(row.amount)]),
     );
@@ -526,6 +519,7 @@ export async function getTopProducts(
   storeId: string,
   location: AnalyticsLocationSelection,
   range: AnalyticsRange,
+  limit = 10,
 ): Promise<TopProduct[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
@@ -549,7 +543,7 @@ export async function getTopProducts(
       )
       .groupBy(orderItems.productId)
       .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}), 0)`))
-      .limit(10);
+      .limit(Math.max(1, Math.min(limit, 10_000)));
     return rows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -617,47 +611,45 @@ export async function getSalesByChannel(
 ): Promise<CommerceBreakdown[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [earnedRows, refundRows] = await Promise.all([
-      db
-        .select({
-          key: orders.salesChannel,
-          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-          orders: sql<number>`count(*)::int`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .groupBy(orders.salesChannel),
-      db
-        .select({
-          key: orders.salesChannel,
-          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-        })
-        .from(orderRefunds)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderRefunds.orderId),
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(
-          and(
-            eq(orderRefunds.storeId, storeId),
-            eq(orderRefunds.status, "completed"),
-            refundWindow(range.current),
-          ),
-        )
-        .groupBy(orders.salesChannel),
-    ]);
+    const earnedRows = await db
+      .select({
+        key: orders.salesChannel,
+        amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+        orders: sql<number>`count(*)::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(orders.salesChannel);
+    const refundRows = await db
+      .select({
+        key: orders.salesChannel,
+        refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+      })
+      .from(orderRefunds)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderRefunds.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .where(
+        and(
+          eq(orderRefunds.storeId, storeId),
+          eq(orderRefunds.status, "completed"),
+          refundWindow(range.current),
+        ),
+      )
+      .groupBy(orders.salesChannel);
     return finalizeBreakdown(
       earnedRows.map((row) => ({ ...row, name: channelName(row.key) })),
       refundRows.map((row) => ({ ...row, name: channelName(row.key) })),
@@ -674,63 +666,61 @@ export async function getSalesByLocation(
   const key = sql<string>`coalesce(${orders.locationId}::text, 'online')`;
   const name = sql<string>`coalesce(${storeLocations.name}, 'Online / unassigned')`;
   return withService(async (db) => {
-    const [earnedRows, refundRows] = await Promise.all([
-      db
-        .select({
-          key,
-          name,
-          amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
-          orders: sql<number>`count(*)::int`,
-        })
-        .from(orders)
-        .leftJoin(
-          storeLocations,
-          and(
-            eq(storeLocations.id, orders.locationId),
-            eq(storeLocations.storeId, storeId),
-          ),
-        )
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .groupBy(key, name),
-      db
-        .select({
-          key,
-          name,
-          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-        })
-        .from(orderRefunds)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderRefunds.orderId),
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .leftJoin(
-          storeLocations,
-          and(
-            eq(storeLocations.id, orders.locationId),
-            eq(storeLocations.storeId, storeId),
-          ),
-        )
-        .where(
-          and(
-            eq(orderRefunds.storeId, storeId),
-            eq(orderRefunds.status, "completed"),
-            refundWindow(range.current),
-          ),
-        )
-        .groupBy(key, name),
-    ]);
+    const earnedRows = await db
+      .select({
+        key,
+        name,
+        amount: sql<number>`coalesce(sum(${orders.total}), 0)::float8`,
+        orders: sql<number>`count(*)::int`,
+      })
+      .from(orders)
+      .leftJoin(
+        storeLocations,
+        and(
+          eq(storeLocations.id, orders.locationId),
+          eq(storeLocations.storeId, storeId),
+        ),
+      )
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(key, name);
+    const refundRows = await db
+      .select({
+        key,
+        name,
+        refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+      })
+      .from(orderRefunds)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderRefunds.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .leftJoin(
+        storeLocations,
+        and(
+          eq(storeLocations.id, orders.locationId),
+          eq(storeLocations.storeId, storeId),
+        ),
+      )
+      .where(
+        and(
+          eq(orderRefunds.storeId, storeId),
+          eq(orderRefunds.status, "completed"),
+          refundWindow(range.current),
+        ),
+      )
+      .groupBy(key, name);
     return finalizeBreakdown(earnedRows, refundRows);
   });
 }
@@ -805,87 +795,82 @@ export async function getSalesByPaymentMethod(
 ): Promise<CommerceBreakdown[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [posRows, [creditRow], onlineRows, refundRows] = await Promise.all([
-      db
-        .select({
-          key: orderPayments.method,
-          amount: sql<number>`coalesce(sum(${orderPayments.amount}), 0)::float8`,
-          orders: sql<number>`count(distinct ${orderPayments.orderId})::int`,
-        })
-        .from(orderPayments)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderPayments.orderId),
-            eq(orders.storeId, storeId),
-            eq(orders.salesChannel, "pos"),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(eq(orderPayments.storeId, storeId))
-        .groupBy(orderPayments.method),
-      db
-        .select({
-          amount: sql<number>`coalesce(sum(${orders.storeCreditUsed}), 0)::float8`,
-          orders: sql<number>`count(*)::int`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            ne(orders.salesChannel, "pos"),
-            gt(orders.storeCreditUsed, 0),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
+    const posRows = await db
+      .select({
+        key: orderPayments.method,
+        amount: sql<number>`coalesce(sum(${orderPayments.amount}), 0)::float8`,
+        orders: sql<number>`count(distinct ${orderPayments.orderId})::int`,
+      })
+      .from(orderPayments)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderPayments.orderId),
+          eq(orders.storeId, storeId),
+          eq(orders.salesChannel, "pos"),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
         ),
-      db
-        .select({
-          key: orders.paymentMethod,
-          amount: sql<number>`coalesce(sum(greatest(${orders.total} - ${orders.storeCreditUsed}, 0)), 0)::float8`,
-          orders: sql<number>`count(*)::int`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            ne(orders.salesChannel, "pos"),
-            gt(
-              sql`greatest(${orders.total} - ${orders.storeCreditUsed}, 0)`,
-              0,
-            ),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .groupBy(orders.paymentMethod),
-      db
-        .select({
-          key: orderRefunds.method,
-          refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-        })
-        .from(orderRefunds)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderRefunds.orderId),
-            eq(orders.storeId, storeId),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(
-          and(
-            eq(orderRefunds.storeId, storeId),
-            eq(orderRefunds.status, "completed"),
-            refundWindow(range.current),
-          ),
-        )
-        .groupBy(orderRefunds.method),
-    ]);
+      )
+      .where(eq(orderPayments.storeId, storeId))
+      .groupBy(orderPayments.method);
+    const [creditRow] = await db
+      .select({
+        amount: sql<number>`coalesce(sum(${orders.storeCreditUsed}), 0)::float8`,
+        orders: sql<number>`count(*)::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          ne(orders.salesChannel, "pos"),
+          gt(orders.storeCreditUsed, 0),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      );
+    const onlineRows = await db
+      .select({
+        key: orders.paymentMethod,
+        amount: sql<number>`coalesce(sum(greatest(${orders.total} - ${orders.storeCreditUsed}, 0)), 0)::float8`,
+        orders: sql<number>`count(*)::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          ne(orders.salesChannel, "pos"),
+          gt(sql`greatest(${orders.total} - ${orders.storeCreditUsed}, 0)`, 0),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .groupBy(orders.paymentMethod);
+    const refundRows = await db
+      .select({
+        key: orderRefunds.method,
+        refunds: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+      })
+      .from(orderRefunds)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderRefunds.orderId),
+          eq(orders.storeId, storeId),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .where(
+        and(
+          eq(orderRefunds.storeId, storeId),
+          eq(orderRefunds.status, "completed"),
+          refundWindow(range.current),
+        ),
+      )
+      .groupBy(orderRefunds.method);
 
     return buildPaymentBreakdown({
       pos: posRows,
@@ -949,37 +934,35 @@ export async function getDiscountImpact(
 ): Promise<DiscountImpact> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [[orderRow], [lineRow]] = await Promise.all([
-      db
-        .select({
-          discounts: sql<number>`coalesce(sum(${orders.discount}), 0)::float8`,
-          couponOrders: sql<number>`count(*) filter (where ${orders.appliedCouponCode} is not null)::int`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
+    const [orderRow] = await db
+      .select({
+        discounts: sql<number>`coalesce(sum(${orders.discount}), 0)::float8`,
+        couponOrders: sql<number>`count(*) filter (where ${orders.appliedCouponCode} is not null)::int`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
         ),
-      db
-        .select({
-          discounts: sql<number>`coalesce(sum(${orderItems.lineDiscount}), 0)::float8`,
-        })
-        .from(orderItems)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderItems.orderId),
-            eq(orders.storeId, storeId),
-            recognizedOrder(),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
+      );
+    const [lineRow] = await db
+      .select({
+        discounts: sql<number>`coalesce(sum(${orderItems.lineDiscount}), 0)::float8`,
+      })
+      .from(orderItems)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderItems.orderId),
+          eq(orders.storeId, storeId),
+          recognizedOrder(),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
         ),
-    ]);
+      );
     const orderDiscounts = Number(orderRow?.discounts ?? 0);
     const lineDiscounts = Number(lineRow?.discounts ?? 0);
     return {
@@ -998,73 +981,71 @@ export async function getReturnsAndRefunds(
 ): Promise<ReturnsAndRefunds> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [[returnRow], [itemRow], [refundRow]] = await Promise.all([
-      db
-        .select({
-          count: sql<number>`count(*)::int`,
-          value: sql<number>`coalesce(sum(${orderReturns.total}), 0)::float8`,
-        })
-        .from(orderReturns)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderReturns.orderId),
-            eq(orders.storeId, storeId),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(
-          and(
-            eq(orderReturns.storeId, storeId),
-            eq(orderReturns.status, "completed"),
-            gte(orderReturns.createdAt, range.current.from.toISOString()),
-            lt(orderReturns.createdAt, range.current.to.toISOString()),
-          ),
+    const [returnRow] = await db
+      .select({
+        count: sql<number>`count(*)::int`,
+        value: sql<number>`coalesce(sum(${orderReturns.total}), 0)::float8`,
+      })
+      .from(orderReturns)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderReturns.orderId),
+          eq(orders.storeId, storeId),
+          ...(scoped ? [scoped] : []),
         ),
-      db
-        .select({
-          units: sql<number>`coalesce(sum(${orderReturnItems.quantity}), 0)::int`,
-        })
-        .from(orderReturnItems)
-        .innerJoin(
-          orderReturns,
-          and(
-            eq(orderReturns.id, orderReturnItems.returnId),
-            eq(orderReturns.storeId, storeId),
-            eq(orderReturns.status, "completed"),
-            gte(orderReturns.createdAt, range.current.from.toISOString()),
-            lt(orderReturns.createdAt, range.current.to.toISOString()),
-          ),
-        )
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderReturns.orderId),
-            eq(orders.storeId, storeId),
-            ...(scoped ? [scoped] : []),
-          ),
+      )
+      .where(
+        and(
+          eq(orderReturns.storeId, storeId),
+          eq(orderReturns.status, "completed"),
+          gte(orderReturns.createdAt, range.current.from.toISOString()),
+          lt(orderReturns.createdAt, range.current.to.toISOString()),
         ),
-      db
-        .select({
-          value: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
-        })
-        .from(orderRefunds)
-        .innerJoin(
-          orders,
-          and(
-            eq(orders.id, orderRefunds.orderId),
-            eq(orders.storeId, storeId),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .where(
-          and(
-            eq(orderRefunds.storeId, storeId),
-            eq(orderRefunds.status, "completed"),
-            refundWindow(range.current),
-          ),
+      );
+    const [itemRow] = await db
+      .select({
+        units: sql<number>`coalesce(sum(${orderReturnItems.quantity}), 0)::int`,
+      })
+      .from(orderReturnItems)
+      .innerJoin(
+        orderReturns,
+        and(
+          eq(orderReturns.id, orderReturnItems.returnId),
+          eq(orderReturns.storeId, storeId),
+          eq(orderReturns.status, "completed"),
+          gte(orderReturns.createdAt, range.current.from.toISOString()),
+          lt(orderReturns.createdAt, range.current.to.toISOString()),
         ),
-    ]);
+      )
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderReturns.orderId),
+          eq(orders.storeId, storeId),
+          ...(scoped ? [scoped] : []),
+        ),
+      );
+    const [refundRow] = await db
+      .select({
+        value: sql<number>`coalesce(sum(${orderRefunds.amount}), 0)::float8`,
+      })
+      .from(orderRefunds)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.id, orderRefunds.orderId),
+          eq(orders.storeId, storeId),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .where(
+        and(
+          eq(orderRefunds.storeId, storeId),
+          eq(orderRefunds.status, "completed"),
+          refundWindow(range.current),
+        ),
+      );
     return {
       completedReturns: Number(returnRow?.count ?? 0),
       returnedUnits: Number(itemRow?.units ?? 0),
@@ -1167,58 +1148,56 @@ export async function getActivity(
 ): Promise<ActivityItem[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
-    const [orderRows, enquiryRows, blogRows] = await Promise.all([
-      db
-        .select({
-          ref: orders.orderRef,
-          createdAt: orders.createdAt,
-          first: sql<string>`${orders.shippingAddress}->>'firstName'`,
-          last: sql<string>`${orders.shippingAddress}->>'lastName'`,
-        })
-        .from(orders)
-        .where(
-          and(
-            eq(orders.storeId, storeId),
-            orderWindow(range.current),
-            ...(scoped ? [scoped] : []),
-          ),
-        )
-        .orderBy(desc(orders.createdAt))
-        .limit(5),
-      db
-        .select({
-          name: enquiries.name,
-          subject: enquiries.subject,
-          createdAt: enquiries.createdAt,
-        })
-        .from(enquiries)
-        .where(
-          and(
-            eq(enquiries.storeId, storeId),
-            gte(enquiries.createdAt, range.current.from.toISOString()),
-            lt(enquiries.createdAt, range.current.to.toISOString()),
-          ),
-        )
-        .orderBy(desc(enquiries.createdAt))
-        .limit(5),
-      db
-        .select({
-          title: blogs.title,
-          author: blogs.author,
-          status: blogs.status,
-          createdAt: blogs.createdAt,
-        })
-        .from(blogs)
-        .where(
-          and(
-            eq(blogs.storeId, storeId),
-            gte(blogs.createdAt, range.current.from.toISOString()),
-            lt(blogs.createdAt, range.current.to.toISOString()),
-          ),
-        )
-        .orderBy(desc(blogs.createdAt))
-        .limit(5),
-    ]);
+    const orderRows = await db
+      .select({
+        ref: orders.orderRef,
+        createdAt: orders.createdAt,
+        first: sql<string>`${orders.shippingAddress}->>'firstName'`,
+        last: sql<string>`${orders.shippingAddress}->>'lastName'`,
+      })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          orderWindow(range.current),
+          ...(scoped ? [scoped] : []),
+        ),
+      )
+      .orderBy(desc(orders.createdAt))
+      .limit(5);
+    const enquiryRows = await db
+      .select({
+        name: enquiries.name,
+        subject: enquiries.subject,
+        createdAt: enquiries.createdAt,
+      })
+      .from(enquiries)
+      .where(
+        and(
+          eq(enquiries.storeId, storeId),
+          gte(enquiries.createdAt, range.current.from.toISOString()),
+          lt(enquiries.createdAt, range.current.to.toISOString()),
+        ),
+      )
+      .orderBy(desc(enquiries.createdAt))
+      .limit(5);
+    const blogRows = await db
+      .select({
+        title: blogs.title,
+        author: blogs.author,
+        status: blogs.status,
+        createdAt: blogs.createdAt,
+      })
+      .from(blogs)
+      .where(
+        and(
+          eq(blogs.storeId, storeId),
+          gte(blogs.createdAt, range.current.from.toISOString()),
+          lt(blogs.createdAt, range.current.to.toISOString()),
+        ),
+      )
+      .orderBy(desc(blogs.createdAt))
+      .limit(5);
     return [
       ...orderRows.map((row) => ({
         kind: "order" as const,

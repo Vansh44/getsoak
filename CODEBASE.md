@@ -216,7 +216,9 @@ wholesip/
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
 │   │   │                      # Search aggregates, widget registry, and persisted
-│   │   │                      # per-admin "Edit dashboard" canvas
+│   │   │                      # per-admin "Edit dashboard" canvas. reports/[report]
+│   │   │                      # provides tenant/location-safe drill-down tables for
+│   │   │                      # total sales, sales over time, products and Search queries
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
@@ -521,6 +523,9 @@ wholesip/
 │       │                      # STREAMS (keyset-paged, one page in memory) with
 │       │                      # Content-Disposition. ?template=1 = blank template.
 │       │                      # Gated on `view` of the resource's own section
+│       ├── dashboard/analytics/reports/[report]/ # ★ §20 formula-safe CSV for
+│       │                      # the four analytics drill-downs. Re-derives tenant,
+│       │                      # analytics.view and location scope; rate-limited
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -684,7 +689,8 @@ wholesip/
 │   ├── logs/                  # ★ §33: the Failures feed. failure-types.ts is the
 │   │                          # CLIENT-safe half (shapes + FAILURE_SOURCE_META for
 │   │                          # the filter chips); failures.ts is the server half —
-│   │                          # FAILURE_SOURCES, one entry per table it reads. The
+│   │                          # FAILURE_SOURCES, one entry per persisted source it
+│   │                          # reads (including stores.settings indexing health). The
 │   │                          # split is load-bearing: failures.ts imports the db
 │   │                          # client, so a client component importing it drags
 │   │                          # `pg` (and `fs`) into the browser bundle and FAILS
@@ -797,6 +803,8 @@ wholesip/
 │   │                          # hook + idempotent per-store Google reconciliation;
 │   │                          # keeps public token/status/error timestamps in
 │   │                          # stores.settings and retries via seo-refresh cron.
+│   │                          # ★ indexing-health.ts — pure current-origin state
+│   │                          # model shared by Domain settings and failure reads.
 │   │                          # IndexNow key: public/<key>.txt.
 │   │                          # ★ disallow.ts — the ONE list of non-indexable
 │   │                          # storefront/platform paths, read by BOTH app/robots.ts
@@ -2272,12 +2280,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     - `analytics/page.tsx` starts independent widget reads together and hands
       Suspense-wrapped server nodes to the canvas. A card the viewer cannot use
       is never placed in `slots`, so permission gating stays server-side.
-    - `analytics/dashboard-canvas.tsx` owns the draft UI: dnd-kit reorder within
-      and across named sections, section add/rename/hide/reorder/delete,
-      semantic card sizing, keyboard-accessible section/card move controls,
-      remove/add, Cancel, Save, and confirmed Reset. `useSortable` is called
-      only under its DndContext. Saved sections render as a responsive
-      four-column grid; `compact`/`half`/`full` collapse to one column on mobile.
+    - `analytics/dashboard-canvas.tsx` owns the draft UI. Edit mode becomes a
+      full workspace with a sticky searchable/grouped card rail, click-or-drag
+      insertion, dotted landing slots, compact card option menus, section
+      add/rename/hide/reorder/delete controls, an unsaved-changes save bar, and
+      add/remove undo toasts. dnd-kit reorders cards within/across named sections
+      and accepts new cards dragged from the rail; keyboard and non-drag controls
+      remain available. `useSortable`/`useDraggable` are called only under their
+      DndContext. Saved sections render as a responsive four-column grid;
+      semantic `compact`/`half`/`full` sizes collapse to one column on mobile.
     - **Phase 2a persistence (2026-08-18):**
       `supabase/analytics_01_dashboard_layouts.sql` and the matching
       `analyticsDashboardLayouts` Drizzle model store a bounded, versioned
@@ -2349,6 +2360,39 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       healthy-zero-visibility, ready and actionable source-error states; stale
       successful data stays visible with a warning. Customized layouts remain
       unchanged until the merchant adds the new cards.
+    - **Search Console Phase 3c indexing health (2026-08-20):**
+      `lib/seo/indexing-health.ts` converts the seven existing public Google
+      settings keys into one origin-aware unavailable/unlaunched/waiting/ready/
+      error contract. Domain settings shows ownership, sitemap submission, last
+      attempt and the actionable error for both StoreMink subdomains and custom
+      domains; its permission-gated **Check now** action reuses the idempotent
+      `ensureGoogleCoverageForStore()` path while the daily cron remains the
+      backstop. The shared Failures registry also reads current non-empty
+      `google_indexing_error` values. Merchant reads bind `stores.id` to the
+      acting store; only the operator page can request the explicit cross-store
+      scope. No schema or duplicated failure table was added.
+    - **Search Console Phase 3d lifecycle cleanup (2026-08-20):**
+      custom-domain replacement and disconnect clear routing plus the public
+      META token in the database before `lib/seo/search-engines.ts` issues
+      idempotent Search Console property and Site Verification ownership
+      deletes for the detached `https://domain/` URL-prefix. The shared cleanup
+      path remains best-effort so remote or certificate failures cannot undo a
+      successful merchant mutation, while each failure is logged separately.
+      Google JWT tokens now use the response's `expires_in`; ADC tokens use the
+      auth client's `expiry_date`. Both refresh slightly early and an unknown
+      expiry disables the local cache instead of assuming 55 minutes.
+    - **Analytics drill-down + CSV (2026-08-20):** the Total sales, Total
+      sales over time, Top products, and Top Google searches card titles link
+      to `/dashboard/analytics/reports/[report]` while preserving the shared
+      range/comparison/location query contract. Total sales is a ledger of
+      positive recognized-sale and negative completed-refund events, so its
+      rows add up under the same creation/settlement-time definition as the
+      headline. Report reads bind `store_id` and intersect URL locations with
+      `getViewerLocations()` server-side; Google Search intentionally ignores
+      location. `/api/dashboard/analytics/reports/[report]` repeats the
+      `analytics.view` and scope gates, rate-limits downloads, caps result sets,
+      and uses the shared BOM/formula-safe CSV serializer. The page shows the
+      first 250 rows while CSV supports up to 10,000. No schema was added.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2361,8 +2405,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       store's validated IANA `settings.business.timeZone`; absent/invalid legacy
       values use `Asia/Kolkata`. The control to change it lives on Settings and
       writes through permission-gated `app/actions/analytics-settings.ts`.
-      `analytics/data.ts` has per-widget readers. **Total sales** includes paid
-      online/store-credit, finalized POS and non-cancelled COD orders, excludes
+      `analytics/data.ts` has per-widget readers. Statements inside one
+      `withService` transaction run serially because they share one PostgreSQL
+      client. Parameterized time buckets group/order by selected-column ordinal
+      (`GROUP BY 1`) so Drizzle cannot duplicate the expression with different
+      bind placeholders. **Total sales** includes paid online/store-credit,
+      finalized POS and non-cancelled COD orders, excludes
       pending payment attempts, and subtracts only completed refunds by their
       settlement date. Charts keep raw rupees (no `₹K` rounding). Location
       scope is applied to every order-shaped read, including legacy/online
@@ -5416,9 +5464,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `data_jobs` row. A `failures` table would be a second copy of facts we
       hold, a write to forget on every new failure path, and a row that can
       disagree with the thing it describes. So `FAILURE_SOURCES` is a registry
-      of READS (email, notification, refund, import, payment) — add a source =
-      add an entry — and there is nothing to migrate, backfill, or prune (§32
-      already prunes the underlying tables).
+      of READS (email, SMS, notification, refund, import/export, Google
+      indexing, checkout payment, subscription payment) — add a source = add
+      an entry — and there is nothing to migrate, backfill, or prune (§32
+      already prunes the underlying event tables; indexing is current state on
+      the store row).
     - **★ SCOPE IS A DISCRIMINATED UNION, NOT AN OPTIONAL `storeId`.** These
       queries run under `withService`, which BYPASSES RLS, so tenant scoping is
       the caller's job (convention #2). An optional field would make "every
@@ -6723,7 +6773,10 @@ NEXT_PUBLIC_NOINDEX !== "1"`) is the single gate for `robots.ts` (non-prod →
   active/launched/non-demo store daily. StoreMink subdomains submit under the
   Domain property. A verified custom domain gets a Google META token in public
   `stores.settings`, an automatically verified URL-prefix property, and its own
-  sitemap submission. Google's META verification response is a complete HTML
+  sitemap submission. Replacing or disconnecting that domain removes the public
+  token first, then best-effort deletes the old Search Console property and the
+  runtime service account's Site Verification ownership record so detached
+  domains do not accumulate indefinitely. Google's META verification response is a complete HTML
   tag, but Next metadata accepts only its `content` value; the pipeline
   normalizes that value before storage and also repairs legacy full-tag values
   so the tag cannot be escaped inside another tag. Attempt/success/error

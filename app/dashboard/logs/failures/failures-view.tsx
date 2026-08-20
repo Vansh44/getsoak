@@ -21,6 +21,7 @@ const SOURCE_STYLE: Record<string, string> = {
   notification: "text-violet-700 dark:text-violet-400",
   refund: "text-red-700 dark:text-red-400",
   import: "text-amber-700 dark:text-amber-400",
+  indexing: "text-blue-700 dark:text-blue-400",
   payment: "text-red-700 dark:text-red-400",
 };
 

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import type {
   SearchAnalytics,
   SearchAnalyticsState,
@@ -261,9 +262,11 @@ function RankingTable({
 export function SearchRankingWidget({
   data,
   kind,
+  reportHref,
 }: {
   data: SearchAnalytics;
   kind: "query" | "page";
+  reportHref?: string;
 }) {
   const title =
     kind === "query" ? "Top Google searches" : "Top search landing pages";
@@ -271,7 +274,19 @@ export function SearchRankingWidget({
     <div className="dash-card h-full">
       <div className="dash-card-header">
         <div>
-          <div className="dash-card-title">{title}</div>
+          <div className="dash-card-title">
+            {reportHref ? (
+              <Link
+                href={reportHref}
+                className="inline-flex items-center gap-1 hover:text-[var(--dash-accent)]"
+              >
+                {title}
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            ) : (
+              title
+            )}
+          </div>
           <div className="dash-card-sub">
             {data.rangeLabel} · ranked by clicks
           </div>

@@ -6,11 +6,23 @@ vi.mock("@/app/actions/store-domain", () => ({
   verifyDomain: vi.fn(),
   disconnectDomain: vi.fn(),
   getDomainConnectionState: vi.fn(),
+  retryGoogleIndexing: vi.fn(),
 }));
 
 import { DomainSettingsView } from "./domain-settings-view";
 
 afterEach(cleanup);
+
+const INDEXING = {
+  state: "waiting" as const,
+  origin: "https://shop.storemink.com",
+  verification: "platform" as const,
+  verifiedAt: null,
+  sitemap: "pending" as const,
+  sitemapSubmittedAt: null,
+  lastAttemptAt: "2026-08-20T02:00:00.000Z",
+  error: null,
+};
 
 describe("DomainSettingsView", () => {
   it("shows registrar-relative names and the fully-qualified result", () => {
@@ -24,6 +36,7 @@ describe("DomainSettingsView", () => {
           available: true,
           certificateState: "PROVISIONING",
           extraHosts: [],
+          indexing: INDEXING,
           records: [
             {
               type: "A",
@@ -76,6 +89,7 @@ describe("DomainSettingsView", () => {
           available: true,
           certificateState: "ACTIVE",
           extraHosts: [],
+          indexing: INDEXING,
           records: [
             {
               type: "CNAME",
@@ -107,6 +121,7 @@ describe("DomainSettingsView", () => {
           available: true,
           certificateState: "ACTIVE",
           extraHosts: ["www.storiq.in"],
+          indexing: INDEXING,
           records: [],
         }}
       />,
@@ -116,5 +131,35 @@ describe("DomainSettingsView", () => {
       screen.getByText(/along with www\.storiq\.in\./),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Finish covering/)).not.toBeInTheDocument();
+  });
+
+  it("shows actionable Google indexing health from the persisted status", () => {
+    render(
+      <DomainSettingsView
+        rootDomain="storemink.com"
+        initial={{
+          domain: null,
+          verified: false,
+          allowed: true,
+          available: true,
+          certificateState: null,
+          extraHosts: [],
+          records: [],
+          indexing: {
+            ...INDEXING,
+            state: "error",
+            error: "Search Console permission denied",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Google Search coverage")).toBeInTheDocument();
+    expect(screen.getByText("Needs attention")).toBeInTheDocument();
+    expect(
+      screen.getByText("Search Console permission denied"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check now" })).toBeEnabled();
+    expect(screen.getByText("Covered by StoreMink")).toBeInTheDocument();
   });
 });

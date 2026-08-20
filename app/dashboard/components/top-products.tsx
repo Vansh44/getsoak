@@ -1,11 +1,31 @@
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import type { TopProduct } from "../analytics/data";
 
-export function TopProducts({ items }: { items: TopProduct[] }) {
+export function TopProducts({
+  items,
+  reportHref,
+}: {
+  items: TopProduct[];
+  reportHref?: string;
+}) {
   return (
     <div className="dash-card h-full">
       <div className="dash-card-header">
         <div>
-          <div className="dash-card-title">Top products</div>
+          <div className="dash-card-title">
+            {reportHref ? (
+              <Link
+                href={reportHref}
+                className="inline-flex items-center gap-1 hover:text-[var(--dash-accent)]"
+              >
+                Top products
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            ) : (
+              "Top products"
+            )}
+          </div>
           <div className="dash-card-sub">Ranked by units sold</div>
         </div>
       </div>

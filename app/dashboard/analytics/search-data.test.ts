@@ -31,6 +31,7 @@ vi.mock("@/lib/db/client", () => ({
 import {
   deriveSearchState,
   getSearchAnalytics,
+  getSearchRankingReport,
   searchDateWindow,
   searchMetricStat,
   searchRangeLabel,
@@ -144,5 +145,29 @@ describe("Search analytics presentation contract", () => {
     for (const where of captured.wheres) {
       expect(boundValues(where)).toContain("store-tenant");
     }
+  });
+
+  it("keeps detailed query reports tenant-bound", async () => {
+    captured.rows = [
+      [{ key: "linen", clicks: 2, impressions: 10, positionSum: 50 }],
+    ];
+    const range = parseAnalyticsRange(
+      { range: "7d", compare: "none" },
+      "Asia/Kolkata",
+      new Date("2026-08-19T08:00:00.000Z"),
+    );
+
+    await expect(
+      getSearchRankingReport("store-tenant", range, "query", 250),
+    ).resolves.toEqual([
+      {
+        key: "linen",
+        clicks: 2,
+        impressions: 10,
+        ctr: 20,
+        position: 5,
+      },
+    ]);
+    expect(boundValues(captured.wheres[0])).toContain("store-tenant");
   });
 });
