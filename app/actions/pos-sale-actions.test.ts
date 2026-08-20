@@ -34,6 +34,7 @@ vi.mock("@/lib/rate-limit", () => ({
   clientIp: vi.fn(() => "1.2.3.4"),
 }));
 vi.mock("@/lib/settings/resolve", () => ({ getStoreSettings: vi.fn() }));
+vi.mock("@/lib/pos/audit", () => ({ posAudit: vi.fn() }));
 vi.mock("@/lib/payments/pos-gateway", () => ({
   counterGatewayKeyId: vi.fn(async () => null),
   startCounterPayment: vi.fn(),
@@ -77,6 +78,7 @@ import {
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
 import { orders, orderPayments } from "@/drizzle/schema";
 import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
+import { posAudit } from "@/lib/pos/audit";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -1594,5 +1596,111 @@ describe("placePosSale — the gateway replay CONSTRAINT firing", () => {
     const res = await placePosSale([line], cash);
     expect(res.error).toBeUndefined();
     expect(dbHolder.current.calls.delete).not.toContain(orders);
+  });
+});
+
+// ── The money audit (roadmap Step 14) ───────────────────────────────────────
+// Discount AMOUNTS were always on the order. What was missing is who did it
+// and — the point of the step — who APPROVED it, which `placePosSale` verified
+// and then threw away as `!!verifyApprovalToken(...)`.
+
+describe("placePosSale — the money audit", () => {
+  const auditFor = (event: string) =>
+    vi
+      .mocked(posAudit)
+      .mock.calls.map((c) => c[0])
+      .find((a: any) => a.event === event) as any;
+
+  it("★ an ordinary sale audits nothing", async () => {
+    // No discount, no override — nobody exercised discretion, so there is
+    // nothing to attribute. A row per sale would drown the feed.
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    seedHappyPath();
+    await placePosSale([line], cash);
+    expect(posAudit).not.toHaveBeenCalled();
+  });
+
+  it("★★ records a discount with its amount and the order", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    seedHappyPath();
+    await placePosSale(
+      [line],
+      [{ method: "cash", amount: 108, tendered: 200 }],
+      {
+        orderDiscount: 10,
+      },
+    );
+    const entry = auditFor("sale_discount");
+    expect(entry).toMatchObject({
+      storeId: "store-1",
+      amount: 10,
+      orderId: expect.any(String),
+      actor: "Vansh",
+    });
+  });
+
+  it("★★ records WHO APPROVED an over-cap discount", async () => {
+    // The whole reason this step exists. A cashier discounting above the cap
+    // needs a manager's PIN; that manager's id was previously discarded.
+    vi.mocked(getStoreSettings).mockResolvedValue(STAFF_MAY_DISCOUNT);
+    const sale = { lines: [line], orderDiscount: 50 };
+    seedHappyPath();
+    await placePosSale(
+      [line],
+      [{ method: "cash", amount: 68, tendered: 100 }],
+      {
+        orderDiscount: 50,
+        approvalToken: approvalFor(sale),
+      },
+    );
+    expect(auditFor("sale_discount")).toMatchObject({ approver: "mgr-1" });
+  });
+
+  it("★ an unapproved discount records no approver, rather than a blank one", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    seedHappyPath();
+    await placePosSale(
+      [line],
+      [{ method: "cash", amount: 108, tendered: 200 }],
+      {
+        orderDiscount: 10,
+      },
+    );
+    expect(auditFor("sale_discount").approver).toBeNull();
+  });
+
+  it("★★ records a price override as the DELTA given away", async () => {
+    // ₹100 catalogue → ₹60 charged on one unit = ₹40 given away. The new price
+    // alone would be meaningless without yesterday's, and that price moves.
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    seedHappyPath();
+    await placePosSale(
+      [{ ...line, priceOverride: 60 }],
+      [{ method: "cash", amount: 71, tendered: 100 }],
+    );
+    expect(auditFor("price_override")).toMatchObject({ amount: 40 });
+  });
+
+  it("★ a discount and an override on one sale are TWO rows", async () => {
+    // Two different decisions, possibly by two different people.
+    vi.mocked(resolvePosOperator).mockResolvedValue(OWNER as any);
+    seedHappyPath();
+    await placePosSale(
+      [{ ...line, priceOverride: 60 }],
+      [{ method: "cash", amount: 61, tendered: 100 }],
+      { orderDiscount: 10 },
+    );
+    expect(auditFor("sale_discount")).toBeTruthy();
+    expect(auditFor("price_override")).toBeTruthy();
+  });
+
+  it("★★ a REFUSED sale audits nothing", async () => {
+    // Audited after the sale is recorded, so a sale that never happened logs
+    // no give-away. This action returns early in a dozen places.
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+    seedHappyPath();
+    const res = await placePosSale([line], cash, { orderDiscount: 10 });
+    expect(res.error).toBeTruthy();
+    expect(posAudit).not.toHaveBeenCalled();
   });
 });

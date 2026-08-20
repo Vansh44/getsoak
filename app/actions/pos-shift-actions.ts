@@ -26,6 +26,7 @@ import {
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import {
   shiftTotals,
@@ -449,6 +450,25 @@ export async function recordCashMovement(
         createdByName: op.name,
       }),
     );
+    // ── The money audit (Step 14) ───────────────────────────────────────────
+    // ★ `pos_cash_movements` already records this, and the audit row is NOT a
+    // duplicate: it puts cash leaving the drawer in the SAME feed as discounts,
+    // overrides and refunds, which is how a shop owner reads "what happened to
+    // the money today" without joining three tables. A drop is also the one
+    // money event with no order behind it.
+    //
+    // ★ A PAYOUT AND A DROP LEAVE; A PAID-IN ARRIVES. The sign says which, so
+    // the feed can be summed without knowing the vocabulary.
+    posAudit({
+      storeId: op.storeId,
+      event: "cash_movement",
+      locationId: op.locationId,
+      staffId: op.staffId,
+      actor: op.name,
+      amount: type === "paid_in" ? -amt : amt,
+      detail: `${type.replace("_", " ")}${reason?.trim() ? ` · ${reason.trim().slice(0, 120)}` : ""}`,
+    });
+
     revalidatePath("/pos");
     return { success: true };
   } catch (err) {

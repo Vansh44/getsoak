@@ -2651,6 +2651,63 @@ copy explaining that it has no stock-ledger movement.
 
 ---
 
+## 11e. The money audit _(roadmap Step 14)_
+
+Set up: a store with POS on, one cashier and one manager. The gap being closed
+is ATTRIBUTION — the amounts were always on the order; who did it, and who
+approved it, were nowhere.
+
+**PS-AU.1 — An ordinary sale audits nothing**
+Ring a sale with no discount and no override.
+**Expect:** no row on `/dashboard/pos/money`. A row per sale would drown the
+feed; only discretionary acts belong here.
+
+**PS-AU.2 ★★ — A discount records amount, actor and order**
+As the owner, take ₹50 off a sale.
+**Expect:** one Discount row — ₹50, the owner's name, and the order reference in
+the detail.
+
+**PS-AU.3 ★★ — An over-cap discount records WHO APPROVED IT**
+Turn off `pos.ownerOnlyDiscounts`. As a cashier, discount above
+`pos.maxDiscountPercent`, and have a manager key their PIN.
+**Expect:** the row shows the CASHIER under "By" and the MANAGER under "Approved
+by". This is the fact nothing else in the system records.
+
+**PS-AU.4 — An unapproved discount shows "Not required", not a blank**
+As the owner, discount within the cap.
+**Expect:** "Approved by" reads _Not required_ — most acts need no second
+person, and an empty cell reads as missing data.
+
+**PS-AU.5 ★★ — A price override records the DELTA**
+Reprice a ₹100 line to ₹60, quantity 1.
+**Expect:** ₹40, not ₹60. Then reprice one UP and expect a negative amount shown
+as `+₹x` — money came in, and hiding the sign would misstate exposure.
+
+**PS-AU.6 — A discount and an override on one sale are two rows**
+Do both on one basket.
+**Expect:** two rows. Two decisions, possibly two people.
+
+**PS-AU.7 ★★ — A refused sale audits nothing**
+Attempt a discount as a cashier with `pos.ownerOnlyDiscounts` ON (refused).
+**Expect:** no row. Nothing was given away.
+
+**PS-AU.8 — A till refund and a cash drop appear**
+Take a return at the counter, then bank ₹2,000.
+**Expect:** a Refund row and a Cash row. A paid-in shows as `+₹`, and the
+"Net out" total nets it off.
+
+**PS-AU.9 ★ — Money and security stay separate**
+Pair a device, then open both pages.
+**Expect:** the pairing appears on Devices, NOT on Money log; the discount
+appears on Money log, NOT on Devices.
+
+**PS-AU.10 ★ — A logging failure never blocks a sale**
+Break `pos_audit_log` (revoke insert), then ring a discounted sale.
+**Expect:** the sale COMPLETES. Losing a log line is bad; refusing a customer is
+worse.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

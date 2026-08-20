@@ -30,6 +30,7 @@ import {
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import {
   refundBreakdown,
@@ -766,6 +767,21 @@ export async function processReturn(
       paymentMethod: method,
       items: breakdown.lines.reduce((a, l) => a + l.quantity, 0),
     },
+  });
+
+  // ── The money audit (Step 14) ─────────────────────────────────────────────
+  // A till refund is a discretionary act — someone decided to hand money back —
+  // and `order_refunds` records the amount but not who stood at the counter.
+  // ★ After the refund has actually settled, so a refused one logs nothing.
+  posAudit({
+    storeId: op.storeId,
+    event: "refund_issued",
+    locationId: op.locationId,
+    staffId: op.staffId,
+    actor: op.name,
+    amount: breakdown.total,
+    orderId,
+    detail: `${sale.receiptNo ?? orderId.slice(0, 8)} · ${method} · ${breakdown.lines.reduce((a, l) => a + l.quantity, 0)} item(s)`,
   });
 
   revalidatePath("/pos/sales");

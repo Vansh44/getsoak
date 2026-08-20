@@ -211,6 +211,10 @@ export const SECTIONS: DashboardSection[] = [
       { label: "Overview", href: "/dashboard/pos", icon: "pos" },
       { label: "Staff", href: "/dashboard/pos/staff", icon: "customers" },
       { label: "Devices", href: "/dashboard/pos/devices", icon: "channels" },
+      // Money events (Step 14) get their own page rather than a tab on
+      // "Devices": an owner reconciling a drawer and an admin checking who
+      // paired a browser are looking for different things.
+      { label: "Money log", href: "/dashboard/pos/money", icon: "orders" },
       {
         label: "POS settings",
         href: "/dashboard/pos/settings",

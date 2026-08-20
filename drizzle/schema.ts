@@ -3798,6 +3798,11 @@ export const posAuditLog = pgTable(
     actor: text(),
     ip: text(),
     detail: text(),
+    // Money events (pos_16_money_audit.sql). Rupees given away or moved; who
+    // authorised it when that differs from the actor; and what it concerns.
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }),
+    approver: text(),
+    orderId: uuid("order_id"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),

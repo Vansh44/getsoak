@@ -2776,7 +2776,20 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         4. **Append-only audit trail** (`pos_audit_log`, admin-readable,
            service-role writes) for device authorized/revoked, clone detected,
            operator login + failed login, via `lib/pos/audit.ts` — always
-           best-effort, so a logging failure can never block a sale. Surfaced on
+           best-effort, so a logging failure can never block a sale.
+           **★★ AND FOUR MONEY EVENTS SINCE STEP 14** (`sale_discount`,
+           `price_override`, `refund_issued`, `cash_movement`;
+           `pos_16_money_audit.sql` adds `amount`/`approver`/`order_id`).
+           The amounts were never lost — orders, order_items and order_refunds
+           carry them — so what this adds is ATTRIBUTION, above all the
+           APPROVER: `placePosSale` verified the manager's PIN token and then
+           discarded the identity (`!!verifyApprovalToken(...)`), which is the
+           one fact nothing else records. ⚠ A GATEWAY TENDER IS DELIBERATELY
+           NOT AUDITED — the cashier chose nothing and it is reconstructible
+           from `order_payments` + `orders.cashier_id`; noise is what makes an
+           audit stop being read. An override records the DELTA, not the new
+           price. Read at `/dashboard/pos/money`; the devices page reads the
+           security half. Surfaced on
            **`/dashboard/pos/devices`** (`listPosActivity`) next to a **Revoked
            devices** list showing WHY each died — without that, a clone-detected
            auto-revoke is an unexplainable outage.

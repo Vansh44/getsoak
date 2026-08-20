@@ -69,6 +69,7 @@ import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { summariseItems } from "@/lib/notifications/format";
 import { posCan, type PosActorRole } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { verifyPin } from "@/lib/pos/pin";
 import {
   type ApprovableSale,
@@ -986,7 +987,12 @@ export async function placePosSale(
   // till, minted by verifyManagerPin. An unverifiable, stale, tampered or
   // absent token all land in the same place — unapproved — so a caller that
   // skips the PIN pad entirely gets nowhere.
-  const managerApproved = !!verifyApprovalToken(opts.approvalToken, {
+  // ★★ THE CLAIMS ARE KEPT, NOT COERCED. This was `!!verifyApprovalToken(...)`,
+  // which threw away `approverId` — the manager who keyed their PIN. Everything
+  // else about a discount is reconstructible from the order; who authorised it
+  // is not, once the sale commits. The module's own comment has said "returns
+  // the claims (so the approver can be recorded)" since it was written.
+  const approval = verifyApprovalToken(opts.approvalToken, {
     storeId: op.storeId,
     locationId: op.locationId,
     operatorId: op.staffId,
@@ -995,6 +1001,7 @@ export async function placePosSale(
       orderDiscount: opts.orderDiscount,
     }),
   });
+  const managerApproved = !!approval;
 
   // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
   // reconciliation never has to infer it from a timestamp. A store may require
@@ -1118,6 +1125,10 @@ export async function placePosSale(
 
   // 5. Price each line + validate discounts/overrides.
   const priced: PricedLine[] = [];
+  // Accumulated for the money audit (Step 14): how much repricing gave away,
+  // across how many lines.
+  let overrideLines = 0;
+  let overrideGivenAway = 0;
   let needsApproval = false;
 
   for (const l of lines) {
@@ -1131,6 +1142,10 @@ export async function placePosSale(
     const special = v ? v.special_price : null;
     const listed = v ? v.selling_price : p.selling_price;
     let unit = special && special > 0 ? special : listed;
+    // What the catalogue said, before any override. The audit records the
+    // DELTA rather than the new price: "we charged ₹1" means nothing without
+    // yesterday's price, and that price moves.
+    const catalogueUnit = unit;
 
     // A price override is an authorised deviation, never a client claim.
     if (
@@ -1157,6 +1172,8 @@ export async function placePosSale(
         needsApproval = true;
       }
       unit = l.priceOverride;
+      overrideLines += 1;
+      overrideGivenAway += (catalogueUnit - unit) * l.quantity;
     }
 
     const gross = unit * l.quantity;
@@ -1513,6 +1530,56 @@ export async function placePosSale(
     // Everything else keeps the original rule: the sale IS recorded and the
     // stock is taken, so losing the tender BREAKDOWN must not void a completed
     // transaction. Logged loudly for reconciliation.
+  }
+
+  // ── The money audit (Step 14) ─────────────────────────────────────────────
+  // ★ AFTER THE SALE IS RECORDED, deliberately. A refused sale gave nothing
+  // away, so auditing earlier would log discounts that never happened — and
+  // this action returns early in a dozen places before the order exists.
+  //
+  // ★ ONE ROW PER ACT, not per sale. A discount and a price override on the
+  // same basket are two different decisions by (possibly) two different people.
+  //
+  // Best-effort and deferred, the posAudit rule: a logging failure must never
+  // reach a cashier standing in front of a customer.
+  const givenAway = discount + priced.reduce((n, l) => n + l.line_discount, 0);
+  if (givenAway > 0) {
+    after(() =>
+      posAudit({
+        storeId: op.storeId,
+        event: "sale_discount",
+        locationId: op.locationId,
+        staffId: op.staffId,
+        actor: op.name,
+        approver: approval?.approverId ?? null,
+        amount: givenAway,
+        orderId,
+        detail: `${orderRef || orderId.slice(0, 8)} · ₹${givenAway.toLocaleString("en-IN")} off${
+          discount > 0 && priced.some((l) => l.line_discount > 0)
+            ? " (order + lines)"
+            : discount > 0
+              ? " (order)"
+              : " (lines)"
+        }`,
+      }),
+    );
+  }
+  if (overrideLines > 0 && overrideGivenAway !== 0) {
+    after(() =>
+      posAudit({
+        storeId: op.storeId,
+        event: "price_override",
+        locationId: op.locationId,
+        staffId: op.staffId,
+        actor: op.name,
+        approver: approval?.approverId ?? null,
+        // Negative is possible and is NOT an error: repricing UP happens, and
+        // recording it as a give-away would misstate the shop's exposure.
+        amount: overrideGivenAway,
+        orderId,
+        detail: `${orderRef || orderId.slice(0, 8)} · ${overrideLines} line${overrideLines === 1 ? "" : "s"} repriced`,
+      }),
+    );
   }
 
   // An in-store sale is a sale. Without this it existed only in the orders

@@ -44,8 +44,8 @@ sequence AND the spec for everything still to build.
 | **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ✅ done |
 | **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
 | **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
-| **14** | **Money-event audit — who discounted, overrode, refunded**     | M    | ⏭ next |
-| **15** | Hourly sweep + held sales expire                               | S    | ⏳      |
+| **14** | Money-event audit — who discounted, overrode, refunded         | M    | ✅ done |
+| **15** | **Hourly sweep + held sales expire**                           | S    | ⏭ next |
 | **16** | A counter gateway payment holds stock                          | M    | ⏳      |
 | **17** | Dashboard POS reporting — shifts, Z-reports, sales by shop     | M    | ⏳      |
 | **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
@@ -658,7 +658,7 @@ till.
 
 ---
 
-## Step 14 — Money-event audit: who discounted, overrode, refunded
+## Step 14 — Money-event audit: who discounted, overrode, refunded ✅ DONE
 
 **The gap.** `posAudit` has six call sites and every one is auth or device:
 authorized, revoked, clone detected, operator login, failed login. Not one money
@@ -672,10 +672,33 @@ discount carries a signed approval token naming the manager who keyed their PIN
 AWAY. Persisting `approverId` is most of this step's value for almost none of
 its work — and it is the one fact nobody can reconstruct afterwards.
 
-**Ships.** `posAudit` entries for: order + line discount, price override, till
-refund, gateway tender accepted, cash movement. Each carries actor, approver
-(where one exists), amount and reason. Surfaced as a Money tab beside the
-existing device activity on `/dashboard/pos/devices`, location-scoped.
+**✅ Shipped.** `supabase/pos_16_money_audit.sql` (⚠ **not applied** — needs
+`postgres`) adds `amount` / `approver` / `order_id` plus a partial index;
+`posAudit` gained four money events wired into `placePosSale`, `processReturn`
+and `recordCashMovement`; and `/dashboard/pos/money` renders the feed with
+per-event filters and a net-out total. 12 new tests; the approver and the
+override delta are both mutation-checked.
+
+**★★ ONE EVENT WAS DROPPED FROM THIS SPEC: `gateway_tender`.** The line above
+originally listed it. Implementing it showed it does not belong — the cashier
+CHOSE nothing (verification either passes or the sale is refused), and it is
+fully reconstructible from `order_payments.reference` plus
+`orders.cashier_id`. This feed records DISCRETIONARY acts, and noise is what
+makes an audit stop being read. `lib/pos/audit.test.ts` pins it as not a money
+event so it is not "completed" back in later.
+
+**★ THE OVERRIDE AMOUNT IS THE DELTA, NOT THE NEW PRICE.** "We charged ₹1" is
+meaningless without yesterday's catalogue price, and that price moves. A
+negative delta (repricing UP) is kept negative rather than absolute — recording
+it as a give-away would misstate the shop's exposure.
+
+**★ AUDITED AFTER THE SALE IS RECORDED.** `placePosSale` returns early in a
+dozen places; auditing sooner would log give-aways for sales that never
+happened.
+
+**★ THE DEVICES PAGE NOW READS `kind: "security"`.** It already called its list
+"Security activity"; money has its own page because an owner reconciling a
+drawer and an admin checking who paired a browser want different things.
 
 **★ BEST-EFFORT, NEVER BLOCKING** — the existing `posAudit` rule. A logging
 failure must not refuse a sale in front of a customer.
