@@ -78,7 +78,7 @@ export const ANALYTICS_FEATURES: Record<
     label: "Gross margin",
     description: "Product costs, gross profit and margin reporting.",
     minPlan: "pro",
-    status: "planned",
+    status: "available",
   },
 };
 

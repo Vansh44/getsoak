@@ -222,7 +222,8 @@ wholesip/
 │   │   │                      # per-admin "Edit dashboard" canvas. reports/[report]
 │   │   │                      # provides tenant/location-safe drill-down tables for
 │   │   │                      # total sales, sales over time, products and Search queries;
-│   │   │                      # platform availability gates live in lib/analytics/features
+│   │   │                      # platform availability gates live in lib/analytics/features;
+│   │   │                      # Pro gross-margin cards use immutable order-line costs
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
@@ -622,7 +623,9 @@ wholesip/
 │   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
 │   ├── analytics/             # ★ §20 dashboard contracts plus platform feature gates;
 │   │                          # merchant-pixels.ts validates/fail-closes the GA4 + Meta
-│   │                          # settings stored under stores.settings.marketing
+│   │                          # settings stored under stores.settings.marketing;
+│   │                          # store-entitlement.ts combines operator availability
+│   │                          # with the store's effective plan for server reads/writes
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
 │   ├── credit/                # ★ §29: store credit — apply.ts (PURE: how much
 │   │                          # credit goes on an order, incl. the unpayable-
@@ -2423,7 +2426,7 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `platform-feature-store.ts` owns fail-safe reads. Core dashboard,
       customization, drill-down/CSV and Google Search switches are enforced at
       merchant render/action/export boundaries. GA4, Meta Pixel, and storefront
-      conversion are available Pro-only modules; margin remains planned;
+      conversion and gross margin are available Pro-only modules;
       `PLAN_LIMITS.advancedAnalytics` is the independent entitlement gate, so a
       global switch can never grant a lower plan. `app/actions/platform-analytics-settings.ts`
       rechecks superadmin authorization and validates the full fixed setting
@@ -2468,6 +2471,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       and attribution are pruned after 14 days by `prune-logs`. Pro merchants
       receive Visitors, Sessions, Page views, and ordered Funnel cards; lower
       plans and a disabled platform switch receive neither collection nor cards.
+    - **Phase 10 gross margin (2026-08-20):** migration
+      `20260820_0012_gross_margin` adds nullable `products.cost_price`, optional
+      variant overrides, and immutable `order_items.unit_cost` snapshots, then
+      enables the Pro/platform-gated module and publishes its Help guide. The
+      product Pricing editor is the backfill surface: the first supplied cost
+      fills only older lines with no snapshot; later edits affect future online,
+      POS, and exchange lines without rewriting history. Analytics reports
+      costed merchandise sales, COGS, gross profit, margin, and explicit cost
+      coverage before returns/refunds. Unknown costs are excluded—not treated
+      as zero—so an incomplete catalog cannot inflate profit silently.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2588,7 +2601,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       GA4 and Meta Pixel setup guides, including official external setup links,
       consent, testing, and subdomain/custom-domain limitations. Migration
       `20260820_0010_merchant_pixels` publishes those two guides alongside the
-      shipped Pro integrations. All rows remain editable through the operator Help
+      shipped Pro integrations. `20260820_0011_storefront_conversion` and
+      `20260820_0012_gross_margin` add the first-party conversion and gross-margin
+      guides. All rows remain editable through the operator Help
       Centre console; no second static docs source exists.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex

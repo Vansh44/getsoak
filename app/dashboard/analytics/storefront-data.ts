@@ -1,9 +1,9 @@
 import "server-only";
 
 import { and, eq, gte, lte } from "drizzle-orm";
-import { storefrontDaily, stores } from "@/drizzle/schema";
+import { storefrontDaily } from "@/drizzle/schema";
 import { withService } from "@/lib/db/client";
-import { effectivePlan } from "@/lib/plans";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 import type { AnalyticsRange } from "@/lib/analytics/range";
 import type { Stat } from "./data";
 
@@ -33,17 +33,7 @@ function stat(value: number, spark: number[]): Stat {
 }
 
 export async function storeHasProAnalytics(storeId: string): Promise<boolean> {
-  const [row] = await withService((db) =>
-    db
-      .select({ plan: stores.plan, expiresAt: stores.planExpiresAt })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1),
-  );
-  return (
-    !!row &&
-    effectivePlan({ plan: row.plan, plan_expires_at: row.expiresAt }) === "pro"
-  );
+  return storeHasAnalyticsFeature(storeId, "storefrontConversion");
 }
 
 export async function getStorefrontAnalytics(

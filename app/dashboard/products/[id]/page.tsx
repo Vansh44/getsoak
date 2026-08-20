@@ -22,6 +22,7 @@ export default async function ProductEditPage({
         categories={data.categories}
         colors={data.colors}
         taxClasses={data.taxClasses}
+        canUseGrossMargin={data.canUseGrossMargin}
       />
     </div>
   );

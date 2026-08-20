@@ -37,6 +37,9 @@ vi.mock("@/lib/ai/gemini", () => ({
   callGemini: vi.fn(async () => ({ text: "A lovely description." })),
   brandSystemText: vi.fn((b: string) => b),
 }));
+vi.mock("@/lib/analytics/store-entitlement", () => ({
+  storeHasAnalyticsFeature: vi.fn(async () => true),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));

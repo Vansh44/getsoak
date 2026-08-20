@@ -68,6 +68,10 @@ describe("analytics layout v2 contract", () => {
         cards: ["customer_mix", "metric_customers"],
       },
       {
+        title: "Profit",
+        cards: ["metric_gross_profit", "gross_margin_overview"],
+      },
+      {
         title: "Google Search",
         cards: [
           "search_clicks",

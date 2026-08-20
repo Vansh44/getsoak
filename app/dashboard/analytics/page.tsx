@@ -27,6 +27,7 @@ import {
   getCustomerMix,
   getDiscountImpact,
   getInventoryVelocity,
+  getGrossMarginAnalytics,
   getRecentOrders,
   getReturnsAndRefunds,
   getSalesAnalytics,
@@ -37,6 +38,7 @@ import {
   getTopProducts,
 } from "./data";
 import type { CatalogSnapshots, SalesAnalytics } from "./data";
+import type { GrossMarginAnalytics } from "./data";
 import { getSearchAnalytics, type SearchAnalytics } from "./search-data";
 import { isWidgetId, type WidgetId } from "./widgets";
 import {
@@ -50,6 +52,7 @@ import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { analyticsReportHref } from "@/lib/analytics/reports";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 import {
   getStorefrontAnalytics,
   storeHasProAnalytics,
@@ -362,6 +365,68 @@ async function StorefrontFunnel({
   );
 }
 
+async function GrossProfitMetric({
+  data,
+}: {
+  data: Promise<GrossMarginAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <MetricCard
+      label="Gross profit"
+      stat={{
+        value: result.grossProfit,
+        trendPct: null,
+        trendUp: result.grossProfit >= 0,
+        spark: [],
+      }}
+      currency
+    />
+  );
+}
+
+async function GrossMarginWidget({
+  data,
+}: {
+  data: Promise<GrossMarginAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <AnalyticsSummaryCard
+      title="Gross margin"
+      subtitle="Recognized merchandise lines with a cost snapshot"
+      items={[
+        {
+          label: "Costed sales",
+          value: result.costedSales,
+          format: "currency",
+        },
+        {
+          label: "Cost of goods",
+          value: result.costOfGoods,
+          format: "currency",
+        },
+        {
+          label: "Gross profit",
+          value: result.grossProfit,
+          format: "currency",
+        },
+        {
+          label: "Gross margin",
+          value: result.marginPercent,
+          format: "percent",
+        },
+        {
+          label: "Cost coverage",
+          value: result.coveragePercent,
+          format: "percent",
+        },
+      ]}
+      note="Before returns and refunds. Missing costs are excluded, never counted as zero. Add costs in Products to improve coverage."
+    />
+  );
+}
+
 export default async function AnalyticsPage({
   searchParams,
 }: {
@@ -429,6 +494,9 @@ export default async function AnalyticsPage({
     (await storeHasProAnalytics(storeId))
       ? getStorefrontAnalytics(storeId, range)
       : null;
+  const margin = (await storeHasAnalyticsFeature(storeId, "grossMargin"))
+    ? getGrossMarginAnalytics(storeId, location, range)
+    : null;
   const totalSalesReport = platformFeatures.drilldownReports
     ? analyticsReportHref("total-sales", params)
     : undefined;
@@ -596,6 +664,18 @@ export default async function AnalyticsPage({
     slots.traffic_funnel = (
       <Suspense fallback={<WidgetSkeleton />}>
         <StorefrontFunnel data={storefront} />
+      </Suspense>
+    );
+  }
+  if (margin) {
+    slots.metric_gross_profit = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <GrossProfitMetric data={margin} />
+      </Suspense>
+    );
+    slots.gross_margin_overview = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <GrossMarginWidget data={margin} />
       </Suspense>
     );
   }

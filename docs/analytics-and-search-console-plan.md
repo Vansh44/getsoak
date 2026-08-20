@@ -926,7 +926,7 @@ Ordered by value per unit of work, and each step is shippable alone.
 | 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set                                                      | S          |
 | 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                                                                 | S          |
 | 9   | Storefront conversion | **Built 2026-08-20; migration/Scheduler pending:** Pro-only consented beacon, 14-day retention, 30-minute sessions, purchase attribution, hourly rollup, funnel, bot controls, and cards | L          |
-| 10  | Margin                | Pro-only `cost_price`, backfill UX, gross margin reporting                                                                                                                               | M          |
+| 10  | Margin                | **Built 2026-08-20; migration pending:** Pro-only product/variant `cost_price`, immutable order-line snapshots, safe first-cost backfill, explicit coverage, and gross-margin cards       | M          |
 
 Steps 1–3 form overview-dashboard parity. Step 4 is independent once the global
 range contract exists and is StoreMink's differentiator. Do not start the

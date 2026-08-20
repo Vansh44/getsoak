@@ -39,7 +39,9 @@ export type WidgetId =
   | "traffic_visitors"
   | "traffic_sessions"
   | "traffic_page_views"
-  | "traffic_funnel";
+  | "traffic_funnel"
+  | "metric_gross_profit"
+  | "gross_margin_overview";
 
 export type WidgetGroup =
   | "Metrics"
@@ -48,7 +50,8 @@ export type WidgetGroup =
   | "Inventory"
   | "Content"
   | "Search"
-  | "Traffic";
+  | "Traffic"
+  | "Profit";
 
 export interface WidgetMeta {
   id: WidgetId;
@@ -58,6 +61,19 @@ export interface WidgetMeta {
 }
 
 export const WIDGETS: Record<WidgetId, WidgetMeta> = {
+  metric_gross_profit: {
+    id: "metric_gross_profit",
+    title: "Gross profit",
+    description: "Sales less snapshotted product costs on costed order lines.",
+    group: "Profit",
+  },
+  gross_margin_overview: {
+    id: "gross_margin_overview",
+    title: "Gross margin",
+    description:
+      "Costed merchandise sales, COGS, profit, margin, and coverage.",
+    group: "Profit",
+  },
   traffic_visitors: {
     id: "traffic_visitors",
     title: "Storefront visitors",
@@ -256,6 +272,7 @@ export const WIDGET_GROUPS: WidgetGroup[] = [
   "Content",
   "Search",
   "Traffic",
+  "Profit",
 ];
 
 /** The out-of-the-box dashboard, in render order. Lays out as four tidy rows. */

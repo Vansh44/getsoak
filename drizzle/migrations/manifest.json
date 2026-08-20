@@ -288,6 +288,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260820_0012_gross_margin",
+      "description": "Add nullable product and variant costs, immutable order-line cost snapshots, enable Pro gross-margin analytics, and publish its Help guide",
+      "file": "sql/20260820_0012_gross_margin.sql",
+      "transaction": true,
+      "requires": ["20260820_0011_storefront_conversion"],
+      "verify": {
+        "columns": [
+          "order_items.unit_cost",
+          "product_variants.cost_price",
+          "products.cost_price"
+        ],
+        "constraints": [
+          "order_items_unit_cost_nonnegative",
+          "product_variants_cost_price_nonnegative",
+          "products_cost_price_nonnegative"
+        ],
+        "queries": [
+          {
+            "name": "gross margin is available and documented",
+            "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.gross_margin = true and exists (select 1 from public.help_articles a where a.slug = 'understand-gross-margin-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

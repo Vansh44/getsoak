@@ -1678,6 +1678,10 @@ export const orderItems = pgTable(
     price: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
+    // Immutable cost basis captured when the order line is created. Nullable
+    // means the merchant had not supplied a cost; reports must never treat it
+    // as zero. Product cost edits do not rewrite this snapshot.
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2, mode: "number" }),
     quantity: integer().default(1).notNull(),
     total: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -2342,6 +2346,12 @@ export const productVariants = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost. Null inherits the parent product cost.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     imageUrl: text("image_url"),
     images: text().array().default([""]).notNull(),
     specialPrice: numeric("special_price", {
@@ -2481,6 +2491,12 @@ export const products = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost used for future order-line snapshots.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     cardColor: text("card_color"),
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),

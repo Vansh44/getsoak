@@ -864,6 +864,7 @@ interface PricedLine {
   variant_name: string | null;
   hsn_code: string | null;
   unit_price: number;
+  unit_cost: number | null;
   quantity: number;
   /** unit_price * qty, minus the line discount. */
   amount: number;
@@ -1015,6 +1016,7 @@ export async function placePosSale(
     id: string;
     name: string;
     selling_price: number;
+    cost_price: number | null;
     tax_class_id: string | null;
     hsn_code: string | null;
   }>;
@@ -1023,6 +1025,7 @@ export async function placePosSale(
     name: string;
     selling_price: number;
     special_price: number | null;
+    cost_price: number | null;
   }>;
   try {
     const res = await withService(async (db) => {
@@ -1031,6 +1034,7 @@ export async function placePosSale(
           id: products.id,
           name: products.name,
           selling_price: products.sellingPrice,
+          cost_price: products.costPrice,
           tax_class_id: products.taxClassId,
           hsn_code: products.hsnCode,
         })
@@ -1048,6 +1052,7 @@ export async function placePosSale(
               name: productVariants.name,
               selling_price: productVariants.sellingPrice,
               special_price: productVariants.specialPrice,
+              cost_price: productVariants.costPrice,
             })
             .from(productVariants)
             .where(
@@ -1173,6 +1178,7 @@ export async function placePosSale(
       variant_name: v?.name ?? null,
       hsn_code: p.hsn_code ?? null,
       unit_price: unit,
+      unit_cost: v?.cost_price ?? p.cost_price,
       quantity: l.quantity,
       amount: gross - lineDisc,
       line_discount: lineDisc,
@@ -1453,6 +1459,7 @@ export async function placePosSale(
             name: l.name,
             variantName: l.variant_name,
             price: l.unit_price,
+            unitCost: l.unit_cost,
             quantity: l.quantity,
             total: l.amount,
             lineDiscount: l.line_discount,
