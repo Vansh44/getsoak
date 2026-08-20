@@ -175,6 +175,49 @@
           "store_search_sync_jobs"
         ]
       }
+    },
+    {
+      "id": "20260820_0007_platform_analytics_controls",
+      "description": "Add operator-controlled Analytics availability and seed the first Analytics help documents",
+      "file": "sql/20260820_0007_platform_analytics_controls.sql",
+      "transaction": true,
+      "requires": ["20260819_0006_search_metrics"],
+      "verify": {
+        "tables": ["platform_analytics_settings"],
+        "constraints": [
+          "platform_analytics_settings_id_check",
+          "platform_analytics_settings_pkey"
+        ],
+        "rlsTables": ["platform_analytics_settings"],
+        "queries": [
+          {
+            "name": "the Analytics help overview is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'understand-analytics-dashboard' and status = 'published'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0008_analytics_help_documents",
+      "description": "Publish the complete Analytics Help Centre guide set and prepare detailed GA4 and Meta Pixel setup drafts",
+      "file": "sql/20260820_0008_analytics_help_documents.sql",
+      "transaction": true,
+      "requires": ["20260820_0007_platform_analytics_controls"],
+      "verify": {
+        "queries": [
+          {
+            "name": "eight shipped Analytics guides are published",
+            "sql": "select count(*)::text from public.help_articles where slug in ('understand-analytics-dashboard', 'analytics-terms-and-data-sources', 'analytics-sales-and-orders', 'analytics-customers-inventory-and-activity', 'understand-google-search-analytics', 'analytics-reports-and-csv', 'customize-analytics-dashboard', 'analytics-troubleshooting') and status = 'published'",
+            "equals": "8"
+          },
+          {
+            "name": "merchant pixel setup guides remain drafts",
+            "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'draft'",
+            "equals": "2"
+          }
+        ]
+      }
     }
   ]
 }

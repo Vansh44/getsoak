@@ -220,7 +220,8 @@ wholesip/
 │   │   │                      # Search aggregates, widget registry, and persisted
 │   │   │                      # per-admin "Edit dashboard" canvas. reports/[report]
 │   │   │                      # provides tenant/location-safe drill-down tables for
-│   │   │                      # total sales, sales over time, products and Search queries
+│   │   │                      # total sales, sales over time, products and Search queries;
+│   │   │                      # platform availability gates live in lib/analytics/features
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
@@ -351,7 +352,7 @@ wholesip/
 │   │                          # (ONE merchant, fully described), email-logs/,
 │   │                          # failures/ (the SAME feed as a store's, scoped
 │   │                          # { kind: "platform" } across every store, §33);
-│   │                          # ADMINISTRATION = help/, themes/, pricing/,
+│   │                          # ADMINISTRATION = help/, themes/, pricing/, analytics/,
 │   │                          # operators/, billing/. require-operator.ts is the
 │   │                          # per-PAGE gate — the layout's redirect does not abort a
 │   │                          # concurrently-rendering page, and these reads run under
@@ -2404,6 +2405,21 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `analytics.view` and scope gates, rate-limits downloads, caps result sets,
       and uses the shared BOM/formula-safe CSV serializer. The page shows the
       first 250 rows while CSV supports up to 10,000. No schema was added.
+    - **Platform Analytics controls + Pro contract (2026-08-20):**
+      `/platform/dashboard/(console)/analytics` lets platform operators control
+      global module availability. `platform_analytics_settings` is a singleton,
+      service-only table enrolled as migration
+      `20260820_0007_platform_analytics_controls`; shipped modules default on,
+      while planned collection modules default off. `lib/analytics/features.ts`
+      is the pure registry/default/entitlement layer and
+      `platform-feature-store.ts` owns fail-safe reads. Core dashboard,
+      customization, drill-down/CSV and Google Search switches are enforced at
+      merchant render/action/export boundaries. GA4, Meta Pixel, storefront
+      conversion and margin are registered as planned Pro-only modules;
+      `PLAN_LIMITS.advancedAnalytics` is the independent entitlement gate, so a
+      global switch can never grant a lower plan. `app/actions/platform-analytics-settings.ts`
+      rechecks superadmin authorization and validates the full fixed setting
+      shape before upsert.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2497,6 +2513,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       stays a dialog) + `help-admin.css`. Body sanitized on write AND render
       (`sanitizeBlogContent` — which now also permits table `colspan`/`rowspan`
       - cell width so tables survive; the blog trust model).
+    - **Analytics Help Centre guides (2026-08-20):** migration
+      `20260820_0007_platform_analytics_controls` adds the Analytics & reports
+      category and its initial rows;
+      `20260820_0008_analytics_help_documents` expands them into eight
+      published guides covering the dashboard, metric definitions and sources,
+      sales/orders, customers/inventory/activity, Google Search, reports/CSV,
+      dashboard customization, and troubleshooting. It also installs detailed
+      GA4 and Meta Pixel setup guides as drafts, including official external
+      setup links, consent, testing, and subdomain/custom-domain limitations.
+      Those two guides are published only when the corresponding Pro merchant
+      integrations ship. All rows remain editable through the operator Help
+      Centre console; no second static docs source exists.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.

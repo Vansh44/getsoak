@@ -20,7 +20,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(6);
+    expect(loaded.migrations).toHaveLength(8);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -50,6 +50,16 @@ describe("database migration controls", () => {
       transaction: true,
     });
     expect(loaded.migrations[5].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[6]).toMatchObject({
+      id: "20260820_0007_platform_analytics_controls",
+      transaction: true,
+    });
+    expect(loaded.migrations[6].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[7]).toMatchObject({
+      id: "20260820_0008_analytics_help_documents",
+      transaction: true,
+    });
+    expect(loaded.migrations[7].checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("canonicalizes objects before hashing", () => {

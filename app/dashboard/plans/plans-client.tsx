@@ -89,6 +89,9 @@ function planFeatures(plan: Plan): string[] {
     l.customDomain ? "Custom domain" : "Subdomain only",
     l.onlinePayments ? "Online payments (own gateway)" : "Cash on Delivery",
     ...(l.emailCampaigns ? ["Email campaigns"] : []),
+    ...(l.advancedAnalytics
+      ? ["Advanced analytics — GA4, Meta Pixel and conversion insights"]
+      : []),
     ...(l.removeBadge ? ['No "Powered by StoreMink" badge'] : []),
   ];
 }

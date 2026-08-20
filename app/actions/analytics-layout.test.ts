@@ -12,6 +12,9 @@ vi.mock("@/app/dashboard/lib/access", () => ({
 vi.mock("@/lib/locations/scope", () => ({
   getViewerLocations: vi.fn(),
 }));
+vi.mock("@/lib/analytics/platform-feature-store", () => ({
+  getPlatformAnalyticsFeatures: vi.fn(),
+}));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
@@ -19,6 +22,7 @@ vi.mock("@/lib/db/client", () => ({
 import { revalidatePath } from "next/cache";
 import { getViewerContext } from "@/app/dashboard/lib/access";
 import { getViewerLocations } from "@/lib/locations/scope";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
 import {
   resetAnalyticsDashboardLayout,
   saveAnalyticsDashboardLayout,
@@ -59,6 +63,16 @@ describe("analytics layout actions", () => {
     dbHolder.current = makeDbMock({ selectQueue: [[]] });
     vi.mocked(getViewerContext).mockResolvedValue(VIEWER as any);
     vi.mocked(getViewerLocations).mockResolvedValue(null);
+    vi.mocked(getPlatformAnalyticsFeatures).mockResolvedValue({
+      coreDashboard: true,
+      dashboardCustomization: true,
+      drilldownReports: true,
+      googleSearchConsole: true,
+      googleAnalytics4: false,
+      metaPixel: false,
+      storefrontConversion: false,
+      grossMargin: false,
+    });
   });
 
   it("requires Analytics view access", async () => {
@@ -73,6 +87,25 @@ describe("analytics layout actions", () => {
     );
     expect(result.error).toMatch(/access/i);
     expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
+  it("refuses layout writes when customization is disabled platform-wide", async () => {
+    vi.mocked(getPlatformAnalyticsFeatures).mockResolvedValue({
+      coreDashboard: true,
+      dashboardCustomization: false,
+      drilldownReports: true,
+      googleSearchConsole: true,
+      googleAnalytics4: false,
+      metaPixel: false,
+      storefrontConversion: false,
+      grossMargin: false,
+    });
+    const result = await saveAnalyticsDashboardLayout(
+      layout([{ widgetId: "metric_orders" }]),
+      null,
+    );
+    expect(result.error).toMatch(/access/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("rejects unknown, duplicate, and currently unauthorized cards", async () => {

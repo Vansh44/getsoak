@@ -19,6 +19,7 @@ import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { serializeCsv } from "@/lib/csv/serialize";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { rateLimit } from "@/lib/rate-limit";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
 
 export const runtime = "nodejs";
 
@@ -47,6 +48,20 @@ export async function GET(
   if (!can(ctx.permissions, "analytics", "view", ctx.isSuperadmin)) {
     return NextResponse.json(
       { error: "You don't have permission to export analytics." },
+      { status: 403 },
+    );
+  }
+
+  const features = await getPlatformAnalyticsFeatures();
+  if (!features.coreDashboard || !features.drilldownReports) {
+    return NextResponse.json(
+      { error: "Analytics reports are currently disabled." },
+      { status: 403 },
+    );
+  }
+  if (report === "search-queries" && !features.googleSearchConsole) {
+    return NextResponse.json(
+      { error: "Google Search analytics is currently disabled." },
       { status: 403 },
     );
   }

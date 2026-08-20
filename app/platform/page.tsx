@@ -180,6 +180,7 @@ const PLANS = [
       "Stock per location, and transfers",
       "Buy online, collect in store",
       "Email campaigns",
+      "Advanced analytics — GA4, Meta Pixel and conversion insights",
       "Unlimited products and staff",
       `${PLAN_LIMITS.pro.aiGenerationsPerMonth} AI generations a month`,
     ],

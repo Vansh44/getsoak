@@ -2204,6 +2204,36 @@ export const platformBillingSettings = pgTable(
   ],
 );
 
+/**
+ * Platform-wide Analytics feature controls. This is availability, not plan
+ * entitlement: Pro-only checks still happen through lib/plans.ts.
+ */
+export const platformAnalyticsSettings = pgTable(
+  "platform_analytics_settings",
+  {
+    id: boolean().default(true).primaryKey().notNull(),
+    coreDashboard: boolean("core_dashboard").default(true).notNull(),
+    dashboardCustomization: boolean("dashboard_customization")
+      .default(true)
+      .notNull(),
+    drilldownReports: boolean("drilldown_reports").default(true).notNull(),
+    googleSearchConsole: boolean("google_search_console")
+      .default(true)
+      .notNull(),
+    googleAnalytics4: boolean("google_analytics_4").default(false).notNull(),
+    metaPixel: boolean("meta_pixel").default(false).notNull(),
+    storefrontConversion: boolean("storefront_conversion")
+      .default(false)
+      .notNull(),
+    grossMargin: boolean("gross_margin").default(false).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  () => [check("platform_analytics_settings_id_check", sql`id`)],
+);
+
 export const productReviews = pgTable(
   "product_reviews",
   {

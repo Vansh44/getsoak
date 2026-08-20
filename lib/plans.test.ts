@@ -120,6 +120,9 @@ describe("catalog consistency", () => {
     expect(PLAN_META.basic.yearlyInr).toBe(15000);
     expect(PLAN_META.pro.monthlyInr).toBe(5000);
     expect(PLAN_META.pro.yearlyInr).toBe(50000);
+    expect(PLAN_LIMITS.free.advancedAnalytics).toBe(false);
+    expect(PLAN_LIMITS.basic.advancedAnalytics).toBe(false);
+    expect(PLAN_LIMITS.pro.advancedAnalytics).toBe(true);
   });
 
   it("yearly is cheaper than 12× monthly", () => {
