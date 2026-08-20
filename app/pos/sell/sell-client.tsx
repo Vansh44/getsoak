@@ -490,7 +490,10 @@ export function SellClient({
       return { error: "Online payments aren't switched on for this store." };
     }
     const amountPaise = Math.round(amount * 100);
-    const started = await startPosGatewayPayment(amountPaise);
+    // The cart goes with it so the server can check the shelf BEFORE the
+    // customer pays — see startPosGatewayPayment. Refusing here is free;
+    // refusing after capture needs a dashboard refund.
+    const started = await startPosGatewayPayment(amountPaise, saleLines());
     if ("error" in started) return { error: started.error };
 
     const outcome = await new Promise<{ reference?: string; error?: string }>(

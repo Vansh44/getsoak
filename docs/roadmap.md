@@ -46,8 +46,8 @@ sequence AND the spec for everything still to build.
 | **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
 | **14** | Money-event audit — who discounted, overrode, refunded         | M    | ✅ done |
 | **15** | Hourly sweep + held sales expire                               | S    | ✅ done |
-| **16** | **A counter gateway payment holds stock**                      | M    | ⏭ next |
-| **17** | Dashboard POS reporting — shifts, Z-reports, sales by shop     | M    | ⏳      |
+| **16** | Check the shelf before taking counter payment (rescoped)       | S    | ✅ done |
+| **17** | **Dashboard POS reporting — shifts, Z-reports, sales by shop** | M    | ⏭ next |
 | **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
 | **19** | Catalogue delta sync                                           | M    | ⏳      |
 | **20** | `placePosSale` round trips (11 → few)                          | M    | ⏳      |
@@ -774,7 +774,9 @@ real one. A ceiling with nothing ageing out of it becomes a wall.
 
 ---
 
-## Step 16 — A counter gateway payment holds stock
+## Step 16 — Check the shelf before taking counter payment ✅ DONE
+
+_(Rescoped 2026-08-18. Was "a counter gateway payment holds stock".)_
 
 **The gap**, and it is one this branch introduced. Stock is reserved when the
 sale COMPLETES, not when the customer pays. Between `confirmPosGatewayPayment`
@@ -782,23 +784,52 @@ and Complete sale, another till can take the last unit — the sale then fails
 with "only N left" against a **captured payment**, which the merchant has to
 refund from the dashboard.
 
-**Ships.** `holdStock` at confirm, `commitHold` at `placePosSale`, release on
-abandon, and a sweep for holds nobody released.
+**✅ Shipped:** `shortLinesAt` (a READ, `lib/inventory/reservations.ts`) and a
+check inside `startPosGatewayPayment` — the cart now travels with the amount, so
+the shelf is checked BEFORE the Razorpay order is even created. A short shelf
+then costs nothing at all: no captured money, not even an abandoned order on the
+merchant's account. 7 tests; the coalescing and the fail-open are
+mutation-checked.
 
-**★★ THE SWEEP IS NOT OPTIONAL HERE, unlike parking.** §22 records why a park
-holds nothing: an abandoned hold strands stock, a cashier could empty a shelf on
-paper, and the shop reorders goods it has. A payment hold has the same hazard —
-so it may only exist WITH an expiry, and that is most of the work.
+**★ IT CATCHES THE COMMONER FAILURE, WHICH IS NOT THE RACE.** The register's
+IndexedDB catalogue is explicitly non-authoritative, so "only N left" at
+completion most often means the CACHED count was stale, not that another till
+just sold the unit. That case is now refused while refusing is free.
 
-**★ HOLD AT CONFIRM, NOT AT START.** Holding when the modal opens would strand
-stock for every dismissed payment, which is an ordinary counter outcome. At
-confirm the money is already captured, so the customer is committed.
+**★ COALESCED BY SKU.** Two cart lines for one product are one demand on one
+shelf; checking them independently would pass 2 + 2 against 3 available — the
+per-entry clamp bug §28 already paid for once.
 
-**★ THE FAILURE MESSAGE MUST STILL NAME THE PAYMENT.** The window narrows to
-near-zero; it does not close, because a hold can still lapse. Whatever the
-sale says when it fails after capture has to be actionable.
+**★ FAILS TO "NOTHING IS SHORT".** It is a courtesy in front of a real
+guarantee (`reserve_stock_at`), so a blipped read must not refuse a sale.
 
-**Acceptance:** PS-GW.16–19. **Effort: M.**
+### ★★ THE HOLD WAS CONSIDERED AND REJECTED (owner, 2026-08-18)
+
+This step originally specced `holdStock` at confirm + `commitHold` at sale. It
+is buildable — `payment_pending` is already a declared owner type, `holdStock`
+takes a TTL, and `sweepExpiredHolds` already runs on the (now hourly) sweep — and
+it was rejected anyway, for the reason **§22 gives for parked sales in almost
+these words**: "an abandoned hold would strand stock until something swept it,
+and the shop would reorder goods it still has."
+
+`inventory_levels.reserved` is a counter the sweep decrements, so an abandoned
+hold — a closed tab, a cashier who walks away — locks the unit for **TTL + up to
+an hour**. The trade is:
+
+|                 |                                                          |
+| --------------- | -------------------------------------------------------- |
+| Problem removed | two tills, same last unit, same ~30s → one manual refund |
+| Problem created | one distracted cashier → an unsellable unit for an hour  |
+
+The second is likelier and more annoying, so the residual race stays: the sale
+fails with the existing "only N left", and the merchant refunds from the
+dashboard (§26).
+
+⚠ **Do not re-propose this as a new idea.** If it is ever revisited, the missing
+piece is an explicit release when the cart is cleared — that covers the common
+abandon and leaves only a genuinely closed tab to the sweep.
+
+**Acceptance:** PS-GW.16–18. **Effort: S** (was M, before the hold was dropped).
 
 ---
 

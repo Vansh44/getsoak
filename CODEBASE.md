@@ -2151,7 +2151,14 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     `order_payments.reference` uniqueness stops it settling two sales, in the
     action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
     (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
-    reserve**, so a refused payment unwinds nothing. **★★ BOTH COUNTERS VERIFY,
+    reserve**, so a refused payment unwinds nothing. **★ THE SHELF IS CHECKED
+    BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
+    runs `shortLinesAt`, refusing before the Razorpay order exists, which
+    catches the commoner stale-IndexedDB-cache case for free. ⚠ It does NOT
+    hold stock: an abandoned hold strands units for up to an hour, the same
+    reason a parked sale holds none (§22), so the two-till race on a last unit
+    still fails at completion and is refunded from the dashboard (owner's
+    decision, 2026-08-18). **★★ BOTH COUNTERS VERIFY,
     FROM ONE IMPLEMENTATION** — `verifyGatewayTenders` is called by
     `placePosSale` before its order insert and by `markCollected` before its
     claim, in each case while a refusal still costs nothing. `razorpay` briefly

@@ -123,3 +123,82 @@ export async function sweepExpiredHolds(limit = 500): Promise<number> {
     return 0;
   }
 }
+
+export interface AvailabilityLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
+
+export interface ShortLine extends AvailabilityLine {
+  /** What the location can actually serve right now. */
+  available: number;
+}
+
+/**
+ * Which of these lines the location cannot serve, READ-ONLY.
+ *
+ * ★★ THIS IS NOT A GUARANTEE AND MUST NOT BE USED AS ONE. It is a read, so the
+ * answer is stale the instant it returns; `reserve_stock_at` and `hold_stock_at`
+ * remain the only things that can promise stock, because each is a single
+ * conditional UPDATE.
+ *
+ * What it is FOR is telling somebody BEFORE an irreversible step. The counter
+ * gateway payment is the case: without it a cashier takes ₹500, and only then
+ * discovers the shelf is empty — leaving captured money against a sale that
+ * cannot complete. Refusing beforehand costs nothing.
+ *
+ * ⚠ `available` counts held units as gone (on_hand − reserved), which is the
+ * same arithmetic the RPCs use, so this cannot report a line as servable that
+ * a hold would then refuse.
+ */
+export async function shortLinesAt(
+  storeId: string,
+  locationId: string,
+  lines: AvailabilityLine[],
+): Promise<ShortLine[]> {
+  const wanted = lines.filter(
+    (l) => Number.isInteger(l.quantity) && l.quantity > 0 && l.productId,
+  );
+  if (wanted.length === 0) return [];
+  try {
+    const rows = await withService((db) =>
+      db.execute(
+        sql`select product_id, variant_id, (on_hand - reserved) as available
+              from inventory_levels
+             where store_id = ${storeId} and location_id = ${locationId}`,
+      ),
+    );
+    const have = new Map<string, number>();
+    for (const r of rows.rows as {
+      product_id: string;
+      variant_id: string | null;
+      available: number | string;
+    }[]) {
+      have.set(
+        `${r.product_id}:${r.variant_id ?? ""}`,
+        Number(r.available) || 0,
+      );
+    }
+    // Same product twice in one cart is one demand on one shelf.
+    const demand = new Map<string, AvailabilityLine & { quantity: number }>();
+    for (const l of wanted) {
+      const key = `${l.productId}:${l.variantId ?? ""}`;
+      const seen = demand.get(key);
+      if (seen) seen.quantity += l.quantity;
+      else demand.set(key, { ...l });
+    }
+    const short: ShortLine[] = [];
+    for (const [key, l] of demand) {
+      const available = have.get(key) ?? 0;
+      if (available < l.quantity) short.push({ ...l, available });
+    }
+    return short;
+  } catch (err) {
+    // ★ FAILS TO "NOTHING IS SHORT". This is a courtesy check in front of a
+    // real guarantee; refusing a sale because a read blipped would be strictly
+    // worse than letting the authoritative reserve decide.
+    console.error("shortLinesAt:", err);
+    return [];
+  }
+}

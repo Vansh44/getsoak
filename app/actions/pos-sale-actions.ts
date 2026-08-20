@@ -67,6 +67,7 @@ import { personLabel } from "@/lib/pos/person";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { shortLinesAt } from "@/lib/inventory/reservations";
 import { summariseItems } from "@/lib/notifications/format";
 import { posCan, type PosActorRole } from "@/lib/pos/permissions";
 import { posAudit } from "@/lib/pos/audit";
@@ -288,6 +289,20 @@ export async function getRegisterConfig(): Promise<
  */
 export async function startPosGatewayPayment(
   amountPaise: number,
+  /**
+   * The cart, so the shelf can be checked BEFORE the customer pays.
+   *
+   * ★★ THIS IS THE WHOLE POINT OF PASSING IT. Stock is reserved when the sale
+   * COMPLETES, so without this a cashier takes ₹500 and only then learns the
+   * shelf is empty — captured money against a sale that cannot finish, needing
+   * a dashboard refund. The check costs one read and refuses while refusing is
+   * still free.
+   *
+   * ⚠ IT IS A COURTESY, NOT A GUARANTEE. Nothing is held; `reserve_stock_at`
+   * at completion remains the only thing that can promise stock. Optional, so
+   * a caller that has no cart to offer still works.
+   */
+  lines?: PosCartLine[],
 ): Promise<
   { rzpOrderId: string; keyId: string; amountPaise: number } | { error: string }
 > {
@@ -304,6 +319,29 @@ export async function startPosGatewayPayment(
   });
   if (!rl.allowed)
     return { error: "Too many payment attempts. Wait a moment." };
+
+  // ★ BEFORE the gateway order, so a short shelf costs nothing at all — not
+  // even an abandoned Razorpay order on the merchant's account.
+  if (Array.isArray(lines) && lines.length > 0) {
+    const short = await shortLinesAt(
+      op.storeId,
+      op.locationId,
+      lines.map((l) => ({
+        productId: l.productId,
+        variantId: l.variantId ?? null,
+        quantity: l.quantity,
+      })),
+    );
+    if (short.length > 0) {
+      const first = short[0];
+      return {
+        error:
+          first.available > 0
+            ? `Only ${first.available} left of one item at this location. Adjust the cart before taking payment.`
+            : "One of these items has just sold out at this location. Adjust the cart before taking payment.",
+      };
+    }
+  }
 
   const res = await startCounterPayment(op.storeId, {
     amountPaise,
