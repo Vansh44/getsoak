@@ -4265,6 +4265,478 @@ a.customer-detail-field:hover {
   }
 }
 
+/* ---------- Full analytics editor shell ----------
+   Edit mode intentionally becomes a contained, Shopify-like workspace: the
+   card catalogue stays visible on the left while the merchant works on the
+   dashboard canvas. Normal analytics view does not use any of these rules. */
+.dashboard-shell .dash-editor-mode {
+  min-height: calc(100vh - 64px);
+  margin: calc(var(--dash-pad-t, 28px) * -1)
+    calc(var(--dash-pad-x, 32px) * -1) -40px;
+  background: #f5f5f5;
+}
+
+.dashboard-shell .dash-editor-mode .dash-savebar {
+  top: calc(var(--dash-pad-t, 28px) * -1);
+  margin: 0;
+  min-height: 52px;
+  padding: 8px max(20px, var(--dash-pad-x, 32px));
+  background: #111;
+}
+
+.dashboard-shell .dash-editor-mode .dash-savebar-msg {
+  width: min(720px, 54vw);
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+.dashboard-shell .dash-editor-mode .dash-savebar-actions {
+  margin-right: auto;
+}
+
+.dashboard-shell .dash-editor-shell {
+  display: grid;
+  grid-template-columns: 286px minmax(0, 1fr);
+  min-height: calc(100vh - 116px);
+}
+
+.dashboard-shell .dash-editor-main {
+  min-width: 0;
+  padding: 24px 24px 56px;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-head {
+  min-height: 42px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--dash-border-strong);
+}
+
+.dashboard-shell .dash-editor-main .dash-an-head h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 22px;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-head h1 svg {
+  width: 19px;
+  height: 19px;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-btn {
+  border-color: transparent;
+  background: #e8e8e8;
+  box-shadow: none;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-btn:hover:not(:disabled),
+.dashboard-shell .dash-editor-main .dash-an-btn.is-active {
+  background: #dadada;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-btn:disabled {
+  cursor: not-allowed;
+  color: var(--dash-text-3);
+  opacity: 0.58;
+}
+
+.dashboard-shell .dash-editor-main .dash-an-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.dashboard-shell .dash-widget-library {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 92px);
+  min-height: 420px;
+  overflow: hidden;
+  padding: 16px 10px 12px;
+  border-right: 1px solid var(--dash-border-strong);
+  background: var(--dash-surface);
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-search {
+  height: 42px;
+  margin: 0 4px 10px;
+  padding: 0 12px;
+  border: 1px solid var(--dash-border-hover);
+  border-radius: 9px;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-search:focus-within {
+  border-color: var(--dash-text-2);
+  box-shadow: 0 0 0 1px var(--dash-text-2);
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-search svg {
+  width: 18px;
+  height: 18px;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-list {
+  flex: 1;
+  padding: 0 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-group-label {
+  padding: 15px 8px 6px;
+  color: var(--dash-text-3);
+  font-size: 12px;
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  margin: 1px 0;
+  padding: 7px 8px;
+  color: var(--dash-text);
+  touch-action: none;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item > svg:first-child {
+  width: 15px;
+  height: 15px;
+  color: var(--dash-text-3);
+  opacity: 0;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item:hover > svg:first-child,
+.dashboard-shell
+  .dash-widget-library
+  .dash-lib-item:focus-visible
+  > svg:first-child {
+  opacity: 1;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item > span:nth-child(2) {
+  min-width: 0;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item-desc {
+  display: none;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item > svg:last-child {
+  width: 15px;
+  height: 15px;
+  color: var(--dash-text-3);
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item.is-added {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.dashboard-shell .dash-widget-library .dash-lib-item.is-dragging {
+  opacity: 0.28;
+}
+
+.dashboard-shell .dash-lib-added {
+  font-size: 10.5px;
+  color: var(--dash-text-3);
+}
+
+.dashboard-shell .dash-lib-help {
+  margin: 8px 8px 0;
+  color: var(--dash-text-3);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.dashboard-shell .dash-editor-main .dash-sections.is-editing {
+  gap: 20px;
+  padding-top: 20px;
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor {
+  padding: 0 0 20px;
+  border: 0;
+  border-bottom: 1px solid var(--dash-border-strong);
+  border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor.is-hidden {
+  opacity: 0.64;
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor-head {
+  min-height: 34px;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.dashboard-shell .dash-section-editor-head > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--dash-text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.dashboard-shell .dash-section-editor-head > h2 span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--dash-surface-3);
+  color: var(--dash-text-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor-actions button {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.dashboard-shell
+  .dash-editor-main
+  .dash-section-editor-actions
+  button:hover:not(:disabled) {
+  background: var(--dash-surface-3);
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor .dash-canvas {
+  position: relative;
+  min-height: 190px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  gap: 14px;
+}
+
+.dashboard-shell
+  .dash-editor-main
+  .dash-section-editor
+  .dash-canvas.is-drop-target {
+  background: transparent;
+}
+
+.dashboard-shell .dash-slot-placeholder {
+  min-height: 62px;
+  grid-column: span 1;
+  border: 2px dashed #dedede;
+  border-radius: 22px;
+  background: transparent;
+  pointer-events: none;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease;
+}
+
+.dashboard-shell .dash-canvas.is-drop-target .dash-slot-placeholder {
+  border-color: var(--dash-accent);
+  background: var(--dash-accent-soft);
+}
+
+.dashboard-shell .dash-slot-placeholder.is-insertion.is-over {
+  border-color: var(--dash-accent);
+  background: var(--dash-accent-soft);
+  box-shadow: 0 0 0 2px var(--dash-accent-ring);
+}
+
+.dashboard-shell .dash-editor-main .dash-section-editor .dash-widget {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  background: var(--dash-surface);
+}
+
+.dashboard-shell .dash-editor-main .dash-widget-bar {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.dashboard-shell .dash-editor-main .dash-widget-bar > * {
+  pointer-events: auto;
+}
+
+.dashboard-shell .dash-editor-main .dash-widget-grip {
+  flex: 0 0 24px;
+  justify-content: center;
+  width: 24px;
+  margin-right: auto;
+  background: color-mix(in srgb, var(--dash-surface) 88%, transparent);
+}
+
+.dashboard-shell .dash-editor-main .dash-widget-x,
+.dashboard-shell .dash-editor-main .dash-widget-menu > summary {
+  background: color-mix(in srgb, var(--dash-surface) 88%, transparent);
+}
+
+.dashboard-shell .dash-editor-main .dash-card-header {
+  padding-left: 44px;
+  padding-right: 68px;
+}
+
+.dashboard-shell .dash-editor-main .dash-metric {
+  padding-left: 48px;
+  padding-right: 66px;
+}
+
+.dashboard-shell .dash-widget-menu {
+  position: relative;
+}
+
+.dashboard-shell .dash-widget-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--dash-text-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.dashboard-shell .dash-widget-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dashboard-shell .dash-widget-menu > summary svg {
+  width: 15px;
+  height: 15px;
+}
+
+.dashboard-shell .dash-widget-menu[open] > summary,
+.dashboard-shell .dash-widget-menu > summary:hover {
+  background: var(--dash-surface-3);
+  color: var(--dash-text);
+}
+
+.dashboard-shell .dash-widget-menu > div {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  gap: 9px;
+  width: 190px;
+  padding: 11px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 9px;
+  background: var(--dash-surface);
+  box-shadow: var(--dash-shadow-lg);
+}
+
+.dashboard-shell .dash-widget-menu label {
+  display: grid;
+  gap: 4px;
+  color: var(--dash-text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.dashboard-shell .dash-widget-menu select {
+  width: 100%;
+  height: 30px;
+  padding: 0 7px;
+  color: var(--dash-text);
+  font-size: 12px;
+  background: var(--dash-surface-2);
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 7px;
+}
+
+.dashboard-shell .dash-drag-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 210px;
+  padding: 12px 14px;
+  border: 1px solid var(--dash-border-strong);
+  border-radius: 10px;
+  background: var(--dash-surface);
+  box-shadow: var(--dash-shadow-lg);
+  color: var(--dash-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dashboard-shell .dash-drag-preview svg {
+  width: 16px;
+  height: 16px;
+  color: var(--dash-text-3);
+}
+
+@media (max-width: 1080px) {
+  .dashboard-shell .dash-editor-shell {
+    grid-template-columns: 228px minmax(0, 1fr);
+  }
+
+  .dashboard-shell .dash-editor-main {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .dashboard-shell .dash-editor-main .dash-an-head {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 780px) {
+  .dashboard-shell .dash-editor-mode {
+    margin-right: calc(var(--dash-pad-x, 32px) * -1);
+    margin-left: calc(var(--dash-pad-x, 32px) * -1);
+  }
+
+  .dashboard-shell .dash-editor-shell {
+    display: block;
+  }
+
+  .dashboard-shell .dash-widget-library {
+    position: relative;
+    top: auto;
+    height: 260px;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--dash-border-strong);
+  }
+
+  .dashboard-shell .dash-lib-help {
+    display: none;
+  }
+
+  .dashboard-shell .dash-editor-mode .dash-savebar-msg {
+    width: auto;
+    margin-left: 0;
+    padding-left: 0;
+  }
+
+  .dashboard-shell .dash-editor-mode .dash-savebar-actions {
+    margin-right: 0;
+  }
+}
+
 /* Sales-by-category lists EVERY category, so it scrolls inside its card
    instead of stretching the dashboard row it shares with the revenue chart. */
 .dashboard-shell .dash-cat-list {

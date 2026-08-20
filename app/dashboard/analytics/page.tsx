@@ -46,6 +46,7 @@ import {
 import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { getAnalyticsDashboardLayout } from "@/lib/analytics/layout-store";
 import { resolveAnalyticsLocation } from "@/lib/analytics/location";
+import { analyticsReportHref } from "@/lib/analytics/reports";
 import { getViewerLocations } from "@/lib/locations/scope";
 
 function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
@@ -60,13 +61,22 @@ function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
 async function SalesMetric({
   data,
   metric,
+  reportHref,
 }: {
   data: Promise<SalesAnalytics>;
   metric: "sales" | "orders" | "aov" | "units";
+  reportHref?: string;
 }) {
   const result = await data;
   if (metric === "sales")
-    return <MetricCard label="Total sales" stat={result.totalSales} currency />;
+    return (
+      <MetricCard
+        label="Total sales"
+        stat={result.totalSales}
+        currency
+        reportHref={reportHref}
+      />
+    );
   if (metric === "orders")
     return <MetricCard label="Orders" stat={result.orders} />;
   if (metric === "aov")
@@ -95,7 +105,13 @@ async function SnapshotMetric({
   );
 }
 
-async function SalesChart({ data }: { data: Promise<SalesAnalytics> }) {
+async function SalesChart({
+  data,
+  reportHref,
+}: {
+  data: Promise<SalesAnalytics>;
+  reportHref?: string;
+}) {
   const result = await data;
   return (
     <RevenueChart
@@ -103,6 +119,7 @@ async function SalesChart({ data }: { data: Promise<SalesAnalytics> }) {
       total={result.totalSales}
       rangeLabel={result.rangeLabel}
       comparisonLabel={result.comparisonLabel}
+      reportHref={reportHref}
     />
   );
 }
@@ -117,10 +134,12 @@ async function CategoryWidget({
 
 async function TopProductsWidget({
   data,
+  reportHref,
 }: {
   data: ReturnType<typeof getTopProducts>;
+  reportHref?: string;
 }) {
-  return <TopProducts items={await data} />;
+  return <TopProducts items={await data} reportHref={reportHref} />;
 }
 
 async function BreakdownWidget({
@@ -278,11 +297,19 @@ async function SearchTrend({ data }: { data: Promise<SearchAnalytics> }) {
 async function SearchRanking({
   data,
   kind,
+  reportHref,
 }: {
   data: Promise<SearchAnalytics>;
   kind: "query" | "page";
+  reportHref?: string;
 }) {
-  return <SearchRankingWidget data={await data} kind={kind} />;
+  return (
+    <SearchRankingWidget
+      data={await data}
+      kind={kind}
+      reportHref={reportHref}
+    />
+  );
 }
 
 export default async function AnalyticsPage({
@@ -329,11 +356,19 @@ export default async function AnalyticsPage({
   const returns = getReturnsAndRefunds(storeId, location, range);
   const velocity = getInventoryVelocity(storeId, location, range);
   const search = getSearchAnalytics(storeId, range);
+  const totalSalesReport = analyticsReportHref("total-sales", params);
+  const salesOverTimeReport = analyticsReportHref("sales-over-time", params);
+  const topProductsReport = analyticsReportHref("top-products", params);
+  const searchQueriesReport = analyticsReportHref("search-queries", params);
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
       <Suspense fallback={<WidgetSkeleton compact />}>
-        <SalesMetric data={sales} metric="sales" />
+        <SalesMetric
+          data={sales}
+          metric="sales"
+          reportHref={totalSalesReport}
+        />
       </Suspense>
     ),
     metric_orders: (
@@ -358,7 +393,7 @@ export default async function AnalyticsPage({
     ),
     revenue_chart: (
       <Suspense fallback={<WidgetSkeleton />}>
-        <SalesChart data={sales} />
+        <SalesChart data={sales} reportHref={salesOverTimeReport} />
       </Suspense>
     ),
     top_categories: (
@@ -368,7 +403,7 @@ export default async function AnalyticsPage({
     ),
     top_products: (
       <Suspense fallback={<WidgetSkeleton />}>
-        <TopProductsWidget data={topProducts} />
+        <TopProductsWidget data={topProducts} reportHref={topProductsReport} />
       </Suspense>
     ),
     sales_by_channel: (
@@ -446,7 +481,11 @@ export default async function AnalyticsPage({
     ),
     search_queries: (
       <Suspense fallback={<WidgetSkeleton />}>
-        <SearchRanking data={search} kind="query" />
+        <SearchRanking
+          data={search}
+          kind="query"
+          reportHref={searchQueriesReport}
+        />
       </Suspense>
     ),
     search_pages: (

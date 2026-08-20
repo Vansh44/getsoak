@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import type { Stat } from "../analytics/data";
 
 // A single analytics metric — label, value, change vs last month, and a hairline
@@ -10,6 +12,8 @@ export interface MetricCardProps {
   stat: Stat;
   /** Rupee-format the value (revenue) vs plain count. */
   currency?: boolean;
+  /** Optional detailed report while preserving the dashboard's active filters. */
+  reportHref?: string;
 }
 
 function formatValue(value: number, currency: boolean): string {
@@ -56,7 +60,12 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
-export function MetricCard({ label, stat, currency = false }: MetricCardProps) {
+export function MetricCard({
+  label,
+  stat,
+  currency = false,
+  reportHref,
+}: MetricCardProps) {
   // A flat month reads as "—", not "+0%" — Shopify's convention, and it stops
   // an empty store from showing a wall of meaningless green.
   const noComparison = stat.trendPct === null;
@@ -66,7 +75,19 @@ export function MetricCard({ label, stat, currency = false }: MetricCardProps) {
 
   return (
     <div className="dash-metric">
-      <div className="dash-metric-label">{label}</div>
+      <div className="dash-metric-label">
+        {reportHref ? (
+          <Link
+            href={reportHref}
+            className="inline-flex items-center gap-1 hover:text-[var(--dash-accent)]"
+          >
+            {label}
+            <ArrowUpRight className="h-3 w-3" aria-hidden />
+          </Link>
+        ) : (
+          label
+        )}
+      </div>
       <div className="dash-metric-row">
         <span className="dash-metric-val">
           {formatValue(stat.value, currency)}

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import {
   Area,
   AreaChart,
@@ -8,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ArrowUpRight } from "lucide-react";
 
 import type { SalesPoint, Stat } from "../analytics/data";
 
@@ -16,6 +18,7 @@ export interface RevenueChartProps {
   total: Stat;
   rangeLabel: string;
   comparisonLabel: string | null;
+  reportHref?: string;
 }
 
 function compactCurrency(value: number): string {
@@ -58,6 +61,7 @@ export function RevenueChart({
   total,
   rangeLabel,
   comparisonLabel,
+  reportHref,
 }: RevenueChartProps) {
   const hasData = data.some((point) => point.sales !== 0);
 
@@ -65,7 +69,19 @@ export function RevenueChart({
     <div className="dash-card h-full">
       <div className="dash-card-header">
         <div>
-          <div className="dash-card-title">Total sales over time</div>
+          <div className="dash-card-title">
+            {reportHref ? (
+              <Link
+                href={reportHref}
+                className="inline-flex items-center gap-1 hover:text-[var(--dash-accent)]"
+              >
+                Total sales over time
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            ) : (
+              "Total sales over time"
+            )}
+          </div>
           <div className="dash-card-sub">{rangeLabel}</div>
         </div>
       </div>

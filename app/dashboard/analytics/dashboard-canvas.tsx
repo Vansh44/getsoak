@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -11,13 +12,16 @@ import {
 } from "react";
 import {
   DndContext,
+  DragOverlay,
   KeyboardSensor,
   PointerSensor,
   closestCenter,
+  useDraggable,
   useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -27,16 +31,20 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  ChartNoAxesCombined,
   ChevronDown,
   ChevronUp,
+  EllipsisVertical,
   Eye,
   EyeOff,
   GripVertical,
+  Pencil,
   Plus,
   Search,
   Trash2,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   resetAnalyticsDashboardLayout,
   saveAnalyticsDashboardLayout,
@@ -107,6 +115,26 @@ function itemLocation(sections: AnalyticsLayoutSection[], id: string) {
   return null;
 }
 
+function dropLocation(sections: AnalyticsLayoutSection[], overId: string) {
+  if (overId.startsWith("insert:")) {
+    const [, sectionId, rawIndex] = overId.split(":");
+    const index = Number(rawIndex);
+    if (sectionId && Number.isInteger(index)) return { sectionId, index };
+  }
+  if (overId.startsWith("section-drop:")) {
+    const sectionId = overId.slice("section-drop:".length);
+    const section = sections.find((entry) => entry.id === sectionId);
+    return section ? { sectionId, index: section.items.length } : null;
+  }
+  const item = itemLocation(sections, overId);
+  return item
+    ? {
+        sectionId: sections[item.sectionIndex].id,
+        index: item.itemIndex,
+      }
+    : null;
+}
+
 export function DashboardCanvas({
   storeId,
   slots,
@@ -125,7 +153,11 @@ export function DashboardCanvas({
   );
   const [updatedAt, setUpdatedAt] = useState(initialLayout.updatedAt);
   const [draft, setDraft] = useState<AnalyticsLayoutSection[] | null>(null);
-  const [librarySectionId, setLibrarySectionId] = useState<string | null>(null);
+  const [reorderingSections, setReorderingSections] = useState(false);
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [lastAddedWidgetId, setLastAddedWidgetId] = useState<WidgetId | null>(
+    null,
+  );
   const [resetRequested, setResetRequested] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -161,16 +193,21 @@ export function DashboardCanvas({
   const placed = new Set(
     sections.flatMap((section) => section.items.map((item) => item.widgetId)),
   );
-  const removed = allowed.filter((id) => !placed.has(id));
+  const hasChanges =
+    editing &&
+    (resetRequested || JSON.stringify(draft) !== JSON.stringify(layout));
 
   const startEditing = () => {
     setSaveError(null);
     setResetRequested(false);
+    setLastAddedWidgetId(null);
     setDraft(cloneSections(layout));
   };
   const cancelEditing = () => {
     setDraft(null);
-    setLibrarySectionId(null);
+    setReorderingSections(false);
+    setActiveDragId(null);
+    setLastAddedWidgetId(null);
     setResetRequested(false);
     setSaveError(null);
   };
@@ -194,7 +231,9 @@ export function DashboardCanvas({
       setLayoutConfigured(!resetRequested);
       setUpdatedAt(result.updatedAt ?? null);
       setDraft(null);
-      setLibrarySectionId(null);
+      setReorderingSections(false);
+      setActiveDragId(null);
+      setLastAddedWidgetId(null);
       setResetRequested(false);
       removeLegacyLayout(storeId);
     });
@@ -218,7 +257,8 @@ export function DashboardCanvas({
     }
     setDraft(defaultAnalyticsSections(allowed));
     setResetRequested(true);
-    setLibrarySectionId(null);
+    setReorderingSections(false);
+    setLastAddedWidgetId(null);
     setSaveError(null);
   };
   const addSection = () => {
@@ -239,31 +279,75 @@ export function DashboardCanvas({
       ];
     });
   };
-  const addCard = (sectionId: string, widgetId: WidgetId) => {
+  const addCard = (sectionId: string, widgetId: WidgetId, index?: number) => {
     changeDraft((current) =>
       current.map((section) =>
         section.id === sectionId
           ? {
               ...section,
-              items: [
-                ...section.items,
-                {
-                  widgetId,
-                  size: availableWidgetSizes(widgetId)[0],
-                },
-              ],
+              items: section.items.some((item) => item.widgetId === widgetId)
+                ? section.items
+                : [
+                    ...section.items.slice(0, index ?? section.items.length),
+                    {
+                      widgetId,
+                      size: availableWidgetSizes(widgetId)[0],
+                    },
+                    ...section.items.slice(index ?? section.items.length),
+                  ],
             }
           : section,
       ),
     );
+    setLastAddedWidgetId(widgetId);
+    toast("Card added", {
+      action: {
+        label: "Undo",
+        onClick: () => {
+          setLastAddedWidgetId(null);
+          removeCard(widgetId, false);
+        },
+      },
+    });
   };
-  const removeCard = (widgetId: WidgetId) =>
+  const removeCard = (widgetId: WidgetId, announce = true) => {
+    const location = itemLocation(sections, widgetId);
+    const removedItem = location
+      ? sections[location.sectionIndex].items[location.itemIndex]
+      : null;
+    const removedSectionId = location
+      ? sections[location.sectionIndex].id
+      : null;
     changeDraft((current) =>
       current.map((section) => ({
         ...section,
         items: section.items.filter((item) => item.widgetId !== widgetId),
       })),
     );
+    if (lastAddedWidgetId === widgetId) setLastAddedWidgetId(null);
+    if (announce && removedItem && removedSectionId && location) {
+      toast("Card removed", {
+        action: {
+          label: "Undo",
+          onClick: () =>
+            changeDraft((current) =>
+              current.map((section) =>
+                section.id === removedSectionId
+                  ? {
+                      ...section,
+                      items: [
+                        ...section.items.slice(0, location.itemIndex),
+                        removedItem,
+                        ...section.items.slice(location.itemIndex),
+                      ],
+                    }
+                  : section,
+              ),
+            ),
+        },
+      });
+    }
+  };
   const resizeCard = (widgetId: WidgetId, size: AnalyticsWidgetSize) =>
     changeDraft((current) =>
       current.map((section) => ({
@@ -296,56 +380,73 @@ export function DashboardCanvas({
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
-  const onDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const activeId = String(event.active.id);
-      const overId = event.over ? String(event.over.id) : null;
-      if (!overId || activeId === overId) return;
-      changeDraft((current) => {
-        const source = itemLocation(current, activeId);
-        if (!source) return current;
-        const moving = current[source.sectionIndex].items[source.itemIndex];
-        const target = itemLocation(current, overId);
-        const targetSectionId = overId.startsWith("section-drop:")
-          ? overId.slice("section-drop:".length)
-          : target
-            ? current[target.sectionIndex].id
-            : null;
-        if (!targetSectionId) return current;
+  const onDragStart = (event: DragStartEvent) => {
+    setActiveDragId(String(event.active.id));
+  };
+  const onDragEnd = (event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : null;
+    setActiveDragId(null);
+    if (!overId || activeId === overId) return;
 
-        const next = cloneSections(current);
-        next[source.sectionIndex].items.splice(source.itemIndex, 1);
-        const targetSectionIndex = next.findIndex(
-          (section) => section.id === targetSectionId,
-        );
-        if (targetSectionIndex < 0) return current;
-        let targetIndex = next[targetSectionIndex].items.length;
-        if (target) {
-          targetIndex = next[targetSectionIndex].items.findIndex(
-            (item) => item.widgetId === overId,
-          );
-          if (targetIndex < 0)
-            targetIndex = next[targetSectionIndex].items.length;
-        }
-        next[targetSectionIndex].items.splice(targetIndex, 0, moving);
-        return next;
-      });
-    },
-    [changeDraft],
-  );
+    if (activeId.startsWith("library:")) {
+      const widgetId = activeId.slice("library:".length) as WidgetId;
+      if (!(widgetId in WIDGETS) || placed.has(widgetId)) return;
+      const target = dropLocation(sections, overId);
+      if (!target) return;
+      addCard(target.sectionId, widgetId, target.index);
+      return;
+    }
+
+    changeDraft((current) => {
+      const source = itemLocation(current, activeId);
+      if (!source) return current;
+      const moving = current[source.sectionIndex].items[source.itemIndex];
+      const target = dropLocation(current, overId);
+      if (!target) return current;
+
+      const next = cloneSections(current);
+      next[source.sectionIndex].items.splice(source.itemIndex, 1);
+      const targetSectionIndex = next.findIndex(
+        (section) => section.id === target.sectionId,
+      );
+      if (targetSectionIndex < 0) return current;
+      let targetIndex = Math.min(
+        target.index,
+        next[targetSectionIndex].items.length,
+      );
+      if (
+        source.sectionIndex === targetSectionIndex &&
+        source.itemIndex < targetIndex
+      ) {
+        targetIndex -= 1;
+      }
+      next[targetSectionIndex].items.splice(targetIndex, 0, moving);
+      return next;
+    });
+  };
 
   const renderedSections = editing
     ? sections
     : sections.filter((section) => !section.hidden && section.items.length > 0);
 
+  const libraryTargetSectionId =
+    sections.find((section) => !section.hidden)?.id ?? sections[0]?.id ?? null;
+  const activeWidgetId = activeDragId?.startsWith("library:")
+    ? (activeDragId.slice("library:".length) as WidgetId)
+    : (activeDragId as WidgetId | null);
+  const lastAddedLocation = lastAddedWidgetId
+    ? itemLocation(sections, lastAddedWidgetId)
+    : null;
+
   return (
-    <>
+    <div className={editing ? "dash-editor-mode" : undefined}>
       {editing ? (
         <div className="dash-savebar">
           <div className="dash-savebar-msg">
             <span className="dash-savebar-dot" aria-hidden />
             <span>
-              Editing dashboard
+              {hasChanges ? "Unsaved changes" : "Editing dashboard"}
               {saveError ? (
                 <span className="dash-savebar-error" role="alert">
                   {saveError}
@@ -354,9 +455,6 @@ export function DashboardCanvas({
             </span>
           </div>
           <div className="dash-savebar-actions">
-            <button type="button" className="dash-sb-btn" onClick={reset}>
-              Reset to default
-            </button>
             <button
               type="button"
               className="dash-sb-btn"
@@ -368,7 +466,7 @@ export function DashboardCanvas({
               type="button"
               className="dash-sb-btn is-primary"
               onClick={save}
-              disabled={pending}
+              disabled={pending || !hasChanges}
             >
               {pending ? "Saving…" : "Save"}
             </button>
@@ -376,117 +474,187 @@ export function DashboardCanvas({
         </div>
       ) : null}
 
-      <header className="dash-an-head">
-        <h1>Analytics</h1>
-        <div className="dash-an-actions">
-          {!editing ? headerExtras : null}
-          {editing ? (
-            <button
-              type="button"
-              className="dash-an-btn"
-              onClick={addSection}
-              disabled={sections.length >= MAX_ANALYTICS_SECTIONS}
-            >
-              <Plus className="h-[15px] w-[15px]" />
-              Add section
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="dash-an-btn"
-              onClick={startEditing}
-            >
-              Edit dashboard
-            </button>
-          )}
-        </div>
-      </header>
-
       {editing ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
+          onDragStart={onDragStart}
+          onDragCancel={() => setActiveDragId(null)}
           onDragEnd={onDragEnd}
         >
-          <div className="dash-sections is-editing">
-            {renderedSections.map((section, index) => (
-              <EditableSection
-                key={section.id}
-                section={section}
-                index={index}
-                total={sections.length}
-                slots={slots}
-                sections={sections}
-                removed={removed}
-                libraryOpen={librarySectionId === section.id}
-                onLibraryOpen={() => setLibrarySectionId(section.id)}
-                onLibraryClose={() => setLibrarySectionId(null)}
-                onAdd={(widgetId) => addCard(section.id, widgetId)}
-                onRemove={removeCard}
-                onResize={resizeCard}
-                onMoveCard={moveCard}
-                onChange={(patch) =>
-                  changeDraft((current) =>
-                    current.map((entry) =>
-                      entry.id === section.id ? { ...entry, ...patch } : entry,
-                    ),
-                  )
+          <div className="dash-editor-shell">
+            <WidgetLibraryRail
+              allowed={allowed}
+              placed={placed}
+              canAdd={libraryTargetSectionId !== null}
+              onAdd={(widgetId) => {
+                if (libraryTargetSectionId) {
+                  const targetSection = sections.find(
+                    (section) => section.id === libraryTargetSectionId,
+                  );
+                  addCard(
+                    libraryTargetSectionId,
+                    widgetId,
+                    Math.min(4, targetSection?.items.length ?? 0),
+                  );
                 }
-                onDelete={() =>
-                  changeDraft((current) =>
-                    current.filter((entry) => entry.id !== section.id),
-                  )
-                }
-                onMoveSection={(direction) =>
-                  changeDraft((current) => {
-                    const to = index + direction;
-                    if (to < 0 || to >= current.length) return current;
-                    const next = [...current];
-                    const [moving] = next.splice(index, 1);
-                    next.splice(to, 0, moving);
-                    return next;
-                  })
-                }
-              />
-            ))}
-          </div>
-        </DndContext>
-      ) : (
-        <div className="dash-sections">
-          {renderedSections.map((section) => (
-            <section key={section.id} className="dash-section">
-              <h2>{section.title}</h2>
-              <div className="dash-canvas">
-                {section.items.map((item) => (
-                  <Widget
-                    key={item.widgetId}
-                    item={item}
-                    node={slots[item.widgetId]}
+              }}
+            />
+
+            <main className="dash-editor-main">
+              <header className="dash-an-head">
+                <h1>
+                  <ChartNoAxesCombined aria-hidden /> Analytics
+                </h1>
+                <div className="dash-an-actions">
+                  <button
+                    type="button"
+                    className="dash-an-btn"
+                    onClick={addSection}
+                    disabled={sections.length >= MAX_ANALYTICS_SECTIONS}
+                  >
+                    <Plus /> Add section
+                  </button>
+                  <button
+                    type="button"
+                    className={`dash-an-btn${reorderingSections ? " is-active" : ""}`}
+                    onClick={() => setReorderingSections((value) => !value)}
+                    disabled={sections.length < 2}
+                  >
+                    Reorder sections
+                  </button>
+                  <button
+                    type="button"
+                    className="dash-an-btn"
+                    onClick={reset}
+                    disabled={pending}
+                  >
+                    Reset to default
+                  </button>
+                </div>
+              </header>
+
+              <div className="dash-sections is-editing">
+                {renderedSections.map((section, index) => (
+                  <EditableSection
+                    key={section.id}
+                    section={section}
+                    index={index}
+                    total={sections.length}
+                    slots={slots}
+                    sections={sections}
+                    reordering={reorderingSections}
+                    showInsertionGuides={
+                      hasChanges ||
+                      activeDragId?.startsWith("library:") === true
+                    }
+                    insertionGuideIndex={
+                      lastAddedLocation?.sectionIndex === index
+                        ? lastAddedLocation.itemIndex + 1
+                        : 4
+                    }
+                    insertionGuideCount={
+                      lastAddedLocation?.sectionIndex === index ? 7 : 8
+                    }
+                    onRemove={removeCard}
+                    onResize={resizeCard}
+                    onMoveCard={moveCard}
+                    onChange={(patch) =>
+                      changeDraft((current) =>
+                        current.map((entry) =>
+                          entry.id === section.id
+                            ? { ...entry, ...patch }
+                            : entry,
+                        ),
+                      )
+                    }
+                    onDelete={() =>
+                      changeDraft((current) =>
+                        current.filter((entry) => entry.id !== section.id),
+                      )
+                    }
+                    onMoveSection={(direction) =>
+                      changeDraft((current) => {
+                        const to = index + direction;
+                        if (to < 0 || to >= current.length) return current;
+                        const next = [...current];
+                        const [moving] = next.splice(index, 1);
+                        next.splice(to, 0, moving);
+                        return next;
+                      })
+                    }
                   />
                 ))}
               </div>
-            </section>
-          ))}
-        </div>
-      )}
 
-      {renderedSections.length === 0 ? (
-        <div className="dash-canvas-empty">
-          <p>Your dashboard is empty.</p>
-          <button
-            type="button"
-            className="dash-an-btn"
-            onClick={() => {
-              if (!editing) startEditing();
-              else addSection();
-            }}
-          >
-            <Plus className="h-[15px] w-[15px]" />
-            {editing ? "Add a section" : "Edit dashboard"}
-          </button>
-        </div>
-      ) : null}
-    </>
+              {renderedSections.length === 0 ? (
+                <div className="dash-canvas-empty">
+                  <p>Your dashboard is empty.</p>
+                  <button
+                    type="button"
+                    className="dash-an-btn"
+                    onClick={addSection}
+                  >
+                    <Plus /> Add a section
+                  </button>
+                </div>
+              ) : null}
+            </main>
+          </div>
+          <DragOverlay dropAnimation={null}>
+            {activeWidgetId && activeWidgetId in WIDGETS ? (
+              <div className="dash-drag-preview">
+                <GripVertical aria-hidden /> {WIDGETS[activeWidgetId].title}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      ) : (
+        <>
+          <header className="dash-an-head">
+            <h1>Analytics</h1>
+            <div className="dash-an-actions">
+              {headerExtras}
+              <button
+                type="button"
+                className="dash-an-btn"
+                onClick={startEditing}
+              >
+                Edit dashboard
+              </button>
+            </div>
+          </header>
+          <div className="dash-sections">
+            {renderedSections.map((section) => (
+              <section key={section.id} className="dash-section">
+                <h2>{section.title}</h2>
+                <div className="dash-canvas">
+                  {section.items.map((item) => (
+                    <Widget
+                      key={item.widgetId}
+                      item={item}
+                      node={slots[item.widgetId]}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+          {renderedSections.length === 0 ? (
+            <div className="dash-canvas-empty">
+              <p>Your dashboard is empty.</p>
+              <button
+                type="button"
+                className="dash-an-btn"
+                onClick={startEditing}
+              >
+                <Plus /> Edit dashboard
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -510,11 +678,10 @@ function EditableSection({
   total,
   slots,
   sections,
-  removed,
-  libraryOpen,
-  onLibraryOpen,
-  onLibraryClose,
-  onAdd,
+  reordering,
+  showInsertionGuides,
+  insertionGuideIndex,
+  insertionGuideCount,
   onRemove,
   onResize,
   onMoveCard,
@@ -527,11 +694,10 @@ function EditableSection({
   total: number;
   slots: Partial<Record<WidgetId, ReactNode>>;
   sections: AnalyticsLayoutSection[];
-  removed: WidgetId[];
-  libraryOpen: boolean;
-  onLibraryOpen: () => void;
-  onLibraryClose: () => void;
-  onAdd: (id: WidgetId) => void;
+  reordering: boolean;
+  showInsertionGuides: boolean;
+  insertionGuideIndex: number;
+  insertionGuideCount: number;
   onRemove: (id: WidgetId) => void;
   onResize: (id: WidgetId, size: AnalyticsWidgetSize) => void;
   onMoveCard: (id: WidgetId, sectionId: string) => void;
@@ -539,33 +705,61 @@ function EditableSection({
   onDelete: () => void;
   onMoveSection: (direction: -1 | 1) => void;
 }) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
     <section
       className={`dash-section-editor${section.hidden ? " is-hidden" : ""}`}
     >
       <div className="dash-section-editor-head">
-        <input
-          value={section.title}
-          maxLength={60}
-          aria-label="Section title"
-          onChange={(event) => onChange({ title: event.target.value })}
-        />
+        {editingTitle ? (
+          <input
+            autoFocus
+            value={section.title}
+            maxLength={60}
+            aria-label="Section title"
+            onChange={(event) => onChange({ title: event.target.value })}
+            onBlur={() => setEditingTitle(false)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === "Escape") {
+                setEditingTitle(false);
+              }
+            }}
+          />
+        ) : (
+          <h2>
+            {section.title}
+            {section.hidden ? <span>Hidden</span> : null}
+          </h2>
+        )}
         <div className="dash-section-editor-actions">
+          {reordering ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onMoveSection(-1)}
+                disabled={index === 0}
+                aria-label={`Move ${section.title} up`}
+              >
+                <ChevronUp />
+              </button>
+              <button
+                type="button"
+                onClick={() => onMoveSection(1)}
+                disabled={index === total - 1}
+                aria-label={`Move ${section.title} down`}
+              >
+                <ChevronDown />
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
-            onClick={() => onMoveSection(-1)}
-            disabled={index === 0}
-            aria-label={`Move ${section.title} up`}
+            onClick={() => setEditingTitle(true)}
+            aria-label={`Rename ${section.title}`}
           >
-            <ChevronUp />
-          </button>
-          <button
-            type="button"
-            onClick={() => onMoveSection(1)}
-            disabled={index === total - 1}
-            aria-label={`Move ${section.title} down`}
-          >
-            <ChevronDown />
+            <Pencil />
           </button>
           <button
             type="button"
@@ -581,34 +775,55 @@ function EditableSection({
           >
             <Trash2 />
           </button>
-          <div className="dash-lib-anchor">
-            <button type="button" onClick={onLibraryOpen}>
-              <Plus /> Add card
-            </button>
-            {libraryOpen ? (
-              <SectionLibrary
-                removed={removed}
-                onAdd={onAdd}
-                onClose={onLibraryClose}
-              />
-            ) : null}
-          </div>
+          <button
+            type="button"
+            onClick={() => setCollapsed((value) => !value)}
+            aria-label={`${collapsed ? "Expand" : "Collapse"} ${section.title}`}
+            aria-expanded={!collapsed}
+          >
+            {collapsed ? <ChevronDown /> : <ChevronUp />}
+          </button>
         </div>
       </div>
-      <SectionGrid section={section}>
-        {section.items.map((item) => (
-          <SortableWidget
-            key={item.widgetId}
-            item={item}
-            node={slots[item.widgetId]}
-            sections={sections}
-            currentSectionId={section.id}
-            onRemove={() => onRemove(item.widgetId)}
-            onResize={(size) => onResize(item.widgetId, size)}
-            onMove={(sectionId) => onMoveCard(item.widgetId, sectionId)}
-          />
-        ))}
-      </SectionGrid>
+      {!collapsed ? (
+        <SectionGrid section={section}>
+          {section.items.map((item, itemIndex) => (
+            <Fragment key={item.widgetId}>
+              {showInsertionGuides && itemIndex === insertionGuideIndex
+                ? Array.from({ length: insertionGuideCount }).map(
+                    (_, guideIndex) => (
+                      <InsertionSlot
+                        key={`insert-${guideIndex}`}
+                        sectionId={section.id}
+                        index={insertionGuideIndex + guideIndex}
+                      />
+                    ),
+                  )
+                : null}
+              <SortableWidget
+                item={item}
+                node={slots[item.widgetId]}
+                sections={sections}
+                currentSectionId={section.id}
+                onRemove={() => onRemove(item.widgetId)}
+                onResize={(size) => onResize(item.widgetId, size)}
+                onMove={(sectionId) => onMoveCard(item.widgetId, sectionId)}
+              />
+            </Fragment>
+          ))}
+          {showInsertionGuides && section.items.length <= insertionGuideIndex
+            ? Array.from({ length: insertionGuideCount }).map(
+                (_, guideIndex) => (
+                  <InsertionSlot
+                    key={`insert-${guideIndex}`}
+                    sectionId={section.id}
+                    index={insertionGuideIndex + guideIndex}
+                  />
+                ),
+              )
+            : null}
+        </SectionGrid>
+      ) : null}
     </section>
   );
 }
@@ -633,11 +848,39 @@ function SectionGrid({
         className={`dash-canvas${isOver ? " is-drop-target" : ""}`}
       >
         {children}
+        {Array.from({ length: Math.max(4, 8 - section.items.length) }).map(
+          (_, index) => (
+            <div
+              key={`placeholder-${index}`}
+              className="dash-slot-placeholder"
+              aria-hidden
+            />
+          ),
+        )}
         {section.items.length === 0 ? (
-          <div className="dash-section-empty">Drop or add a card here</div>
+          <span className="sr-only">Drop or add a card here</span>
         ) : null}
       </div>
     </SortableContext>
+  );
+}
+
+function InsertionSlot({
+  sectionId,
+  index,
+}: {
+  sectionId: string;
+  index: number;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `insert:${sectionId}:${index}`,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`dash-slot-placeholder is-insertion${isOver ? " is-over" : ""}`}
+      aria-hidden
+    />
   );
 }
 
@@ -683,32 +926,45 @@ function SortableWidget({
         >
           <GripVertical />
         </button>
-        <select
-          value={item.size}
-          aria-label={`Size of ${meta.title}`}
-          onChange={(event) =>
-            onResize(event.target.value as AnalyticsWidgetSize)
-          }
-        >
-          {availableWidgetSizes(item.widgetId).map((size) => (
-            <option key={size} value={size}>
-              {size[0].toUpperCase() + size.slice(1)}
-            </option>
-          ))}
-        </select>
-        {sections.length > 1 ? (
-          <select
-            value={currentSectionId}
-            aria-label={`Section for ${meta.title}`}
-            onChange={(event) => onMove(event.target.value)}
-          >
-            {sections.map((section) => (
-              <option key={section.id} value={section.id}>
-                {section.title}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        <details className="dash-widget-menu">
+          <summary aria-label={`Card options for ${meta.title}`}>
+            <EllipsisVertical />
+          </summary>
+          <div>
+            <label>
+              Card size
+              <select
+                value={item.size}
+                aria-label={`Size of ${meta.title}`}
+                onChange={(event) =>
+                  onResize(event.target.value as AnalyticsWidgetSize)
+                }
+              >
+                {availableWidgetSizes(item.widgetId).map((size) => (
+                  <option key={size} value={size}>
+                    {size[0].toUpperCase() + size.slice(1)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {sections.length > 1 ? (
+              <label>
+                Section
+                <select
+                  value={currentSectionId}
+                  aria-label={`Section for ${meta.title}`}
+                  onChange={(event) => onMove(event.target.value)}
+                >
+                  {sections.map((section) => (
+                    <option key={section.id} value={section.id}>
+                      {section.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        </details>
         <button
           type="button"
           className="dash-widget-x"
@@ -723,34 +979,20 @@ function SortableWidget({
   );
 }
 
-function SectionLibrary({
-  removed,
+function WidgetLibraryRail({
+  allowed,
+  placed,
+  canAdd,
   onAdd,
-  onClose,
 }: {
-  removed: WidgetId[];
+  allowed: WidgetId[];
+  placed: Set<WidgetId>;
+  canAdd: boolean;
   onAdd: (id: WidgetId) => void;
-  onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
   const normalized = query.trim().toLowerCase();
-  const matches = removed.filter((id) => {
+  const matches = allowed.filter((id) => {
     if (!normalized) return true;
     const meta = WIDGETS[id];
     return (
@@ -758,25 +1000,21 @@ function SectionLibrary({
       meta.description.toLowerCase().includes(normalized)
     );
   });
+
   return (
-    <div className="dash-lib" ref={ref}>
+    <aside className="dash-widget-library" aria-label="Analytics card library">
       <div className="dash-lib-search">
         <Search />
         <input
-          autoFocus
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search cards"
+          placeholder="Search"
           aria-label="Search cards"
         />
       </div>
       <div className="dash-lib-list">
         {matches.length === 0 ? (
-          <p className="dash-lib-empty">
-            {removed.length === 0
-              ? "Every available card is already placed."
-              : "No cards match that search."}
-          </p>
+          <p className="dash-lib-empty">No cards match that search.</p>
         ) : (
           WIDGET_GROUPS.map((group) => {
             const items = matches.filter((id) => WIDGETS[id].group === group);
@@ -785,31 +1023,59 @@ function SectionLibrary({
               <div key={group} className="dash-lib-group">
                 <div className="dash-lib-group-label">{group}</div>
                 {items.map((id) => (
-                  <button
+                  <DraggableLibraryItem
                     key={id}
-                    type="button"
-                    className="dash-lib-item"
-                    onClick={() => {
-                      onAdd(id);
-                      onClose();
-                    }}
-                  >
-                    <span>
-                      <span className="dash-lib-item-title">
-                        {WIDGETS[id].title}
-                      </span>
-                      <span className="dash-lib-item-desc">
-                        {WIDGETS[id].description}
-                      </span>
-                    </span>
-                    <Plus />
-                  </button>
+                    id={id}
+                    added={placed.has(id)}
+                    disabled={!canAdd}
+                    onAdd={() => onAdd(id)}
+                  />
                 ))}
               </div>
             );
           })
         )}
       </div>
-    </div>
+      <p className="dash-lib-help">
+        Drag a card into a dotted space, or click its name to add it.
+      </p>
+    </aside>
+  );
+}
+
+function DraggableLibraryItem({
+  id,
+  added,
+  disabled,
+  onAdd,
+}: {
+  id: WidgetId;
+  added: boolean;
+  disabled: boolean;
+  onAdd: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: `library:${id}`,
+      disabled: added || disabled,
+    });
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      className={`dash-lib-item${added ? " is-added" : ""}${isDragging ? " is-dragging" : ""}`}
+      style={{ transform: CSS.Transform.toString(transform) }}
+      onClick={onAdd}
+      disabled={added || disabled}
+      {...attributes}
+      {...listeners}
+    >
+      <GripVertical aria-hidden />
+      <span>
+        <span className="dash-lib-item-title">{WIDGETS[id].title}</span>
+        <span className="dash-lib-item-desc">{WIDGETS[id].description}</span>
+      </span>
+      {added ? <span className="dash-lib-added">Added</span> : <Plus />}
+    </button>
   );
 }

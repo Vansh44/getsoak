@@ -84,10 +84,9 @@ Shopify's current overview dashboard supports:
   insights.
 
 StoreMink now has add/remove/reorder, named sections, semantic card sizes, a
-searchable library, Save/Cancel/Reset, server persistence, and a global
-date/comparison contract. It does **not** yet have report drill-downs or enough
-commerce/traffic metrics. Calling the current page full "Shopify parity" would
-therefore still be inaccurate.
+searchable library, Save/Cancel/Reset, server persistence, a global
+date/comparison contract, and the first four card-linked detailed reports with
+CSV export. First-party traffic metrics remain a separate later release.
 
 | Capability                          | Shopify now                 | StoreMink now                      | This spec                            |
 | ----------------------------------- | --------------------------- | ---------------------------------- | ------------------------------------ |
@@ -98,7 +97,7 @@ therefore still be inaccurate.
 | Named/reorderable/hideable sections | Yes                         | Yes                                | Shipped                              |
 | Searchable widget library           | Yes                         | Yes                                | Keep; add categories and "New" state |
 | Cross-device persistence            | Yes in product behavior     | Yes; server-side per admin         | Shipped                              |
-| Card -> detailed report             | Yes                         | No                                 | Release 2                            |
+| Card -> detailed report             | Yes                         | First four reports + CSV shipped   | Expand incrementally                 |
 | Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker  |
 | Targets and generated insights      | Yes                         | No                                 | Later                                |
 | Google Search Console cards         | Not native to Shopify admin | No                                 | Release 2 differentiator             |
@@ -585,16 +584,20 @@ the viewer later becomes unrestricted.
   non-drag controls available for section/card movement and sizing.
 - Entering edit mode creates a draft. **Save** commits, **Cancel** discards, and
   **Reset to default** removes the personal override after confirmation.
+- Edit mode uses a persistent searchable card rail beside the canvas rather
+  than a per-section popup. A card can be clicked into the first visible section
+  or dragged directly to a dotted landing area; added cards stay visible but
+  disabled in the rail so the complete catalogue does not jump while editing.
+  Add/remove feedback includes an Undo action.
 - Cards drag within or across sections. Sections can be added, renamed, hidden,
   reordered, and deleted. A section title is 1–60 trimmed characters.
 - Cards support `compact`, `half`, and `full` sizes. The renderer maps these
   semantic sizes to the current four-column grid; raw column counts are not
   persisted. Tables and multi-series charts have a minimum `half` size.
-- A widget can appear once. Adding it removes it from library results; removing
-  it returns it to the library.
-- The library is searchable and grouped by Overview, Sales, Customers,
-  Acquisition, Inventory, Operations, and Content. Groups are catalog metadata,
-  not dashboard sections.
+- A widget can appear once. Adding it marks it as already added in the library;
+  removing it makes it available again.
+- The library is searchable and grouped by Metrics, Sales, Customers, Inventory,
+  Content, and Search. Groups are catalog metadata, not dashboard sections.
 - Keyboard drag/reorder, move-up/down controls, visible focus, and non-drag
   add/remove paths are acceptance requirements, not polish.
 - The edit surface may render lightweight previews, but Save validates every
@@ -902,7 +905,7 @@ Ordered by value per unit of work, and each step is shippable alone.
 | 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                     | M          |
 | 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                        | L          |
 | 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                                    | S          |
-| 6   | Drill-down            | Card-linked detailed reports and CSV export for the highest-value metrics                                                                    | M/L        |
+| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                         | M/L        |
 | 7   | Merchant pixels       | GA4 and Meta Pixel settings with consent-policy integration                                                                                  | S          |
 | 8   | Storefront conversion | Beacon, raw-event retention, 30-minute sessionization, recognized-purchase attribution, daily rollup, funnel, bot controls, conversion cards | L          |
 | 9   | Margin                | `cost_price`, backfill UX, gross margin reporting                                                                                            | M          |
@@ -922,9 +925,10 @@ history, and unlaunched-store state are decided above. These remain:
   small production pilot should decide; do not guess from positioning.
 - **Consent model for StoreMink traffic and merchant pixels:** jurisdiction and
   storefront policy work must precede event collection.
-- **Detailed-report scope:** which first four cards get drill-down pages after
-  dashboard parity. Recommended: Total sales, Sales over time, Top products, and
-  Google Search queries.
+- **Closed 2026-08-20 — detailed-report scope:** the first four are Total
+  sales, Sales over time, Top products, and Google Search queries. Each keeps
+  the global range contract; commerce reports additionally keep the resolved
+  location scope, while Search queries correctly ignore physical location.
 - **Search types:** start with `type: "web"`. Images/News/Discover can be added as
   explicit sources later; mixing them into one unexplained total is not useful.
 - **Saved layouts and staff offboarding:** rows should normally cascade/delete

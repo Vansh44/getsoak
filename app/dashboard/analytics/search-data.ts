@@ -210,6 +210,7 @@ async function rankingRows(
   storeId: string,
   window: SearchDateWindow,
   dimension: "query" | "page",
+  limit = 25,
 ): Promise<RankingAggregate[]> {
   return db
     .select({
@@ -242,7 +243,22 @@ async function rankingRows(
       desc(sql`sum(${storeSearchMetrics.clicks})`),
       desc(sql`sum(${storeSearchMetrics.impressions})`),
     )
-    .limit(25);
+    .limit(Math.max(1, Math.min(limit, 10_000)));
+}
+
+/** Detailed reports and CSV use the same tenant-bound aggregate as the card,
+ * with a larger but still bounded row cap. */
+export async function getSearchRankingReport(
+  storeId: string,
+  range: AnalyticsRange,
+  dimension: "query" | "page",
+  limit: number,
+): Promise<SearchRankingRow[]> {
+  const window = searchDateWindow(range.current);
+  const rows = await withService((db) =>
+    rankingRows(db, storeId, window, dimension, limit),
+  );
+  return toSearchRanking(rows);
 }
 
 /** Read one tenant's delayed Search Console snapshot. Every service-role query

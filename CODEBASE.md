@@ -216,7 +216,9 @@ wholesip/
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
 │   │   │                      # Search aggregates, widget registry, and persisted
-│   │   │                      # per-admin "Edit dashboard" canvas
+│   │   │                      # per-admin "Edit dashboard" canvas. reports/[report]
+│   │   │                      # provides tenant/location-safe drill-down tables for
+│   │   │                      # total sales, sales over time, products and Search queries
 │   │   ├── components/        # Dashboard widgets (metric-card, revenue-chart,
 │   │   │                      # Search metric/trend/ranking cards,
 │   │   │                      # recent-orders-table, activity-feed, bulk-actions…) +
@@ -521,6 +523,9 @@ wholesip/
 │       │                      # STREAMS (keyset-paged, one page in memory) with
 │       │                      # Content-Disposition. ?template=1 = blank template.
 │       │                      # Gated on `view` of the resource's own section
+│       ├── dashboard/analytics/reports/[report]/ # ★ §20 formula-safe CSV for
+│       │                      # the four analytics drill-downs. Re-derives tenant,
+│       │                      # analytics.view and location scope; rate-limited
 │       ├── og-image/          # OG image proxy (compresses Supabase images only)
 │       ├── og/                # Dynamic branded OG card (ImageResponse; ?d=JSON
 │       │                      # {title,subtitle,color}) — default share image for
@@ -2275,12 +2280,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     - `analytics/page.tsx` starts independent widget reads together and hands
       Suspense-wrapped server nodes to the canvas. A card the viewer cannot use
       is never placed in `slots`, so permission gating stays server-side.
-    - `analytics/dashboard-canvas.tsx` owns the draft UI: dnd-kit reorder within
-      and across named sections, section add/rename/hide/reorder/delete,
-      semantic card sizing, keyboard-accessible section/card move controls,
-      remove/add, Cancel, Save, and confirmed Reset. `useSortable` is called
-      only under its DndContext. Saved sections render as a responsive
-      four-column grid; `compact`/`half`/`full` collapse to one column on mobile.
+    - `analytics/dashboard-canvas.tsx` owns the draft UI. Edit mode becomes a
+      full workspace with a sticky searchable/grouped card rail, click-or-drag
+      insertion, dotted landing slots, compact card option menus, section
+      add/rename/hide/reorder/delete controls, an unsaved-changes save bar, and
+      add/remove undo toasts. dnd-kit reorders cards within/across named sections
+      and accepts new cards dragged from the rail; keyboard and non-drag controls
+      remain available. `useSortable`/`useDraggable` are called only under their
+      DndContext. Saved sections render as a responsive four-column grid;
+      semantic `compact`/`half`/`full` sizes collapse to one column on mobile.
     - **Phase 2a persistence (2026-08-18):**
       `supabase/analytics_01_dashboard_layouts.sql` and the matching
       `analyticsDashboardLayouts` Drizzle model store a bounded, versioned
@@ -2373,6 +2381,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       Google JWT tokens now use the response's `expires_in`; ADC tokens use the
       auth client's `expiry_date`. Both refresh slightly early and an unknown
       expiry disables the local cache instead of assuming 55 minutes.
+    - **Analytics drill-down + CSV (2026-08-20):** the Total sales, Total
+      sales over time, Top products, and Top Google searches card titles link
+      to `/dashboard/analytics/reports/[report]` while preserving the shared
+      range/comparison/location query contract. Total sales is a ledger of
+      positive recognized-sale and negative completed-refund events, so its
+      rows add up under the same creation/settlement-time definition as the
+      headline. Report reads bind `store_id` and intersect URL locations with
+      `getViewerLocations()` server-side; Google Search intentionally ignores
+      location. `/api/dashboard/analytics/reports/[report]` repeats the
+      `analytics.view` and scope gates, rate-limits downloads, caps result sets,
+      and uses the shared BOM/formula-safe CSV serializer. The page shows the
+      first 250 rows while CSV supports up to 10,000. No schema was added.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2385,8 +2405,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       store's validated IANA `settings.business.timeZone`; absent/invalid legacy
       values use `Asia/Kolkata`. The control to change it lives on Settings and
       writes through permission-gated `app/actions/analytics-settings.ts`.
-      `analytics/data.ts` has per-widget readers. **Total sales** includes paid
-      online/store-credit, finalized POS and non-cancelled COD orders, excludes
+      `analytics/data.ts` has per-widget readers. Statements inside one
+      `withService` transaction run serially because they share one PostgreSQL
+      client. Parameterized time buckets group/order by selected-column ordinal
+      (`GROUP BY 1`) so Drizzle cannot duplicate the expression with different
+      bind placeholders. **Total sales** includes paid online/store-credit,
+      finalized POS and non-cancelled COD orders, excludes
       pending payment attempts, and subtracts only completed refunds by their
       settlement date. Charts keep raw rupees (no `₹K` rounding). Location
       scope is applied to every order-shaped read, including legacy/online

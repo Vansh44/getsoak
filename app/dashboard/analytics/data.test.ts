@@ -4,7 +4,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Every query is captured rather than executed: what matters here is WHICH
 // rows a viewer's figures are computed from, which lives entirely in the WHERE.
-const captured = vi.hoisted(() => ({ wheres: [] as unknown[] }));
+const captured = vi.hoisted(() => ({
+  wheres: [] as unknown[],
+  groups: [] as unknown[][],
+  activeQueries: 0,
+  maxActiveQueries: 0,
+}));
 
 function chain(): any {
   const c: any = {};
@@ -14,20 +19,22 @@ function chain(): any {
     "from",
     "leftJoin",
     "innerJoin",
-    "groupBy",
     "orderBy",
     "limit",
   ]) {
     c[m] = vi.fn(self);
   }
+  c.groupBy = vi.fn((...groups: unknown[]) => {
+    captured.groups.push(groups);
+    return c;
+  });
   c.where = vi.fn((w: unknown) => {
     captured.wheres.push(w);
     return c;
   });
-  // ★ ONE permissive row, not []. The data layer destructures scalar results
-  // (`const [[{ c }]] = await Promise.all(...)`), so an empty array throws
-  // before any WHERE is captured — and the test would then be asserting on a
-  // crash rather than on the query.
+  // ★ ONE permissive row, not []. The data layer destructures scalar results,
+  // so an empty array throws before any WHERE is captured — and the test would
+  // then be asserting on a crash rather than on the query.
   const row = new Proxy(
     {},
     {
@@ -35,7 +42,17 @@ function chain(): any {
         k === "then" ? undefined : k === "key" ? "online" : (0 as never),
     },
   );
-  c.then = (res: (v: unknown[]) => unknown) => res([row]);
+  c.then = (res: (v: unknown[]) => unknown) => {
+    captured.activeQueries += 1;
+    captured.maxActiveQueries = Math.max(
+      captured.maxActiveQueries,
+      captured.activeQueries,
+    );
+    queueMicrotask(() => {
+      captured.activeQueries -= 1;
+      res([row]);
+    });
+  };
   return c;
 }
 
@@ -82,6 +99,10 @@ const scopedLocations = (locationIds: string[]) => ({
  * a scoped query from an unscoped one, so they are what this walks for.
  */
 function params(): unknown[] {
+  return boundValues(captured.wheres);
+}
+
+function boundValues(nodes: unknown[]): unknown[] {
   const out: unknown[] = [];
   const walk = (node: any, depth = 0) => {
     if (depth > 12 || node === null || node === undefined) return;
@@ -94,13 +115,16 @@ function params(): unknown[] {
     // A bound value; anything else is table/column machinery.
     if ("value" in node) walk(node.value, depth + 1);
   };
-  captured.wheres.forEach((w) => walk(w));
+  nodes.forEach((node) => walk(node));
   return out;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   captured.wheres = [];
+  captured.groups = [];
+  captured.activeQueries = 0;
+  captured.maxActiveQueries = 0;
 });
 
 describe("analytics data — location scope", () => {
@@ -154,6 +178,16 @@ describe("recognized sales", () => {
       "refunded",
     ]);
     expect(RECOGNIZED_POS_STATUSES).toEqual(["completed", "refunded"]);
+  });
+
+  it("keeps bucket queries valid and serial on the scoped PostgreSQL client", async () => {
+    await getSalesAnalytics("store-1", allLocations, range);
+
+    expect(captured.maxActiveQueries).toBe(1);
+    expect(captured.groups).toHaveLength(3);
+    const groupValues = boundValues(captured.groups);
+    expect(groupValues).not.toContain("day");
+    expect(groupValues).not.toContain("Asia/Kolkata");
   });
 
   it("omits a misleading percentage when comparison is absent or zero", () => {
