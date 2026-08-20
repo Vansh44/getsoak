@@ -3246,8 +3246,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         `pos.cashVarianceTolerance` (a hand-counted drawer is never exact to
         the paise). Capabilities: `open_close_shift` to open/close,
         `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
-        declare what was in it. A CLOSED shift reports the figures snapshotted
-        at close, so an old Z-report can't drift when an order is later edited.
+        declare what was in it. ⚠ A CLOSED shift reports the RECONCILIATION
+        figures snapshotted at close — expected, counted, variance — so those
+        cannot drift. **★★ THE BREAKDOWN STILL CAN, and this line used to
+        overstate it:** `cashSales`, `byMethod`, `saleCount` and `grossSales`
+        are RECOMPUTED from `order_payments` on every read, so refunding an
+        order weeks later moves the takings on a Z-report the shop may already
+        have printed. Found while building the dashboard reader (Step 17), which
+        reuses the same `loadReport`. Closing it means snapshotting more at
+        close — a migration, and a decision about what a Z-report legally is.
+        Read at `/dashboard/pos/shifts`; ⚠ `loadReport` takes a shift id with NO
+        store predicate, so any NEW caller must prove ownership first, as
+        `getShiftReport` does.
     - **Phase 4 (done) = inventory from the shop floor.** `/pos/inventory`
       (`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`, so
       a cashier sells stock but never declares how much exists). Search or

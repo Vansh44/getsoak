@@ -215,6 +215,9 @@ export const SECTIONS: DashboardSection[] = [
       // "Devices": an owner reconciling a drawer and an admin checking who
       // paired a browser are looking for different things.
       { label: "Money log", href: "/dashboard/pos/money", icon: "orders" },
+      // Shift history + Z-reports (Step 17). Drawers are shift-shaped, which
+      // is why they live here and not in Analytics — see the roadmap.
+      { label: "Shifts", href: "/dashboard/pos/shifts", icon: "orders" },
       {
         label: "POS settings",
         href: "/dashboard/pos/settings",

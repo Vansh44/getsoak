@@ -47,8 +47,8 @@ sequence AND the spec for everything still to build.
 | **14** | Money-event audit — who discounted, overrode, refunded         | M    | ✅ done |
 | **15** | Hourly sweep + held sales expire                               | S    | ✅ done |
 | **16** | Check the shelf before taking counter payment (rescoped)       | S    | ✅ done |
-| **17** | **Dashboard POS reporting — shifts, Z-reports, sales by shop** | M    | ⏭ next |
-| **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
+| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)   | M    | ✅ done |
+| **18** | **Collection counter: part payment, discount, expiry banner**  | M    | ⏭ next |
 | **19** | Catalogue delta sync                                           | M    | ⏳      |
 | **20** | `placePosSale` round trips (11 → few)                          | M    | ⏳      |
 | **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)       | M    | ⏳      |
@@ -833,24 +833,51 @@ abandon and leaves only a genuinely closed tab to the sweep.
 
 ---
 
-## Step 17 — Dashboard POS reporting
+## Step 17 — Dashboard shift history + Z-reports ✅ DONE
 
 **The gap.** Shift figures exist only at the till: `/pos/shift` shows the live
 X-report and the Z-report of the shift being closed. An owner cannot see
 yesterday's, cannot compare two shops, and cannot see POS sales split by cashier
 or tender anywhere in the dashboard.
 
-**Ships.** `/dashboard/pos/reports`: shifts list (per location, with variance),
-one shift's Z-report, and POS sales by location / cashier / tender over a date
-range.
+**✅ Shipped:** `/dashboard/pos/shifts` — the shift list across every location
+the viewer may see (with variance) and a full Z-report per shift. Readers are
+`getShiftHistory` / `getShiftReport`; 6 gate tests, both scoping guards
+mutation-checked.
+
+**★★ SALES-BY-CASHIER/TENDER WAS SPLIT OFF TO ANALYTICS, deliberately.** The
+spec bundled it here, and the overlap warning below is the reason not to: a
+Z-report is SHIFT-shaped — a drawer, a float, a variance — and analytics has no
+concept of a shift. Sales aggregates over a date range are exactly what the
+analytics rebuild is for. So the line is: **drawers and shifts belong to POS;
+sales aggregates belong to analytics.** Per-shift takings by method are still
+here, because they are part of reconciling that drawer rather than a report.
+
+**★★ THE OWNERSHIP CHECK IS THE SECURITY-CRITICAL HALF.** `loadReport` reads a
+shift BY ID with no store predicate — perfectly safe where it was written,
+because the till path bounds it to the operator's own location. Reached from a
+dashboard the id comes from the CLIENT, so store and `admin_locations` scope are
+proved before the report is built. Without it any admin could read any store's
+drawer by guessing a uuid.
+
+**★ AN EMPTY LOCATION SCOPE SHOWS NOTHING.** "Assigned to nothing that still
+exists" is a real state (their shop was deleted) and must never be widened to
+unrestricted — `lib/locations/scope.ts`'s contract, and the mistake that would
+promote a bound admin to the whole business.
+
+**⚠ A CLOSED Z-REPORT IS NOT FULLY FROZEN, and this step did not change that.**
+`loadReport` reads `expected_cash` / `counted_cash` / `variance` from the
+snapshot — the reconciliation figures are safe — but `cashSales`, `byMethod`,
+`saleCount` and `grossSales` are RECOMPUTED from `order_payments` on every read.
+So refunding an order weeks later moves the takings on a Z-report the shop may
+already have printed. CODEBASE §22 states the stronger claim ("reports the
+figures snapshotted at close"); it is true of the money reconciliation and not
+of the breakdown. Closing it properly means snapshotting more at close, which is
+a migration and a decision about what a Z-report legally is.
 
 **★ LOCATION-SCOPED, like every other order read** (`admin_locations`, §23). A
 branch manager sees their own shop. This is also where the scope story gets its
 first real test, since the till path never needed it.
-
-**★ READ THE SNAPSHOT, NOT THE LIVE FIGURES.** A closed shift reports what was
-recorded at close (§22) — recomputing would let an old Z-report drift when an
-order is later edited.
 
 **⚠ THIS OVERLAPS THE ANALYTICS REBUILD.** `docs/analytics-and-search-console-plan.md`
 covers commerce widgets and the missing location filter. Decide once whether POS
