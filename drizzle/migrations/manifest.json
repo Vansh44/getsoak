@@ -235,6 +235,27 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260820_0010_merchant_pixels",
+      "description": "Enable Pro merchant GA4 and Meta Pixel modules and publish their consent-aware setup guides",
+      "file": "sql/20260820_0010_merchant_pixels.sql",
+      "transaction": true,
+      "requires": ["20260820_0009_help_article_indexability"],
+      "verify": {
+        "queries": [
+          {
+            "name": "merchant pixel modules are globally available",
+            "sql": "select count(*)::text from public.platform_analytics_settings where id = true and google_analytics_4 = true and meta_pixel = true",
+            "equals": "1"
+          },
+          {
+            "name": "merchant pixel setup guides are published",
+            "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'published'",
+            "equals": "2"
+          }
+        ]
+      }
     }
   ]
 }

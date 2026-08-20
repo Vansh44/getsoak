@@ -57,14 +57,14 @@ export const ANALYTICS_FEATURES: Record<
     label: "Google Analytics 4",
     description: "Merchant GA4 Measurement ID and consent-aware tracking.",
     minPlan: "pro",
-    status: "planned",
+    status: "available",
   },
   metaPixel: {
     id: "metaPixel",
     label: "Meta Pixel",
     description: "Merchant Meta Pixel ID and consent-aware tracking.",
     minPlan: "pro",
-    status: "planned",
+    status: "available",
   },
   storefrontConversion: {
     id: "storefrontConversion",

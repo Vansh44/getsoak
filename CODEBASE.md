@@ -123,7 +123,8 @@ wholesip/
 │   │
 │   ├── (storefront)/          # ★ THE STORE WEBSITE (served on store hosts)
 │   │   ├── layout.tsx         # Storefront shell: Header/Footer, BrandProvider, Auth+Cart+
-│   │   │                      # delivery-location providers
+│   │   │                      # delivery-location providers; mounts the Pro merchant
+│   │   │                      # tracking consent boundary outside builder previews
 │   │   ├── page.tsx           # Store homepage = store_pages row with slug "" (the
 │   │   │                      # "homepage sentinel"); reads published/preview sections
 │   │   │                      # just like [pageSlug]. Edited in /dashboard/builder (§11)
@@ -324,7 +325,9 @@ wholesip/
 │   │   │                      # ★ failures/ = everything that DIDN'T work, read
 │   │   │                      # across the other tables (§33). FIVE logs, ONE
 │   │   │                      # `activity` permission
-│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) + ★ notifications/ (§22 CONSOLE:
+│   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) +
+│   │                          # ★ analytics/ (Pro GA4 + Meta IDs and enable switches) +
+│   │                          # ★ notifications/ (§22 CONSOLE:
 │   │                          # list → [key] detail with General + per-channel
 │   │                          # tabs; me/ = personal opt-outs);
 │   │                          # feature toggles live on their feature's own page
@@ -389,6 +392,7 @@ wholesip/
 │   │   │                      # marks Firebase emailVerified only on success
 │   │   ├── store-branding.ts  # Per-store branding updates
 │   │   ├── store-settings.ts  # Read/save per-store feature settings (see lib/settings)
+│   │   ├── merchant-analytics-settings.ts # Pro/platform-gated GA4 + Meta settings
 │   │   ├── blog-taxonomy-actions.ts  # Per-store blog categories/tags CRUD (+ propagation into blogs)
 │   │   ├── subscribe-actions.ts # ★ §34 dashboard-only subscription path:
 │   │                      # startSubscribe / confirmSubscribe plus manual
@@ -616,6 +620,9 @@ wholesip/
 │   │                          # NOT in the "use server" file, or the sweep would be
 │   │                          # a public unauthenticated endpoint). Tested, plus a
 │   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
+│   ├── analytics/             # ★ §20 dashboard contracts plus platform feature gates;
+│   │                          # merchant-pixels.ts validates/fail-closes the GA4 + Meta
+│   │                          # settings stored under stores.settings.marketing
 │   ├── store/                 # ★ Tenancy (see §3): host.ts, resolve.ts, brand.ts
 │   ├── credit/                # ★ §29: store credit — apply.ts (PURE: how much
 │   │                          # credit goes on an order, incl. the unpayable-
@@ -1210,7 +1217,8 @@ wholesip/
 │                              # 0003 adds orders.pickup_prepared_at so actual
 │                              # packing is distinct from the checkout promise;
 │                              # 0004 repairs paid AI-credit invoices left open
-│                              # and therefore falsely presented as plan debt.
+│                              # and therefore falsely presented as plan debt; 0010
+│                              # enables merchant pixels and publishes their setup guides.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
@@ -2420,6 +2428,23 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       global switch can never grant a lower plan. `app/actions/platform-analytics-settings.ts`
       rechecks superadmin authorization and validates the full fixed setting
       shape before upsert.
+    - **Phase 8 merchant pixels (2026-08-20):**
+      `/dashboard/settings/analytics` lets settings viewers inspect and settings
+      managers save a GA4 Measurement ID and Meta Pixel ID under the store's
+      existing `settings.marketing` object. `app/actions/merchant-analytics-settings.ts`
+      re-derives the store, effective plan, permission, and current platform
+      switches before every write; invalid IDs fail closed and unavailable
+      integrations are preserved rather than overwritten. The Analytics page
+      links to this settings screen. On the public store,
+      `merchant-tracking.tsx` loads neither provider until the shopper explicitly
+      permits its separate Analytics or Marketing category, stores the choice in
+      that browser, supports later withdrawal, and sends route-aware page views.
+      Lower plans, disabled operator switches, invalid legacy settings, and
+      builder previews render no provider script. Migration
+      `20260820_0010_merchant_pixels` enables the two platform modules and
+      publishes their previously drafted Help Centre setup guides. These pixels
+      send data to the merchant's own provider account; they do not populate the
+      StoreMink dashboard or replace Phase 9 first-party conversion analytics.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -2537,10 +2562,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       published guides covering the dashboard, metric definitions and sources,
       sales/orders, customers/inventory/activity, Google Search, reports/CSV,
       dashboard customization, and troubleshooting. It also installs detailed
-      GA4 and Meta Pixel setup guides as drafts, including official external
-      setup links, consent, testing, and subdomain/custom-domain limitations.
-      Those two guides are published only when the corresponding Pro merchant
-      integrations ship. All rows remain editable through the operator Help
+      GA4 and Meta Pixel setup guides, including official external setup links,
+      consent, testing, and subdomain/custom-domain limitations. Migration
+      `20260820_0010_merchant_pixels` publishes those two guides alongside the
+      shipped Pro integrations. All rows remain editable through the operator Help
       Centre console; no second static docs source exists.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex

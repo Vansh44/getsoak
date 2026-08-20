@@ -1,7 +1,8 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
 > **Status:** implementation underway — dashboard, Search Console, drill-down,
-> and platform feature controls shipped through 2026-08-20 · **Owner:** Vansh · **Surface:**
+> platform controls, and consent-aware merchant pixels shipped through
+> 2026-08-20 · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -23,7 +24,7 @@ Search storage, explicit business time zones, and session/purchase semantics.
 IANA-zone ranges and comparisons, store time-zone settings, recognized Total
 sales less completed refunds, raw-rupee adaptive charts, staff location scope,
 restricted customer-card omission, and independent Suspense widget reads. The
-The Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
+Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
 optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
 one-time import/removal of the legacy localStorage order, versioned named
 sections, visibility/reorder/delete controls, cross-section card movement, and
@@ -33,8 +34,9 @@ migration is required. Phase 2c adds a scope-safe URL location filter plus AOV,
 units sold, top products, sales by channel, and sales by location. Phase 2d adds
 itemized payment-method allocation, new-vs-returning customers, discount impact,
 returns/refunds, and tracked-stock velocity. Search Console is shipped;
-first-party traffic remains planned below. Ledger migration
-`20260818_0005_analytics_dashboard_layouts` is applied.
+consent-aware Pro GA4 and Meta Pixel connections are shipped; first-party
+StoreMink traffic remains planned below. Ledger migration
+`20260820_0010_merchant_pixels` is the latest required migration.
 
 ---
 
@@ -922,7 +924,7 @@ Ordered by value per unit of work, and each step is shippable alone.
 | 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                               | S          |
 | 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                    | M/L        |
 | 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set     | S          |
-| 8   | Merchant pixels       | Pro-only GA4 and Meta Pixel settings with consent-policy integration                                                                    | S          |
+| 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                | S          |
 | 9   | Storefront conversion | Pro-only beacon, retention, 30-minute sessions, purchase attribution, rollup, funnel, bot controls, and cards                           | L          |
 | 10  | Margin                | Pro-only `cost_price`, backfill UX, gross margin reporting                                                                              | M          |
 
@@ -940,8 +942,12 @@ history, and unlaunched-store state are decided above. These remain:
 - **Closed 2026-08-20 — advanced Analytics plan gate:** Pro only. GA4, Meta
   Pixel, first-party conversion, and margin require
   `PLAN_LIMITS.advancedAnalytics` plus their platform switch.
-- **Consent model for StoreMink traffic and merchant pixels:** jurisdiction and
-  storefront policy work must precede event collection.
+- **Closed 2026-08-20 — merchant-pixel consent:** optional providers are global
+  opt-in only. Analytics and Marketing are separate choices, rejection leaves
+  shopping usable, the choice is stored per browser, and a persistent control
+  supports withdrawal. No provider script loads in builder previews. Phase 9
+  must separately document the policy for StoreMink's own first-party events
+  before collection starts.
 - **Closed 2026-08-20 — detailed-report scope:** the first four are Total
   sales, Sales over time, Top products, and Google Search queries. Each keeps
   the global range contract; commerce reports additionally keep the resolved

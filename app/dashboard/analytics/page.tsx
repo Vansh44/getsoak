@@ -1,4 +1,5 @@
 import { Suspense, type ReactNode } from "react";
+import Link from "next/link";
 import { ActivityFeed } from "../components/activity-feed";
 import { AnalyticsSummaryCard } from "../components/analytics-summary-card";
 import { BlogApprovals } from "../components/blog-approvals";
@@ -570,11 +571,16 @@ export default async function AnalyticsPage({
         storeId={storeId}
         slots={slots}
         headerExtras={
-          <AnalyticsFilters
-            range={range}
-            locations={locationOptions}
-            selectedLocationId={location.selectedId}
-          />
+          <>
+            <AnalyticsFilters
+              range={range}
+              locations={locationOptions}
+              selectedLocationId={location.selectedId}
+            />
+            <Link href="/dashboard/settings/analytics" className="dash-an-btn">
+              Tracking settings
+            </Link>
+          </>
         }
         initialLayout={initialLayout}
         canCustomize={platformFeatures.dashboardCustomization}
