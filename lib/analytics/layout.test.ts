@@ -79,6 +79,15 @@ describe("analytics layout v2 contract", () => {
           "search_pages",
         ],
       },
+      {
+        title: "Storefront traffic",
+        cards: [
+          "traffic_visitors",
+          "traffic_sessions",
+          "traffic_page_views",
+          "traffic_funnel",
+        ],
+      },
     ]);
   });
 

@@ -915,18 +915,18 @@ applicable visitor consent.
 
 Ordered by value per unit of work, and each step is shippable alone.
 
-| #   | Release               | Step                                                                                                                                    | Rough size |
-| --- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| 1   | Dashboard foundation  | Business-time-zone setting, metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes | M          |
-| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import                              | L          |
-| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                | M          |
-| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                   | L          |
-| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                               | S          |
-| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                    | M/L        |
-| 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set     | S          |
-| 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                | S          |
-| 9   | Storefront conversion | Pro-only beacon, retention, 30-minute sessions, purchase attribution, rollup, funnel, bot controls, and cards                           | L          |
-| 10  | Margin                | Pro-only `cost_price`, backfill UX, gross margin reporting                                                                              | M          |
+| #   | Release               | Step                                                                                                                                                                                     | Rough size |
+| --- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 1   | Dashboard foundation  | Business-time-zone setting, metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes                                                  | M          |
+| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import                                                                               | L          |
+| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                                                                 | M          |
+| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                                                                    | L          |
+| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                                                                                | S          |
+| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                                                                     | M/L        |
+| 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set                                                      | S          |
+| 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                                                                 | S          |
+| 9   | Storefront conversion | **Built 2026-08-20; migration/Scheduler pending:** Pro-only consented beacon, 14-day retention, 30-minute sessions, purchase attribution, hourly rollup, funnel, bot controls, and cards | L          |
+| 10  | Margin                | Pro-only `cost_price`, backfill UX, gross margin reporting                                                                                                                               | M          |
 
 Steps 1–3 form overview-dashboard parity. Step 4 is independent once the global
 range contract exists and is StoreMink's differentiator. Do not start the
@@ -948,6 +948,12 @@ history, and unlaunched-store state are decided above. These remain:
   supports withdrawal. No provider script loads in builder previews. Phase 9
   must separately document the policy for StoreMink's own first-party events
   before collection starts.
+- **Closed 2026-08-20 — first-party conversion consent and retention:** use the
+  same explicit Analytics opt-in as GA4, create no persistent device/browser
+  identifier, rotate the server-side pseudonymous key each business-local day,
+  retain raw events and temporary order attribution for 14 days, and keep only
+  non-identifying daily totals long term. The published Help guide states these
+  rules and the merchant's obligation to obtain market-appropriate legal advice.
 - **Closed 2026-08-20 — detailed-report scope:** the first four are Total
   sales, Sales over time, Top products, and Google Search queries. Each keeps
   the global range contract; commerce reports additionally keep the resolved

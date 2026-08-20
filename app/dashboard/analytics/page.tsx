@@ -50,6 +50,11 @@ import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { analyticsReportHref } from "@/lib/analytics/reports";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import {
+  getStorefrontAnalytics,
+  storeHasProAnalytics,
+  type StorefrontAnalytics,
+} from "./storefront-data";
 
 function WidgetSkeleton({ compact = false }: { compact?: boolean }) {
   return (
@@ -314,6 +319,49 @@ async function SearchRanking({
   );
 }
 
+async function StorefrontMetric({
+  data,
+  metric,
+}: {
+  data: Promise<StorefrontAnalytics>;
+  metric: "visitors" | "sessions" | "pageViews";
+}) {
+  const result = await data;
+  const labels = {
+    visitors: "Storefront visitors",
+    sessions: "Storefront sessions",
+    pageViews: "Storefront page views",
+  } as const;
+  return <MetricCard label={labels[metric]} stat={result[metric]} />;
+}
+
+async function StorefrontFunnel({
+  data,
+}: {
+  data: Promise<StorefrontAnalytics>;
+}) {
+  const result = await data;
+  return (
+    <AnalyticsSummaryCard
+      title="Storefront conversion funnel"
+      subtitle="Consented sessions with steps completed in order"
+      items={[
+        { label: "Sessions", value: result.sessions.value },
+        { label: "Viewed a product", value: result.productSessions },
+        { label: "Added to cart", value: result.cartSessions },
+        { label: "Reached checkout", value: result.checkoutSessions },
+        { label: "Converted sessions", value: result.convertedSessions },
+        {
+          label: "Conversion rate",
+          value: result.conversionRate,
+          format: "percent",
+        },
+      ]}
+      note="Visitors who reject analytics and filtered automated traffic are not counted. Aggregates refresh hourly."
+    />
+  );
+}
+
 export default async function AnalyticsPage({
   searchParams,
 }: {
@@ -376,6 +424,11 @@ export default async function AnalyticsPage({
   const search = platformFeatures.googleSearchConsole
     ? getSearchAnalytics(storeId, range)
     : null;
+  const storefront =
+    platformFeatures.storefrontConversion &&
+    (await storeHasProAnalytics(storeId))
+      ? getStorefrontAnalytics(storeId, range)
+      : null;
   const totalSalesReport = platformFeatures.drilldownReports
     ? analyticsReportHref("total-sales", params)
     : undefined;
@@ -521,6 +574,28 @@ export default async function AnalyticsPage({
     slots.search_pages = (
       <Suspense fallback={<WidgetSkeleton />}>
         <SearchRanking data={search} kind="page" />
+      </Suspense>
+    );
+  }
+  if (storefront) {
+    slots.traffic_visitors = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="visitors" />
+      </Suspense>
+    );
+    slots.traffic_sessions = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="sessions" />
+      </Suspense>
+    );
+    slots.traffic_page_views = (
+      <Suspense fallback={<WidgetSkeleton compact />}>
+        <StorefrontMetric data={storefront} metric="pageViews" />
+      </Suspense>
+    );
+    slots.traffic_funnel = (
+      <Suspense fallback={<WidgetSkeleton />}>
+        <StorefrontFunnel data={storefront} />
       </Suspense>
     );
   }

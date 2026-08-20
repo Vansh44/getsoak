@@ -8,8 +8,15 @@ vi.mock("next/script", () => ({
 }));
 
 describe("MerchantTracking consent gate", () => {
+  const sendBeacon = vi.fn(() => true);
+
   beforeEach(() => {
     localStorage.clear();
+    Object.defineProperty(navigator, "sendBeacon", {
+      configurable: true,
+      value: sendBeacon,
+    });
+    sendBeacon.mockClear();
   });
 
   it("does not render either provider before consent", async () => {
@@ -18,7 +25,10 @@ describe("MerchantTracking consent gate", () => {
         storeName="Echoes"
         ga4MeasurementId="G-ABC12345"
         metaPixelId="1234567890"
-      />,
+        firstPartyEnabled={false}
+      >
+        <div>Store</div>
+      </MerchantTracking>,
     );
 
     expect(
@@ -37,7 +47,10 @@ describe("MerchantTracking consent gate", () => {
         storeName="Echoes"
         ga4MeasurementId="G-ABC12345"
         metaPixelId="1234567890"
-      />,
+        firstPartyEnabled={false}
+      >
+        <div>Store</div>
+      </MerchantTracking>,
     );
 
     fireEvent.click(await screen.findByRole("button", { name: "Accept all" }));
@@ -59,7 +72,10 @@ describe("MerchantTracking consent gate", () => {
         storeName="Echoes"
         ga4MeasurementId="G-ABC12345"
         metaPixelId="1234567890"
-      />,
+        firstPartyEnabled={false}
+      >
+        <div>Store</div>
+      </MerchantTracking>,
     );
 
     fireEvent.click(
@@ -88,11 +104,32 @@ describe("MerchantTracking consent gate", () => {
         storeName="Echoes"
         ga4MeasurementId="G-ABC12345"
         metaPixelId="1234567890"
-      />,
+        firstPartyEnabled={false}
+      >
+        <div>Store</div>
+      </MerchantTracking>,
     );
 
     expect(await screen.findByTestId(/sm-meta-pixel/)).toBeInTheDocument();
     expect(screen.queryByTestId(/sm-ga4/)).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("sends first-party events only after analytics consent", async () => {
+    render(
+      <MerchantTracking
+        storeName="Echoes"
+        ga4MeasurementId={null}
+        metaPixelId={null}
+        firstPartyEnabled
+      >
+        <div>Store</div>
+      </MerchantTracking>,
+    );
+
+    expect(sendBeacon).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Accept all" }));
+    await waitFor(() => expect(sendBeacon).toHaveBeenCalledTimes(1));
+    expect(sendBeacon).toHaveBeenCalledWith("/api/t", expect.any(Blob));
   });
 });

@@ -256,6 +256,38 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260820_0011_storefront_conversion",
+      "description": "Add consented first-party storefront events, temporary order attribution, durable daily funnel aggregates, and its Help guide",
+      "file": "sql/20260820_0011_storefront_conversion.sql",
+      "transaction": true,
+      "requires": ["20260820_0010_merchant_pixels"],
+      "verify": {
+        "tables": [
+          "storefront_daily",
+          "storefront_events",
+          "storefront_order_attribution"
+        ],
+        "constraints": [
+          "storefront_daily_pkey",
+          "storefront_events_store_event_key",
+          "storefront_events_type_check",
+          "storefront_order_attribution_pkey"
+        ],
+        "rlsTables": [
+          "storefront_daily",
+          "storefront_events",
+          "storefront_order_attribution"
+        ],
+        "queries": [
+          {
+            "name": "storefront conversion is available and documented",
+            "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.storefront_conversion = true and exists (select 1 from public.help_articles a where a.slug = 'understand-storefront-conversion-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

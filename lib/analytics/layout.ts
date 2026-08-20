@@ -14,6 +14,10 @@ export type AnalyticsWidgetSize = (typeof ANALYTICS_WIDGET_SIZES)[number];
  * saved compact/half/full preference controls only its width.
  */
 export const ANALYTICS_WIDGET_GRID_ROWS: Record<WidgetId, number> = {
+  traffic_visitors: 2,
+  traffic_sessions: 2,
+  traffic_page_views: 2,
+  traffic_funnel: 6,
   metric_revenue: 2,
   metric_orders: 2,
   metric_aov: 2,
@@ -85,6 +89,10 @@ export const WIDGET_SIZE_RULES: Record<
   WidgetId,
   { default: AnalyticsWidgetSize; min: AnalyticsWidgetSize }
 > = {
+  traffic_visitors: { default: "compact", min: "compact" },
+  traffic_sessions: { default: "compact", min: "compact" },
+  traffic_page_views: { default: "compact", min: "compact" },
+  traffic_funnel: { default: "full", min: "half" },
   metric_revenue: { default: "compact", min: "compact" },
   metric_orders: { default: "compact", min: "compact" },
   metric_aov: { default: "compact", min: "compact" },
@@ -150,6 +158,16 @@ const DEFAULT_SECTIONS: Array<{
       "search_trend",
       "search_queries",
       "search_pages",
+    ],
+  },
+  {
+    id: "storefront-traffic",
+    title: "Storefront traffic",
+    widgets: [
+      "traffic_visitors",
+      "traffic_sessions",
+      "traffic_page_views",
+      "traffic_funnel",
     ],
   },
 ];

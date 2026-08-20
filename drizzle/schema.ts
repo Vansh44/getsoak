@@ -3342,6 +3342,122 @@ export const analyticsDashboardLayouts = pgTable(
   ],
 );
 
+// Phase 9 first-party storefront analytics. Raw rows and the attribution
+// bridge are short-lived; storefrontDaily is the durable reporting surface.
+export const storefrontEvents = pgTable(
+  "storefront_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    eventId: uuid("event_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    eventType: text("event_type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    path: text(),
+    productId: uuid("product_id"),
+    orderId: uuid("order_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("storefront_events_store_event_key").on(
+      table.storeId,
+      table.eventId,
+    ),
+    uniqueIndex("storefront_events_purchase_order_key")
+      .on(table.storeId, table.orderId)
+      .where(
+        sql`${table.eventType} = 'purchase' AND ${table.orderId} IS NOT NULL`,
+      ),
+    index("storefront_events_store_date_idx").on(
+      table.storeId,
+      table.eventDate,
+      table.visitorKey,
+      table.occurredAt,
+    ),
+    index("storefront_events_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_events_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_events_order_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "storefront_events_type_check",
+      sql`${table.eventType} IN ('page_view', 'product_view', 'add_to_cart', 'checkout_start', 'purchase')`,
+    ),
+  ],
+);
+
+export const storefrontOrderAttribution = pgTable(
+  "storefront_order_attribution",
+  {
+    orderId: uuid("order_id").primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    occurredAt: timestamp("occurred_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    convertedAt: timestamp("converted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("storefront_order_attribution_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_order_attribution_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_order_attribution_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const storefrontDaily = pgTable(
+  "storefront_daily",
+  {
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    visitors: integer().default(0).notNull(),
+    sessions: integer().default(0).notNull(),
+    pageViews: integer("page_views").default(0).notNull(),
+    productSessions: integer("product_sessions").default(0).notNull(),
+    cartSessions: integer("cart_sessions").default(0).notNull(),
+    checkoutSessions: integer("checkout_sessions").default(0).notNull(),
+    convertedSessions: integer("converted_sessions").default(0).notNull(),
+    purchases: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.date] }),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_daily_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
 // Google Search Console Phase 3a (search_metrics_01_schema.sql). Source epochs
 // preserve origin history; metrics are complete replaceable PT-day buckets;
 // jobs are the durable cursor used by the self-chaining cron.

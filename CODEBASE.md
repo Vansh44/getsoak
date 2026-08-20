@@ -2418,12 +2418,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       global module availability. `platform_analytics_settings` is a singleton,
       service-only table enrolled as migration
       `20260820_0007_platform_analytics_controls`; shipped modules default on,
-      while planned collection modules default off. `lib/analytics/features.ts`
+      while optional collection modules default off. `lib/analytics/features.ts`
       is the pure registry/default/entitlement layer and
       `platform-feature-store.ts` owns fail-safe reads. Core dashboard,
       customization, drill-down/CSV and Google Search switches are enforced at
-      merchant render/action/export boundaries. GA4, Meta Pixel, storefront
-      conversion and margin are registered as planned Pro-only modules;
+      merchant render/action/export boundaries. GA4, Meta Pixel, and storefront
+      conversion are available Pro-only modules; margin remains planned;
       `PLAN_LIMITS.advancedAnalytics` is the independent entitlement gate, so a
       global switch can never grant a lower plan. `app/actions/platform-analytics-settings.ts`
       rechecks superadmin authorization and validates the full fixed setting
@@ -2445,6 +2445,29 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       publishes their previously drafted Help Centre setup guides. These pixels
       send data to the merchant's own provider account; they do not populate the
       StoreMink dashboard or replace Phase 9 first-party conversion analytics.
+    - **Phase 9 storefront conversion (2026-08-20):** Pro storefronts can
+      collect first-party `page_view`, `product_view`, `add_to_cart`, and
+      `checkout_start` events through the same explicit Analytics consent used
+      by GA4. `POST /api/t` resolves the store from the request host, accepts no
+      client store id or purchase event, validates same-origin payloads, filters
+      common bots, rate-limits a server-derived daily visitor key, and relies on
+      `(store_id,event_id)` uniqueness for retry safety. The HMAC key rotates at
+      local midnight and uses `STOREFRONT_ANALYTICS_SECRET` when present, falling
+      back to the already-required `CRON_SECRET`; no visitor/device id is stored
+      in the browser. `merchant-tracking.tsx` owns consent and route events,
+      while `CartProvider` emits successful add-to-cart actions.
+      `lib/analytics/storefront-purchase.ts` creates temporary attribution only
+      when the same consented daily key reached checkout in the preceding 30
+      minutes; recognized COD/store-credit orders and the atomic Razorpay paid
+      claimant promote it to a server-only, order-idempotent purchase event.
+      Migration `20260820_0011_storefront_conversion` adds service-only raw,
+      attribution and daily tables, enables the platform module, and publishes
+      the privacy/metric Help guide. `/api/cron/analytics-rollup` rebuilds the
+      14-day correction window into 30-minute ordered sessions and durable daily
+      funnel totals; Cloud Scheduler must invoke it hourly at `:40`. Raw events
+      and attribution are pruned after 14 days by `prune-logs`. Pro merchants
+      receive Visitors, Sessions, Page views, and ordered Funnel cards; lower
+      plans and a disabled platform switch receive neither collection nor cards.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend

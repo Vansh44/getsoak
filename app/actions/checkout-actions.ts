@@ -69,6 +69,10 @@ import {
 import { packageForShippingLines } from "@/lib/shipping/rates";
 import { quoteShippingForOrder } from "@/lib/shipping/quote";
 import type { ShippingOptionSnapshot } from "@/lib/shipping/types";
+import {
+  recordStorefrontOrderAttribution,
+  recordStorefrontPurchase,
+} from "@/lib/analytics/storefront-purchase";
 
 // Aliased select for store_billing_settings preserving the snake_case row shape
 // rowToBillingSettings expects (Drizzle would otherwise return camelCase keys).
@@ -1592,6 +1596,8 @@ export async function placeOrder(
     return { error: "Failed to save order items. Please try again." };
   }
 
+  await recordStorefrontOrderAttribution(order.id, storeId);
+
   // Shopify's durable split: the order records the sale; this work object says
   // which location must prepare it. A migration rolling out moments after the
   // app must not lose a paid order, so this is self-healing and booking repeats
@@ -1725,7 +1731,10 @@ export async function placeOrder(
 
   // Paid, or payable without a gateway round trip ⇒ this is a real order now.
   // Otherwise it is a checkout attempt, and markOrderPaid will announce it.
-  if (!awaitsGatewayPayment) emitEvent(orderPlacedEvent);
+  if (!awaitsGatewayPayment) {
+    await recordStorefrontPurchase(order.id);
+    emitEvent(orderPlacedEvent);
+  }
 
   // Tell the merchant if this sale just emptied a shelf. Deferred, and keyed on
   // the threshold CROSSING, so a slow-moving SKU alerts once rather than on

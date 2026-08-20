@@ -52,6 +52,7 @@ each job is a landmine the moment it does:
 | `storemink-search-metrics`          | `30 2 * * *`   | `https://storemink.com/api/cron/search-metrics`          |
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
 | `storemink-prune-logs`              | `0 3 * * *`    | `https://storemink.com/api/cron/prune-logs`              |
+| `storemink-analytics-rollup`        | `40 * * * *`   | `https://storemink.com/api/cron/analytics-rollup`        |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
 | `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 
@@ -61,9 +62,10 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-The original eight exist. **`storemink-search-metrics` is pending** until ledger
-migration `20260819_0006_search_metrics` is applied and its route is deployed;
-do not schedule it against an older schema. Each job is `GET`, `Etc/UTC`, 300s
+The original eight exist. **`storemink-search-metrics` and
+`storemink-analytics-rollup` are pending** until their ledger migrations are
+applied and their routes are deployed; do not schedule either against an older
+schema. Each job is `GET`, `Etc/UTC`, 300s
 attempt deadline, 3 retries, and an `Authorization: Bearer <CRON_SECRET>` header
 — the same secret the routes check (`CRON_SECRET` is in Secret Manager and
 already wired to the prod service).
@@ -141,6 +143,19 @@ gcloud scheduler jobs create http storemink-search-metrics \
 This is intentionally not part of `seo-refresh`: a Search Analytics outage must
 not make sitemap reconciliation report red, and its durable
 `(source_id, PT date, dimension)` cursor can resume independently.
+
+After migration `20260820_0011_storefront_conversion` and the matching deploy,
+create the hourly conversion rollup. It rebuilds the still-correctable 14-day
+raw window, so retries and delayed purchase events remain deterministic:
+
+```bash
+gcloud scheduler jobs create http storemink-analytics-rollup \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="40 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/analytics-rollup" \
+  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
 
 The domain backstop is the one **hourly** job. Google's managed certificate takes
 up to ~30 minutes after the challenge CNAME resolves, and merchants edit DNS on

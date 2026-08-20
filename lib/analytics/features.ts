@@ -71,7 +71,7 @@ export const ANALYTICS_FEATURES: Record<
     label: "Storefront conversion",
     description: "Visitors, sessions and the storefront conversion funnel.",
     minPlan: "pro",
-    status: "planned",
+    status: "available",
   },
   grossMargin: {
     id: "grossMargin",

@@ -130,6 +130,9 @@ export default async function StorefrontLayout({
     analyticsFeatureAllowed(analyticsFeatures, "metaPixel", plan)
       ? pixelSettings.metaPixelId
       : null;
+  const firstPartyEnabled =
+    !previewing &&
+    analyticsFeatureAllowed(analyticsFeatures, "storefrontConversion", plan);
 
   // The visual skin: resolve the store's pinned theme release (falling back to
   // the legacy settings.template id) and flatten
@@ -179,29 +182,31 @@ export default async function StorefrontLayout({
   return (
     <AuthProvider initialHasSession={hasCustomerSession}>
       <DeliveryLocationProvider>
-        <CartProvider>
-          <BrandProvider brand={brand}>
-            <ChromeProvider
-              chrome={chrome}
-              themeLayout={design?.layout}
-              live={previewing}
-            >
-              <div className={rootClass} style={themeVars as CSSProperties}>
-                <Header />
-                {children}
-                <Footer />
-              </div>
-            </ChromeProvider>
-          </BrandProvider>
-          <AuthModalLoader />
-          <CartDrawer />
-          <MerchantTracking
-            storeName={store.name}
-            ga4MeasurementId={ga4MeasurementId}
-            metaPixelId={metaPixelId}
-          />
-          <Toaster richColors />
-        </CartProvider>
+        <MerchantTracking
+          storeName={store.name}
+          ga4MeasurementId={ga4MeasurementId}
+          metaPixelId={metaPixelId}
+          firstPartyEnabled={firstPartyEnabled}
+        >
+          <CartProvider>
+            <BrandProvider brand={brand}>
+              <ChromeProvider
+                chrome={chrome}
+                themeLayout={design?.layout}
+                live={previewing}
+              >
+                <div className={rootClass} style={themeVars as CSSProperties}>
+                  <Header />
+                  {children}
+                  <Footer />
+                </div>
+              </ChromeProvider>
+            </BrandProvider>
+            <AuthModalLoader />
+            <CartDrawer />
+            <Toaster richColors />
+          </CartProvider>
+        </MerchantTracking>
       </DeliveryLocationProvider>
     </AuthProvider>
   );

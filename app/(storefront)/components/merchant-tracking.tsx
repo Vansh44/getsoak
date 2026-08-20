@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { usePathname } from "next/navigation";
@@ -13,6 +22,23 @@ interface TrackingConsent {
   analytics: boolean;
   marketing: boolean;
   decidedAt: string;
+}
+
+export type StorefrontEventType =
+  | "page_view"
+  | "product_view"
+  | "add_to_cart"
+  | "checkout_start";
+
+type TrackStorefrontEvent = (
+  type: StorefrontEventType,
+  details?: { productId?: string },
+) => void;
+
+const TrackingContext = createContext<TrackStorefrontEvent>(() => {});
+
+export function useStorefrontTracking(): TrackStorefrontEvent {
+  return useContext(TrackingContext);
 }
 
 declare global {
@@ -81,10 +107,14 @@ export function MerchantTracking({
   storeName,
   ga4MeasurementId,
   metaPixelId,
+  firstPartyEnabled,
+  children,
 }: {
   storeName: string;
   ga4MeasurementId: string | null;
   metaPixelId: string | null;
+  firstPartyEnabled: boolean;
+  children: ReactNode;
 }) {
   const pathname = usePathname();
   const savedConsent = useSyncExternalStore<string | null | undefined>(
@@ -101,6 +131,47 @@ export function MerchantTracking({
   const [marketingChoice, setMarketingChoice] = useState(false);
   const [gaReady, setGaReady] = useState(false);
   const [metaReady, setMetaReady] = useState(false);
+  const lastFirstPartyPath = useRef<string | null>(null);
+
+  const track = useCallback<TrackStorefrontEvent>(
+    (type, details) => {
+      if (!firstPartyEnabled || !consent?.analytics) return;
+      const payload = JSON.stringify({
+        eventId: crypto.randomUUID(),
+        type,
+        path: window.location.pathname,
+        ...(details?.productId ? { productId: details.productId } : {}),
+      });
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(
+            "/api/t",
+            new Blob([payload], { type: "application/json" }),
+          );
+          return;
+        }
+      } catch {
+        // Fall through to keepalive fetch. Collection must never interrupt a
+        // shopper action if the browser blocks either transport.
+      }
+      void fetch("/api/t", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
+    },
+    [consent?.analytics, firstPartyEnabled],
+  );
+
+  useEffect(() => {
+    if (!firstPartyEnabled || !consent?.analytics) return;
+    if (lastFirstPartyPath.current === pathname) return;
+    lastFirstPartyPath.current = pathname;
+    track("page_view");
+    if (/^\/shop\/[^/]+$/.test(pathname)) track("product_view");
+    if (pathname === "/checkout") track("checkout_start");
+  }, [consent?.analytics, firstPartyEnabled, pathname, track]);
 
   useEffect(() => {
     if (!gaReady || !ga4MeasurementId || !consent?.analytics) return;
@@ -116,12 +187,10 @@ export function MerchantTracking({
     window.fbq?.("track", "PageView");
   }, [consent?.marketing, metaPixelId, metaReady, pathname]);
 
-  if (!ga4MeasurementId && !metaPixelId) return null;
-
   function saveChoice(analytics: boolean, marketing: boolean) {
     const next: TrackingConsent = {
       version: 1,
-      analytics: Boolean(ga4MeasurementId) && analytics,
+      analytics: Boolean(ga4MeasurementId || firstPartyEnabled) && analytics,
       marketing: Boolean(metaPixelId) && marketing,
       decidedAt: new Date().toISOString(),
     };
@@ -146,6 +215,9 @@ export function MerchantTracking({
   const gaAllowed = Boolean(ga4MeasurementId && consent?.analytics);
   const metaAllowed = Boolean(metaPixelId && consent?.marketing);
   const showDialog = consent === null || managing;
+  const hasOptionalTracking = Boolean(
+    firstPartyEnabled || ga4MeasurementId || metaPixelId,
+  );
 
   function beginManaging() {
     setAnalyticsChoice(consent?.analytics ?? false);
@@ -154,7 +226,8 @@ export function MerchantTracking({
   }
 
   return (
-    <>
+    <TrackingContext.Provider value={track}>
+      {children}
       {gaAllowed && ga4MeasurementId ? (
         <>
           <Script
@@ -196,7 +269,7 @@ window.fbq('init', '${metaPixelId}');
 `}</Script>
       ) : null}
 
-      {showDialog ? (
+      {hasOptionalTracking && showDialog ? (
         <section
           role="dialog"
           aria-modal="true"
@@ -217,7 +290,7 @@ window.fbq('init', '${metaPixelId}');
 
           {managing ? (
             <div className="mt-4 space-y-3 border-y border-slate-100 py-4">
-              {ga4MeasurementId ? (
+              {ga4MeasurementId || firstPartyEnabled ? (
                 <label className="flex items-start gap-3 text-sm">
                   <input
                     type="checkbox"
@@ -230,7 +303,13 @@ window.fbq('init', '${metaPixelId}');
                   <span>
                     <strong className="block">Analytics</strong>
                     <span className="text-slate-600">
-                      Allow Google Analytics to measure visits and page views.
+                      Allow{" "}
+                      {firstPartyEnabled ? "StoreMink" : "Google Analytics"} to
+                      measure visits and shopping steps
+                      {ga4MeasurementId && firstPartyEnabled
+                        ? ", and send analytics to Google Analytics"
+                        : ""}
+                      .
                     </span>
                   </span>
                 </label>
@@ -293,7 +372,7 @@ window.fbq('init', '${metaPixelId}');
             )}
           </div>
         </section>
-      ) : consent ? (
+      ) : hasOptionalTracking && consent ? (
         <button
           type="button"
           className="fixed bottom-3 right-3 z-[70] rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-md"
@@ -302,6 +381,6 @@ window.fbq('init', '${metaPixelId}');
           Privacy choices
         </button>
       ) : null}
-    </>
+    </TrackingContext.Provider>
   );
 }
