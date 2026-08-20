@@ -147,9 +147,6 @@ export default async function DashboardLayout({
   // ★ EMPTY for an unrestricted viewer, which is what hides the tag. A
   // restricted admin otherwise sees the same screens with rows quietly missing
   // and nothing on the page to explain why.
-  const scopedLocations = await getViewerLocationNames();
-  const newEnquiries = canViewEnquiries ? await getNewEnquiriesCount() : 0;
-
   // NOTE: no low-stock badge on Inventory. It was removed deliberately, and
   // with it the getLowStockAlertCount() query — one less DB round trip on every
   // dashboard page load. Low stock still surfaces where it is actionable: the
@@ -160,20 +157,32 @@ export default async function DashboardLayout({
   // Store identity for the topbar (name + current plan, Shopify-style). Cached
   // host lookup, so this adds no query. effectivePlan folds an expired timed
   // plan back to free so the badge never overstates what the store can do.
-  const store = await getCurrentStore();
+  // These chrome reads are independent. Keeping them sequential is especially
+  // expensive in local development because each scoped query crosses the
+  // Cloud SQL proxy; run them together so they cost one network window rather
+  // than three. The location read alone depends on the resolved store.
+  const storeContext = getCurrentStore().then(async (store) => {
+    const posState = getPosState(store);
+    const locationCount = posState.posAvailable
+      ? (await getStoreLocations(store.id)).length
+      : 0;
+    return { store, posState, locationCount };
+  });
+  const [scopedLocations, newEnquiries, resolvedStoreContext] =
+    await Promise.all([
+      getViewerLocationNames(),
+      canViewEnquiries ? getNewEnquiriesCount() : Promise.resolve(0),
+      storeContext,
+    ]);
+  const { store, posState, locationCount } = resolvedStoreContext;
   const planId = effectivePlan(store);
   const planName = PLAN_META[planId].name;
 
   // POS sidebar three-state: "Included in Pro" (upgrade) → "Enable POS" → live.
-  const posState = getPosState(store);
-
   // Locations appears only once it is useful: a single-location store has
   // nothing to decide there (docs/locations-ia.md §6.3). Shown on Pro once the
   // store either has a second location or has switched POS on — both are the
   // moment "which location?" starts being a real question.
-  const locationCount = posState.posAvailable
-    ? (await getStoreLocations(store.id)).length
-    : 0;
   const showLocations =
     posState.posAvailable && (locationCount > 1 || posState.posEnabled);
 

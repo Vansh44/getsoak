@@ -211,7 +211,9 @@ wholesip/
 │   │       │                        # = "quick_add"; hidden by CSS otherwise)
 │   │
 │   ├── dashboard/             # ★ STORE ADMIN DASHBOARD (per-store, auth-gated)
-│   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css)
+│   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css); independent
+│   │   │                      # location/enquiry/store chrome reads run concurrently
+│   │   │                      # so local Cloud SQL latency is paid once, not serially
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
@@ -1209,6 +1211,9 @@ wholesip/
 │                              # 0004 repairs paid AI-credit invoices left open
 │                              # and therefore falsely presented as plan debt.
 ├── scripts/
+│   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
+│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
+│   │                          # generated .next/dev caches over 3 GB; signal-safe
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
 │   │                          # checksum drift/unknown-row refusal, RLS/table/column/
@@ -6580,19 +6585,21 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 > anything. It is measured, and the answer is almost never the bundler:
 > compiles run 13 ms–1.5 s, while **every DB query costs ~46 ms** because
 > `db:proxy` points at a Cloud SQL instance in Mumbai — so a page render spends
-> 300–500 ms on network before React starts. The durable fix is a local
-> Postgres (not built; the doc says what it would take). On an 8 GB machine the
-> second cost is memory: the dev server grows to ~4.4 GB through a session and
-> `.next/dev` to ~4 GB, so `rm -rf .next` plus a restart is the ten-second fix.
+> 300–500 ms on network before React starts. Independent dashboard-shell reads
+> run concurrently, but the durable fix for the remaining network floor is a
+> local Postgres (not built; the doc says what it would take). On an 8 GB machine
+> the second cost is memory, so the default dev runner now caps Next at 2 GB and
+> rotates `.next/dev` only after its generated cache exceeds 3 GB.
 
 ```bash
-npm run dev         # next dev --turbopack (test stores via {slug}.localhost:3000)
-npm run dev:lean    # ↑ with --max-old-space-size=3072. OPT-IN, not the default:
-                    #   a heap cap trades CPU (more GC) for RAM, so it helps only
-                    #   where RAM is the binding constraint — making it default
-                    #   would slow every 16/32 GB machine to suit an 8 GB one.
+npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
+                    #   3 GB on ≤20 GB, uncapped above; test stores via {slug}.localhost:3000
+npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
+npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
+npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
-npm run dev:all:lean # ↑ dev:all, with the heap cap
+npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
+npm run dev:all:full # ↑ uncapped dev + proxy
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`

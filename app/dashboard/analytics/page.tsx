@@ -325,12 +325,11 @@ export default async function AnalyticsPage({
     getViewerLocations(),
     searchParams,
   ]);
-  const timeZone = await getStoreAnalyticsTimeZone(storeId);
+  const [timeZone, locationOptions] = await Promise.all([
+    getStoreAnalyticsTimeZone(storeId),
+    getAnalyticsLocationOptions(storeId, locationScope),
+  ]);
   const range: AnalyticsRange = parseAnalyticsRange(params, timeZone);
-  const locationOptions = await getAnalyticsLocationOptions(
-    storeId,
-    locationScope,
-  );
   const location = resolveAnalyticsLocation(
     params.location,
     locationScope,

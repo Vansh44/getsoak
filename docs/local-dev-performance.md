@@ -110,39 +110,56 @@ compiles routes lazily and keeps every one it has compiled resident, so a long
 session that touches many routes climbs steadily. That is a property of dev
 mode, not a leak to configure away — **restart it when it gets sluggish.**
 
-### `npm run dev:lean`
+### The default runner is now memory-aware
 
 ```bash
-npm run dev:lean        # or dev:all:lean, with the Cloud SQL proxy
+npm run dev             # or dev:all, with the Cloud SQL proxy
 ```
 
-Identical to `dev` with `--max-old-space-size=3072`, which forces V8 to collect
-instead of letting the heap grow toward 4.4 GB.
+`scripts/dev-server.mjs` detects physical memory before starting Turbopack:
 
-**★ IT IS OPT-IN, AND THAT IS DELIBERATE.** A heap cap is not faster — it
-trades CPU (more frequent GC) for RAM. It is a win only where RAM is the
-binding constraint. Making it the default would slow down every 16 GB and
-32 GB machine to accommodate an 8 GB one, so it is a second script that
-whoever needs it types.
+| Machine RAM | Next.js V8 heap |
+| ----------- | --------------- |
+| ≤12 GB      | 2 GB            |
+| 12–20 GB    | 3 GB            |
+| >20 GB      | uncapped        |
+
+This keeps the 8 GB Mac from letting one long dev session grow toward 4.4 GB
+and forcing the whole machine into swap, while larger machines keep their
+headroom. `npm run dev:lean` forces 2 GB and `npm run dev:full` explicitly
+removes the cap. A cap trades some extra garbage collection for dramatically
+less swapping; on this machine that is the correct trade.
 
 ### `.next/dev` grows without bound
 
 It reached **4.1 GB** (of a 4.9 GB `.next`) in one session. On a machine
 already writing ~10 GB of swap to the same SSD, that is disk contention on top
-of memory pressure. `rm -rf .next` is always safe — it is fully generated and
-gitignored — and costs one slow cold compile afterwards.
+of memory pressure. The resource-aware runner measures `.next/dev` before
+startup and removes it only when it exceeds 3 GB. `npm run dev:reset` performs
+the same generated-cache reset manually. Either path costs one cold compile,
+then warm Turbopack caching resumes.
+
+### Dashboard rendering no longer serializes unrelated shell reads
+
+The dashboard layout previously awaited location scope, enquiry count, store,
+and POS-location reads one after another. They are now started concurrently
+(with only the store → POS-location dependency kept), and Analytics resolves
+timezone and location options together. This does not remove the Mumbai network
+floor, but it stops paying several independent windows in sequence on every
+page render.
 
 ---
 
 ## 4. If you have ten minutes and dev feels slow
 
-1. `rm -rf .next` and restart the dev server. Reclaims disk _and_ the dev
-   server's accumulated heap.
+1. `npm run dev:reset` and restart the dev server. Reclaims the generated dev
+   cache without deleting production build output.
 2. Quit Electron apps you are not using (Claude, ChatGPT, Codex desktop apps
    were ~1.9 GB combined here).
 3. `killall NotificationCenter` — a known macOS leak; it was holding 1.1 GB.
    It restarts itself immediately and nothing is lost.
-4. Use `npm run dev:all:lean` if you are on 8 GB.
+4. Use normal `npm run dev:all`; it now selects the 2 GB heap automatically on
+   this 8 GB machine.
 5. Turn off any VPN while developing — it taxes all 46 ms of every query.
 
 If it is still slow after that, it is **§2**, and the answer is a local
