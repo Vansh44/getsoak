@@ -62,13 +62,141 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-The original eight exist. **`storemink-search-metrics` and
-`storemink-analytics-rollup` are pending** until their ledger migrations are
-applied and their routes are deployed; do not schedule either against an older
-schema. Each job is `GET`, `Etc/UTC`, 300s
+**All ten jobs exist** (verified against `gcloud scheduler jobs list`,
+2026-08-21), but ⚠ **`storemink-search-metrics` and `storemink-analytics-rollup`
+are PAUSED**: their routes are on `staging` and NOT YET on `main`, and prod
+deploys from `main` — so both 404 against `https://storemink.com`
+(`analytics-rollup`'s first run returned NOT_FOUND at 11:40Z). **Resume both
+once the routes reach prod**:
+
+```bash
+gcloud scheduler jobs resume storemink-analytics-rollup \
+  --project=storemink-prod --location=asia-south1
+gcloud scheduler jobs resume storemink-search-metrics \
+  --project=storemink-prod --location=asia-south1
+```
+
+★★ **THE FLEET DIFF MUST BE AGAINST WHAT IS DEPLOYED, NOT THE WORKING TREE.**
+This gate has two halves — a route needs a job, and the job needs a route
+_live on the target host_ — and checking `app/api/cron/` against
+`gcloud scheduler jobs list` only ever proves the first. Both jobs were created
+off a branch where the routes exist; on prod they do not. Diff against
+`origin/main` (or curl the endpoint) before creating a job, or the fleet looks
+complete while two of its members 404 every hour.
+
+Their ledger migrations ARE applied in BOTH `storemink` and `storemink_staging`
+(`store_search_metrics` / `store_search_sources` / `store_search_sync_jobs` /
+`store_search_rate_limits`, and `storefront_events` / `storefront_daily` /
+`storefront_order_attribution`).
+
+⚠ **`analytics-rollup` HAD TO BE CREATED BEFORE THE FIRST EVENT ARRIVES, NOT
+AFTER.** It is what turns raw `storefront_events` into the durable
+`storefront_daily` totals — and `prune-logs` deletes both `storefront_events`
+and `storefront_order_attribution` at **14 days** (§32). With the rollup absent,
+raw conversion data would be collected, never aggregated, and then permanently
+deleted, silently. It was caught while both tables were still empty, so nothing
+was lost; had a Pro merchant enabled the module first, the loss would have been
+invisible until someone asked why the funnel was blank.
+
+★ **THE FLEET DIFF IS THE ONLY THING THAT HAS EVER CAUGHT THIS.** Compare the
+`app/api/cron/` directory against `gcloud scheduler jobs list` after ANY deploy
+that adds a cron route. A job documented here but absent from Scheduler fails
+completely silently — nothing errors, the work simply never happens. That has
+now happened four times.
+
+Each job is `GET`, `Etc/UTC`, 300s
 attempt deadline, 3 retries, and an `Authorization: Bearer <CRON_SECRET>` header
 — the same secret the routes check (`CRON_SECRET` is in Secret Manager and
 already wired to the prod service).
+
+## Rotating `CRON_SECRET`
+
+The secret is the ONLY thing in front of every cron endpoint — `prune-logs`
+deletes the audit trail, `billing` charges merchants, `expire-pending-payments`
+cancels orders and restocks. Treat a leak as urgent. Rotated 2026-08-21 after
+the value was pasted into a chat transcript by `jobs describe` (see the trap
+below).
+
+The app reads ONE value (`process.env.CRON_SECRET`, compared per route), so
+there is no dual-secret window: this is a coordinated flip.
+
+```bash
+# 1. New version in Secret Manager (console, or:)
+printf '%s' "$(openssl rand -hex 16)" | \
+  gcloud secrets versions add CRON_SECRET --project=storemink-prod --data-file=-
+
+# 2. Roll a revision so instances re-read it. The service pins
+#    CRON_SECRET=CRON_SECRET:latest, so NO code deploy is needed.
+gcloud run services update storemink-web-prod --project=storemink-prod \
+  --region=asia-south1 \
+  --update-secrets=CRON_SECRET=CRON_SECRET:latest
+
+# 3. Take the value FROM Secret Manager — never retype it (trap 1).
+CRON_SECRET_VALUE=$(gcloud secrets versions access latest \
+  --secret=CRON_SECRET --project=storemink-prod)
+
+# 4. Every job, so none is left behind.
+for J in $(gcloud scheduler jobs list --project=storemink-prod \
+             --location=asia-south1 --format="value(name.basename())"); do
+  gcloud scheduler jobs update http "$J" --project=storemink-prod \
+    --location=asia-south1 \
+    --update-headers="Authorization=Bearer ${CRON_SECRET_VALUE}"
+done
+unset CRON_SECRET_VALUE
+```
+
+⚠ **`--update-secrets`, NEVER `--set-secrets`** in step 2. `--set-secrets`
+REPLACES the whole set (the warning at the top of `cloudbuild.yaml`), so it
+would strip `DB_PASSWORD`, `PAYMENT_CRED_KEY`, both Razorpay secrets and
+`POS_SESSION_SECRET` — a total prod outage from a rotation command.
+
+Between step 2 and step 4 the jobs 401. That is unavoidable with one secret and
+harmless: every cron is an idempotent heartbeat that re-reads the same rows on
+its next run, and each retries 3×. Keep the gap to minutes.
+
+### Three traps, all of which bit on 2026-08-21
+
+**★ 1. NEVER RETYPE THE SECRET INTO A SHELL VARIABLE.** A rotation done by
+pasting into `export SECRET='<the new value>'` left the literal `<` on the
+front, and all ten jobs were updated with a 33-character value against a
+32-character secret. Everything _looked_ right — ten jobs, ten identical
+hashes, no errors — because they were consistently wrong. Step 3 above reads
+the value from Secret Manager so the jobs match BY CONSTRUCTION.
+
+**★★ 2. `jobs describe` PRINTS THE SECRET.** The full `Authorization` header is
+in its default output, which is how the value reached a chat log in the first
+place. Always pass `--format="value(...)"` naming only the fields wanted.
+
+**★★ 3. NORMALISE BOTH SIDES WHEN COMPARING HASHES.** `--format='value(...)'`
+appends a newline; `$(...)` command substitution strips one. Hashing one side
+through a pipe and the other through a variable compares 33 bytes against 32
+and reports a MISMATCH on a perfectly good rotation — which then looks exactly
+like a real outage. Verify with both sides normalised:
+
+```bash
+SM=$(gcloud secrets versions access latest --secret=CRON_SECRET \
+       --project=storemink-prod)
+h(){ printf '%s' "$1" | shasum -a 256 | cut -c1-12; }
+for J in $(gcloud scheduler jobs list --project=storemink-prod \
+             --location=asia-south1 --format="value(name.basename())"); do
+  V=$(gcloud scheduler jobs describe "$J" --project=storemink-prod \
+        --location=asia-south1 \
+        --format='value(httpTarget.headers.Authorization)' | sed 's/^Bearer //')
+  [ "$(h "$V")" = "$(h "$SM")" ] && echo "✅ $J" || echo "❌ $J"
+done
+unset SM V
+```
+
+**A hash check is not proof it works** — it proves the jobs agree with Secret
+Manager, not that the running revision does. Confirm with a real run:
+`import-worker` fires every 10 minutes, so it is the fastest signal. An empty
+`status.code` is success. ⚠ Check `userUpdateTime` against `lastAttemptTime`
+first: an attempt from BEFORE the header change says nothing about the new
+secret, and reading a stale success as a pass is how a broken rotation gets
+declared finished.
+
+Only after a real run passes, **Disable** (not Destroy — disable is reversible)
+the previous secret version.
 
 `seo-refresh` registers the platform/help/themes sitemaps, retries sitemap
 coverage for every launched store, and automatically verifies Search Console URL-prefix
@@ -107,12 +235,13 @@ The secret is read straight from Secret Manager so it never lands in a shell
 history or a repo file:
 
 ```bash
-SECRET=$(gcloud secrets versions access latest --secret=CRON_SECRET --project=storemink-prod)
+CRON_SECRET_VALUE=$(gcloud secrets versions access latest \
+  --secret=CRON_SECRET --project=storemink-prod)
 gcloud scheduler jobs create http storemink-plan-expiry \
   --project=storemink-prod --location=asia-south1 \
   --schedule="15 0 * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/plan-expiry" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -123,7 +252,7 @@ gcloud scheduler jobs create http storemink-seo-refresh \
   --project=storemink-prod --location=asia-south1 \
   --schedule="0 2 * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/seo-refresh" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -136,7 +265,7 @@ gcloud scheduler jobs create http storemink-search-metrics \
   --project=storemink-prod --location=asia-south1 \
   --schedule="30 2 * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/search-metrics" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -153,7 +282,7 @@ gcloud scheduler jobs create http storemink-analytics-rollup \
   --project=storemink-prod --location=asia-south1 \
   --schedule="40 * * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/analytics-rollup" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -167,7 +296,7 @@ gcloud scheduler jobs create http storemink-domain-reconcile \
   --project=storemink-prod --location=asia-south1 \
   --schedule="10 * * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/domain-reconcile" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -184,7 +313,7 @@ gcloud scheduler jobs create http storemink-prune-logs \
   --project=storemink-prod --location=asia-south1 \
   --schedule="0 3 * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/prune-logs" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -201,7 +330,7 @@ gcloud scheduler jobs create http storemink-import-worker \
   --project=storemink-prod --location=asia-south1 \
   --schedule="*/10 * * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/import-worker" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
 
@@ -216,8 +345,9 @@ gcloud scheduler jobs create http storemink-billing \
   --project=storemink-prod --location=asia-south1 \
   --schedule="20 * * * *" --time-zone="Etc/UTC" \
   --uri="https://storemink.com/api/cron/billing" \
-  --http-method=GET --headers="Authorization=Bearer ${SECRET}" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
+unset CRON_SECRET_VALUE
 ```
 
 Runs the three renewal passes **in one request, in order** — collect at T−4d,
@@ -345,7 +475,7 @@ every time it was found by DIFFING, never by re-reading this file. So the diff
 is a command rather than an instruction:
 
 ```bash
-diff <(grep -oE 'storemink-[a-z-]+' docs/cron-jobs.md | grep -v storemink-prod | sort -u) <(gcloud scheduler jobs list --location=asia-south1 --format='value(name.basename())' | sort -u)
+diff <(grep -oE 'storemink-[a-z-]+' docs/cron-jobs.md | grep -v storemink-prod | sort -u) <(gcloud scheduler jobs list --project=storemink-prod --location=asia-south1 --format='value(name.basename())' | sort -u)
 ```
 
 Lines with `<` are **documented and do not exist** — the failure this file keeps
@@ -359,7 +489,8 @@ CI as it stands.
 Schedules drift too, and the diff above only compares NAMES. To compare cadence:
 
 ```bash
-gcloud scheduler jobs list --location=asia-south1 --format='table(name.basename(),schedule)'
+gcloud scheduler jobs list --project=storemink-prod --location=asia-south1 \
+  --format='table(name.basename(),schedule)'
 ```
 
 `storemink-domain-reconcile` was created on **2026-08-06** alongside the fix it
@@ -415,7 +546,6 @@ environment's `CRON_SECRET`.
 ## If you rotate `CRON_SECRET`
 
 The header is baked into each job at creation. Rotating the secret without
-updating the jobs makes all six start returning 401 — silently, because a
-failing cron looks identical to one that had nothing to do. Update them with
-`gcloud scheduler jobs update http <name> --headers=...`, then re-verify with the
-logging query above.
+updating the jobs makes all ten start returning 401 — silently, because a
+failing cron looks identical to one that had nothing to do. Use the coordinated
+rotation procedure above, then re-verify with the logging query.

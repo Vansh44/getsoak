@@ -725,19 +725,23 @@ constraint that no longer applies.
 **✅ Shipped:** `30 * * * *` in `vercel.json` (the inert schedule record) and in
 `docs/cron-jobs.md` (the doc of record).
 
-**⚠ THE CLOUD SCHEDULER JOB ITSELF IS NOT CHANGED — that needs you.** `gcloud`
-CLI auth wants an interactive reauth, so the running job is still daily until:
-
-```bash
-gcloud scheduler jobs update http storemink-expire-pending-payments \
-  --location=asia-south1 --schedule="30 * * * *"
-```
+**✅ THE CLOUD SCHEDULER JOB IS NOW HOURLY** (applied 2026-08-21;
+`schedule: 30 * * * *`, ENABLED). It needed an interactive `gcloud` reauth, so
+it could only be run by hand.
 
 **★ THE FLEET DIFF IS NOW A COMMAND, not an instruction.** `docs/cron-jobs.md`
 gained a runnable `diff` of the documented job list against
-`gcloud scheduler jobs list` — three times a job has been documented here and
-absent from Scheduler, and every time diffing is what found it. Reading the
-table has never once caught it.
+`gcloud scheduler jobs list`. Reading the table has never once caught anything;
+diffing has caught it every time.
+
+**★★ AND IT IMMEDIATELY CAUGHT TWO MORE — INCLUDING ONE THAT DESTROYS DATA.**
+Running the diff after this change found `search-metrics` and `analytics-rollup`
+in `app/api/cron/` with no Scheduler job. `analytics-rollup` is what turns raw
+`storefront_events` into the durable `storefront_daily` totals, and `prune-logs`
+deletes the raw tables at 14 days (§32) — so conversion data would have been
+collected, never aggregated, then permanently deleted, with nothing to signal
+it. Both tables were still empty when this was found, so nothing was lost. Both
+jobs now exist; the fleet is ten routes, ten jobs.
 
 **★ `PICKUP_WARN_HOURS` DELIBERATELY DID NOT CHANGE.** The constraint relaxed
 rather than binding: daily warned an order somewhere in (24, 48] hours out,
