@@ -2753,6 +2753,50 @@ accepted behaviour, not a bug.
 
 ---
 
+## 11f. Deposits and expiry at the counter _(roadmap Step 18)_
+
+**PS-DP.1 ★★ — A short payment is a deposit, not a hand-over**
+On a ₹340 pay-at-store collection, take ₹100.
+**Expect:** "₹100 taken. ₹240 still to pay — the order stays on the shelf." The
+row is STILL in the queue and the customer leaves without the parcel.
+
+**PS-DP.2 ★★ — The deposit is subtracted next visit**
+Come back and open the same order.
+**Expect:** ₹240 owed, not ₹340. Without this the till takes ₹540 for a ₹340
+order and the drawer reports OVER by the deposit.
+
+**PS-DP.3 — Settling the balance hands it over**
+Pay the remaining ₹240.
+**Expect:** handed over, exactly as a single full payment would be.
+
+**PS-DP.4 ★ — The deposit is visible on the row**
+Look at a part-paid collection in the queue.
+**Expect:** "₹100 paid" beside it — so a duplicate is visible rather than
+inferred from a smaller amount due.
+
+**PS-DP.5 ★★ — Store credit cannot be used for a deposit**
+Try to part-pay with store credit.
+**Expect:** refused — credit settles a collection in full or not at all. Its
+exactly-once guarantee comes from the claim, and a deposit has no claim.
+
+**PS-DP.6 ★★ — A deposit cannot exceed what is owed (race)**
+Take a deposit while a colleague records another payment on the same order.
+**Expect:** one of them is refused with "more than this order still owes". The
+cap is re-read inside the writing transaction.
+
+**PS-DP.7 ★ — No change on a deposit**
+Hand over ₹100 for a ₹100 deposit on a ₹340 order.
+**Expect:** no change. Change comes from an OVER-payment; a deposit is short by
+definition, so change here would be money out of the drawer.
+
+**PS-DP.8 ★ — Expiring collections are summarised**
+Have 3 ready collections within 48h of expiry.
+**Expect:** an amber banner above "Ready to collect" naming the count. It is
+hidden at zero — a banner that is always there is one nobody reads — and it
+counts READY only, since a parcel still to pack is the shop's own work.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2785,7 +2829,8 @@ Real and deliberate, so nobody files them as bugs:
 | **The shell is browser-verified, the flows are not**                | PS-19.1, 19.3, 19.4, 19.6 (owner), 19.7, 19.8, 19.10 were checked in a browser against staging data. PS-19.5 (a real scanner), PS-19.6 as an actual cashier, and PS-19.9's failure branch are untested                                                                                                                                                                                                         |
 | **Pickup has never been run end to end**                            | No browser verification of PS-8.1–PS-8.31 or PS-E.1–E.6. Every migration it needs is applied (verified 2026-08-18 against both databases), so the only thing outstanding is somebody doing the run                                                                                                                                                                                                             |
 | ~~**`pos-pickup-actions.ts` has no test file**~~                    | **FIXED**. `pos-pickup-actions.test.ts` covers the claim, the idempotent second tap, and the tender/shift wiring; `lib/pos/pickup-payment.test.ts` covers what is owed                                                                                                                                                                                                                                         |
-| **A collection can't be part-paid or discounted**                   | The tender pad must cover the full amount owed. The price was agreed at checkout, and discounting is owner-only (§22) — an exception at this counter would need the same approval machinery                                                                                                                                                                                                                    |
+| ~~**A collection can't be part-paid**~~                             | **FIXED** (PS-DP.1–DP.7). A short payment is recorded as a DEPOSIT and the parcel stays on the shelf — no third pickup state. `amountDueAtCollection` is now net of what has already been taken                                                                                                                                                                                                                |
+| **A collection can't be discounted**                                | By decision (owner, 2026-08-18). It is already placed and INVOICED, with GST computed and an order_ref issued; knocking money off is a partial refund or store credit, both already built. A discount path would mutate a placed sale and move the tax base                                                                                                                                                    |
 | ~~**No tender at the till is gateway-verified**~~                   | **FIXED** (PS-GW.1–GW.12). `razorpay` sat in `TENDER_METHODS` with no gateway call anywhere; `placePosSale` now reads the payment back from Razorpay and refuses anything that is not a CAPTURED INR payment for the exact tender amount. Card/UPI remain external-terminal records BY DESIGN, and the pad now says so                                                                                         |
 | ~~**A collection can't take a gateway payment**~~                   | **FIXED** (PS-GW.13–GW.15). `markCollected` runs the same `verifyGatewayTenders` as the sell counter, before its claim, so `razorpay` rejoined `COUNTER_TENDER_METHODS`                                                                                                                                                                                                                                        |
 | ~~**A dashboard-received return restocks the DEFAULT location**~~   | **FIXED** (PS-RL.1–RL.7). `order_returns.location_id` was never written from `return-actions.ts`, so `receiveReturn` fell to the bare `adjust_stock` wrapper and a parcel that arrived in Mumbai credited Delhi. Now asked for, validated before the claim, and named in the toast                                                                                                                             |

@@ -25,40 +25,40 @@ sequence AND the spec for everything still to build.
 
 ## Status at a glance
 
-| #      | Step                                                           | Size | State   |
-| ------ | -------------------------------------------------------------- | ---- | ------- |
-| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock    | —    | ✅ done |
-| —      | LOC A–F: capabilities, scope, routing, reservations, pickup    | —    | ✅ done |
-| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
-| —      | Store credit                                                   | —    | ✅ done |
-| —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
-| —      | Signup recovery, full business address + live pricing          | —    | ✅ done |
-| —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
-| —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
-| —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
-| **P1** | **Release verification and high-risk action hardening**        | XL   | ◐ part  |
-| **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
-| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
-| **2**  | Cancellation & refund flow                                     | M    | ✅ done |
-| **3**  | Pickup end to end: collection code, QR, role split             | L    | ✅ done |
-| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ✅ done |
-| **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
-| **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
-| **14** | Money-event audit — who discounted, overrode, refunded         | M    | ✅ done |
-| **15** | Hourly sweep + held sales expire                               | S    | ✅ done |
-| **16** | Check the shelf before taking counter payment (rescoped)       | S    | ✅ done |
-| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)   | M    | ✅ done |
-| **18** | **Collection counter: part payment, discount, expiry banner**  | M    | ⏭ next |
-| **19** | Catalogue delta sync                                           | M    | ⏳      |
-| **20** | `placePosSale` round trips (11 → few)                          | M    | ⏳      |
-| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)       | M    | ⏳      |
-| **6**  | Channel stock policy, per location and configurable (LOC H)    | M    | ⏳      |
-| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state) | S    | ⏳      |
-| **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
-| **9**  | Gift cards                                                     | M    | ⏳      |
-| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)             | L    | ⏳      |
-| **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
-| **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
+| #      | Step                                                            | Size | State   |
+| ------ | --------------------------------------------------------------- | ---- | ------- |
+| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock     | —    | ✅ done |
+| —      | LOC A–F: capabilities, scope, routing, reservations, pickup     | —    | ✅ done |
+| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes  | —    | ✅ done |
+| —      | Store credit                                                    | —    | ✅ done |
+| —      | Metered extra-location billing (POS 7)                          | —    | ✅ done |
+| —      | Signup recovery, full business address + live pricing           | —    | ✅ done |
+| —      | Shopify-shaped fulfilment + Shiprocket logistics core           | L    | ✅ done |
+| —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
+| —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
+| **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
+| **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
+| **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                      | M    | ✅ done |
+| **3**  | Pickup end to end: collection code, QR, role split              | L    | ✅ done |
+| **4**  | POS customer capture (Shopify parity) + claim/merge             | L    | ✅ done |
+| **12** | POS payments — gateway tender at the till                       | M    | ✅ done |
+| **13** | Return restock lands at the shop that took it                   | S    | ✅ done |
+| **14** | Money-event audit — who discounted, overrode, refunded          | M    | ✅ done |
+| **15** | Hourly sweep + held sales expire                                | S    | ✅ done |
+| **16** | Check the shelf before taking counter payment (rescoped)        | S    | ✅ done |
+| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)    | M    | ✅ done |
+| **18** | Collection counter: deposits + expiry banner (discount dropped) | M    | ✅ done |
+| **19** | **Catalogue delta sync**                                        | M    | ⏭ next |
+| **20** | `placePosSale` round trips (11 → few)                           | M    | ⏳      |
+| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)        | M    | ⏳      |
+| **6**  | Channel stock policy, per location and configurable (LOC H)     | M    | ⏳      |
+| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)  | S    | ⏳      |
+| **8**  | More routing strategies (LOC J)                                 | M    | ⏳      |
+| **9**  | Gift cards                                                      | M    | ⏳      |
+| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)              | L    | ⏳      |
+| **10** | Offline outbox (POS 9)                                          | XL   | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                                | XL   | ⏳      |
 
 **★★ HOW STEPS 14–21 ARE ORDERED (added 2026-08-18).** They fold the POS gap
 list into this table rather than starting a second plan — one ordered plan is
@@ -888,7 +888,7 @@ this codebase keeps paying for.
 
 ---
 
-## Step 18 — Collection counter: part payment, discount, expiry banner
+## Step 18 — Collection counter: deposits + expiry banner ✅ DONE
 
 Three small gaps at one counter, worth doing together because they touch the
 same screen and the same action.
@@ -901,11 +901,59 @@ same screen and the same action.
 - **`order.pickup_expiring` is email-only.** No in-app banner, so a shop working
   the queue cannot see which parcels are about to lapse.
 
-**★ PART PAYMENT IS THE HARD ONE, and not because of the UI.** `markCollected`
-claims awaiting → collected in one statement; a part-paid collection is neither.
-It needs a state the order model does not have today, or a deliberate decision
-that partial payment leaves the parcel unhanded-over. Settle that before
-building.
+### ✅ Deposits — a short payment does not hand the parcel over
+
+**Owner's decision, 2026-08-18:** take the money, keep the parcel. No third
+pickup state, no schema change. `markCollected`'s claim is awaiting|ready →
+collected and a part-paid collection is neither, so the partial branch RECORDS
+the payment and skips the claim entirely.
+
+**★★ THE REAL WORK WAS `amountDueAtCollection`, NOT THE UI.** It derived owed
+from the order row alone, so a customer who left a ₹200 deposit would have been
+asked for the full ₹340 on their next visit — ₹540 taken for a ₹340 order, and a
+drawer reporting OVER by the deposit. It now takes `paidSoFar`, read by one
+shared `paidSoFarFor` so the queue, a scanned code and the charge cannot
+disagree.
+
+**★ THE CAP IS THE INVARIANT.** Recorded payments can never exceed what the
+order owes — re-read INSIDE the writing transaction, because the figure the
+cashier saw is seconds old. ⚠ It fires on a RACE, not on a big number: a payment
+larger than what is owed is an over-payment on the full path, where cash
+legitimately gives change.
+
+**★ NO STORE CREDIT ON A DEPOSIT.** Its exactly-once guarantee comes from
+running inside the claim's transaction (§29); with no claim there is nothing to
+make it exactly-once and a double-tap would deduct a balance twice.
+
+**⚠ NOT IDEMPOTENT, and neither is the sell counter.** Two deliberate taps
+record twice, capped at the amount owed. That is the till's existing posture —
+the human sees the outcome — and `paidSoFar` on the row makes a duplicate
+visible rather than silent.
+
+### ✅ The expiry banner
+
+`isExpiringSoon` + a banner above "Ready to collect". The row already said
+"2 days left"; nothing SUMMARISED it, so on a queue of twenty the urgent one had
+to be found by reading every row.
+
+**★ READY ONLY.** A parcel still to pack is the SHOP's work and the deadline is
+not yet the customer's problem.
+
+**★ `PICKUP_WARN_HOURS` MOVED to `lib/pos/collection-state.ts`** (pure) and is
+re-exported from the `server-only` `pickup.ts`. The counter and the customer's
+email now share ONE number — a second copy is how the till and the email start
+disagreeing about which parcels are urgent.
+
+### ❌ Discount — dropped, by decision
+
+**Owner, 2026-08-18: use a refund instead.** A collection is already placed and
+INVOICED, with GST computed against `orders.total` and an `order_ref` issued.
+"Knock ₹50 off because it is damaged" is a partial refund or store credit —
+both already built (§26, §29), both leaving a proper record. A discount path
+here would mutate a placed sale and move the tax base.
+
+⚠ Do not re-propose this as "the till can discount, why not the counter". The
+till discounts a sale it is CREATING; this would alter one already issued.
 
 **Effort: M.**
 

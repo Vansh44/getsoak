@@ -101,11 +101,18 @@ const PREPAID = {
   pickup_status: "ready",
 };
 
-/** markCollected's reads in order: the pre-claim look, then this order's holds. */
-const seed = (order: any, holds: any[] = []) =>
+/** markCollected's reads in order: the pre-claim look, the DEPOSITS already
+ *  taken (Step 18), then this order's holds. */
+const seed = (order: any, holds: any[] = [], paid = 0) =>
   makeDbMock({
     returning: CLAIMED,
-    selectQueue: [order ? [order] : [], holds],
+    // ⚠ `order_id` is load-bearing — paidSoFarFor builds a Map keyed by it, so
+    // a row without one lands under `undefined` and reads back as nothing paid.
+    selectQueue: [
+      order ? [order] : [],
+      [{ order_id: "ord-1", paid: String(paid) }],
+      holds,
+    ],
   });
 
 const cash = (amount: number, tendered = amount) => [
@@ -266,14 +273,35 @@ describe("markCollected — the money", () => {
     });
   });
 
-  it("★ refuses a short payment BEFORE claiming — the goods stay on the shelf", async () => {
-    // Claiming first and then refusing the money is the one outcome with no
-    // recovery: the order reads as collected and nothing was ever taken.
+  it("★★ a short payment is a DEPOSIT — recorded, parcel NOT handed over", async () => {
+    // ⚠ THIS BEHAVIOUR CHANGED (Step 18, owner 2026-08-18). It used to be
+    // refused outright. What has NOT changed is the guarantee underneath: the
+    // goods stay on the shelf. A part-paid collection is neither `awaiting` nor
+    // `collected`, so rather than invent a third state the payment is recorded
+    // and the claim is skipped entirely.
     dbHolder.current = seed(UNPAID);
     const res = await markCollected("ord-1", cash(300));
-    expect(res.error).toMatch(/doesn't cover/i);
-    expect(dbHolder.current.calls.update).toHaveLength(0);
-    expect(dbHolder.current.calls.insert).toHaveLength(0);
+
+    expect(res.error).toBeUndefined();
+    expect(res.partial).toEqual({ paid: 300, remaining: 40 });
+    // The payment IS recorded…
+    expect(dbHolder.current.calls.insert).toHaveLength(1);
+    // …and the claim never ran, so the customer has not been given the parcel.
+    const claims = dbHolder.current.calls.set.filter(
+      (v: any) => v?.pickupStatus === "collected",
+    );
+    expect(claims).toHaveLength(0);
+  });
+
+  it("★ a deposit already taken is subtracted on the next visit", async () => {
+    // Without this the customer is charged the full amount twice — ₹540 taken
+    // for a ₹340 order, and a drawer reporting OVER by the deposit.
+    dbHolder.current = seed(UNPAID, [], 200);
+    const res = await markCollected("ord-1", cash(140));
+    expect(res.error).toBeUndefined();
+    // 140 settles the remaining 140, so this is a full hand-over, not a deposit.
+    expect(res.partial).toBeUndefined();
+    expect(res.success).toBe(true);
   });
 
   it("refuses to hand over an unpaid order with no payment at all", async () => {
@@ -698,5 +726,86 @@ describe("markCollected — store credit", () => {
     await markCollected("ord-1", cash(340));
     expect(spendCredit).not.toHaveBeenCalled();
     expect(getCreditBalance).not.toHaveBeenCalled();
+  });
+});
+
+// ── Deposits (roadmap Step 18) ──────────────────────────────────────────────
+// A part-paid collection is neither `awaiting` nor `collected`, so rather than
+// invent a third state the payment is recorded and the claim is skipped: the
+// shop holds the deposit AND the parcel (owner, 2026-08-18).
+
+describe("markCollected — deposits", () => {
+  it("★★ the parcel is NOT handed over, and the claim never runs", async () => {
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", cash(100));
+    expect(res.partial).toEqual({ paid: 100, remaining: 240 });
+    expect(
+      dbHolder.current.calls.set.filter(
+        (v: any) => v?.pickupStatus === "collected",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("★★ a deposit CANNOT exceed what the order owes — the RACE case", async () => {
+    // ⚠ The guard fires on a race, not on a big number. A payment larger than
+    // what is owed is not a deposit at all — it is an over-payment on the full
+    // path, and cash legitimately gives change there.
+    //
+    // What this pins: the figure the cashier saw is seconds old. Here the OUTER
+    // read says nothing is paid (₹340 owed, ₹300 is short → a deposit), but by
+    // the time the write runs another ₹200 has landed, leaving only ₹140. The
+    // re-read INSIDE the writing transaction is the only thing standing between
+    // that and an inflated drawer.
+    dbHolder.current = makeDbMock({
+      returning: CLAIMED,
+      selectQueue: [
+        [UNPAID],
+        [{ order_id: "ord-1", paid: "0" }], // outer: nothing paid yet
+        [{ order_id: "ord-1", paid: "200" }], // inner: someone got there first
+      ],
+    });
+    const res = await markCollected("ord-1", cash(300));
+    expect(res.error).toMatch(/more than this order still owes/i);
+    expect(res.partial).toBeUndefined();
+  });
+
+  it("★★ store credit may not be used for a deposit", async () => {
+    // Its exactly-once guarantee comes from running inside the claim's
+    // transaction (§29). With no claim there is nothing to make it
+    // exactly-once, and a double-tap would deduct a balance twice.
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", [
+      { method: "store_credit" as const, amount: 100 },
+    ]);
+    expect(res.error).toMatch(/in full/i);
+    expect(spendCredit).not.toHaveBeenCalled();
+  });
+
+  it("★ a gateway deposit is verified exactly like a full payment", async () => {
+    dbHolder.current = seed(UNPAID);
+    await markCollected("ord-1", [
+      { method: "razorpay" as const, amount: 100, reference: "pay_x" },
+    ]);
+    expect(verifyGatewayTenders).toHaveBeenCalled();
+  });
+
+  it("★ a refused gateway deposit records nothing", async () => {
+    vi.mocked(verifyGatewayTenders).mockResolvedValue("nope");
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", [
+      { method: "razorpay" as const, amount: 100, reference: "pay_x" },
+    ]);
+    expect(res.error).toBe("nope");
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("★ no change is given on a deposit", async () => {
+    // Change comes out of an OVER-payment; a deposit is by definition short, so
+    // handing money back would be taking it straight out of the drawer.
+    dbHolder.current = seed(UNPAID);
+    await markCollected("ord-1", cash(100, 100));
+    expect(dbHolder.current.calls.values[0][0]).toMatchObject({
+      changeDue: null,
+    });
   });
 });

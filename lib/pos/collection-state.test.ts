@@ -6,7 +6,9 @@ import {
   collectionState,
   handoverGate,
   isCollectable,
+  isExpiringSoon,
   isPrepared,
+  PICKUP_WARN_HOURS,
 } from "./collection-state";
 
 const NOW = new Date("2026-08-12T10:00:00.000Z");
@@ -205,4 +207,46 @@ describe("handoverGate", () => {
       expect(handoverGate({ status }).allowed).toBe(false);
     },
   );
+});
+
+// ── isExpiringSoon (roadmap Step 18) ───────────────────────────────────────
+// The counter row already said "2 days left"; nothing SUMMARISED it, so on a
+// queue of twenty parcels the urgent one had to be found by reading every row.
+
+describe("isExpiringSoon", () => {
+  const now = new Date("2026-08-18T12:00:00Z");
+  const inHours = (h: number) =>
+    new Date(now.getTime() + h * 3_600_000).toISOString();
+
+  it("flags a collection inside the warning window", () => {
+    expect(isExpiringSoon(inHours(12), now)).toBe(true);
+    expect(isExpiringSoon(inHours(PICKUP_WARN_HOURS - 1), now)).toBe(true);
+  });
+
+  it("does not flag one comfortably in the future", () => {
+    expect(isExpiringSoon(inHours(PICKUP_WARN_HOURS + 1), now)).toBe(false);
+  });
+
+  it("★★ an ALREADY-expired collection is not 'expiring soon'", () => {
+    // That is `lapsed`/`gone`, which the row says in its own words. Counting it
+    // here would put a parcel nobody can act on into a banner about chasing
+    // customers.
+    expect(isExpiringSoon(inHours(-1), now)).toBe(false);
+    expect(isExpiringSoon(inHours(0), now)).toBe(false);
+  });
+
+  it("a collection with no deadline is never urgent", () => {
+    expect(isExpiringSoon(null, now)).toBe(false);
+    expect(isExpiringSoon(undefined, now)).toBe(false);
+  });
+
+  it("an unparseable date is not urgent rather than throwing", () => {
+    expect(isExpiringSoon("not-a-date", now)).toBe(false);
+  });
+
+  it("★ uses the SAME window as the customer's email", () => {
+    // The shop seeing "3 expiring" while the customer was nudged on a different
+    // clock is the drift that makes staff distrust both numbers.
+    expect(PICKUP_WARN_HOURS).toBe(48);
+  });
 });
