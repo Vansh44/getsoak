@@ -3079,6 +3079,46 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         profiles, quota) so the register just falls back to the server. Sales
         decrement the cache immediately (`applySold`); a 5-min interval
         re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **★★ THAT RE-SYNC IS A DELTA NOW (Step 19).** It used to re-pull the
+        WHOLE catalogue every five minutes — 300 products a page, forever, for
+        every open till — to learn that a quiet shop had changed nothing.
+        `getCatalogSnapshot(cursor, since)` takes a watermark and returns only
+        what moved; `mergeCatalogDelta` (pure, in `catalog-index.ts`) folds it
+        into the cache. Five rules, each of which is a way to get this wrong:
+        - **★ THE WATERMARK IS SERVER-ISSUED, NEVER A BROWSER CLOCK.** A till
+          whose clock runs fast would skip everything changed in between —
+          permanently, since the next window starts after the one it skipped.
+          The server issues it backdated by `DELTA_OVERLAP_SECONDS` (10), so a
+          write committing in the same second as a sync is re-sent rather than
+          missed. Re-sending is free (the merge is idempotent); missing is not.
+        - **★★ `products.updated_at` COVERS STOCK, NOT JUST CONTENT** — verified
+          against the live schema 2026-08-21, not assumed. `update_catalog_updated_at()`
+          is a BEFORE UPDATE FOR EACH ROW trigger whose whole body is
+          `NEW.updated_at = NOW()`, so it fires on the inventory aggregate's
+          `UPDATE products SET stock` as well as on an editor save. Reading only
+          the aggregate trigger's SET list suggests otherwise; it is wrong.
+          ⚠ `product_variants` has NO `updated_at`, so variants are covered
+          INDIRECTLY — a variant-only write path that never touches the product
+          row would go unnoticed. Pinned by a test.
+        - **★★ A DELTA MUST CARRY REMOVALS OR IT IS ACTIVELY WRONG.** The
+          catalogue query filters on `status = 'published'`, so an unpublished
+          product simply stops matching and would linger on the till forever —
+          the register going on selling something the merchant withdrew. The
+          action asks the opposite question too and returns `removedProductIds`.
+          A removal WINS over a contradictory change in the same window.
+        - **★★ A HARD-DELETED PRODUCT CANNOT APPEAR IN ANY DELTA**, because the
+          row is gone. So `FULL_RESYNC_EVERY_MS` (30 min) is a **CORRECTNESS
+          interval, not a tuning knob** — lengthen it and the window in which a
+          till offers a deleted product grows in step. The full pull remains the
+          source of truth; the delta is the thing that is rationed.
+        - **★ A PRODUCT IS REPLACED WHOLESALE, not upserted per SKU.** Merging
+          variant by variant leaves a DELETED variant in the cache forever,
+          since nothing in the delta mentions the SKU that no longer exists.
+          A failed removals read ships NO watermark, so the client repeats the
+          window rather than advancing past a withdrawal it never heard about —
+          the `use-poll` rule that an error is never a quiet answer. `catalog-store.ts`
+          is at `SCHEMA_VERSION` 3 (the cache gained `watermark`), so an older
+          shape is re-synced rather than served.
       - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
         finds an EXISTING customer of the store (phone/name/email, 2-char
         floor, store-scoped) to attach to a sale, and **`createPosCustomer`

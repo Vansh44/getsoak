@@ -27,6 +27,7 @@ import {
   lt,
   or,
   sql,
+  ne,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -558,8 +559,33 @@ export interface CatalogPage {
   items: PosCatalogItem[];
   /** Pass back to continue; null when the catalog is fully drained. */
   nextCursor: string | null;
+  /**
+   * Products that have LEFT the catalogue since `since` (roadmap Step 19).
+   *
+   * ★★ A DELTA THAT ONLY SENDS CHANGES IS WRONG. The query filters on
+   * `status = 'published'`, so an unpublished product simply stops matching —
+   * the register would keep selling something the merchant withdrew. These are
+   * the ids to drop. Empty on a full sync, where the item list IS the truth.
+   */
+  removedProductIds?: string[];
+  /**
+   * The server clock to pass as `since` next time. Server-issued, never the
+   * browser's: a till whose clock is minutes fast would skip everything
+   * changed in between, permanently.
+   */
+  watermark?: string;
   error?: string;
 }
+
+/**
+ * Overlap re-sent on every delta.
+ *
+ * ★ A row written DURING the sync would otherwise fall in the gap between the
+ * watermark and the next `since`, and never be sent again. Re-sending a few
+ * seconds of changes is free — the merge is an upsert — while missing one is
+ * a stale price at a counter forever.
+ */
+const DELTA_OVERLAP_SECONDS = 10;
 
 /**
  * A page of the FULL sellable catalog for the operator's location, for the
@@ -574,6 +600,15 @@ export interface CatalogPage {
  */
 export async function getCatalogSnapshot(
   cursor?: string | null,
+  /**
+   * Only what changed after this instant (roadmap Step 19). Omit for a full
+   * pull — which stays the recovery path and the only thing that can notice a
+   * HARD-deleted product, since a deleted row cannot appear in any delta.
+   *
+   * ★ MUST BE A WATERMARK THIS SERVER ISSUED. Accepting a browser clock would
+   * let a fast till skip everything changed in between, permanently.
+   */
+  since?: string | null,
 ): Promise<CatalogPage> {
   const op = await resolvePosOperator();
   if (!op) return { items: [], nextCursor: null, error: "Not signed in." };
@@ -581,6 +616,12 @@ export async function getCatalogSnapshot(
     return { items: [], nextCursor: null, error: "Not allowed." };
 
   const after = typeof cursor === "string" && cursor ? cursor : null;
+  // An unparseable `since` degrades to a FULL sync rather than an empty delta.
+  // Sending nothing would look like "no changes" and leave the till stale.
+  const sinceAt =
+    typeof since === "string" && since && !Number.isNaN(Date.parse(since))
+      ? new Date(since)
+      : null;
 
   try {
     const rows = await withService(async (db) => {
@@ -593,6 +634,18 @@ export async function getCatalogSnapshot(
             eq(products.storeId, op.storeId),
             eq(products.status, "published"),
             after ? gt(products.id, after) : undefined,
+            // ★ `products.updated_at` is bumped by a BEFORE UPDATE trigger
+            // (`update_catalog_updated_at`) on EVERY write to the row, so it
+            // covers content edits AND stock: the inventory aggregate trigger
+            // updates products.stock, which fires it too. Verified against the
+            // live schema 2026-08-21.
+            //
+            // ⚠ `product_variants` has NO `updated_at` column, so variants are
+            // covered only INDIRECTLY — a variant's stock moves through the
+            // same aggregate, and the product editor writes the product row on
+            // save. A future variant-only write path that skips the product row
+            // would go unnoticed by this delta. Pinned by a test.
+            sinceAt ? gt(products.updatedAt, sinceAt.toISOString()) : undefined,
           ),
         )
         .orderBy(products.id)
@@ -623,7 +676,49 @@ export async function getCatalogSnapshot(
         ? null
         : (items[items.length - 1]?.productId ?? null);
 
-    return { items, nextCursor };
+    if (!sinceAt) return { items, nextCursor };
+
+    // ── The removals half of a delta ──────────────────────────────────────
+    // ★★ WITHOUT THIS THE DELTA IS ACTIVELY WRONG. The query above filters on
+    // `status = 'published'`, so an unpublished product stops matching and the
+    // register would go on selling something the merchant withdrew. Asking the
+    // opposite question is the only way a delta can say "drop this".
+    //
+    // ⚠ A HARD-DELETED product still cannot appear — the row is gone. That is
+    // what the periodic full reconcile on the client is for, and it is why the
+    // full pull remains the source of truth rather than an optimisation.
+    let removedProductIds: string[] = [];
+    try {
+      const withdrawn = await withService((db) =>
+        db
+          .select({ id: products.id })
+          .from(products)
+          .where(
+            and(
+              eq(products.storeId, op.storeId),
+              ne(products.status, "published"),
+              gt(products.updatedAt, sinceAt.toISOString()),
+            ),
+          )
+          .limit(CATALOG_PAGE_PRODUCTS),
+      );
+      removedProductIds = withdrawn.map((r) => r.id);
+    } catch (err) {
+      // ★ A FAILED REMOVALS READ MUST NOT SILENTLY SHIP A HALF-DELTA. Returning
+      // the additions alone would leave a withdrawn product on the till with
+      // nothing to say so; returning no watermark makes the client keep its old
+      // one and simply try again.
+      console.error("getCatalogSnapshot (removals):", errMsg(err));
+      return { items, nextCursor };
+    }
+
+    // Server-issued, and deliberately backdated: a row written DURING this sync
+    // would otherwise fall between the watermark and the next `since` and never
+    // be sent again. Re-sending a few seconds is free — the merge is an upsert.
+    const watermark = new Date(
+      Date.now() - DELTA_OVERLAP_SECONDS * 1000,
+    ).toISOString();
+    return { items, nextCursor, removedProductIds, watermark };
   } catch (err) {
     return {
       items: [],

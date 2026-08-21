@@ -959,23 +959,68 @@ till discounts a sale it is CREATING; this would alter one already issued.
 
 ---
 
-## Step 19 — Catalogue delta sync
+## Step 19 — Catalogue delta sync ✅ DONE
 
 Every register re-pulls the WHOLE catalogue every 5 minutes, keyset-paged at 300
 products a page — O(catalogue) per till, forever. A 20,000-SKU shop with four
 tills does that 48 times an hour.
 
-**Ships.** A watermark (`max(updated_at)`) per store, and a sync that asks for
-what changed since the last one.
+**✅ Shipped.** `getCatalogSnapshot(cursor, since)` returns changes, REMOVALS and
+a server-issued watermark; `mergeCatalogDelta` (pure, 8 tests) folds them into
+the cache; `use-catalog` keeps the watermark and falls back to a full pull every
+30 minutes.
+
+**★★ THE WATERMARK QUESTION WAS SETTLED AGAINST THE LIVE SCHEMA, NOT ASSUMED.**
+`products.updated_at` is maintained by `update_catalog_updated_at()` — a BEFORE
+UPDATE FOR EACH ROW trigger whose whole body is `NEW.updated_at = NOW()`. So it
+moves on a content edit AND on a stock change, because the inventory aggregate
+trigger issues `UPDATE products SET stock = …` and that fires it too. Verified
+2026-08-21 by reading `pg_proc`; the doubt raised beforehand (from reading only
+the aggregate trigger's SET list) was WRONG, and CODEBASE §7's claim was right.
+
+**⚠ `product_variants` HAS NO `updated_at` COLUMN AT ALL.** Variants are covered
+only INDIRECTLY: their stock moves through the same aggregate, and the product
+editor writes the product row on save. A future variant-only write path that
+skips the product row would be invisible to this delta. Pinned by a comment at
+the predicate.
 
 **★ THE CACHE IS NOT AUTHORITATIVE, and that is what makes this safe.**
 `placePosSale` re-reads price and re-reserves, so a delta that misses something
 is a wrong label at worst, never a wrong charge. A full re-sync stays available
 as the recovery path.
 
-**⚠ DELETES ARE THE TRAP.** A watermark sync never sees a removed product, so
-the register would keep selling something the catalogue dropped. Needs either a
-tombstone or a periodic full reconcile.
+**⚠ DELETES ARE THE TRAP — and they split in two.**
+
+- **UNPUBLISHED** is handled: the catalogue query filters on
+  `status = 'published'`, so a withdrawn product stops matching and would simply
+  linger. The delta asks the OPPOSITE question as well and returns
+  `removedProductIds`. Without that half a delta is actively wrong.
+- **HARD-DELETED cannot be**: the row is gone, so no query can name it. The
+  30-minute full reconcile is the only thing that ever notices, which makes it
+  a CORRECTNESS interval rather than a tuning knob — lengthen it and the window
+  in which a till offers a deleted product grows in step.
+
+**★ A FULL PULL REPLACES; A DELTA MERGES.** Treating a delta as a replacement
+would leave the register holding only what changed in the last five minutes — an
+empty till on a quiet morning.
+
+**★ A PRODUCT IS REPLACED WHOLESALE, not upserted per SKU.** A delta carries
+every sellable SKU under a product, so upserting by product+variant would leave
+a DELETED variant behind forever: the delta stops mentioning it, which is
+indistinguishable from "unchanged". Mutation-checked.
+
+**★ THE WATERMARK IS SERVER-ISSUED AND BACKDATED 10s.** A browser clock would
+let a fast till skip everything changed in between, permanently; the overlap
+stops a row written DURING the sync falling into the gap. Re-sending a few
+seconds is free — the merge is an upsert.
+
+**★ A FAILED REMOVALS READ SHIPS NO WATERMARK.** The client then keeps its old
+one and repeats the window, rather than advancing past a withdrawal it never
+heard about.
+
+**★ THE CACHE VERSION WAS BUMPED (v2 → v3).** A v2 entry has no watermark, and
+serving one would make the first sync a delta with no `since` — which the server
+reads as a full pull. Correct, but only by accident.
 
 **Effort: M.**
 

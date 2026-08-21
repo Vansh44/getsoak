@@ -2797,6 +2797,43 @@ counts READY only, since a parcel still to pack is the shop's own work.
 
 ---
 
+## 11g. Catalogue delta sync _(roadmap Step 19)_
+
+**PS-CS.1 — A quiet catalogue syncs almost nothing**
+Leave a till open 10 minutes with no catalogue edits.
+**Expect:** the periodic syncs return no items. Previously each pulled the whole
+catalogue, 300 products a page.
+
+**PS-CS.2 ★ — A price edit reaches the till**
+Change a product's price in the dashboard, wait for the next sync.
+**Expect:** the grid shows the new price. This is what the watermark exists for
+— `products.updated_at` is bumped by a BEFORE UPDATE trigger on every write.
+
+**PS-CS.3 ★ — A sale on another till updates stock here**
+Sell the last unit on till B.
+**Expect:** till A's cached stock follows within a sync. Stock reaches the
+watermark because the inventory aggregate issues `UPDATE products SET stock`,
+which fires the same trigger.
+
+**PS-CS.4 ★★ — An UNPUBLISHED product disappears**
+Unpublish a product, wait for the next sync.
+**Expect:** gone from the grid. Without the removals half it would linger: the
+catalogue query filters on published, so a withdrawn product simply stops
+matching and is never mentioned again.
+
+**PS-CS.5 ★★ — A HARD-DELETED product disappears within 30 minutes**
+Delete a product outright.
+**Expect:** still on the till until the next FULL reconcile, then gone. No delta
+can name a row that no longer exists — this is why the full pull is rationed
+rather than retired.
+
+**PS-CS.6 ★ — A deleted VARIANT disappears**
+Remove one variant from a multi-variant product.
+**Expect:** gone. The product is replaced wholesale by what the delta sends;
+upserting per SKU would leave it behind forever.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

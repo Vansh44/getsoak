@@ -20,6 +20,7 @@ import {
   searchLocal,
   type CatalogIndex,
   type CatalogItem,
+  mergeCatalogDelta,
 } from "./catalog-index";
 import { catalogKey, readCatalog, writeCatalog } from "./catalog-store";
 import { usePoll } from "./use-poll";
@@ -44,6 +45,20 @@ const RESYNC_MS = 5 * 60 * 1000;
 
 /** Bounds memory and sync time on a pathological catalog. Past this the
  *  register still works — it just falls back to the server more often. */
+/**
+ * How often a DELTA gives way to a full reconcile (roadmap Step 19).
+ *
+ * ★★ THIS IS A CORRECTNESS INTERVAL, NOT A TUNING KNOB. A delta can never
+ * mention a HARD-deleted product: the row is gone, so no query returns it and
+ * no removals list can name it. Only a full pull ever notices, so this bounds
+ * how long a register can go on offering something that no longer exists.
+ *
+ * 30 minutes against a 5-minute sync means ~1 full pull in 6 — the load win
+ * this step exists for — while a deleted product is gone from every till within
+ * half an hour. Lengthen it and that window grows in step.
+ */
+const FULL_RESYNC_EVERY_MS = 30 * 60 * 1000;
+
 const MAX_ITEMS = 20_000;
 const MAX_PAGES = 200;
 
@@ -107,6 +122,13 @@ export function useCatalog(
   // against a resolved sync writing into an unmounted register.
   const syncingRef = useRef(false);
   const aliveRef = useRef(true);
+  // ── Delta-sync state (roadmap Step 19) ─────────────────────────────────
+  // Refs, not state: the sync loop reads them and a re-render in between must
+  // not hand it a stale closure — this is exactly the "in-flight run commits
+  // superseded state" hazard usePoll already guards.
+  const itemsRef = useRef<CatalogItem[]>([]);
+  const watermarkRef = useRef<string | null>(null);
+  const lastFullRef = useRef(0);
 
   const sync = useCallback(
     async (run?: PollRun) => {
@@ -114,11 +136,24 @@ export function useCatalog(
       syncingRef.current = true;
       setState((s) => ({ ...s, syncing: true, error: null }));
 
+      // ── Delta or full? (roadmap Step 19) ─────────────────────────────────
+      // ★★ THE FULL PULL IS NOT RETIRED, IT IS RATIONED. A delta can never
+      // report a HARD-deleted product — the row is gone, so no query can
+      // mention it — which means a register would go on selling something that
+      // no longer exists. The periodic full reconcile is the only thing that
+      // ever notices, so it is a correctness requirement, not a fallback.
+      const wm = watermarkRef.current;
+      const dueFull =
+        !wm || Date.now() - lastFullRef.current >= FULL_RESYNC_EVERY_MS;
+      const since = dueFull ? null : wm;
+
       try {
         const items: CatalogItem[] = [];
+        const removed: string[] = [];
+        let nextWatermark: string | null = null;
         let cursor: string | null = null;
         for (let page = 0; page < MAX_PAGES; page++) {
-          const res = await fetchCatalogPage(cursor, run?.signal);
+          const res = await fetchCatalogPage(cursor, run?.signal, since);
           if (!res || res.error) {
             // Keep whatever cache we already have — a failed refresh must never
             // empty a working register.
@@ -131,13 +166,31 @@ export function useCatalog(
             return;
           }
           items.push(...res.items);
+          if (res.removedProductIds?.length)
+            removed.push(...res.removedProductIds);
+          // ★ Kept from the LAST page only. Each page issues its own, and the
+          // last is the newest — taking an earlier one would re-send the pages
+          // between forever.
+          if (res.watermark) nextWatermark = res.watermark;
           cursor = res.nextCursor;
           if (!cursor || items.length >= MAX_ITEMS) break;
         }
 
         if (!aliveRef.current || (run && !run.isCurrent())) return;
-        const capped = items.slice(0, MAX_ITEMS);
+        // ★ A FULL pull REPLACES; a delta MERGES. Treating a delta as a
+        // replacement would leave the till holding only what changed in the
+        // last five minutes — an empty register on a quiet morning.
+        const merged = since
+          ? mergeCatalogDelta(itemsRef.current, items, removed)
+          : items;
+        const capped = merged.slice(0, MAX_ITEMS);
         const syncedAt = Date.now();
+        itemsRef.current = capped;
+        if (!since) lastFullRef.current = syncedAt;
+        // ★ Only advanced when the server ISSUED one. A delta whose removals
+        // read failed returns none, so the next sync repeats the same window
+        // rather than skipping past a withdrawal it never heard about.
+        if (nextWatermark) watermarkRef.current = nextWatermark;
         setIndex(capped);
         setState((s) => ({
           ...s,
@@ -148,7 +201,7 @@ export function useCatalog(
           error: null,
         }));
         // Persist last: a failed write costs the next cold start, not this session.
-        void writeCatalog(key, capped, syncedAt);
+        void writeCatalog(key, capped, syncedAt, watermarkRef.current);
       } catch {
         if (aliveRef.current)
           setState((s) => ({
@@ -172,6 +225,8 @@ export function useCatalog(
     void (async () => {
       const cached = await readCatalog(key);
       if (!cancelled && cached && cached.items.length > 0) {
+        itemsRef.current = cached.items;
+        watermarkRef.current = cached.watermark ?? null;
         setIndex(cached.items);
         setState((s) => ({
           ...s,
