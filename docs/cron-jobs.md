@@ -90,6 +90,90 @@ attempt deadline, 3 retries, and an `Authorization: Bearer <CRON_SECRET>` header
 — the same secret the routes check (`CRON_SECRET` is in Secret Manager and
 already wired to the prod service).
 
+## Rotating `CRON_SECRET`
+
+The secret is the ONLY thing in front of every cron endpoint — `prune-logs`
+deletes the audit trail, `billing` charges merchants, `expire-pending-payments`
+cancels orders and restocks. Treat a leak as urgent. Rotated 2026-08-21 after
+the value was pasted into a chat transcript by `jobs describe` (see the trap
+below).
+
+The app reads ONE value (`process.env.CRON_SECRET`, compared per route), so
+there is no dual-secret window: this is a coordinated flip.
+
+```bash
+# 1. New version in Secret Manager (console, or:)
+printf '%s' "$(openssl rand -hex 16)" | \
+  gcloud secrets versions add CRON_SECRET --project=storemink-prod --data-file=-
+
+# 2. Roll a revision so instances re-read it. The service pins
+#    CRON_SECRET=CRON_SECRET:latest, so NO code deploy is needed.
+gcloud run services update storemink-web-prod --region=asia-south1 \
+  --update-secrets=CRON_SECRET=CRON_SECRET:latest
+
+# 3. Take the value FROM Secret Manager — never retype it (trap 1).
+export SECRET=$(gcloud secrets versions access latest \
+  --secret=CRON_SECRET --project=storemink-prod)
+
+# 4. Every job, so none is left behind.
+for J in $(gcloud scheduler jobs list --location=asia-south1 \
+             --format="value(name.basename())"); do
+  gcloud scheduler jobs update http $J --location=asia-south1 \
+    --update-headers="Authorization=Bearer ${SECRET}"
+done
+```
+
+⚠ **`--update-secrets`, NEVER `--set-secrets`** in step 2. `--set-secrets`
+REPLACES the whole set (the warning at the top of `cloudbuild.yaml`), so it
+would strip `DB_PASSWORD`, `PAYMENT_CRED_KEY`, both Razorpay secrets and
+`POS_SESSION_SECRET` — a total prod outage from a rotation command.
+
+Between step 2 and step 4 the jobs 401. That is unavoidable with one secret and
+harmless: every cron is an idempotent heartbeat that re-reads the same rows on
+its next run, and each retries 3×. Keep the gap to minutes.
+
+### Three traps, all of which bit on 2026-08-21
+
+**★ 1. NEVER RETYPE THE SECRET INTO A SHELL VARIABLE.** A rotation done by
+pasting into `export SECRET='<the new value>'` left the literal `<` on the
+front, and all ten jobs were updated with a 33-character value against a
+32-character secret. Everything _looked_ right — ten jobs, ten identical
+hashes, no errors — because they were consistently wrong. Step 3 above reads
+the value from Secret Manager so the jobs match BY CONSTRUCTION.
+
+**★★ 2. `jobs describe` PRINTS THE SECRET.** The full `Authorization` header is
+in its default output, which is how the value reached a chat log in the first
+place. Always pass `--format="value(...)"` naming only the fields wanted.
+
+**★★ 3. NORMALISE BOTH SIDES WHEN COMPARING HASHES.** `--format='value(...)'`
+appends a newline; `$(...)` command substitution strips one. Hashing one side
+through a pipe and the other through a variable compares 33 bytes against 32
+and reports a MISMATCH on a perfectly good rotation — which then looks exactly
+like a real outage. Verify with both sides normalised:
+
+```bash
+SM=$(gcloud secrets versions access latest --secret=CRON_SECRET \
+       --project=storemink-prod)
+h(){ printf '%s' "$1" | shasum -a 256 | cut -c1-12; }
+for J in $(gcloud scheduler jobs list --location=asia-south1 \
+             --format="value(name.basename())"); do
+  V=$(gcloud scheduler jobs describe $J --location=asia-south1 \
+        --format='value(httpTarget.headers.Authorization)' | sed 's/^Bearer //')
+  [ "$(h "$V")" = "$(h "$SM")" ] && echo "✅ $J" || echo "❌ $J"
+done
+```
+
+**A hash check is not proof it works** — it proves the jobs agree with Secret
+Manager, not that the running revision does. Confirm with a real run:
+`import-worker` fires every 10 minutes, so it is the fastest signal. An empty
+`status.code` is success. ⚠ Check `userUpdateTime` against `lastAttemptTime`
+first: an attempt from BEFORE the header change says nothing about the new
+secret, and reading a stale success as a pass is how a broken rotation gets
+declared finished.
+
+Only after a real run passes, **Disable** (not Destroy — disable is reversible)
+the previous secret version.
+
 `seo-refresh` registers the platform/help/themes sitemaps, retries sitemap
 coverage for every launched store, and automatically verifies Search Console URL-prefix
 properties for connected custom domains. It returns **503 on any partial
