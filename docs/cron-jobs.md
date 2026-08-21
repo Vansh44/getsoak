@@ -62,10 +62,30 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-The original eight exist. **`storemink-search-metrics` and
-`storemink-analytics-rollup` are pending** until their ledger migrations are
-applied and their routes are deployed; do not schedule either against an older
-schema. Each job is `GET`, `Etc/UTC`, 300s
+**All ten jobs exist** (verified against `gcloud scheduler jobs list`,
+2026-08-21). `storemink-search-metrics` and `storemink-analytics-rollup` were
+the last two: they were held back until their ledger migrations were applied,
+which they now are in BOTH `storemink` and `storemink_staging`
+(`store_search_metrics` / `store_search_sources` / `store_search_sync_jobs` /
+`store_search_rate_limits`, and `storefront_events` / `storefront_daily` /
+`storefront_order_attribution`).
+
+⚠ **`analytics-rollup` HAD TO BE CREATED BEFORE THE FIRST EVENT ARRIVES, NOT
+AFTER.** It is what turns raw `storefront_events` into the durable
+`storefront_daily` totals — and `prune-logs` deletes both `storefront_events`
+and `storefront_order_attribution` at **14 days** (§32). With the rollup absent,
+raw conversion data would be collected, never aggregated, and then permanently
+deleted, silently. It was caught while both tables were still empty, so nothing
+was lost; had a Pro merchant enabled the module first, the loss would have been
+invisible until someone asked why the funnel was blank.
+
+★ **THE FLEET DIFF IS THE ONLY THING THAT HAS EVER CAUGHT THIS.** Compare the
+`app/api/cron/` directory against `gcloud scheduler jobs list` after ANY deploy
+that adds a cron route. A job documented here but absent from Scheduler fails
+completely silently — nothing errors, the work simply never happens. That has
+now happened four times.
+
+Each job is `GET`, `Etc/UTC`, 300s
 attempt deadline, 3 retries, and an `Authorization: Bearer <CRON_SECRET>` header
 — the same secret the routes check (`CRON_SECRET` is in Secret Manager and
 already wired to the prod service).
