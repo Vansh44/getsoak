@@ -24,6 +24,7 @@ import {
   ilike,
   inArray,
   isNotNull,
+  isNull,
   lt,
   or,
   sql,
@@ -54,6 +55,7 @@ import {
   orderItems,
   orderPayments,
   orders,
+  posShifts,
   productVariants,
   products,
   storeBillingSettings,
@@ -65,7 +67,6 @@ import type { OrderInsert } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { likePattern } from "@/lib/pos/search";
 import { personLabel } from "@/lib/pos/person";
-import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
 import { shortLinesAt } from "@/lib/inventory/reservations";
@@ -1069,36 +1070,190 @@ export async function placePosSale(
     }
   }
 
-  // The attached customer MUST belong to this store. Without this check the
-  // client could name any customer id and file the sale against another
-  // store's customer — who would then see a foreign order in their history
-  // (customers hold RLS SELECT on their own orders).
-  let customerId: string | null = null;
-  // Read in the SAME query as the ownership check, because the receipt decision
-  // below needs it: an attached customer WITH an address already gets an order
-  // confirmation from the fan-out, and sending a second copy directly is the
-  // two-emails-for-one-action pattern (§24).
-  let customerEmail: string | null = null;
-  if (typeof opts.customerId === "string" && opts.customerId.trim()) {
-    const wanted = opts.customerId.trim();
+  // ── 3. THE READ WAVE (roadmap Step 20) ────────────────────────────────────
+  // ★★ STATEMENTS INSIDE ONE `withService` RUN SERIALLY — they share a single
+  // pg client — so grouping independent reads into one transaction, which reads
+  // like an optimisation, is the SLOWEST arrangement available. Separate
+  // `withService` calls each take their own pool client, so these four batches
+  // genuinely overlap and the wall clock is the LONGEST batch, not their sum.
+  //
+  // Serial before: shift · products · variants? · billing · tax · location ·
+  // prefix · customer? = 6–8 round trips. Now: max(1, 2, 2, 2) = 2. Against
+  // Mumbai Cloud SQL at ~46ms that is ~320ms saved on the one path whose whole
+  // design goal is "least checkout time".
+  //
+  // ★ BATCHED, NOT ONE PROMISE PER QUERY, AND BALANCED. The wall clock is the
+  // longest batch, so a batch of four would have made three of them wait on it
+  // — the first cut of this had exactly that shape and bought half as much.
+  // The pool is `DB_POOL_MAX` (10) per container, so four concurrent reads per
+  // sale means three simultaneous tills briefly queue. That is acceptable
+  // because each read is short and the total connection-TIME went down; going
+  // wider trades a real pool ceiling for nothing.
+  //
+  // ★★ EVERY BATCH CATCHES ITS OWN FAILURE AND RETURNS IT. Letting them throw
+  // into Promise.all would lose WHICH read failed — and "Couldn't price the
+  // sale." vs "Couldn't read tax settings." is the difference between a cashier
+  // knowing to re-ring and knowing to call someone. It also avoids an unhandled
+  // rejection when one batch fails while the others are still in flight.
+  const wantedCustomerId =
+    typeof opts.customerId === "string" && opts.customerId.trim()
+      ? opts.customerId.trim()
+      : null;
+
+  const productIds = Array.from(new Set(lines.map((l) => l.productId)));
+  const variantIds = Array.from(
+    new Set(lines.map((l) => l.variantId).filter(Boolean)),
+  ) as string[];
+
+  type Batch<T> = { ok: true; value: T } | { ok: false; error: string };
+  const batch = async <T>(
+    fallback: string,
+    run: () => Promise<T>,
+  ): Promise<Batch<T>> => {
     try {
-      const owned = await withService((db) =>
-        db
-          .select({ id: users.id, email: users.email })
-          .from(users)
-          .where(and(eq(users.id, wanted), eq(users.storeId, op.storeId)))
-          .limit(1),
-      );
-      if (owned.length === 0)
-        return { error: "That customer isn't in this store." };
-      customerId = owned[0].id;
-      customerEmail = owned[0].email ?? null;
+      return { ok: true, value: await run() };
     } catch (err) {
-      return { error: dbErrorMessage(err, "Couldn't verify the customer.") };
+      return { ok: false, error: dbErrorMessage(err, fallback) };
     }
+  };
+
+  const [counterRead, catalogueRead, taxRead, tillRead, settings] =
+    await Promise.all([
+      // The counter: who is being served, and which drawer this belongs to.
+      batch("Couldn't verify the customer.", () =>
+        withService(async (db) => {
+          const owner = wantedCustomerId
+            ? await db
+                .select({ id: users.id, email: users.email })
+                .from(users)
+                .where(
+                  and(
+                    eq(users.id, wantedCustomerId),
+                    eq(users.storeId, op.storeId),
+                  ),
+                )
+                .limit(1)
+            : [];
+          return { owner };
+        }),
+      ),
+      // The catalogue: prices are RE-READ here — the client's are a display hint.
+      batch("Couldn't price the sale.", () =>
+        withService(async (db) => {
+          const p = await db
+            .select({
+              id: products.id,
+              name: products.name,
+              selling_price: products.sellingPrice,
+              cost_price: products.costPrice,
+              tax_class_id: products.taxClassId,
+              hsn_code: products.hsnCode,
+            })
+            .from(products)
+            .where(
+              and(
+                inArray(products.id, productIds),
+                eq(products.storeId, op.storeId),
+              ),
+            );
+          const v = variantIds.length
+            ? await db
+                .select({
+                  id: productVariants.id,
+                  name: productVariants.name,
+                  selling_price: productVariants.sellingPrice,
+                  special_price: productVariants.specialPrice,
+                  cost_price: productVariants.costPrice,
+                })
+                .from(productVariants)
+                .where(
+                  and(
+                    inArray(productVariants.id, variantIds),
+                    eq(productVariants.storeId, op.storeId),
+                  ),
+                )
+            : [];
+          return { p, v };
+        }),
+      ),
+      // Tax config (uncached — a sale must reflect the config at the moment it is
+      // rung, never a stale copy).
+      batch("Couldn't read tax settings.", () =>
+        withService(async (db) => {
+          const b = await db
+            .select({
+              ...BILLING_COLS,
+              gst_enabled: storeBillingSettings.gstEnabled,
+            })
+            .from(storeBillingSettings)
+            .where(eq(storeBillingSettings.storeId, op.storeId))
+            .limit(1);
+          const t = await db
+            .select({
+              id: taxClasses.id,
+              name: taxClasses.name,
+              rate: taxClasses.rate,
+              sort_order: taxClasses.sortOrder,
+            })
+            .from(taxClasses)
+            .where(eq(taxClasses.storeId, op.storeId));
+          return { b: b[0] ?? null, t };
+        }),
+      ),
+      // This till: where it is, and which drawer is open.
+      batch("Couldn't read this till's settings.", () =>
+        withService(async (db) => {
+          // ★ THE RECEIPT PREFIX RIDES ALONG WITH THE STATE CODE — same row. It
+          // was being fetched by its own `withService` further down: a whole
+          // round trip, on the sell path, for a column already in flight.
+          const loc = await db
+            .select({
+              state_code: storeLocations.stateCode,
+              receipt_prefix: storeLocations.receiptPrefix,
+            })
+            .from(storeLocations)
+            .where(eq(storeLocations.id, op.locationId))
+            .limit(1);
+          // Which cash drawer this sale belongs to (Phase 3). Stamped on the
+          // order so reconciliation never infers it from a timestamp.
+          const shift = await db
+            .select({ id: posShifts.id })
+            .from(posShifts)
+            .where(
+              and(
+                eq(posShifts.locationId, op.locationId),
+                eq(posShifts.status, "open"),
+                isNull(posShifts.closedAt),
+              ),
+            )
+            .limit(1);
+          return { loc: loc[0] ?? null, shift };
+        }),
+      ),
+      getStoreSettings(),
+    ]);
+
+  // ★ RESULTS ARE CHECKED IN THE ORDER THEY USED TO RUN IN — customer, shift,
+  // prices, tax — so which error a cashier sees for a sale with two problems
+  // is unchanged. Reading them in the order the BATCHES happen to be declared
+  // would quietly reshuffle that, which is the kind of change nobody notices
+  // until someone at a counter is told the wrong thing is wrong.
+  if (!counterRead.ok) return { error: counterRead.error };
+  let customerId: string | null = null;
+  let customerEmail: string | null = null;
+  if (wantedCustomerId) {
+    const owned = counterRead.value.owner;
+    if (owned.length === 0)
+      return { error: "That customer isn't in this store." };
+    customerId = owned[0].id;
+    customerEmail = owned[0].email ?? null;
   }
 
-  const settings = await getStoreSettings();
+  if (!tillRead.ok) return { error: tillRead.error };
+  const supplierState = tillRead.value.loc?.state_code ?? null;
+  const receiptPrefix = tillRead.value.loc?.receipt_prefix || "POS";
+  const shiftId = tillRead.value.shift[0]?.id ?? null;
+
   const allowOverride = settings["pos.allowPriceOverride"] !== false;
   const requireApproval = settings["pos.requireManagerForDiscount"] === true;
   // ★ A DELIBERATE 0 MUST SURVIVE. `|| 10` read as a NaN guard, but the setting
@@ -1115,6 +1270,31 @@ export async function placePosSale(
   // out deliberately.
   const ownerOnlyDiscounts = settings["pos.ownerOnlyDiscounts"] !== false;
   const mayDiscount = posCan(op.role, "discount");
+
+  // ★ THE SHIFT GATE STAYS AFTER THE READS, NOT INSIDE THEM. A store may
+  // require an open shift before selling; that is OFF by default because
+  // turning it on can stop a till, so it stays the merchant's decision.
+  // ⚠ A failed till read already returned above, so — unlike the old
+  // `currentShiftIdFor`, which swallowed its own errors and returned null — a
+  // DB blip can no longer read as "no drawer open" and refuse the sale under
+  // `pos.requireOpenShift`. It reads as the outage it is.
+  if (!shiftId && settings["pos.requireOpenShift"] === true) {
+    return { error: "Open a shift before selling." };
+  }
+
+  if (!catalogueRead.ok) return { error: catalogueRead.error };
+  const pMap = new Map(catalogueRead.value.p.map((p) => [p.id, p]));
+  const vMap = new Map(catalogueRead.value.v.map((v) => [v.id, v]));
+
+  if (!taxRead.ok) return { error: taxRead.error };
+  const billing = rowToBillingSettings(
+    taxRead.value.b as Record<string, unknown> | null,
+  );
+  const gstEnabled = !!(taxRead.value.b as { gst_enabled?: boolean } | null)
+    ?.gst_enabled;
+  const taxClassList = taxRead.value.t.map((r) =>
+    rowToTaxClass(r as Record<string, unknown>),
+  );
 
   // A manager's approval is a SIGNED grant for this exact cart at this exact
   // till, minted by verifyManagerPin. An unverifiable, stale, tampered or
@@ -1136,124 +1316,6 @@ export async function placePosSale(
   });
   const managerApproved = !!approval;
 
-  // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
-  // reconciliation never has to infer it from a timestamp. A store may require
-  // an open shift before selling; that is OFF by default because turning it on
-  // can stop a till, so it stays the merchant's decision.
-  const shiftId = await currentShiftIdFor(op.locationId);
-  if (!shiftId && settings["pos.requireOpenShift"] === true) {
-    return { error: "Open a shift before selling." };
-  }
-
-  // 3. Re-read prices from the DB, store-scoped. The client's prices are only
-  //    ever a display hint.
-  const productIds = Array.from(new Set(lines.map((l) => l.productId)));
-  const variantIds = Array.from(
-    new Set(lines.map((l) => l.variantId).filter(Boolean)),
-  ) as string[];
-
-  let dbProducts: Array<{
-    id: string;
-    name: string;
-    selling_price: number;
-    cost_price: number | null;
-    tax_class_id: string | null;
-    hsn_code: string | null;
-  }>;
-  let dbVariants: Array<{
-    id: string;
-    name: string;
-    selling_price: number;
-    special_price: number | null;
-    cost_price: number | null;
-  }>;
-  try {
-    const res = await withService(async (db) => {
-      const p = await db
-        .select({
-          id: products.id,
-          name: products.name,
-          selling_price: products.sellingPrice,
-          cost_price: products.costPrice,
-          tax_class_id: products.taxClassId,
-          hsn_code: products.hsnCode,
-        })
-        .from(products)
-        .where(
-          and(
-            inArray(products.id, productIds),
-            eq(products.storeId, op.storeId),
-          ),
-        );
-      const v = variantIds.length
-        ? await db
-            .select({
-              id: productVariants.id,
-              name: productVariants.name,
-              selling_price: productVariants.sellingPrice,
-              special_price: productVariants.specialPrice,
-              cost_price: productVariants.costPrice,
-            })
-            .from(productVariants)
-            .where(
-              and(
-                inArray(productVariants.id, variantIds),
-                eq(productVariants.storeId, op.storeId),
-              ),
-            )
-        : [];
-      return { p, v };
-    });
-    dbProducts = res.p;
-    dbVariants = res.v;
-  } catch (err) {
-    return { error: dbErrorMessage(err, "Couldn't price the sale.") };
-  }
-
-  const pMap = new Map(dbProducts.map((p) => [p.id, p]));
-  const vMap = new Map(dbVariants.map((v) => [v.id, v]));
-
-  // 4. Tax config + GST place of supply (uncached — a sale must reflect the
-  //    config at the moment it is rung, never a stale copy).
-  let billing: ReturnType<typeof rowToBillingSettings>;
-  let taxClassList: ReturnType<typeof rowToTaxClass>[];
-  let gstEnabled = false;
-  let supplierState: string | null = null;
-  try {
-    const cfg = await withService(async (db) => {
-      const b = await db
-        .select({
-          ...BILLING_COLS,
-          gst_enabled: storeBillingSettings.gstEnabled,
-        })
-        .from(storeBillingSettings)
-        .where(eq(storeBillingSettings.storeId, op.storeId))
-        .limit(1);
-      const t = await db
-        .select({
-          id: taxClasses.id,
-          name: taxClasses.name,
-          rate: taxClasses.rate,
-          sort_order: taxClasses.sortOrder,
-        })
-        .from(taxClasses)
-        .where(eq(taxClasses.storeId, op.storeId));
-      const loc = await db
-        .select({ state_code: storeLocations.stateCode })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1);
-      return { b: b[0] ?? null, t, loc: loc[0] ?? null };
-    });
-    billing = rowToBillingSettings(cfg.b as Record<string, unknown> | null);
-    gstEnabled = !!(cfg.b as { gst_enabled?: boolean } | null)?.gst_enabled;
-    taxClassList = cfg.t.map((r) =>
-      rowToTaxClass(r as Record<string, unknown>),
-    );
-    supplierState = cfg.loc?.state_code ?? null;
-  } catch (err) {
-    return { error: dbErrorMessage(err, "Couldn't read tax settings.") };
-  }
   const classById = new Map(taxClassList.map((c) => [c.id, c]));
 
   // 5. Price each line + validate discounts/overrides.
@@ -1453,15 +1515,10 @@ export async function placePosSale(
       db.execute(sql`select next_pos_receipt_no(${op.locationId}) as seq`),
     );
     const seq = Number((res.rows[0] as { seq?: number } | undefined)?.seq ?? 0);
-    const prefixRows = await withService((db) =>
-      db
-        .select({ prefix: storeLocations.receiptPrefix })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1),
-    );
-    const prefix = prefixRows[0]?.prefix || "POS";
-    receiptNo = `${prefix}-${String(seq).padStart(6, "0")}`;
+    // The prefix came back with the read wave — it is a column on the same
+    // location row as the state code, so fetching it here was a whole round
+    // trip on the sell path for something already in hand.
+    receiptNo = `${receiptPrefix}-${String(seq).padStart(6, "0")}`;
   } catch (err) {
     // A receipt number is cosmetic — never lose a sale over it.
     console.error("next_pos_receipt_no:", errMsg(err));

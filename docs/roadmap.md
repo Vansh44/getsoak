@@ -1026,23 +1026,99 @@ reads as a full pull. Correct, but only by accident.
 
 ---
 
-## Step 20 — `placePosSale` round trips
+## Step 20 — `placePosSale` round trips ✅ done
 
-The sale path makes **11 separate transactions** — 11 × RTT on the one code path
-whose whole design goal is "least checkout time". Against Mumbai Cloud SQL at
-~46ms that is half a second of pure network.
+**Shipped.** The sell path's read phase went from **6–8 serial round trips to 2**.
+At Mumbai Cloud SQL's ~46ms that is roughly **320ms off every sale**, on the one
+code path whose whole design goal is "least checkout time".
 
-**Ships.** Fold the independent reads into one round trip and the write chain
-into fewer, without weakening the rollback discipline.
+### ★★ THE PLAN SAID "11 TRANSACTIONS". THE REAL NUMBER WAS WORSE
 
-**★★ THE ROLLBACK CHAIN IS WHY IT LOOKS LIKE THIS.** `placeOrder` and
-`placePosSale` both unwind in reverse on failure because there is no
-cross-statement transaction over the pool. Collapsing steps that must unwind
-INDEPENDENTLY would trade latency for a half-committed sale. The safe wins are
-the READS (prices, billing, tax classes, location, prefix), which can be one
-query, and the receipt-number allocation.
+Counting `withService` calls undercounts, because **statements inside ONE
+`withService` share a single pg client and therefore run SERIALLY**. Two of the
+blocks held several statements each, so a 3-line sale with a customer attached
+actually made ~19 round trips, not 11.
 
-**Effort: M.**
+The corollary is the uncomfortable one: **grouping independent reads into one
+transaction — which reads like an optimisation — was the slowest arrangement
+available.** `withService` calls `getPool().connect()`, so separate calls take
+separate pool clients and genuinely overlap. Splitting the groups APART is what
+made them fast.
+
+### What changed
+
+Four concurrent batches, replacing eight serial reads:
+
+| batch     | statements                    | on failure                            |
+| --------- | ----------------------------- | ------------------------------------- |
+| counter   | customer (only when attached) | "Couldn't verify the customer."       |
+| catalogue | products · variants           | "Couldn't price the sale."            |
+| tax       | billing · tax classes         | "Couldn't read tax settings."         |
+| till      | location · open shift         | "Couldn't read this till's settings." |
+
+Plus the receipt prefix, which was **its own round trip on the sell path for a
+column on the same row as the state code** — it now rides along with it.
+
+### ★ BALANCED, NOT MAXIMALLY PARALLEL
+
+The wall clock is the LONGEST batch, so balance matters more than count. The
+first cut of this used three batches and left one holding four statements — it
+bought half as much for the same complexity. Four batches of ≤2 gets the wall to
+2 round trips.
+
+Going wider is not free: `DB_POOL_MAX` is **10 per container**, so four
+concurrent reads per sale means three simultaneous tills briefly queue. That is
+acceptable because each read is short and total connection-TIME went DOWN; going
+wider would trade a real ceiling for no further win.
+
+### ★★ A BUG FELL OUT OF IT
+
+`currentShiftIdFor` swallowed its own errors and returned `null`, on the sound
+reasoning that a sale must never fail because the drawer lookup did. But under
+`pos.requireOpenShift` that null means "no shift open" — so **an unreachable
+database refused the sale with "Open a shift before selling."**, sending a
+cashier to open a drawer that was already open. The till batch owns the failure
+now, so an outage reads as an outage. Regression-tested, mutation-checked.
+
+### ★ ERROR PRECEDENCE IS PRESERVED DELIBERATELY
+
+Results are checked in the order they used to RUN in — customer, shift, prices,
+tax — not the order the batches are declared. Reading them in declaration order
+silently reshuffles which problem a cashier is told about first. ⚠ The first
+attempt got this wrong in both directions, and the outage test above passed
+anyway because it happened to break the batch that was checked first. Failing
+the RIGHT read is what made it a real test.
+
+### ★★ THE CONCURRENCY ITSELF IS PINNED
+
+Every other test passes just as happily when the reads run one after another —
+the values are identical either way — so serialising them is an **invisible**
+regression. One test measures peak in-flight `withService` calls.
+
+⚠ **The first mutation written against it proved nothing**: swapping
+`Promise.all` for a sequential loop does NOT serialise anything, because the
+array literal has already invoked all four batches by then. Concurrency comes
+from eager invocation, not from `Promise.all`. The mutation that works delays
+each batch's start. Second time this session a mutation silently failed to
+change behaviour — **expect the mutation to fail the test, and treat it passing
+as a broken mutation, not a passing suite.**
+
+### Not done here
+
+- **The `reserve_stock_at` loop is still one round trip per line.** Folding it
+  into a single statement over a `VALUES` list would make it 1 RTT _and_ atomic
+  — strictly better than the current per-line loop with its manual unwind. It is
+  out of scope because it changes rollback semantics on the money path, and
+  staging cannot exercise it (see below). Worth doing next.
+- The write chain (order → stock → items → payments) is untouched. It unwinds in
+  reverse on failure and collapsing steps that must unwind INDEPENDENTLY would
+  trade latency for a half-committed sale.
+
+### ⚠ Measured in theory, not on a till
+
+The round-trip COUNT is verified; the ~320ms is arithmetic from the known ~46ms
+RTT, not a measurement. **Staging has products but zero `store_locations` rows**,
+so no store there can ring a sale at all — this could not be timed end to end.
 
 ---
 

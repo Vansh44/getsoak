@@ -3119,6 +3119,39 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           the `use-poll` rule that an error is never a quiet answer. `catalog-store.ts`
           is at `SCHEMA_VERSION` 3 (the cache gained `watermark`), so an older
           shape is re-synced rather than served.
+      - **★★ THE READ PHASE IS FOUR CONCURRENT BATCHES, NOT EIGHT SERIAL READS
+        (Step 20).** `withService` calls `getPool().connect()`, so separate
+        calls take separate pool clients and overlap — while statements INSIDE
+        one `withService` share a client and run SERIALLY. So **grouping
+        independent reads into one transaction, which reads like an
+        optimisation, was the slowest arrangement available**; splitting them
+        apart is what made them fast. counter (customer) · catalogue (products,
+        variants) · tax (billing, classes) · till (location, open shift), each
+        with its OWN failure message — losing which read failed would leave a
+        cashier unable to tell "re-ring this" from "call someone". 6–8 round
+        trips → 2, ≈320ms at Mumbai's ~46ms RTT.
+        - **★ BALANCED, NOT MAXIMALLY PARALLEL.** The wall clock is the LONGEST
+          batch, so a batch of four makes the other three wait on it — the first
+          cut had exactly that shape and bought half as much. And `DB_POOL_MAX`
+          is 10 per container, so four concurrent reads per sale means three
+          simultaneous tills briefly queue; wider trades a real ceiling for no
+          further win.
+        - **★ THE RECEIPT PREFIX RIDES ON THE LOCATION ROW.** It was a separate
+          `withService` on the sell path for a column beside the state code.
+        - **★★ AND IT FIXED A BUG.** `currentShiftIdFor` swallowed its errors
+          and returned null — sound, since a sale must never fail because the
+          drawer lookup did. But under `pos.requireOpenShift` null means "no
+          shift open", so an unreachable DB refused the sale with "Open a shift
+          before selling.", sending a cashier to open a drawer already open.
+          The till batch owns the failure now.
+        - **★ RESULTS ARE CHECKED IN THE ORDER THEY USED TO RUN IN** — customer,
+          shift, prices, tax — never the order the batches are declared, which
+          would silently reshuffle which problem a cashier hears about first.
+        - **★★ THE CONCURRENCY IS PINNED BY ITS OWN TEST**, because every other
+          test passes identically when the reads are serialised: the values do
+          not change, only the time. ⚠ Swapping `Promise.all` for a sequential
+          loop does NOT serialise them — the array literal has already invoked
+          every batch — so a mutation of that shape proves nothing.
       - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
         finds an EXISTING customer of the store (phone/name/email, 2-char
         floor, store-scoped) to attach to a sale, and **`createPosCustomer`

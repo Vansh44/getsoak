@@ -137,18 +137,32 @@ const TAX_CLASS = { id: "tc1", name: "GST 18%", rate: 18, sort_order: 0 };
 
 /**
  * placePosSale's reads, in order:
- *  1 products, 2 variants(skipped when none), 3 billing, 4 tax classes,
- *  5 location state, 6 receipt prefix.
+ * ★ THE ORDER IS SET BY THE READ WAVE'S INTERLEAVING (roadmap Step 20), not by
+ * the order the values are USED in. The three batches start in Promise.all
+ * array order and each runs synchronously up to its first await, so the first
+ * select of each lands before any batch's second one:
+ *
+ *   round 0:  counter(customer, only when one is attached) · catalogue(products)
+ *             · tax(billing) · till(location)
+ *   round 1:  catalogue(variants, only when the cart has any) · tax(classes)
+ *             · till(shift)
+ *
+ * `makeDbMock` consumes its queue when `db.select()` is CALLED, so this is
+ * deterministic — but it does depend on the awaits above. ⚠ Adding an await to
+ * any batch shifts every entry after it; if this becomes a nuisance the fix is
+ * table-keyed responses in `makeDbMock`, not more comments here.
  * db.execute() calls (receipt seq, reserve_stock_at) come from executeQueue.
  */
-function seedHappyPath(over: { productRows?: any[] } = {}) {
+function seedHappyPath(over: { productRows?: any[]; shiftRows?: any[] } = {}) {
   dbHolder.current = makeDbMock({
     selectQueue: [
-      over.productRows ?? [PRODUCT], // 1 products
-      [BILLING], // 2 billing (variants skipped: no variantIds)
-      [TAX_CLASS], // 3 tax classes
-      [{ state_code: "07" }], // 4 location state
-      [{ prefix: "DEL" }], // 5 receipt prefix
+      over.productRows ?? [PRODUCT], // products
+      [BILLING], // billing (variants skipped: no variantIds)
+      // ★ The receipt prefix rides on the location row now — it was a second
+      // round trip on the sell path for a column already in flight.
+      [{ state_code: "07", receipt_prefix: "DEL" }], // location
+      [TAX_CLASS], // tax classes
+      over.shiftRows ?? [], // open shift (none unless a test seeds one)
     ],
     executeQueue: [
       [{ seq: 42 }], // next_pos_receipt_no
@@ -1028,13 +1042,16 @@ describe("placePosSale — store credit", () => {
   /** The ownership read comes first, then the happy-path queue. */
   function seedWithCustomer() {
     dbHolder.current = makeDbMock({
+      // Read-wave order with a customer attached (see seedHappyPath):
+      // round 0 customer · products · billing · location,
+      // round 1 tax classes · shift.
       selectQueue: [
         [{ id: "cust-1", email: null }],
         [PRODUCT],
         [BILLING],
+        [{ state_code: "07", receipt_prefix: "DEL" }],
         [TAX_CLASS],
-        [{ state_code: "07" }],
-        [{ prefix: "DEL" }],
+        [], // no open shift
       ],
       executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
       returning: [{ id: "o1", order_ref: "ORD100110006" }],
@@ -1364,25 +1381,71 @@ describe("searchPosCustomers", () => {
   });
 });
 
+describe("placePosSale — the read wave (Step 20)", () => {
+  // ★★ THIS PINS THE ONLY THING STEP 20 ACTUALLY BUYS. Every other test here
+  // passes just as happily when the reads run one after another — the values
+  // are identical either way — so without this, converting the Promise.all back
+  // into sequential awaits is an invisible regression that quietly puts ~320ms
+  // back onto every sale.
+  it("★ overlaps the reads instead of running them one at a time", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(withService).mockImplementation(async (fn: any) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      try {
+        return await fn(dbHolder.current.db);
+      } finally {
+        inFlight--;
+      }
+    });
+    const r = await placePosSale([line], cash);
+    expect(r.success).toBe(true);
+    // Four read batches are in flight together: counter, catalogue, tax, till.
+    // Serialised, this is 1.
+    expect(peak).toBeGreaterThanOrEqual(4);
+  });
+
+  // ⚠ The pool is DB_POOL_MAX (10) per container. Going wider than this trades
+  // a real ceiling — three simultaneous tills — for no further wall-clock win,
+  // since the wave is already only as slow as its longest batch.
+  it("⚠ does not open more connections than the pool can spare", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(withService).mockImplementation(async (fn: any) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      try {
+        return await fn(dbHolder.current.db);
+      } finally {
+        inFlight--;
+      }
+    });
+    await placePosSale([line], cash);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+});
+
 describe("placePosSale — shift attribution", () => {
+  // The drawer is read INSIDE the config batch now (Step 20), so these seed the
+  // row rather than mocking `currentShiftIdFor` — the sale path no longer calls
+  // it, and a mock of an uncalled function proves nothing.
   it("stamps the sale onto the open drawer", async () => {
-    vi.mocked(currentShiftIdFor).mockResolvedValue("shift-1");
+    seedHappyPath({ shiftRows: [{ id: "shift-1" }] });
     const r = await placePosSale([line], cash);
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].shiftId).toBe("shift-1");
   });
 
-  // Reconciliation surfaces an unattributed sale; a failed drawer lookup must
-  // never refuse a paying customer.
+  // Reconciliation surfaces an unattributed sale; a missing drawer must never
+  // refuse a paying customer.
   it("still sells when no shift is open", async () => {
-    vi.mocked(currentShiftIdFor).mockResolvedValue(null);
     const r = await placePosSale([line], cash);
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].shiftId).toBeNull();
   });
 
   it("refuses when the store requires an open shift and there is none", async () => {
-    vi.mocked(currentShiftIdFor).mockResolvedValue(null);
     vi.mocked(getStoreSettings).mockResolvedValue({
       ...SETTINGS,
       "pos.requireOpenShift": true,
@@ -1393,12 +1456,39 @@ describe("placePosSale — shift attribution", () => {
   });
 
   it("sells under that setting once a shift is open", async () => {
-    vi.mocked(currentShiftIdFor).mockResolvedValue("shift-1");
+    seedHappyPath({ shiftRows: [{ id: "shift-1" }] });
     vi.mocked(getStoreSettings).mockResolvedValue({
       ...SETTINGS,
       "pos.requireOpenShift": true,
     } as any);
     expect((await placePosSale([line], cash)).success).toBe(true);
+  });
+
+  // ★★ A DB BLIP MUST NOT READ AS "NO DRAWER OPEN". The old `currentShiftIdFor`
+  // swallowed its own errors and returned null, so under `pos.requireOpenShift`
+  // an unreadable config refused the sale with "Open a shift before selling." —
+  // sending a cashier to open a drawer that was already open. The config batch
+  // owns the failure now, so it surfaces as the outage it is.
+  it("reports an outage rather than claiming no shift is open", async () => {
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      ...SETTINGS,
+      "pos.requireOpenShift": true,
+    } as any);
+    dbHolder.current = makeDbMock({
+      // Round 0 is catalogue(products) · tax(billing) · till(location). It is
+      // the TILL read that must fail — that is the batch carrying the shift, so
+      // it is the one whose failure could be mistaken for "no drawer open".
+      selectQueue: [[PRODUCT], [BILLING], new Error("connection reset")],
+    });
+    const r = await placePosSale([line], cash);
+    expect(r.success).toBeUndefined();
+    expect(typeof r.error).toBe("string");
+    expect(r.error).not.toMatch(/open a shift/i);
+    // The real cause reaches the operator. ⚠ `dbErrorMessage` propagates the
+    // raw driver message when there is one and only falls back to the supplied
+    // sentence otherwise — pre-existing behaviour every read here already had.
+    expect(r.error).toBe("connection reset");
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 });
 
@@ -1554,12 +1644,14 @@ describe("placePosSale — the gateway replay CONSTRAINT firing", () => {
   function seedInsertClash() {
     const mock = makeDbMock({
       selectQueue: [
+        // Read wave (see seedHappyPath), then the gateway replay check, which
+        // runs AFTER it — a refused payment must cost nothing.
         [PRODUCT],
         [BILLING],
+        [{ state_code: "07", receipt_prefix: "DEL" }],
         [TAX_CLASS],
-        [{ state_code: "07" }],
+        [], // no open shift
         [], // replay check finds nothing — the race is still open
-        [{ prefix: "DEL" }],
       ],
       executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
       returning: [{ id: "o1", order_ref: "ORD100110006" }],
