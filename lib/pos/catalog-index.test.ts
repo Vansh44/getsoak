@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  mergeCatalogDelta,
   applyLayout,
   applyStockDeltas,
   buildIndex,
@@ -334,5 +335,86 @@ describe("manager-arranged layout", () => {
       const clean = at("p-milk", "p-bread");
       expect(pruneLayout(CAT, clean)).toEqual(clean);
     });
+  });
+});
+
+// ── mergeCatalogDelta (roadmap Step 19) ────────────────────────────────────
+// A delta that only ADDS is wrong: the catalogue query filters on
+// status='published', so a withdrawn product simply stops matching and the
+// register would go on selling it.
+
+describe("mergeCatalogDelta", () => {
+  const item = (
+    productId: string,
+    variantId: string | null = null,
+    name = productId,
+  ) =>
+    ({
+      productId,
+      variantId,
+      name,
+      variantName: null,
+      price: 100,
+      stock: 5,
+      trackInventory: true,
+      allowBackorder: false,
+      barcode: null,
+      sku: null,
+      image: null,
+      taxClassId: null,
+    }) as unknown as CatalogItem;
+
+  it("leaves untouched products alone", () => {
+    const out = mergeCatalogDelta([item("a"), item("b")], [], []);
+    expect(out.map((i) => i.productId)).toEqual(["a", "b"]);
+  });
+
+  it("★ a changed product REPLACES its cached version", () => {
+    const out = mergeCatalogDelta(
+      [item("a", null, "old"), item("b")],
+      [item("a", null, "new")],
+    );
+    expect(out.find((i) => i.productId === "a")?.name).toBe("new");
+    expect(out).toHaveLength(2);
+  });
+
+  it("★★ a withdrawn product is DROPPED", () => {
+    // The whole reason removals exist. Without this the till keeps selling
+    // something the merchant unpublished.
+    const out = mergeCatalogDelta([item("a"), item("b")], [], ["a"]);
+    expect(out.map((i) => i.productId)).toEqual(["b"]);
+  });
+
+  it("★★ a product is replaced WHOLESALE, so a deleted variant disappears", () => {
+    // Upserting by product+variant would leave v2 behind forever: the delta
+    // simply stops mentioning it, which is indistinguishable from "unchanged"
+    // unless the product's SKUs are replaced as a set.
+    const out = mergeCatalogDelta(
+      [item("a", "v1"), item("a", "v2")],
+      [item("a", "v1")],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].variantId).toBe("v1");
+  });
+
+  it("★ a new product is added", () => {
+    const out = mergeCatalogDelta([item("a")], [item("b")]);
+    expect(out.map((i) => i.productId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("★★ removal wins over a contradictory change", () => {
+    // The server should never send both; if it does, "no longer sellable" is
+    // the safer reading than putting it back on the grid.
+    const out = mergeCatalogDelta([item("a")], [item("a")], ["a"]);
+    expect(out).toEqual([]);
+  });
+
+  it("removing something not cached is a no-op, not a crash", () => {
+    expect(mergeCatalogDelta([item("a")], [], ["zzz"])).toHaveLength(1);
+  });
+
+  it("an empty delta preserves the cache exactly", () => {
+    const cached = [item("a"), item("b", "v1")];
+    expect(mergeCatalogDelta(cached, [])).toEqual(cached);
   });
 });

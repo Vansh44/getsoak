@@ -11,7 +11,17 @@
 //   posLock()                — clears the operator cookie.
 // Admin-side: createPairingCode / listDevices / revokeDevice (gated on `pos`).
 
-import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  notInArray,
+  sql,
+} from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { revalidatePath } from "next/cache";
@@ -44,7 +54,7 @@ import {
   SESSION_COOKIE,
   sessionCookieOptions,
 } from "@/lib/auth/session-cookie";
-import { posAudit } from "@/lib/pos/audit";
+import { posAudit, POS_MONEY_EVENTS } from "@/lib/pos/audit";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { hashPin, verifyPin, isValidPinFormat } from "@/lib/pos/pin";
 import { isPosRole } from "@/lib/pos/permissions";
@@ -531,8 +541,18 @@ export interface PosActivityRow {
   actor: string | null;
   ip: string | null;
   detail: string | null;
+  /** Money events only (Step 14). Rupees given away or moved; negative means
+   *  it came IN. Null for auth and device events. */
+  amount: number | null;
+  /** Who authorised it, when that differs from the actor. */
+  approver: string | null;
+  orderId: string | null;
   createdAt: string;
 }
+
+/** Which half of the trail to read. Money and security answer different
+ *  questions and are read by people looking for different things. */
+export type PosActivityKind = "all" | "money" | "security";
 
 /**
  * Recent POS security events for the dashboard. Without this the audit trail is
@@ -541,6 +561,7 @@ export interface PosActivityRow {
  */
 export async function listPosActivity(
   limit = 50,
+  kind: PosActivityKind = "all",
 ): Promise<{ events: PosActivityRow[]; error?: string }> {
   const admin = await getManagerIdentity("pos");
   if (!admin) return { events: [], error: "Not authorized" };
@@ -558,10 +579,25 @@ export async function listPosActivity(
           actor: posAuditLog.actor,
           ip: posAuditLog.ip,
           detail: posAuditLog.detail,
+          amount: posAuditLog.amount,
+          approver: posAuditLog.approver,
+          order_id: posAuditLog.orderId,
           created_at: posAuditLog.createdAt,
         })
         .from(posAuditLog)
-        .where(eq(posAuditLog.storeId, storeId))
+        // ★ Filtered on the EVENT list, not on `amount is not null`. A ₹0
+        // discount is still a discretionary act somebody performed, and it is
+        // exactly the row an owner would want when a total looks wrong.
+        .where(
+          kind === "all"
+            ? eq(posAuditLog.storeId, storeId)
+            : and(
+                eq(posAuditLog.storeId, storeId),
+                kind === "money"
+                  ? inArray(posAuditLog.event, [...POS_MONEY_EVENTS])
+                  : notInArray(posAuditLog.event, [...POS_MONEY_EVENTS]),
+              ),
+        )
         .orderBy(desc(posAuditLog.createdAt))
         .limit(safeLimit),
     );
@@ -574,6 +610,9 @@ export async function listPosActivity(
         actor: r.actor,
         ip: r.ip,
         detail: r.detail,
+        amount: r.amount ?? null,
+        approver: r.approver ?? null,
+        orderId: r.order_id ?? null,
         createdAt: r.created_at,
       })),
     };

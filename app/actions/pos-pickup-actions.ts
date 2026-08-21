@@ -42,6 +42,7 @@ import {
   normalizeCollectionCode,
 } from "@/lib/fulfilment/collection-code";
 import { amountDueAtCollection } from "@/lib/pos/pickup-payment";
+import { coversTotal } from "@/lib/pos/totals";
 import {
   accountTenderTotal,
   settleTenders,
@@ -83,10 +84,135 @@ export interface PickupOrder {
   placedAt: string;
   expiresAt: string | null;
   status: string;
+  /** Deposits already taken at the counter. 0 for almost every order; shown on
+   *  the row so a part-paid collection is visible rather than inferred from a
+   *  smaller `amountDue`. */
+  paidSoFar: number;
 }
 
 function fail(msg: string) {
   return { orders: [] as PickupOrder[], error: msg };
+}
+
+/**
+ * What has already been taken at the counter, per order (roadmap Step 18).
+ *
+ * ★ ONE READER, so the queue, a scanned code and the charge itself cannot
+ * disagree about what a customer still owes. Empty map on failure, which reads
+ * as "nothing paid" — the safe direction: it asks for the full amount rather
+ * than handing goods over against a deposit that may not exist.
+ */
+async function paidSoFarFor(orderIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (orderIds.length === 0) return out;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          order_id: orderPayments.orderId,
+          paid: sql<string>`coalesce(sum(${orderPayments.amount}), 0)`,
+        })
+        .from(orderPayments)
+        .where(inArray(orderPayments.orderId, orderIds))
+        .groupBy(orderPayments.orderId),
+    );
+    for (const r of rows) out.set(r.order_id, Number(r.paid) || 0);
+  } catch (err) {
+    console.error("paidSoFarFor:", err);
+  }
+  return out;
+}
+
+/**
+ * Record a DEPOSIT: money taken at the counter that does not settle the order.
+ *
+ * ★★ NO CLAIM, AND THAT IS THE WHOLE DESIGN. `markCollected`'s claim is
+ * awaiting|ready → collected, and a part-paid collection is neither. Rather
+ * than invent a third pickup state, this records the payment and leaves the
+ * order exactly where it was: the shop holds the deposit AND the parcel, and
+ * the customer collects when they settle (owner, 2026-08-18).
+ *
+ * ★ THE CAP IS THE INVARIANT WORTH HAVING. Recorded payments can never exceed
+ * what the order owes — re-read inside the same transaction that writes, so a
+ * slow double-tap cannot walk the total past the order's value. Combined with
+ * `paidSoFar` on the row, a duplicate is visible rather than silent.
+ *
+ * ⚠ IT IS NOT IDEMPOTENT, and neither is the sell counter: two deliberate taps
+ * on "take ₹200" record ₹200 twice, capped at the amount owed. That is the
+ * till's existing posture — the human sees the outcome — and the cap bounds the
+ * damage to the order's own total instead of unbounded drawer inflation.
+ */
+async function takeDeposit(input: {
+  op: { storeId: string; locationId: string; staffId: string | null };
+  orderId: string;
+  tenders: PosTender[];
+  paid: number;
+  due: number;
+  alreadyPaid: number;
+  shiftId: string | null;
+}): Promise<{
+  success?: boolean;
+  error?: string;
+  partial?: { paid: number; remaining: number };
+}> {
+  const { op, orderId, tenders, paid, due, alreadyPaid, shiftId } = input;
+  try {
+    const remaining = await withService(async (db) => {
+      // Re-read INSIDE the transaction: the figure the cashier saw may be
+      // seconds old, and this is the only thing standing between a double-tap
+      // and an inflated drawer.
+      const nowRows = await db
+        .select({
+          paid: sql<string>`coalesce(sum(${orderPayments.amount}), 0)`,
+        })
+        .from(orderPayments)
+        .where(eq(orderPayments.orderId, orderId));
+      const settledNow = Number(nowRows[0]?.paid) || 0;
+      const owedNow = Math.max(0, due + alreadyPaid - settledNow);
+      if (paid > owedNow + 0.0001) {
+        throw new Error(OVERPAID);
+      }
+
+      await db.insert(orderPayments).values(
+        tenders.map((t) => ({
+          orderId,
+          storeId: op.storeId,
+          method: t.method,
+          amount: t.amount,
+          tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
+          // ★ NO CHANGE ON A DEPOSIT. Change comes out of an OVER-payment, and
+          // a deposit is by definition short — handing money back here would be
+          // taking it straight out of the drawer.
+          changeDue: null,
+          reference: t.reference?.slice(0, 120) ?? null,
+        })),
+      );
+      return Math.max(0, owedNow - paid);
+    });
+
+    // ★ The drawer is stamped on the ORDER, and a deposit belongs to the shift
+    // that took it exactly as a full payment does — otherwise the notes are in
+    // the till and contribute 0 to expectedCash, which is the bug §23 fixed.
+    if (shiftId) {
+      await withService((db) =>
+        db
+          .update(orders)
+          .set({ shiftId })
+          .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId))),
+      ).catch((err) => console.error("takeDeposit (shift stamp):", err));
+    }
+
+    revalidatePath("/pos/pickups");
+    return { success: true, partial: { paid, remaining } };
+  } catch (err) {
+    if (err instanceof Error && err.message === OVERPAID) {
+      return {
+        error:
+          "That is more than this order still owes — someone may have just taken a payment. Reload and check.",
+      };
+    }
+    return { error: dbErrorMessage(err, "Couldn't record that payment.") };
+  }
 }
 
 /** Orders waiting to be collected at THIS shop, oldest first. */
@@ -153,6 +279,7 @@ export async function getPickupQueue(
       );
       for (const c of countRows) counts.set(c.order_id, Number(c.n) || 0);
     }
+    const deposits = await paidSoFarFor(rows.map((r) => r.id));
 
     return {
       orders: rows.map((r) => {
@@ -172,7 +299,9 @@ export async function getPickupQueue(
             paymentMethod: r.payment_method,
             paymentStatus: r.payment_status,
             total: r.total,
+            paidSoFar: deposits.get(r.id) ?? 0,
           }),
+          paidSoFar: deposits.get(r.id) ?? 0,
           placedAt: r.created_at,
           expiresAt: r.expires_at,
           status: r.status ?? "awaiting",
@@ -184,6 +313,7 @@ export async function getPickupQueue(
   }
 }
 
+const OVERPAID = "sm:overpaid";
 const CREDIT_MOVED = "sm:credit-moved";
 const NOT_WAITING =
   "That order isn't waiting for collection here. It may already have been collected.";
@@ -210,6 +340,9 @@ export async function markCollected(
   /** The order was never marked ready and needs an explicit confirmation. The
    *  counter turns this into a dialog rather than a dead error. */
   needsPreparedAck?: boolean;
+  /** A DEPOSIT was recorded and the parcel stayed on the shelf (Step 18). Its
+   *  presence is how the counter knows not to say "handed over". */
+  partial?: { paid: number; remaining: number };
 }> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
@@ -281,10 +414,14 @@ export async function markCollected(
     return { error: gate.reason, needsPreparedAck: true };
   }
 
+  // Net of any deposit already left at this counter (Step 18) — otherwise a
+  // customer coming back to settle would be charged the full amount twice.
+  const alreadyPaid = (await paidSoFarFor([orderId])).get(orderId) ?? 0;
   const due = amountDueAtCollection({
     paymentMethod: owed.payment_method,
     paymentStatus: owed.payment_status,
     total: owed.total as number | string | null,
+    paidSoFar: alreadyPaid,
   });
 
   let shiftId: string | null = null;
@@ -300,10 +437,6 @@ export async function markCollected(
       COUNTER_TENDER_METHODS,
     );
     if (bad) return { error: bad };
-    const settled = settleTenders(tenders, due);
-    if ("error" in settled) return { error: settled.error };
-    change = settled.change;
-
     // ── Gateway tenders (§18 Step 12) ──────────────────────────────────────
     // ★★ THE SAME CHECK THE SELL COUNTER RUNS, from the same module. Until this
     // existed, `razorpay` was kept out of COUNTER_TENDER_METHODS entirely,
@@ -340,6 +473,48 @@ export async function markCollected(
         };
       }
     }
+
+    // ── Part payment (roadmap Step 18) ─────────────────────────────────────
+    // ★★ A DEPOSIT DOES NOT HAND THE PARCEL OVER. `markCollected` claims
+    // awaiting|ready → collected in ONE statement, and a part-paid collection
+    // is neither state — so rather than invent a third, a short payment is
+    // RECORDED and the claim is skipped entirely. The shop holds a deposit and
+    // the goods; the customer collects when they settle. Owner's decision,
+    // 2026-08-18.
+    //
+    // ★ NO STORE CREDIT ON A DEPOSIT, deliberately. The credit spend's
+    // exactly-once guarantee comes from running inside the claim's transaction
+    // (§29); with no claim there is nothing to make it exactly-once, and a
+    // double-tap would deduct a balance twice. Money instruments only.
+    const paid = tenders.reduce((sum, t) => sum + (t.amount || 0), 0);
+    const isPartial = paid > 0 && !coversTotal(paid, due);
+    if (isPartial) {
+      if (creditAsked > 0) {
+        return {
+          error:
+            "Store credit can only settle a collection in full. Take the rest another way, or pay the balance with credit at the end.",
+        };
+      }
+      // The drawer is resolved HERE too — a deposit is money in the till
+      // exactly as a full payment is, and must join the same shift.
+      return takeDeposit({
+        op,
+        orderId,
+        tenders,
+        paid,
+        due,
+        alreadyPaid,
+        shiftId: await currentShiftIdFor(op.locationId),
+      });
+    }
+
+    // ★ ONLY THE FULL PATH REACHES THIS. `settleTenders` refuses a short
+    // payment by design, and a deposit IS a short payment — so the partial
+    // branch above returns before it, rather than this being taught a second
+    // meaning.
+    const settled = settleTenders(tenders, due);
+    if ("error" in settled) return { error: settled.error };
+    change = settled.change;
 
     // Which drawer this money belongs to. Stamped on the order in the SAME
     // statement as the claim, so a collection cannot be recorded without its
@@ -716,6 +891,7 @@ export async function findPickupByCode(
         .where(eq(orderItems.orderId, row.id)),
     ).catch(() => []);
 
+    const scannedPaid = (await paidSoFarFor([row.id])).get(row.id) ?? 0;
     return {
       order: {
         id: row.id,
@@ -733,7 +909,9 @@ export async function findPickupByCode(
           paymentMethod: row.payment_method,
           paymentStatus: row.payment_status,
           total: row.total,
+          paidSoFar: scannedPaid,
         }),
+        paidSoFar: scannedPaid,
       },
     };
   } catch (err) {

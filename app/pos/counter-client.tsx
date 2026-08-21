@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   Check,
   Loader2,
   PackageCheck,
@@ -45,7 +46,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { isCollectionCode } from "@/lib/fulfilment/collection-code";
-import { collectionNote, collectionState } from "@/lib/pos/collection-state";
+import {
+  collectionNote,
+  collectionState,
+  isExpiringSoon,
+  PICKUP_WARN_HOURS,
+} from "@/lib/pos/collection-state";
 import {
   getCollectionCredit,
   findPickupByCode,
@@ -365,6 +371,20 @@ export function CounterClient({
       return { error: res.error };
     }
     setTendering(null);
+
+    // ★★ A DEPOSIT IS NOT A HAND-OVER, and the message must not imply it is.
+    // The parcel stays on the shelf until the balance is settled, so saying
+    // "handed over" here would have a cashier give away goods the server
+    // deliberately kept. `settle` removes the row from the queue, which is also
+    // wrong for a deposit — the order is still work.
+    if (res.partial) {
+      toast.success(
+        `₹${res.partial.paid.toLocaleString("en-IN")} taken. ₹${res.partial.remaining.toLocaleString("en-IN")} still to pay — the order stays on the shelf.`,
+      );
+      refreshQueue();
+      return {};
+    }
+
     settle(
       o.id,
       res.changeDue
@@ -404,6 +424,19 @@ export function CounterClient({
     (o) => o.status !== "awaiting" && o.status !== "ready",
   );
   const pastOrders = rows.flatMap((r) => (r.kind === "past" ? [r.order] : []));
+
+  // ── Expiring soon (roadmap Step 18) ──────────────────────────────────────
+  // ★ THE ROW ALREADY SAID "2 days left"; nothing SUMMARISED it. On a queue of
+  // twenty parcels that means reading every row to find the one that matters,
+  // which is the same as not knowing.
+  //
+  // ★ READY ONLY, deliberately. A parcel still to pack is the SHOP's work and
+  // the deadline is not yet the customer's problem; chasing someone about an
+  // order nobody has packed is the wrong conversation. This counts what is on
+  // the shelf waiting for a person who has not come in.
+  const expiringSoon = readyToCollect.filter((o) =>
+    isExpiringSoon(o.expiresAt),
+  );
 
   /** A collection waiting on this shop's shelf. Defined here rather than as a
    *  component so the two sections and the search results share ONE row — three
@@ -471,6 +504,9 @@ export function CounterClient({
             saying the order could still be handed over — two contradictory
             answers to the same question. The note is the better one, so it
             wins, and it carries the date itself on a gone order. */}
+          {o.paidSoFar > 0
+            ? ` · ₹${o.paidSoFar.toLocaleString("en-IN")} paid`
+            : ""}
           {o.expiresAt && state === "collectable"
             ? ` · ${expiryLabel(o.expiresAt)}`
             : ""}
@@ -710,6 +746,22 @@ export function CounterClient({
           >
             {toPrepare.map(renderPickup)}
           </Section>
+          {/* ★ ABOVE the section, not inside it: it is a call to act on a
+              handful of rows, and inside a list of twenty it would be one more
+              thing to scroll past. Hidden at zero — unlike the section
+              headings, which are permanent structure. A banner that is always
+              there is a banner nobody reads. */}
+          {expiringSoon.length > 0 && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>
+                <strong className="font-semibold">{expiringSoon.length}</strong>{" "}
+                {expiringSoon.length === 1 ? "collection" : "collections"} on
+                the shelf expiring within {PICKUP_WARN_HOURS} hours. Ring the
+                customer, or they lapse and the stock goes back.
+              </span>
+            </div>
+          )}
           <Section
             title="Ready to collect"
             count={readyToCollect.length}

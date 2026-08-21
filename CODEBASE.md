@@ -523,7 +523,9 @@ wholesip/
 │       │                      # still ISSUES invoices payable on /dashboard/plans
 │       ├── cron/prune-logs/   # ★ DAILY log retention (§32): the ONLY caller of
 │       │                      # lib/retention/prune.ts. notifications 90d,
-│       │                      # activity_events 365d, email_logs 90d — windows
+│       │                      # activity_events 365d, email_logs 90d (+ pos_parked_sales 7d,
+│                              # Step 15 — the 20-per-counter CAP is what runs
+│                              # out, not the disk) — windows
 │       │                      # that were documented for months and enforced by
 │       │                      # nothing. 503 on a failed table (seo-refresh
 │       │                      # contract), 200 while a backlog drains
@@ -2149,7 +2151,14 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     `order_payments.reference` uniqueness stops it settling two sales, in the
     action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
     (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
-    reserve**, so a refused payment unwinds nothing. **★★ BOTH COUNTERS VERIFY,
+    reserve**, so a refused payment unwinds nothing. **★ THE SHELF IS CHECKED
+    BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
+    runs `shortLinesAt`, refusing before the Razorpay order exists, which
+    catches the commoner stale-IndexedDB-cache case for free. ⚠ It does NOT
+    hold stock: an abandoned hold strands units for up to an hour, the same
+    reason a parked sale holds none (§22), so the two-till race on a last unit
+    still fails at completion and is refunded from the dashboard (owner's
+    decision, 2026-08-18). **★★ BOTH COUNTERS VERIFY,
     FROM ONE IMPLEMENTATION** — `verifyGatewayTenders` is called by
     `placePosSale` before its order insert and by `markCollected` before its
     claim, in each case while a refusal still costs nothing. `razorpay` briefly
@@ -2776,7 +2785,20 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         4. **Append-only audit trail** (`pos_audit_log`, admin-readable,
            service-role writes) for device authorized/revoked, clone detected,
            operator login + failed login, via `lib/pos/audit.ts` — always
-           best-effort, so a logging failure can never block a sale. Surfaced on
+           best-effort, so a logging failure can never block a sale.
+           **★★ AND FOUR MONEY EVENTS SINCE STEP 14** (`sale_discount`,
+           `price_override`, `refund_issued`, `cash_movement`;
+           `pos_16_money_audit.sql` adds `amount`/`approver`/`order_id`).
+           The amounts were never lost — orders, order_items and order_refunds
+           carry them — so what this adds is ATTRIBUTION, above all the
+           APPROVER: `placePosSale` verified the manager's PIN token and then
+           discarded the identity (`!!verifyApprovalToken(...)`), which is the
+           one fact nothing else records. ⚠ A GATEWAY TENDER IS DELIBERATELY
+           NOT AUDITED — the cashier chose nothing and it is reconstructible
+           from `order_payments` + `orders.cashier_id`; noise is what makes an
+           audit stop being read. An override records the DELTA, not the new
+           price. Read at `/dashboard/pos/money`; the devices page reads the
+           security half. Surfaced on
            **`/dashboard/pos/devices`** (`listPosActivity`) next to a **Revoked
            devices** list showing WHY each died — without that, a clone-detected
            auto-revoke is an unexplainable outage.
@@ -3057,6 +3079,79 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         profiles, quota) so the register just falls back to the server. Sales
         decrement the cache immediately (`applySold`); a 5-min interval
         re-syncs, and the header chip shows the cached count + a manual refresh.
+      - **★★ THAT RE-SYNC IS A DELTA NOW (Step 19).** It used to re-pull the
+        WHOLE catalogue every five minutes — 300 products a page, forever, for
+        every open till — to learn that a quiet shop had changed nothing.
+        `getCatalogSnapshot(cursor, since)` takes a watermark and returns only
+        what moved; `mergeCatalogDelta` (pure, in `catalog-index.ts`) folds it
+        into the cache. Five rules, each of which is a way to get this wrong:
+        - **★ THE WATERMARK IS SERVER-ISSUED, NEVER A BROWSER CLOCK.** A till
+          whose clock runs fast would skip everything changed in between —
+          permanently, since the next window starts after the one it skipped.
+          The server issues it backdated by `DELTA_OVERLAP_SECONDS` (10), so a
+          write committing in the same second as a sync is re-sent rather than
+          missed. Re-sending is free (the merge is idempotent); missing is not.
+        - **★★ `products.updated_at` COVERS STOCK, NOT JUST CONTENT** — verified
+          against the live schema 2026-08-21, not assumed. `update_catalog_updated_at()`
+          is a BEFORE UPDATE FOR EACH ROW trigger whose whole body is
+          `NEW.updated_at = NOW()`, so it fires on the inventory aggregate's
+          `UPDATE products SET stock` as well as on an editor save. Reading only
+          the aggregate trigger's SET list suggests otherwise; it is wrong.
+          ⚠ `product_variants` has NO `updated_at`, so variants are covered
+          INDIRECTLY — a variant-only write path that never touches the product
+          row would go unnoticed. Pinned by a test.
+        - **★★ A DELTA MUST CARRY REMOVALS OR IT IS ACTIVELY WRONG.** The
+          catalogue query filters on `status = 'published'`, so an unpublished
+          product simply stops matching and would linger on the till forever —
+          the register going on selling something the merchant withdrew. The
+          action asks the opposite question too and returns `removedProductIds`.
+          A removal WINS over a contradictory change in the same window.
+        - **★★ A HARD-DELETED PRODUCT CANNOT APPEAR IN ANY DELTA**, because the
+          row is gone. So `FULL_RESYNC_EVERY_MS` (30 min) is a **CORRECTNESS
+          interval, not a tuning knob** — lengthen it and the window in which a
+          till offers a deleted product grows in step. The full pull remains the
+          source of truth; the delta is the thing that is rationed.
+        - **★ A PRODUCT IS REPLACED WHOLESALE, not upserted per SKU.** Merging
+          variant by variant leaves a DELETED variant in the cache forever,
+          since nothing in the delta mentions the SKU that no longer exists.
+          A failed removals read ships NO watermark, so the client repeats the
+          window rather than advancing past a withdrawal it never heard about —
+          the `use-poll` rule that an error is never a quiet answer. `catalog-store.ts`
+          is at `SCHEMA_VERSION` 3 (the cache gained `watermark`), so an older
+          shape is re-synced rather than served.
+      - **★★ THE READ PHASE IS FOUR CONCURRENT BATCHES, NOT EIGHT SERIAL READS
+        (Step 20).** `withService` calls `getPool().connect()`, so separate
+        calls take separate pool clients and overlap — while statements INSIDE
+        one `withService` share a client and run SERIALLY. So **grouping
+        independent reads into one transaction, which reads like an
+        optimisation, was the slowest arrangement available**; splitting them
+        apart is what made them fast. counter (customer) · catalogue (products,
+        variants) · tax (billing, classes) · till (location, open shift), each
+        with its OWN failure message — losing which read failed would leave a
+        cashier unable to tell "re-ring this" from "call someone". 6–8 round
+        trips → 2, ≈320ms at Mumbai's ~46ms RTT.
+        - **★ BALANCED, NOT MAXIMALLY PARALLEL.** The wall clock is the LONGEST
+          batch, so a batch of four makes the other three wait on it — the first
+          cut had exactly that shape and bought half as much. And `DB_POOL_MAX`
+          is 10 per container, so four concurrent reads per sale means three
+          simultaneous tills briefly queue; wider trades a real ceiling for no
+          further win.
+        - **★ THE RECEIPT PREFIX RIDES ON THE LOCATION ROW.** It was a separate
+          `withService` on the sell path for a column beside the state code.
+        - **★★ AND IT FIXED A BUG.** `currentShiftIdFor` swallowed its errors
+          and returned null — sound, since a sale must never fail because the
+          drawer lookup did. But under `pos.requireOpenShift` null means "no
+          shift open", so an unreachable DB refused the sale with "Open a shift
+          before selling.", sending a cashier to open a drawer already open.
+          The till batch owns the failure now.
+        - **★ RESULTS ARE CHECKED IN THE ORDER THEY USED TO RUN IN** — customer,
+          shift, prices, tax — never the order the batches are declared, which
+          would silently reshuffle which problem a cashier hears about first.
+        - **★★ THE CONCURRENCY IS PINNED BY ITS OWN TEST**, because every other
+          test passes identically when the reads are serialised: the values do
+          not change, only the time. ⚠ Swapping `Promise.all` for a sequential
+          loop does NOT serialise them — the array literal has already invoked
+          every batch — so a mutation of that shape proves nothing.
       - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
         finds an EXISTING customer of the store (phone/name/email, 2-char
         floor, store-scoped) to attach to a sale, and **`createPosCustomer`
@@ -3224,8 +3319,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         `pos.cashVarianceTolerance` (a hand-counted drawer is never exact to
         the paise). Capabilities: `open_close_shift` to open/close,
         `cash_drop` to bank cash — a cashier sells INTO the drawer but cannot
-        declare what was in it. A CLOSED shift reports the figures snapshotted
-        at close, so an old Z-report can't drift when an order is later edited.
+        declare what was in it. ⚠ A CLOSED shift reports the RECONCILIATION
+        figures snapshotted at close — expected, counted, variance — so those
+        cannot drift. **★★ THE BREAKDOWN STILL CAN, and this line used to
+        overstate it:** `cashSales`, `byMethod`, `saleCount` and `grossSales`
+        are RECOMPUTED from `order_payments` on every read, so refunding an
+        order weeks later moves the takings on a Z-report the shop may already
+        have printed. Found while building the dashboard reader (Step 17), which
+        reuses the same `loadReport`. Closing it means snapshotting more at
+        close — a migration, and a decision about what a Z-report legally is.
+        Read at `/dashboard/pos/shifts`; ⚠ `loadReport` takes a shift id with NO
+        store predicate, so any NEW caller must prove ownership first, as
+        `getShiftReport` does.
     - **Phase 4 (done) = inventory from the shop floor.** `/pos/inventory`
       (`app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`, so
       a cashier sells stock but never declares how much exists). Search or

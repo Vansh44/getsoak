@@ -75,6 +75,12 @@ export function fetchStock(
 export function fetchCatalogPage(
   cursor: string | null,
   signal?: AbortSignal,
+  /** Server-issued watermark; omit for a FULL pull (Step 19). */
+  since?: string | null,
 ): Promise<LiveResult<CatalogPage>> {
-  return poll<CatalogPage>("catalog", cursor ? { cursor } : {}, signal);
+  return poll<CatalogPage>(
+    "catalog",
+    { ...(cursor ? { cursor } : {}), ...(since ? { since } : {}) },
+    signal,
+  );
 }

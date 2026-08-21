@@ -24,7 +24,11 @@ const STORE = "catalog";
  * charges differently. A cache may serve a stale PRICE for a few minutes
  * (harmless: the server re-prices), but it must not serve a stale SHAPE.
  */
-const SCHEMA_VERSION = "v2";
+// ★ BUMPED FOR THE DELTA CACHE (Step 19): the record now carries a watermark,
+// and a v2 entry has none. Serving one would make the first sync a delta with
+// no `since`, which the server reads as a FULL pull — correct, but only by
+// accident. A version bump re-syncs once and removes the accident.
+const SCHEMA_VERSION = "v3";
 
 /** One cached catalog per register: a location's stock is its own truth, and
  *  an operator can legitimately move between stores on a shared browser. */
@@ -32,6 +36,9 @@ export const catalogKey = (storeId: string, locationId: string): string =>
   `${SCHEMA_VERSION}:${storeId}:${locationId}`;
 
 export interface CachedCatalog {
+  /** Server-issued instant to pass as `since` on the next sync. Null means
+   *  "never synced incrementally" — do a full pull. */
+  watermark?: string | null;
   key: string;
   items: CatalogItem[];
   /** Epoch ms of the sync that produced `items` — drives staleness display. */
@@ -101,13 +108,17 @@ export async function writeCatalog(
   key: string,
   items: CatalogItem[],
   syncedAt = Date.now(),
+  /** Server-issued; omitted on a full pull that produced none. */
+  watermark: string | null = null,
 ): Promise<void> {
   const db = await openDb();
   if (!db) return;
   try {
     // Quota failures resolve null rather than throwing — a cashier must never
     // see a sale fail because the cache was full.
-    await tx(db, "readwrite", (s) => s.put({ key, items, syncedAt }));
+    await tx(db, "readwrite", (s) =>
+      s.put({ key, items, syncedAt, watermark }),
+    );
   } finally {
     db.close();
   }

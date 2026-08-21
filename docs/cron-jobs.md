@@ -29,7 +29,7 @@ each job is a landmine the moment it does:
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                       |
 | `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                          |
-| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently**.                                                                                                                           |
+| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently** — and it also carries the PICKUP sweeps, so expired collections never lapse and no collection reminder is ever sent.       |
 | `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                               |
 | `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices.                                                                              |
 | `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                               |
@@ -47,7 +47,7 @@ each job is a landmine the moment it does:
 | ----------------------------------- | -------------- | -------------------------------------------------------- |
 | `storemink-send-emails`             | `0 0 * * *`    | `https://storemink.com/api/cron/send-emails`             |
 | `storemink-plan-expiry`             | `15 0 * * *`   | `https://storemink.com/api/cron/plan-expiry`             |
-| `storemink-expire-pending-payments` | `30 1 * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
+| `storemink-expire-pending-payments` | `30 * * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
 | `storemink-search-metrics`          | `30 2 * * *`   | `https://storemink.com/api/cron/search-metrics`          |
 | `storemink-domain-reconcile`        | `10 * * * *`   | `https://storemink.com/api/cron/domain-reconcile`        |
@@ -337,6 +337,30 @@ roots registered, both eligible stores ready) after enabling the two APIs above.
 The themes catalog joined that same retry-backed root registration in Phase 4;
 the response names each root so a rejected themes sitemap is visible rather
 than an ambiguous array position.
+
+### ★★ The fleet diff — run this, do not read the table
+
+Three times a job has been documented here and absent from Cloud Scheduler, and
+every time it was found by DIFFING, never by re-reading this file. So the diff
+is a command rather than an instruction:
+
+```bash
+diff <(grep -oE 'storemink-[a-z-]+' docs/cron-jobs.md | grep -v storemink-prod | sort -u) <(gcloud scheduler jobs list --location=asia-south1 --format='value(name.basename())' | sort -u)
+```
+
+Lines with `<` are **documented and do not exist** — the failure this file keeps
+recording. Lines with `>` exist and are undocumented, which is the same drift
+pointed the other way.
+
+⚠ It needs interactive `gcloud auth login`; Application Default Credentials
+(what the Cloud SQL proxy uses) are NOT enough, so this cannot be automated into
+CI as it stands.
+
+Schedules drift too, and the diff above only compares NAMES. To compare cadence:
+
+```bash
+gcloud scheduler jobs list --location=asia-south1 --format='table(name.basename(),schedule)'
+```
 
 `storemink-domain-reconcile` was created on **2026-08-06** alongside the fix it
 backs. Its route ships in the same change, so verify its **response** once that

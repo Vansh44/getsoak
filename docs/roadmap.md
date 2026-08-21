@@ -25,40 +25,40 @@ sequence AND the spec for everything still to build.
 
 ## Status at a glance
 
-| #      | Step                                                           | Size | State   |
-| ------ | -------------------------------------------------------------- | ---- | ------- |
-| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock    | —    | ✅ done |
-| —      | LOC A–F: capabilities, scope, routing, reservations, pickup    | —    | ✅ done |
-| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes | —    | ✅ done |
-| —      | Store credit                                                   | —    | ✅ done |
-| —      | Metered extra-location billing (POS 7)                         | —    | ✅ done |
-| —      | Signup recovery, full business address + live pricing          | —    | ✅ done |
-| —      | Shopify-shaped fulfilment + Shiprocket logistics core          | L    | ✅ done |
-| —      | Checkout shipping policies, live courier rates and ETAs        | M    | ✅ done |
-| —      | Shopper Online / In-store omnichannel order history            | S    | ✅ done |
-| **P1** | **Release verification and high-risk action hardening**        | XL   | ◐ part  |
-| **0**  | **Platform → merchant billing rebuild**                        | XL   | ◐ part  |
-| **1**  | Checkout payment defaults + pickup payment policy              | S    | ✅ done |
-| **2**  | Cancellation & refund flow                                     | M    | ✅ done |
-| **3**  | Pickup end to end: collection code, QR, role split             | L    | ✅ done |
-| **4**  | POS customer capture (Shopify parity) + claim/merge            | L    | ✅ done |
-| **12** | POS payments — gateway tender at the till                      | M    | ✅ done |
-| **13** | Return restock lands at the shop that took it                  | S    | ✅ done |
-| **14** | **Money-event audit — who discounted, overrode, refunded**     | M    | ⏭ next |
-| **15** | Hourly sweep + held sales expire                               | S    | ⏳      |
-| **16** | A counter gateway payment holds stock                          | M    | ⏳      |
-| **17** | Dashboard POS reporting — shifts, Z-reports, sales by shop     | M    | ⏳      |
-| **18** | Collection counter: part payment, discount, expiry banner      | M    | ⏳      |
-| **19** | Catalogue delta sync                                           | M    | ⏳      |
-| **20** | `placePosSale` round trips (11 → few)                          | M    | ⏳      |
-| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)       | M    | ⏳      |
-| **6**  | Channel stock policy, per location and configurable (LOC H)    | M    | ⏳      |
-| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state) | S    | ⏳      |
-| **8**  | More routing strategies (LOC J)                                | M    | ⏳      |
-| **9**  | Gift cards                                                     | M    | ⏳      |
-| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)             | L    | ⏳      |
-| **10** | Offline outbox (POS 9)                                         | XL   | ⏳      |
-| **11** | Full omnichannel (POS 8 = LOC K)                               | XL   | ⏳      |
+| #      | Step                                                            | Size | State   |
+| ------ | --------------------------------------------------------------- | ---- | ------- |
+| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock     | —    | ✅ done |
+| —      | LOC A–F: capabilities, scope, routing, reservations, pickup     | —    | ✅ done |
+| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes  | —    | ✅ done |
+| —      | Store credit                                                    | —    | ✅ done |
+| —      | Metered extra-location billing (POS 7)                          | —    | ✅ done |
+| —      | Signup recovery, full business address + live pricing           | —    | ✅ done |
+| —      | Shopify-shaped fulfilment + Shiprocket logistics core           | L    | ✅ done |
+| —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
+| —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
+| **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
+| **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
+| **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                      | M    | ✅ done |
+| **3**  | Pickup end to end: collection code, QR, role split              | L    | ✅ done |
+| **4**  | POS customer capture (Shopify parity) + claim/merge             | L    | ✅ done |
+| **12** | POS payments — gateway tender at the till                       | M    | ✅ done |
+| **13** | Return restock lands at the shop that took it                   | S    | ✅ done |
+| **14** | Money-event audit — who discounted, overrode, refunded          | M    | ✅ done |
+| **15** | Hourly sweep + held sales expire                                | S    | ✅ done |
+| **16** | Check the shelf before taking counter payment (rescoped)        | S    | ✅ done |
+| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)    | M    | ✅ done |
+| **18** | Collection counter: deposits + expiry banner (discount dropped) | M    | ✅ done |
+| **19** | **Catalogue delta sync**                                        | M    | ⏭ next |
+| **20** | `placePosSale` round trips (11 → few)                           | M    | ⏳      |
+| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)        | M    | ⏳      |
+| **6**  | Channel stock policy, per location and configurable (LOC H)     | M    | ⏳      |
+| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)  | S    | ⏳      |
+| **8**  | More routing strategies (LOC J)                                 | M    | ⏳      |
+| **9**  | Gift cards                                                      | M    | ⏳      |
+| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)              | L    | ⏳      |
+| **10** | Offline outbox (POS 9)                                          | XL   | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                                | XL   | ⏳      |
 
 **★★ HOW STEPS 14–21 ARE ORDERED (added 2026-08-18).** They fold the POS gap
 list into this table rather than starting a second plan — one ordered plan is
@@ -658,7 +658,7 @@ till.
 
 ---
 
-## Step 14 — Money-event audit: who discounted, overrode, refunded
+## Step 14 — Money-event audit: who discounted, overrode, refunded ✅ DONE
 
 **The gap.** `posAudit` has six call sites and every one is auth or device:
 authorized, revoked, clone detected, operator login, failed login. Not one money
@@ -672,10 +672,33 @@ discount carries a signed approval token naming the manager who keyed their PIN
 AWAY. Persisting `approverId` is most of this step's value for almost none of
 its work — and it is the one fact nobody can reconstruct afterwards.
 
-**Ships.** `posAudit` entries for: order + line discount, price override, till
-refund, gateway tender accepted, cash movement. Each carries actor, approver
-(where one exists), amount and reason. Surfaced as a Money tab beside the
-existing device activity on `/dashboard/pos/devices`, location-scoped.
+**✅ Shipped.** `supabase/pos_16_money_audit.sql` (⚠ **not applied** — needs
+`postgres`) adds `amount` / `approver` / `order_id` plus a partial index;
+`posAudit` gained four money events wired into `placePosSale`, `processReturn`
+and `recordCashMovement`; and `/dashboard/pos/money` renders the feed with
+per-event filters and a net-out total. 12 new tests; the approver and the
+override delta are both mutation-checked.
+
+**★★ ONE EVENT WAS DROPPED FROM THIS SPEC: `gateway_tender`.** The line above
+originally listed it. Implementing it showed it does not belong — the cashier
+CHOSE nothing (verification either passes or the sale is refused), and it is
+fully reconstructible from `order_payments.reference` plus
+`orders.cashier_id`. This feed records DISCRETIONARY acts, and noise is what
+makes an audit stop being read. `lib/pos/audit.test.ts` pins it as not a money
+event so it is not "completed" back in later.
+
+**★ THE OVERRIDE AMOUNT IS THE DELTA, NOT THE NEW PRICE.** "We charged ₹1" is
+meaningless without yesterday's catalogue price, and that price moves. A
+negative delta (repricing UP) is kept negative rather than absolute — recording
+it as a give-away would misstate the shop's exposure.
+
+**★ AUDITED AFTER THE SALE IS RECORDED.** `placePosSale` returns early in a
+dozen places; auditing sooner would log give-aways for sales that never
+happened.
+
+**★ THE DEVICES PAGE NOW READS `kind: "security"`.** It already called its list
+"Security activity"; money has its own page because an owner reconciling a
+drawer and an admin checking who paired a browser want different things.
 
 **★ BEST-EFFORT, NEVER BLOCKING** — the existing `posAudit` rule. A logging
 failure must not refuse a sale in front of a customer.
@@ -688,7 +711,7 @@ reconciling a drawer, and belongs with the other POS audit rows.
 
 ---
 
-## Step 15 — Hourly sweep, and held sales that expire
+## Step 15 — Hourly sweep, and held sales that expire ✅ DONE
 
 Two cheap fixes with one theme: things that should lapse currently do not.
 
@@ -699,10 +722,30 @@ holds stock up to 24h, and `PICKUP_WARN_HOURS` (48) sits exactly at its
 documented minimum of 2× the interval. The daily cadence was a Vercel Hobby
 constraint that no longer applies.
 
-**Ships:** hourly. Config, not code.
-**⚠ CONFIRM THE JOB EXISTS FIRST.** This repo has had "documented but never
-created" happen three times, caught only by diffing `docs/cron-jobs.md` against
-`gcloud scheduler jobs list`. Do that diff as part of this step.
+**✅ Shipped:** `30 * * * *` in `vercel.json` (the inert schedule record) and in
+`docs/cron-jobs.md` (the doc of record).
+
+**⚠ THE CLOUD SCHEDULER JOB ITSELF IS NOT CHANGED — that needs you.** `gcloud`
+CLI auth wants an interactive reauth, so the running job is still daily until:
+
+```bash
+gcloud scheduler jobs update http storemink-expire-pending-payments \
+  --location=asia-south1 --schedule="30 * * * *"
+```
+
+**★ THE FLEET DIFF IS NOW A COMMAND, not an instruction.** `docs/cron-jobs.md`
+gained a runnable `diff` of the documented job list against
+`gcloud scheduler jobs list` — three times a job has been documented here and
+absent from Scheduler, and every time diffing is what found it. Reading the
+table has never once caught it.
+
+**★ `PICKUP_WARN_HOURS` DELIBERATELY DID NOT CHANGE.** The constraint relaxed
+rather than binding: daily warned an order somewhere in (24, 48] hours out,
+hourly narrows that to (47, 48] — the same promise kept more precisely. Lowering
+the window too would change what every existing merchant's customers receive,
+which a scheduling fix has no business doing (invariant 1). ⚠ Hourly does NOT
+fix a 1-day `pickupHoldDays`, where the nudge still lands at roughly order time;
+that needs a window scaling with the hold, as a deliberate notification change.
 
 **15b — a held sale never expires.** Capped at 20 per counter and discardable
 by hand; nothing sweeps a cart held and forgotten.
@@ -711,14 +754,29 @@ by hand; nothing sweeps a cart held and forgotten.
 stores NO prices (`pos_14`), so expiring one costs a re-scan and nothing else.
 Contrast a pickup hold, where expiry has to release stock.
 
-**Ships:** a retention entry in `lib/retention/prune.ts` — that is the existing
-home for "rows that should stop existing", and it already batches per table.
+**✅ Shipped:** a `pos_parked_sales` entry in `lib/retention/prune.ts` at **7
+days** — long enough for "the customer is coming back Saturday", short enough
+that the 20-per-counter cap stays usable.
+
+**★ NO MIGRATION NEEDED — `pos_14` already anticipated this.** It ships a
+`created_at`-ONLY index with the comment that retention "would filter on
+created_at alone, which the composite above cannot serve". The index was waiting
+for this entry.
+
+**★ `created_at` IS THE ONLY CLOCK.** Parking inserts and resuming DELETES, so a
+row is never touched between the two — there is no `updated_at` to prefer.
+
+**★ THE CAP IS WHY THIS MATTERS, not the disk.** Abandoned carts do not merely
+accumulate; they fill the 20-slot list and eventually stop a counter parking a
+real one. A ceiling with nothing ageing out of it becomes a wall.
 
 **Acceptance:** PS-PK.13, PS-8.32. **Effort: S.**
 
 ---
 
-## Step 16 — A counter gateway payment holds stock
+## Step 16 — Check the shelf before taking counter payment ✅ DONE
+
+_(Rescoped 2026-08-18. Was "a counter gateway payment holds stock".)_
 
 **The gap**, and it is one this branch introduced. Stock is reserved when the
 sale COMPLETES, not when the customer pays. Between `confirmPosGatewayPayment`
@@ -726,44 +784,100 @@ and Complete sale, another till can take the last unit — the sale then fails
 with "only N left" against a **captured payment**, which the merchant has to
 refund from the dashboard.
 
-**Ships.** `holdStock` at confirm, `commitHold` at `placePosSale`, release on
-abandon, and a sweep for holds nobody released.
+**✅ Shipped:** `shortLinesAt` (a READ, `lib/inventory/reservations.ts`) and a
+check inside `startPosGatewayPayment` — the cart now travels with the amount, so
+the shelf is checked BEFORE the Razorpay order is even created. A short shelf
+then costs nothing at all: no captured money, not even an abandoned order on the
+merchant's account. 7 tests; the coalescing and the fail-open are
+mutation-checked.
 
-**★★ THE SWEEP IS NOT OPTIONAL HERE, unlike parking.** §22 records why a park
-holds nothing: an abandoned hold strands stock, a cashier could empty a shelf on
-paper, and the shop reorders goods it has. A payment hold has the same hazard —
-so it may only exist WITH an expiry, and that is most of the work.
+**★ IT CATCHES THE COMMONER FAILURE, WHICH IS NOT THE RACE.** The register's
+IndexedDB catalogue is explicitly non-authoritative, so "only N left" at
+completion most often means the CACHED count was stale, not that another till
+just sold the unit. That case is now refused while refusing is free.
 
-**★ HOLD AT CONFIRM, NOT AT START.** Holding when the modal opens would strand
-stock for every dismissed payment, which is an ordinary counter outcome. At
-confirm the money is already captured, so the customer is committed.
+**★ COALESCED BY SKU.** Two cart lines for one product are one demand on one
+shelf; checking them independently would pass 2 + 2 against 3 available — the
+per-entry clamp bug §28 already paid for once.
 
-**★ THE FAILURE MESSAGE MUST STILL NAME THE PAYMENT.** The window narrows to
-near-zero; it does not close, because a hold can still lapse. Whatever the
-sale says when it fails after capture has to be actionable.
+**★ FAILS TO "NOTHING IS SHORT".** It is a courtesy in front of a real
+guarantee (`reserve_stock_at`), so a blipped read must not refuse a sale.
 
-**Acceptance:** PS-GW.16–19. **Effort: M.**
+### ★★ THE HOLD WAS CONSIDERED AND REJECTED (owner, 2026-08-18)
+
+This step originally specced `holdStock` at confirm + `commitHold` at sale. It
+is buildable — `payment_pending` is already a declared owner type, `holdStock`
+takes a TTL, and `sweepExpiredHolds` already runs on the (now hourly) sweep — and
+it was rejected anyway, for the reason **§22 gives for parked sales in almost
+these words**: "an abandoned hold would strand stock until something swept it,
+and the shop would reorder goods it still has."
+
+`inventory_levels.reserved` is a counter the sweep decrements, so an abandoned
+hold — a closed tab, a cashier who walks away — locks the unit for **TTL + up to
+an hour**. The trade is:
+
+|                 |                                                          |
+| --------------- | -------------------------------------------------------- |
+| Problem removed | two tills, same last unit, same ~30s → one manual refund |
+| Problem created | one distracted cashier → an unsellable unit for an hour  |
+
+The second is likelier and more annoying, so the residual race stays: the sale
+fails with the existing "only N left", and the merchant refunds from the
+dashboard (§26).
+
+⚠ **Do not re-propose this as a new idea.** If it is ever revisited, the missing
+piece is an explicit release when the cart is cleared — that covers the common
+abandon and leaves only a genuinely closed tab to the sweep.
+
+**Acceptance:** PS-GW.16–18. **Effort: S** (was M, before the hold was dropped).
 
 ---
 
-## Step 17 — Dashboard POS reporting
+## Step 17 — Dashboard shift history + Z-reports ✅ DONE
 
 **The gap.** Shift figures exist only at the till: `/pos/shift` shows the live
 X-report and the Z-report of the shift being closed. An owner cannot see
 yesterday's, cannot compare two shops, and cannot see POS sales split by cashier
 or tender anywhere in the dashboard.
 
-**Ships.** `/dashboard/pos/reports`: shifts list (per location, with variance),
-one shift's Z-report, and POS sales by location / cashier / tender over a date
-range.
+**✅ Shipped:** `/dashboard/pos/shifts` — the shift list across every location
+the viewer may see (with variance) and a full Z-report per shift. Readers are
+`getShiftHistory` / `getShiftReport`; 6 gate tests, both scoping guards
+mutation-checked.
+
+**★★ SALES-BY-CASHIER/TENDER WAS SPLIT OFF TO ANALYTICS, deliberately.** The
+spec bundled it here, and the overlap warning below is the reason not to: a
+Z-report is SHIFT-shaped — a drawer, a float, a variance — and analytics has no
+concept of a shift. Sales aggregates over a date range are exactly what the
+analytics rebuild is for. So the line is: **drawers and shifts belong to POS;
+sales aggregates belong to analytics.** Per-shift takings by method are still
+here, because they are part of reconciling that drawer rather than a report.
+
+**★★ THE OWNERSHIP CHECK IS THE SECURITY-CRITICAL HALF.** `loadReport` reads a
+shift BY ID with no store predicate — perfectly safe where it was written,
+because the till path bounds it to the operator's own location. Reached from a
+dashboard the id comes from the CLIENT, so store and `admin_locations` scope are
+proved before the report is built. Without it any admin could read any store's
+drawer by guessing a uuid.
+
+**★ AN EMPTY LOCATION SCOPE SHOWS NOTHING.** "Assigned to nothing that still
+exists" is a real state (their shop was deleted) and must never be widened to
+unrestricted — `lib/locations/scope.ts`'s contract, and the mistake that would
+promote a bound admin to the whole business.
+
+**⚠ A CLOSED Z-REPORT IS NOT FULLY FROZEN, and this step did not change that.**
+`loadReport` reads `expected_cash` / `counted_cash` / `variance` from the
+snapshot — the reconciliation figures are safe — but `cashSales`, `byMethod`,
+`saleCount` and `grossSales` are RECOMPUTED from `order_payments` on every read.
+So refunding an order weeks later moves the takings on a Z-report the shop may
+already have printed. CODEBASE §22 states the stronger claim ("reports the
+figures snapshotted at close"); it is true of the money reconciliation and not
+of the breakdown. Closing it properly means snapshotting more at close, which is
+a migration and a decision about what a Z-report legally is.
 
 **★ LOCATION-SCOPED, like every other order read** (`admin_locations`, §23). A
 branch manager sees their own shop. This is also where the scope story gets its
 first real test, since the till path never needed it.
-
-**★ READ THE SNAPSHOT, NOT THE LIVE FIGURES.** A closed shift reports what was
-recorded at close (§22) — recomputing would let an old Z-report drift when an
-order is later edited.
 
 **⚠ THIS OVERLAPS THE ANALYTICS REBUILD.** `docs/analytics-and-search-console-plan.md`
 covers commerce widgets and the missing location filter. Decide once whether POS
@@ -774,7 +888,7 @@ this codebase keeps paying for.
 
 ---
 
-## Step 18 — Collection counter: part payment, discount, expiry banner
+## Step 18 — Collection counter: deposits + expiry banner ✅ DONE
 
 Three small gaps at one counter, worth doing together because they touch the
 same screen and the same action.
@@ -787,55 +901,224 @@ same screen and the same action.
 - **`order.pickup_expiring` is email-only.** No in-app banner, so a shop working
   the queue cannot see which parcels are about to lapse.
 
-**★ PART PAYMENT IS THE HARD ONE, and not because of the UI.** `markCollected`
-claims awaiting → collected in one statement; a part-paid collection is neither.
-It needs a state the order model does not have today, or a deliberate decision
-that partial payment leaves the parcel unhanded-over. Settle that before
-building.
+### ✅ Deposits — a short payment does not hand the parcel over
+
+**Owner's decision, 2026-08-18:** take the money, keep the parcel. No third
+pickup state, no schema change. `markCollected`'s claim is awaiting|ready →
+collected and a part-paid collection is neither, so the partial branch RECORDS
+the payment and skips the claim entirely.
+
+**★★ THE REAL WORK WAS `amountDueAtCollection`, NOT THE UI.** It derived owed
+from the order row alone, so a customer who left a ₹200 deposit would have been
+asked for the full ₹340 on their next visit — ₹540 taken for a ₹340 order, and a
+drawer reporting OVER by the deposit. It now takes `paidSoFar`, read by one
+shared `paidSoFarFor` so the queue, a scanned code and the charge cannot
+disagree.
+
+**★ THE CAP IS THE INVARIANT.** Recorded payments can never exceed what the
+order owes — re-read INSIDE the writing transaction, because the figure the
+cashier saw is seconds old. ⚠ It fires on a RACE, not on a big number: a payment
+larger than what is owed is an over-payment on the full path, where cash
+legitimately gives change.
+
+**★ NO STORE CREDIT ON A DEPOSIT.** Its exactly-once guarantee comes from
+running inside the claim's transaction (§29); with no claim there is nothing to
+make it exactly-once and a double-tap would deduct a balance twice.
+
+**⚠ NOT IDEMPOTENT, and neither is the sell counter.** Two deliberate taps
+record twice, capped at the amount owed. That is the till's existing posture —
+the human sees the outcome — and `paidSoFar` on the row makes a duplicate
+visible rather than silent.
+
+### ✅ The expiry banner
+
+`isExpiringSoon` + a banner above "Ready to collect". The row already said
+"2 days left"; nothing SUMMARISED it, so on a queue of twenty the urgent one had
+to be found by reading every row.
+
+**★ READY ONLY.** A parcel still to pack is the SHOP's work and the deadline is
+not yet the customer's problem.
+
+**★ `PICKUP_WARN_HOURS` MOVED to `lib/pos/collection-state.ts`** (pure) and is
+re-exported from the `server-only` `pickup.ts`. The counter and the customer's
+email now share ONE number — a second copy is how the till and the email start
+disagreeing about which parcels are urgent.
+
+### ❌ Discount — dropped, by decision
+
+**Owner, 2026-08-18: use a refund instead.** A collection is already placed and
+INVOICED, with GST computed against `orders.total` and an `order_ref` issued.
+"Knock ₹50 off because it is damaged" is a partial refund or store credit —
+both already built (§26, §29), both leaving a proper record. A discount path
+here would mutate a placed sale and move the tax base.
+
+⚠ Do not re-propose this as "the till can discount, why not the counter". The
+till discounts a sale it is CREATING; this would alter one already issued.
 
 **Effort: M.**
 
 ---
 
-## Step 19 — Catalogue delta sync
+## Step 19 — Catalogue delta sync ✅ DONE
 
 Every register re-pulls the WHOLE catalogue every 5 minutes, keyset-paged at 300
 products a page — O(catalogue) per till, forever. A 20,000-SKU shop with four
 tills does that 48 times an hour.
 
-**Ships.** A watermark (`max(updated_at)`) per store, and a sync that asks for
-what changed since the last one.
+**✅ Shipped.** `getCatalogSnapshot(cursor, since)` returns changes, REMOVALS and
+a server-issued watermark; `mergeCatalogDelta` (pure, 8 tests) folds them into
+the cache; `use-catalog` keeps the watermark and falls back to a full pull every
+30 minutes.
+
+**★★ THE WATERMARK QUESTION WAS SETTLED AGAINST THE LIVE SCHEMA, NOT ASSUMED.**
+`products.updated_at` is maintained by `update_catalog_updated_at()` — a BEFORE
+UPDATE FOR EACH ROW trigger whose whole body is `NEW.updated_at = NOW()`. So it
+moves on a content edit AND on a stock change, because the inventory aggregate
+trigger issues `UPDATE products SET stock = …` and that fires it too. Verified
+2026-08-21 by reading `pg_proc`; the doubt raised beforehand (from reading only
+the aggregate trigger's SET list) was WRONG, and CODEBASE §7's claim was right.
+
+**⚠ `product_variants` HAS NO `updated_at` COLUMN AT ALL.** Variants are covered
+only INDIRECTLY: their stock moves through the same aggregate, and the product
+editor writes the product row on save. A future variant-only write path that
+skips the product row would be invisible to this delta. Pinned by a comment at
+the predicate.
 
 **★ THE CACHE IS NOT AUTHORITATIVE, and that is what makes this safe.**
 `placePosSale` re-reads price and re-reserves, so a delta that misses something
 is a wrong label at worst, never a wrong charge. A full re-sync stays available
 as the recovery path.
 
-**⚠ DELETES ARE THE TRAP.** A watermark sync never sees a removed product, so
-the register would keep selling something the catalogue dropped. Needs either a
-tombstone or a periodic full reconcile.
+**⚠ DELETES ARE THE TRAP — and they split in two.**
+
+- **UNPUBLISHED** is handled: the catalogue query filters on
+  `status = 'published'`, so a withdrawn product stops matching and would simply
+  linger. The delta asks the OPPOSITE question as well and returns
+  `removedProductIds`. Without that half a delta is actively wrong.
+- **HARD-DELETED cannot be**: the row is gone, so no query can name it. The
+  30-minute full reconcile is the only thing that ever notices, which makes it
+  a CORRECTNESS interval rather than a tuning knob — lengthen it and the window
+  in which a till offers a deleted product grows in step.
+
+**★ A FULL PULL REPLACES; A DELTA MERGES.** Treating a delta as a replacement
+would leave the register holding only what changed in the last five minutes — an
+empty till on a quiet morning.
+
+**★ A PRODUCT IS REPLACED WHOLESALE, not upserted per SKU.** A delta carries
+every sellable SKU under a product, so upserting by product+variant would leave
+a DELETED variant behind forever: the delta stops mentioning it, which is
+indistinguishable from "unchanged". Mutation-checked.
+
+**★ THE WATERMARK IS SERVER-ISSUED AND BACKDATED 10s.** A browser clock would
+let a fast till skip everything changed in between, permanently; the overlap
+stops a row written DURING the sync falling into the gap. Re-sending a few
+seconds is free — the merge is an upsert.
+
+**★ A FAILED REMOVALS READ SHIPS NO WATERMARK.** The client then keeps its old
+one and repeats the window, rather than advancing past a withdrawal it never
+heard about.
+
+**★ THE CACHE VERSION WAS BUMPED (v2 → v3).** A v2 entry has no watermark, and
+serving one would make the first sync a delta with no `since` — which the server
+reads as a full pull. Correct, but only by accident.
 
 **Effort: M.**
 
 ---
 
-## Step 20 — `placePosSale` round trips
+## Step 20 — `placePosSale` round trips ✅ done
 
-The sale path makes **11 separate transactions** — 11 × RTT on the one code path
-whose whole design goal is "least checkout time". Against Mumbai Cloud SQL at
-~46ms that is half a second of pure network.
+**Shipped.** The sell path's read phase went from **6–8 serial round trips to 2**.
+At Mumbai Cloud SQL's ~46ms that is roughly **320ms off every sale**, on the one
+code path whose whole design goal is "least checkout time".
 
-**Ships.** Fold the independent reads into one round trip and the write chain
-into fewer, without weakening the rollback discipline.
+### ★★ THE PLAN SAID "11 TRANSACTIONS". THE REAL NUMBER WAS WORSE
 
-**★★ THE ROLLBACK CHAIN IS WHY IT LOOKS LIKE THIS.** `placeOrder` and
-`placePosSale` both unwind in reverse on failure because there is no
-cross-statement transaction over the pool. Collapsing steps that must unwind
-INDEPENDENTLY would trade latency for a half-committed sale. The safe wins are
-the READS (prices, billing, tax classes, location, prefix), which can be one
-query, and the receipt-number allocation.
+Counting `withService` calls undercounts, because **statements inside ONE
+`withService` share a single pg client and therefore run SERIALLY**. Two of the
+blocks held several statements each, so a 3-line sale with a customer attached
+actually made ~19 round trips, not 11.
 
-**Effort: M.**
+The corollary is the uncomfortable one: **grouping independent reads into one
+transaction — which reads like an optimisation — was the slowest arrangement
+available.** `withService` calls `getPool().connect()`, so separate calls take
+separate pool clients and genuinely overlap. Splitting the groups APART is what
+made them fast.
+
+### What changed
+
+Four concurrent batches, replacing eight serial reads:
+
+| batch     | statements                    | on failure                            |
+| --------- | ----------------------------- | ------------------------------------- |
+| counter   | customer (only when attached) | "Couldn't verify the customer."       |
+| catalogue | products · variants           | "Couldn't price the sale."            |
+| tax       | billing · tax classes         | "Couldn't read tax settings."         |
+| till      | location · open shift         | "Couldn't read this till's settings." |
+
+Plus the receipt prefix, which was **its own round trip on the sell path for a
+column on the same row as the state code** — it now rides along with it.
+
+### ★ BALANCED, NOT MAXIMALLY PARALLEL
+
+The wall clock is the LONGEST batch, so balance matters more than count. The
+first cut of this used three batches and left one holding four statements — it
+bought half as much for the same complexity. Four batches of ≤2 gets the wall to
+2 round trips.
+
+Going wider is not free: `DB_POOL_MAX` is **10 per container**, so four
+concurrent reads per sale means three simultaneous tills briefly queue. That is
+acceptable because each read is short and total connection-TIME went DOWN; going
+wider would trade a real ceiling for no further win.
+
+### ★★ A BUG FELL OUT OF IT
+
+`currentShiftIdFor` swallowed its own errors and returned `null`, on the sound
+reasoning that a sale must never fail because the drawer lookup did. But under
+`pos.requireOpenShift` that null means "no shift open" — so **an unreachable
+database refused the sale with "Open a shift before selling."**, sending a
+cashier to open a drawer that was already open. The till batch owns the failure
+now, so an outage reads as an outage. Regression-tested, mutation-checked.
+
+### ★ ERROR PRECEDENCE IS PRESERVED DELIBERATELY
+
+Results are checked in the order they used to RUN in — customer, shift, prices,
+tax — not the order the batches are declared. Reading them in declaration order
+silently reshuffles which problem a cashier is told about first. ⚠ The first
+attempt got this wrong in both directions, and the outage test above passed
+anyway because it happened to break the batch that was checked first. Failing
+the RIGHT read is what made it a real test.
+
+### ★★ THE CONCURRENCY ITSELF IS PINNED
+
+Every other test passes just as happily when the reads run one after another —
+the values are identical either way — so serialising them is an **invisible**
+regression. One test measures peak in-flight `withService` calls.
+
+⚠ **The first mutation written against it proved nothing**: swapping
+`Promise.all` for a sequential loop does NOT serialise anything, because the
+array literal has already invoked all four batches by then. Concurrency comes
+from eager invocation, not from `Promise.all`. The mutation that works delays
+each batch's start. Second time this session a mutation silently failed to
+change behaviour — **expect the mutation to fail the test, and treat it passing
+as a broken mutation, not a passing suite.**
+
+### Not done here
+
+- **The `reserve_stock_at` loop is still one round trip per line.** Folding it
+  into a single statement over a `VALUES` list would make it 1 RTT _and_ atomic
+  — strictly better than the current per-line loop with its manual unwind. It is
+  out of scope because it changes rollback semantics on the money path, and
+  staging cannot exercise it (see below). Worth doing next.
+- The write chain (order → stock → items → payments) is untouched. It unwinds in
+  reverse on failure and collapsing steps that must unwind INDEPENDENTLY would
+  trade latency for a half-committed sale.
+
+### ⚠ Measured in theory, not on a till
+
+The round-trip COUNT is verified; the ~320ms is arithmetic from the known ~46ms
+RTT, not a measurement. **Staging has products but zero `store_locations` rows**,
+so no store there can ring a sale at all — this could not be timed end to end.
 
 ---
 

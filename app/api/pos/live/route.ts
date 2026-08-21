@@ -80,8 +80,13 @@ export async function GET(req: NextRequest) {
       }
 
       case "catalog": {
+        // `since` is a watermark this server issued on a previous sync (Step
+        // 19). It is validated inside the action — an unparseable value
+        // degrades to a FULL pull rather than an empty delta, because sending
+        // nothing would read as "no changes" and leave the till stale.
         const res = await getCatalogSnapshot(
           req.nextUrl.searchParams.get("cursor"),
+          req.nextUrl.searchParams.get("since"),
         );
         return actionResponse(res);
       }
