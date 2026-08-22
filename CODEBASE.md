@@ -214,7 +214,9 @@ wholesip/
 │   ├── dashboard/             # ★ STORE ADMIN DASHBOARD (per-store, auth-gated)
 │   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css); independent
 │   │   │                      # location/enquiry/store chrome reads run concurrently
-│   │   │                      # so local Cloud SQL latency is paid once, not serially
+│   │   │                      # so local Cloud SQL latency is paid once, not serially;
+│   │   │                      # topbar Search/⌘K is a keyboard/touch command palette
+│   │   │                      # built only from the viewer's permission-filtered nav
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google

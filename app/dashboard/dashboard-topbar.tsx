@@ -2,7 +2,23 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { Search, Store, Menu, MessageSquare } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import {
+  ArrowRight,
+  Search,
+  Store,
+  Menu,
+  MessageSquare,
+  X,
+} from "lucide-react";
 import { TopbarProfile, formatRole } from "./topbar-profile";
 import { useMobileNav } from "./dashboard-mobile-nav";
 import { useChat } from "./chat-context";
@@ -17,6 +33,77 @@ const PLAN_PILL: Record<string, string> = {
   pro: "bg-[#7F4AFA]/25 text-[#c9b8fb]",
 };
 
+export interface DashboardSearchGroup {
+  group: string;
+  items: {
+    label: string;
+    href: string;
+    openInNewTab?: boolean;
+    children?: { label: string; href: string }[];
+  }[];
+}
+
+interface DashboardSearchItem {
+  label: string;
+  href: string;
+  context: string;
+  openInNewTab: boolean;
+  searchText: string;
+}
+
+/**
+ * Flatten the ALREADY permission-filtered sidebar into one command list.
+ *
+ * Parent landing links often repeat as their first child (Customers / All
+ * customers, POS / Overview). Keep one visible result per href while retaining
+ * every duplicate label as a search alias.
+ */
+function searchItemsFor(groups: DashboardSearchGroup[]): DashboardSearchItem[] {
+  const byHref = new Map<string, DashboardSearchItem>();
+
+  const add = (input: {
+    label: string;
+    href: string;
+    context: string;
+    openInNewTab?: boolean;
+  }) => {
+    const alias =
+      `${input.label} ${input.context} ${input.href.replaceAll("/", " ")}`.toLocaleLowerCase();
+    const existing = byHref.get(input.href);
+    if (existing) {
+      existing.searchText += ` ${alias}`;
+      return;
+    }
+    byHref.set(input.href, {
+      label: input.label,
+      href: input.href,
+      context: input.context,
+      openInNewTab: input.openInNewTab === true,
+      searchText: alias,
+    });
+  };
+
+  for (const group of groups) {
+    for (const item of group.items) {
+      add({
+        label: item.label,
+        href: item.href,
+        context: group.group,
+        openInNewTab: item.openInNewTab,
+      });
+      for (const child of item.children ?? []) {
+        add({
+          label: child.label,
+          href: child.href,
+          context: `${item.label} · ${group.group}`,
+        });
+      }
+    }
+  }
+
+  return [...byHref.values()];
+}
+
 export function DashboardTopbar({
   email,
   role,
@@ -26,6 +113,7 @@ export function DashboardTopbar({
   planId,
   planName,
   scopedLocations = [],
+  searchGroups = [],
 }: {
   email: string;
   role: string;
@@ -39,13 +127,158 @@ export function DashboardTopbar({
   /** The shops this viewer is restricted to. EMPTY = unrestricted, and the tag
    *  renders nothing — the platform console passes nothing at all. */
   scopedLocations?: { id: string; name: string }[];
+  /** The same permission-filtered navigation rendered by the sidebar. Search
+   *  can therefore never reveal a destination hidden from this viewer. */
+  searchGroups?: DashboardSearchGroup[];
 }) {
+  const router = useRouter();
   const { setOpen } = useMobileNav();
   const { isChatOpen, toggleChat } = useChat();
   const planPill = PLAN_PILL[planId ?? "free"] ?? PLAN_PILL.free;
+  const desktopSearchRef = useRef<HTMLDivElement>(null);
+  const mobileSearchRef = useRef<HTMLDivElement>(null);
+  const desktopInputRef = useRef<HTMLInputElement>(null);
+  const mobileInputRef = useRef<HTMLInputElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeResult, setActiveResult] = useState(0);
+
+  const allSearchItems = useMemo(
+    () => searchItemsFor(searchGroups),
+    [searchGroups],
+  );
+  const searchResults = useMemo(() => {
+    const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return allSearchItems;
+    return allSearchItems
+      .filter((item) => words.every((word) => item.searchText.includes(word)))
+      .sort((a, b) => {
+        const aStarts = a.label.toLocaleLowerCase().startsWith(words[0]);
+        const bStarts = b.label.toLocaleLowerCase().startsWith(words[0]);
+        return Number(bStarts) - Number(aStarts);
+      });
+  }, [allSearchItems, query]);
+
+  const openSearch = () => {
+    setSearchOpen(true);
+    setActiveResult(0);
+    requestAnimationFrame(() => {
+      const mobile = window.innerWidth < 768;
+      (mobile ? mobileInputRef : desktopInputRef).current?.focus();
+    });
+  };
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setActiveResult(0);
+  };
+
+  const chooseResult = (item: DashboardSearchItem) => {
+    closeSearch();
+    setQuery("");
+    if (item.openInNewTab) {
+      window.open(item.href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    // href comes exclusively from the server-owned navigation registry, never
+    // from the query or another untrusted string.
+    router.push(item.href);
+  };
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    const item = searchResults[activeResult] ?? searchResults[0];
+    if (item) chooseResult(item);
+  };
+
+  const searchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveResult((current) =>
+        Math.min(current + 1, Math.max(0, searchResults.length - 1)),
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveResult((current) => Math.max(0, current - 1));
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeSearch();
+    }
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openSearch();
+      } else if (event.key === "Escape" && searchOpen) {
+        closeSearch();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !desktopSearchRef.current?.contains(target) &&
+        !mobileSearchRef.current?.contains(target)
+      ) {
+        closeSearch();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [searchOpen]);
+
+  const resultList = (listId: string) => (
+    <div
+      id={listId}
+      role="listbox"
+      aria-label="Dashboard pages"
+      className="max-h-[min(360px,60vh)] overflow-y-auto p-1.5"
+    >
+      {searchResults.length > 0 ? (
+        searchResults.map((item, index) => (
+          <button
+            key={item.href}
+            id={`${listId}-${index}`}
+            type="button"
+            role="option"
+            aria-selected={index === activeResult}
+            onMouseEnter={() => setActiveResult(index)}
+            onClick={() => chooseResult(item)}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+              index === activeResult
+                ? "bg-[var(--dash-accent-soft)] text-[var(--dash-text)]"
+                : "text-[var(--dash-text)] hover:bg-[var(--dash-surface-2)]"
+            }`}
+          >
+            <Search className="h-4 w-4 shrink-0 text-[var(--dash-text-3)]" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">
+                {item.label}
+              </span>
+              <span className="block truncate text-xs text-[var(--dash-text-3)]">
+                {item.context}
+              </span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-[var(--dash-text-3)]" />
+          </button>
+        ))
+      ) : (
+        <p className="px-3 py-8 text-center text-sm text-[var(--dash-text-3)]">
+          No dashboard pages match “{query.trim()}”.
+        </p>
+      )}
+    </div>
+  );
 
   return (
-    <header className="dash-topbar relative flex items-center justify-between px-2 sm:px-4 h-14 bg-[#3f3f46] text-white">
+    <header className="dash-topbar relative z-40 flex items-center justify-between px-2 sm:px-4 h-14 bg-[#3f3f46] text-white">
       {/* Left */}
       <div className="flex items-center gap-1 sm:gap-3 shrink-0">
         <button
@@ -106,18 +339,52 @@ export function DashboardTopbar({
 
       {/* Perfectly centered search */}
       <div className="absolute inset-0 hidden md:flex items-center justify-center pointer-events-none">
-        <div className="pointer-events-auto w-full max-w-md bg-slate-700 hover:bg-slate-600 transition-colors border border-transparent hover:border-slate-500 rounded-lg h-[34px] px-3 flex items-center gap-2 group cursor-text">
-          <Search className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-white transition-colors" />
-
-          <input
-            type="search"
-            placeholder="Search"
-            className="flex-1 bg-transparent border-none outline-none text-white text-[13px] placeholder:text-slate-400"
-          />
-
-          <kbd className="shrink-0 bg-slate-800 border border-slate-600 text-slate-400 text-[10px] font-medium px-1.5 py-0.5 rounded">
-            ⌘ K
-          </kbd>
+        <div
+          ref={desktopSearchRef}
+          className="pointer-events-auto relative w-full max-w-md"
+        >
+          <form
+            onSubmit={submitSearch}
+            className={`group flex h-[34px] items-center gap-2 rounded-lg border px-3 transition-colors ${
+              searchOpen
+                ? "border-slate-400 bg-slate-600"
+                : "border-transparent bg-slate-700 hover:border-slate-500 hover:bg-slate-600"
+            }`}
+          >
+            <Search className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-white" />
+            <input
+              ref={desktopInputRef}
+              type="search"
+              role="combobox"
+              aria-label="Search dashboard"
+              aria-expanded={searchOpen}
+              aria-controls="dashboard-search-results"
+              aria-activedescendant={
+                searchOpen && searchResults[activeResult]
+                  ? `dashboard-search-results-${activeResult}`
+                  : undefined
+              }
+              autoComplete="off"
+              placeholder="Search"
+              value={query}
+              onFocus={openSearch}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSearchOpen(true);
+                setActiveResult(0);
+              }}
+              onKeyDown={searchKeyDown}
+              className="flex-1 bg-transparent border-none outline-none text-white text-[13px] placeholder:text-slate-400"
+            />
+            <kbd className="shrink-0 bg-slate-800 border border-slate-600 text-slate-400 text-[10px] font-medium px-1.5 py-0.5 rounded">
+              ⌘ K
+            </kbd>
+          </form>
+          {searchOpen && (
+            <div className="absolute left-0 right-0 top-[calc(100%+8px)] overflow-hidden rounded-xl border border-[var(--dash-border)] bg-[var(--dash-surface)] text-[var(--dash-text)] shadow-[var(--dash-shadow-lg)]">
+              {resultList("dashboard-search-results")}
+            </div>
+          )}
         </div>
       </div>
 
@@ -134,8 +401,9 @@ export function DashboardTopbar({
 
         <button
           type="button"
+          onClick={openSearch}
           className="md:hidden relative text-slate-300 hover:text-white w-8 h-8 rounded-md flex items-center justify-center transition-colors hover:bg-slate-700 shrink-0"
-          aria-label="Search"
+          aria-label="Open dashboard search"
         >
           <Search className="h-[18px] w-[18px]" />
         </button>
@@ -164,6 +432,60 @@ export function DashboardTopbar({
           />
         </div>
       </div>
+
+      {searchOpen && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/55 p-3 md:hidden"
+          onClick={closeSearch}
+        >
+          <div
+            ref={mobileSearchRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Search dashboard"
+            className="mx-auto mt-2 max-w-lg overflow-hidden rounded-xl border border-[var(--dash-border)] bg-[var(--dash-surface)] text-[var(--dash-text)] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <form
+              onSubmit={submitSearch}
+              className="flex items-center gap-2 border-b border-[var(--dash-border)] px-3 py-2.5"
+            >
+              <Search className="h-4 w-4 shrink-0 text-[var(--dash-text-3)]" />
+              <input
+                ref={mobileInputRef}
+                type="search"
+                role="combobox"
+                aria-label="Search dashboard pages"
+                aria-expanded="true"
+                aria-controls="dashboard-mobile-search-results"
+                aria-activedescendant={
+                  searchResults[activeResult]
+                    ? `dashboard-mobile-search-results-${activeResult}`
+                    : undefined
+                }
+                autoComplete="off"
+                placeholder="Search dashboard"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setActiveResult(0);
+                }}
+                onKeyDown={searchKeyDown}
+                className="min-w-0 flex-1 bg-transparent py-1 text-base outline-none placeholder:text-[var(--dash-text-3)]"
+              />
+              <button
+                type="button"
+                onClick={closeSearch}
+                aria-label="Close search"
+                className="rounded-lg p-2 text-[var(--dash-text-2)] hover:bg-[var(--dash-surface-2)]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </form>
+            {resultList("dashboard-mobile-search-results")}
+          </div>
+        </div>
+      )}
     </header>
   );
 }

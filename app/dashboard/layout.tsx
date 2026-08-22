@@ -253,6 +253,7 @@ export default async function DashboardLayout({
             storeName={store.name}
             planId={planId}
             planName={planName}
+            searchGroups={nav}
           />
           <div className="flex flex-1 overflow-hidden">
             <DashboardSidebar groups={nav} />
