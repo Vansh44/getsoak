@@ -671,7 +671,7 @@ export const billingReconciliationItems = pgTable(
       columns: [table.storeId],
       foreignColumns: [stores.id],
       name: "billing_reconciliation_items_store_id_fkey",
-    }).onDelete("set null"),
+    }).onDelete("cascade"),
     foreignKey({
       columns: [table.invoiceId],
       foreignColumns: [billingInvoices.id],
@@ -5394,27 +5394,40 @@ export const legalDocuments = pgTable("legal_documents", {
 });
 
 // Who agreed to what, when, from where. APPEND-ONLY (DB trigger).
-export const legalAcceptances = pgTable("legal_acceptances", {
-  id: uuid().defaultRandom().primaryKey().notNull(),
-  // Anchored to EITHER a platform document OR a store policy page — exactly
-  // one, enforced by legal_acceptances_anchor_check (legal_02_store_consent).
-  documentId: uuid("document_id"),
-  kind: text().notNull(),
-  version: integer().notNull(),
-  userId: text("user_id").notNull(),
-  email: text(),
-  actorType: text("actor_type").notNull(),
-  storeId: uuid("store_id"),
-  context: text().notNull(),
-  /** Store-policy anchor: the page slug, and a hash of the text they saw. */
-  policySlug: text("policy_slug"),
-  policyChecksum: text("policy_checksum"),
-  ip: text(),
-  userAgent: text("user_agent"),
-  acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: "string" })
-    .defaultNow()
-    .notNull(),
-});
+export const legalAcceptances = pgTable(
+  "legal_acceptances",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    // Anchored to EITHER a platform document OR a store policy page — exactly
+    // one, enforced by legal_acceptances_anchor_check (legal_02_store_consent).
+    documentId: uuid("document_id"),
+    kind: text().notNull(),
+    version: integer().notNull(),
+    userId: text("user_id").notNull(),
+    email: text(),
+    actorType: text("actor_type").notNull(),
+    storeId: uuid("store_id"),
+    context: text().notNull(),
+    /** Store-policy anchor: the page slug, and a hash of the text they saw. */
+    policySlug: text("policy_slug"),
+    policyChecksum: text("policy_checksum"),
+    ip: text(),
+    userAgent: text("user_agent"),
+    acceptedAt: timestamp("accepted_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "legal_acceptances_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
 
 // Every email the platform sends — see supabase/email_logs.sql. A LOG, not a
 // queue: nothing reads it to decide what to do next.
@@ -6072,7 +6085,7 @@ export const platformAnnouncementRecipients = pgTable(
       columns: [table.storeId],
       foreignColumns: [stores.id],
       name: "platform_announcement_recipients_store_id_fkey",
-    }).onDelete("set null"),
+    }).onDelete("cascade"),
   ],
 );
 

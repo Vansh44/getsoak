@@ -22,7 +22,23 @@ vi.mock("@/lib/store/resolve", () => ({
 vi.mock("@/lib/themes", () => ({ getThemeDefinition: vi.fn() }));
 vi.mock("@/lib/themes/apply", () => ({ applyTheme: vi.fn() }));
 vi.mock("@/lib/storage/cleanup", () => ({
-  deleteStorageUrls: vi.fn(),
+  deleteStorageUrls: vi.fn(async () => ({
+    attempted: 0,
+    failed: 0,
+    unmanaged: 0,
+  })),
+}));
+vi.mock("@/lib/storage/gcs", () => ({
+  gcsDeletePrefix: vi.fn(async () => ({ deleted: 0, failed: 0 })),
+}));
+vi.mock("@/lib/domains/cleanup", () => ({
+  cleanupDetachedDomain: vi.fn(async () => ({ failures: [] })),
+}));
+vi.mock("@/lib/auth/firebase-users", () => ({
+  deleteAuthUser: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/auth/firebase-admin", () => ({
+  isFirebaseAdminConfigured: vi.fn(() => true),
 }));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
@@ -37,8 +53,13 @@ vi.mock("@/lib/db/client", () => ({
   withAnon: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
 
-import { setStorePlan, grantAiCredits } from "./platform";
+import { deleteStore, setStorePlan, grantAiCredits } from "./platform";
 import { getServerUser } from "@/lib/auth/server-user";
+import { deleteAuthUser } from "@/lib/auth/firebase-users";
+import { isFirebaseAdminConfigured } from "@/lib/auth/firebase-admin";
+import { deleteStorageUrls } from "@/lib/storage/cleanup";
+import { gcsDeletePrefix } from "@/lib/storage/gcs";
+import { cleanupDetachedDomain } from "@/lib/domains/cleanup";
 import { revalidateTag } from "next/cache";
 
 const OPERATOR_EMAIL = "op@storemink.com";
@@ -248,5 +269,160 @@ describe("grantAiCredits", () => {
     });
     const res = await grantAiCredits("s1", 50);
     expect(res.error).toMatch(/could not grant/i);
+  });
+});
+
+describe("deleteStore", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getServerUser).mockResolvedValue({
+      id: "op-1",
+      email: OPERATOR_EMAIL,
+      phone: null,
+      phoneConfirmed: true,
+      metadata: {},
+    } as any);
+  });
+
+  it("deletes every attached owner, customer and POS staff login", async () => {
+    setup([
+      viewer(),
+      [{ id: "s1", settings: {}, custom_domain: null }],
+      [{ id: "owner-uid", email: "owner@example.com" }],
+      [{ id: "customer-uid", email: "customer@example.com" }],
+      [
+        { user_id: "pos-staff-uid", email: "staff@example.com" },
+        { user_id: "pos-staff-uid", email: "staff@example.com" },
+        { user_id: null, email: "pending@example.com" },
+      ],
+      // One empty result for each store-scoped media table scanned before the
+      // database cascade. Their contents are irrelevant to this regression.
+      ...Array.from({ length: 15 }, () => []),
+      // No remaining admin/customer/POS relationships or platform operator.
+      [],
+      [],
+      [],
+      [],
+    ]);
+
+    const res = await deleteStore("s1");
+
+    expect(res).toEqual({ success: true });
+    expect(deleteStorageUrls).toHaveBeenCalledWith([]);
+    expect(gcsDeletePrefix).toHaveBeenCalledWith("stores/s1/");
+    expect(deleteAuthUser).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(deleteAuthUser).mock.calls.map(([uid]) => uid)).toEqual([
+      "owner-uid",
+      "customer-uid",
+      "pos-staff-uid",
+    ]);
+  });
+
+  it("keeps a login that still belongs to another store or the operator console", async () => {
+    setup([
+      viewer(),
+      [{ id: "s1", settings: {}, custom_domain: null }],
+      [{ id: "shared-admin", email: "owner@example.com" }],
+      [{ id: "platform-op", email: OPERATOR_EMAIL }],
+      [{ user_id: "orphan-pos", email: "staff@example.com" }],
+      ...Array.from({ length: 15 }, () => []),
+      [{ id: "shared-admin" }],
+      [],
+      [],
+      [{ email: OPERATOR_EMAIL }],
+    ]);
+
+    const res = await deleteStore("s1");
+
+    expect(res).toEqual({ success: true });
+    expect(vi.mocked(deleteAuthUser).mock.calls.map(([uid]) => uid)).toEqual([
+      "orphan-pos",
+    ]);
+  });
+
+  it("purges custom-domain and storage resources and surfaces partial failures", async () => {
+    vi.mocked(deleteStorageUrls).mockResolvedValueOnce({
+      attempted: 1,
+      failed: 1,
+      unmanaged: 0,
+    });
+    vi.mocked(gcsDeletePrefix).mockResolvedValueOnce({
+      deleted: 0,
+      failed: 0,
+      error: "bucket unavailable",
+    });
+    vi.mocked(cleanupDetachedDomain).mockResolvedValueOnce({
+      failures: ["TLS certificate resources"],
+    });
+    setup([
+      viewer(),
+      [
+        {
+          id: "s1",
+          settings: {
+            logo: "https://storage.googleapis.com/media/legacy/logo.webp",
+            resend_domain_id: "legacy-resend-1",
+          },
+          custom_domain: "shop.example.com",
+        },
+      ],
+      [],
+      [],
+      [],
+      ...Array.from({ length: 15 }, () => []),
+    ]);
+
+    const res = await deleteStore("s1");
+
+    expect(res.success).toBe(true);
+    expect(res.warning).toMatch(/cleanup still needs attention/i);
+    expect(res.warning).toMatch(/referenced media/i);
+    expect(res.warning).toMatch(/store media prefix/i);
+    expect(res.warning).toMatch(/TLS certificate resources/i);
+    expect(cleanupDetachedDomain).toHaveBeenCalledWith(
+      "shop.example.com",
+      "deleteStore",
+      "legacy-resend-1",
+    );
+  });
+
+  it("removes an orphaned legacy Resend domain even when no custom domain remains", async () => {
+    setup([
+      viewer(),
+      [
+        {
+          id: "s1",
+          settings: { resend_domain_id: "legacy-resend-1" },
+          custom_domain: null,
+        },
+      ],
+      [],
+      [],
+      [],
+      ...Array.from({ length: 15 }, () => []),
+    ]);
+
+    expect(await deleteStore("s1")).toEqual({ success: true });
+    expect(cleanupDetachedDomain).toHaveBeenCalledWith(
+      null,
+      "deleteStore",
+      "legacy-resend-1",
+    );
+  });
+
+  it("warns instead of claiming auth cleanup succeeded when Identity Platform is unavailable", async () => {
+    vi.mocked(isFirebaseAdminConfigured).mockReturnValueOnce(false);
+    setup([
+      viewer(),
+      [{ id: "s1", settings: {}, custom_domain: null }],
+      [{ id: "owner-uid", email: "owner@example.com" }],
+      [],
+      [],
+      ...Array.from({ length: 15 }, () => []),
+    ]);
+
+    const res = await deleteStore("s1");
+    expect(res.warning).toMatch(/Identity Platform is not configured/i);
+    expect(deleteAuthUser).not.toHaveBeenCalled();
   });
 });

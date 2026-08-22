@@ -158,7 +158,8 @@ export function StoreManageBar({
     const res = await deleteStore(storeId);
     setBusy(false);
     if (res.error) return void toast.error(res.error);
-    toast.success(`${name} deleted.`);
+    if (res.warning) toast.warning(res.warning);
+    else toast.success(`${name} deleted.`);
     // Back to the list — the page we are on no longer describes anything.
     router.push("/dashboard/stores");
   }

@@ -92,9 +92,10 @@ export async function gcsSignUploadUrl(
   return url;
 }
 
-/** Best-effort delete of in-bucket paths. Never throws. */
-export async function gcsDeletePaths(paths: string[]): Promise<void> {
-  if (paths.length === 0) return;
+/** Best-effort delete of in-bucket paths. Returns paths that could not be removed. */
+export async function gcsDeletePaths(paths: string[]): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const failed: string[] = [];
   try {
     const b = await bucket();
     await Promise.all(
@@ -102,10 +103,45 @@ export async function gcsDeletePaths(paths: string[]): Promise<void> {
         b
           .file(p)
           .delete({ ignoreNotFound: true })
-          .catch((err) => logError("gcs: delete failed", err, { path: p })),
+          .catch((err) => {
+            failed.push(p);
+            logError("gcs: delete failed", err, { path: p });
+          }),
       ),
     );
   } catch (err) {
     logError("gcs: delete batch failed", err);
+    return [...paths];
+  }
+  return failed;
+}
+
+/**
+ * Best-effort removal of every object below a tenant prefix, including uploads
+ * that never made it into a database row. An empty prefix is rejected so a
+ * caller can never accidentally target the whole bucket.
+ */
+export async function gcsDeletePrefix(
+  prefix: string,
+): Promise<{ deleted: number; failed: number; error?: string }> {
+  if (!prefix.trim()) {
+    return {
+      deleted: 0,
+      failed: 0,
+      error: "Refusing to delete an empty prefix.",
+    };
+  }
+  try {
+    const b = await bucket();
+    const [files] = await b.getFiles({ prefix });
+    const failed = await gcsDeletePaths(files.map((file) => file.name));
+    return { deleted: files.length - failed.length, failed: failed.length };
+  } catch (err) {
+    logError("gcs: delete prefix failed", err, { prefix });
+    return {
+      deleted: 0,
+      failed: 0,
+      error: err instanceof Error ? err.message : "GCS prefix deletion failed",
+    };
   }
 }

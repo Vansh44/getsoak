@@ -32,23 +32,37 @@ export function extractMediaUrlsFromHtml(
 
 // Best-effort deletion of GCS objects by their public URL. Never throws — a
 // storage hiccup must not fail the surrounding DB write. Non-GCS URLs (e.g.
-// legacy Supabase) are ignored.
+// legacy Supabase) cannot be deleted here and are counted for callers that need
+// to surface an incomplete purge.
 export async function deleteStorageUrls(
   urls: (string | null | undefined)[],
-): Promise<void> {
+): Promise<{ attempted: number; failed: number; unmanaged: number }> {
   const gcsPaths = new Set<string>();
+  const unmanagedUrls = new Set<string>();
 
   for (const url of urls) {
     if (!url) continue;
     const gcsPath = gcsPathFromUrl(url);
     if (gcsPath) gcsPaths.add(gcsPath);
+    else unmanagedUrls.add(url);
   }
 
   if (gcsPaths.size > 0) {
     try {
-      await gcsDeletePaths([...gcsPaths]);
+      const failed = await gcsDeletePaths([...gcsPaths]);
+      return {
+        attempted: gcsPaths.size,
+        failed: failed.length,
+        unmanaged: unmanagedUrls.size,
+      };
     } catch (err) {
       logError("deleteStorageUrls: GCS delete failed", err);
+      return {
+        attempted: gcsPaths.size,
+        failed: gcsPaths.size,
+        unmanaged: unmanagedUrls.size,
+      };
     }
   }
+  return { attempted: 0, failed: 0, unmanaged: unmanagedUrls.size };
 }

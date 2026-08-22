@@ -543,7 +543,9 @@ wholesip/
 │       │                      # {title,subtitle,color}) — default share image for
 │       │                      # homepage/custom pages/platform (lib/seo/og-card.ts)
 │       └── upload/            # Image upload (sharp → WebP) → Google Cloud Storage
-│           │                  # (GCS-only; requires GCS_BUCKET). Auth = Firebase session.
+│           │                  # (GCS-only; requires GCS_BUCKET). Auth = Firebase session;
+│           │                  # store-host files live under stores/{storeId}/uploads/
+│           │                  # so permanent deletion also removes abandoned uploads
 │           └── sign-video/    # v4 signed-URL minting for VIDEO uploads (≤50MB, GCS;
 │                              # client PUTs DIRECTLY to storage — serverless routes
 │                              # can't proxy large bodies)
@@ -613,6 +615,9 @@ wholesip/
 │   │                          # (row-atomic, never throw, one outcome per row). Tested
 │   ├── domains/               # ★ §30 custom domains: domain.ts (PURE validation +
 │   │                          # normalisation + zone-relative record names),
+│   │                          # cleanup.ts (shared idempotent teardown of Certificate
+│   │                          # Manager, Identity Platform, Google Search resources +
+│   │                          # any legacy Resend domain still referenced in settings),
 │   │                          # naming.ts (deterministic Certificate Manager ids +
 │   │                          # the delete guard that stops staging removing a prod
 │   │                          # entry from the SHARED cert map), certificates.ts
@@ -733,12 +738,16 @@ wholesip/
 │   ├── storage/               # ★ Google Cloud Storage media backend (GCS-only —
 │   │                          # lib/supabase/ removed, Supabase fully out of code):
 │   │                          # gcs.ts — gcsConfigured/gcsUploadObject/gcsSignUploadUrl/
-│   │                          # gcsDeletePaths/gcsPublicUrl/gcsPathFromUrl (ADC or
+│   │                          # gcsDeletePaths/gcsDeletePrefix/gcsPublicUrl/gcsPathFromUrl
+│   │                          # (ADC or
 │   │                          # GCP_SA_KEY; public bucket; lazy SDK import). uploads.ts —
 │   │                          # client helpers (uploadImage POSTs /api/upload; uploadVideo
 │   │                          # PUTs to a signed GCS URL). cleanup.ts — deleteStorageUrls/
 │   │                          # extractMediaUrlsFromHtml orphan cleanup (legacy Supabase
-│   │                          # URLs ignored). process-image.ts — shared validate+optimize
+│   │                          # URLs ignored). paths.ts — immutable tenant/platform object
+│   │                          # prefixes. upload-owner.ts — proves the Firebase caller is
+│   │                          # a member of the host store or a platform operator before
+│   │                          # assigning that prefix. process-image.ts — shared validate+optimize
 │   │                          # (sharp→WebP, SVG rasterize) used by BOTH /api/upload and
 │   │                          # the media-library action. Tested.
 │   ├── db/                    # ★ Cloud SQL data layer (GCP Phase 5, IN PROGRESS — NOT yet
@@ -1227,7 +1236,9 @@ wholesip/
 │                              # and therefore falsely presented as plan debt; 0010
 │                              # enables merchant pixels and publishes their setup guides;
 │                              # 0013 adds per-tender order_payments.shift_id, backfills
-│                              # legacy rows and makes drawer attribution deposit-safe.
+│                              # legacy rows and makes drawer attribution deposit-safe;
+│                              # 0014 makes every direct store FK cascade and preserves
+│                              # legal-acceptance immutability outside a parent-store purge.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
@@ -6858,6 +6869,23 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       (`people-links.ts`, pure + tested) is the ONE link builder, because a
       "next page" that drops `?q=` turns a filtered list into an unfiltered one
       that still looks filtered.
+    - **★★ PERMANENT STORE DELETION IS A TENANT PURGE, NOT JUST ONE SQL
+      DELETE.** Every direct `stores(id)` foreign key is `ON DELETE CASCADE`
+      (pinned by migration `20260823_0014_store_deletion_cascade`; this includes
+      reconciliation rows, store-policy acceptances and announcement-recipient
+      snapshots that formerly survived with `store_id = NULL`). Before the
+      cascade, `deleteStore` collects uploaded-media references, the custom
+      domain, and every linked Identity Platform UID from `admins.id`,
+      `users.id`, and `pos_staff.user_id`. Afterward it purges both referenced
+      legacy media and the whole `stores/{storeId}/` GCS prefix (including an
+      upload abandoned before a row was saved), tears down Certificate Manager,
+      Identity Platform authorized-domain, Search Console and Site Verification
+      resources plus any retired Resend-domain resource, then deletes only auth
+      identities with NO remaining admin,
+      customer, POS or platform-operator role. That last reference check is
+      load-bearing: deleting one tenant must not break a person who still works
+      in another. Partial external cleanup is returned as an operator-visible
+      warning, never silently reported as a complete purge.
     - **★★ `LogsRail` TAKES ITS REGISTRY AS A PROP, AND THAT IS LOAD-BEARING.**
       Both consoles share `DashboardSidebar`, and their logs are NOT the same
       set: an operator has no import/export jobs and no per-store activity feed

@@ -7,6 +7,7 @@ const dbHolder = vi.hoisted(() => ({ current: null as any }));
 const resendHolder = vi.hoisted(() => ({
   verify: vi.fn(),
   get: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
@@ -18,6 +19,7 @@ vi.mock("resend", () => ({
     domains = {
       verify: resendHolder.verify,
       get: resendHolder.get,
+      remove: resendHolder.remove,
     };
   },
 }));
@@ -133,6 +135,10 @@ beforeEach(() => {
     data: { status: "verified" },
     error: null,
   });
+  resendHolder.remove.mockResolvedValue({
+    data: { id: "resend-1", deleted: true },
+    error: null,
+  });
   vi.mocked(getManagerUserId).mockResolvedValue("admin-1");
   vi.mocked(getViewerAccess).mockResolvedValue({
     can: vi.fn(() => true),
@@ -215,6 +221,9 @@ describe("updateCustomDomain", () => {
       "storemink.com",
     );
     expect(removeGoogleCustomDomain).toHaveBeenCalledWith("old.com");
+    await vi.waitFor(() =>
+      expect(resendHolder.remove).toHaveBeenCalledWith("resend-1"),
+    );
   });
 
   it("does not deprovision when the normalized domain is unchanged", async () => {
@@ -473,11 +482,7 @@ describe("disconnectDomain", () => {
 
     expect(dbHolder.current.calls.set[0]).toEqual({
       customDomain: null,
-      settings: {
-        theme: "classic",
-        resend_domain_id: "resend-1",
-        resend_domain_verified: true,
-      },
+      settings: { theme: "classic" },
     });
     expect(revalidateTag).toHaveBeenCalledWith("stores", "max");
     expect(deprovision).toHaveBeenCalledWith("old.com");
@@ -485,6 +490,7 @@ describe("disconnectDomain", () => {
       "old.com",
       "storemink.com",
     );
+    expect(resendHolder.remove).toHaveBeenCalledWith("resend-1");
     expect(removeGoogleCustomDomain).toHaveBeenCalledWith("old.com");
   });
 

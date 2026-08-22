@@ -83,6 +83,8 @@ describe("email send coverage", () => {
       "lib/email/campaign-worker.ts",
       // Uses resend.domains.* to verify a store's custom domain. No mail.
       "app/actions/store-domain.ts",
+      // Deletes retired resend.domains resources during tenant teardown. No mail.
+      "lib/domains/cleanup.ts",
     ];
     const rogue = filesCalling("new Resend\\(").filter(
       (f) => !NON_SENDERS.includes(f),

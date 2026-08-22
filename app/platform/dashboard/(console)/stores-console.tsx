@@ -226,6 +226,7 @@ export function StoresConsole({
       return;
     }
     setToDelete(null);
+    if (res.warning) alert(res.warning);
     startTransition(() => router.refresh());
   }
 

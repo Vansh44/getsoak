@@ -9,7 +9,7 @@ vi.mock("@/lib/storage/gcs", () => ({
     const m = /storage\.googleapis\.com\/[^/]+\/(.+)$/.exec(url || "");
     return m ? m[1] : null;
   },
-  gcsDeletePaths: vi.fn().mockResolvedValue(undefined),
+  gcsDeletePaths: vi.fn().mockResolvedValue([]),
 }));
 
 import { extractMediaUrlsFromHtml, deleteStorageUrls } from "./cleanup";
@@ -53,23 +53,33 @@ describe("deleteStorageUrls", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("does nothing when given empty / nullish urls", async () => {
-    await deleteStorageUrls([null, undefined, ""]);
+    await expect(deleteStorageUrls([null, undefined, ""])).resolves.toEqual({
+      attempted: 0,
+      failed: 0,
+      unmanaged: 0,
+    });
     expect(gcsDeletePaths).not.toHaveBeenCalled();
   });
 
   // Non-GCS URLs (external + legacy Supabase) are filtered out.
   it("ignores non-GCS URLs", async () => {
-    await deleteStorageUrls([
-      "https://cdn.other.com/x.png",
-      "https://x.example.com/storage/v1/object/public/media/s.png",
-    ]);
+    await expect(
+      deleteStorageUrls([
+        "https://cdn.other.com/x.png",
+        "https://x.example.com/storage/v1/object/public/media/s.png",
+      ]),
+    ).resolves.toEqual({ attempted: 0, failed: 0, unmanaged: 2 });
     expect(gcsDeletePaths).not.toHaveBeenCalled();
   });
 
   // Duplicate URLs are deduped so gcsDeletePaths gets each path once.
   it("dedupes GCS paths before deleting", async () => {
     const url = "https://storage.googleapis.com/bkt/dup.webp";
-    await deleteStorageUrls([url, url, url]);
+    await expect(deleteStorageUrls([url, url, url])).resolves.toEqual({
+      attempted: 1,
+      failed: 0,
+      unmanaged: 0,
+    });
     expect(gcsDeletePaths).toHaveBeenCalledWith(["dup.webp"]);
   });
 
@@ -79,6 +89,6 @@ describe("deleteStorageUrls", () => {
     vi.mocked(gcsDeletePaths).mockRejectedValueOnce(new Error("network"));
     await expect(
       deleteStorageUrls(["https://storage.googleapis.com/bkt/x.webp"]),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ attempted: 1, failed: 1, unmanaged: 0 });
   });
 });

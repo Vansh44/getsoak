@@ -50,5 +50,14 @@ describe("gcs helpers", () => {
         gcs.gcsPathFromUrl("https://storage.googleapis.com/any/a.png"),
       ).toBeNull();
     });
+
+    it("refuses an empty bulk-delete prefix before touching GCS", async () => {
+      const gcs = await loadGcs(undefined);
+      await expect(gcs.gcsDeletePrefix("")).resolves.toEqual({
+        deleted: 0,
+        failed: 0,
+        error: "Refusing to delete an empty prefix.",
+      });
+    });
   });
 });

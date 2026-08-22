@@ -7,6 +7,8 @@ import {
   gcsPublicUrl,
 } from "@/lib/storage/gcs";
 import { logError } from "@/lib/observability/logger";
+import { storeUploadPath } from "@/lib/storage/paths";
+import { resolveUploadOwner } from "@/lib/storage/upload-owner";
 
 // Signed-URL flow for VIDEO uploads. Videos are far too big to proxy through
 // a serverless route, so instead:
@@ -31,6 +33,13 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
+  const owner = await resolveUploadOwner(user);
+  if (!owner) {
+    return NextResponse.json(
+      { error: "You don't have access to upload here." },
+      { status: 403 },
+    );
+  }
 
   // Tighter than images — videos are large; 10/min is plenty for editing.
   const { allowed } = await rateLimit(`upload-video:${user.id}`, {
@@ -53,10 +62,7 @@ export async function POST(request: Request) {
 
   const type = typeof body.type === "string" ? body.type : "";
   const size = Number(body.size);
-  const folder = (typeof body.folder === "string" ? body.folder : "").replace(
-    /[^a-z0-9/_-]/gi,
-    "",
-  );
+  const folder = typeof body.folder === "string" ? body.folder : "";
 
   if (!ALLOWED_VIDEO_TYPES.includes(type)) {
     return NextResponse.json(
@@ -76,7 +82,11 @@ export async function POST(request: Request) {
   }
 
   const fileName = `${Math.random().toString(36).substring(2, 12)}_${Date.now()}.${EXT_BY_TYPE[type]}`;
-  const filePath = folder ? `${folder}/${fileName}` : fileName;
+  const filePath = storeUploadPath(
+    owner.kind === "store" ? owner.storeId : null,
+    folder,
+    fileName,
+  );
 
   if (!gcsConfigured) {
     logError("sign-video: GCS not configured", new Error("GCS_BUCKET unset"), {
