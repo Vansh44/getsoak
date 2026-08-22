@@ -206,6 +206,22 @@ describe("refundOrder — the row is written before the money moves", () => {
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: "order.refund_issued" }),
     );
+    // ★ The payload must name the amount `amount` and carry the method.
+    // `total` is not a declared variable for this event, so templateValues
+    // drops it and the customer's refund email goes out with no figure; the
+    // method is what stops the copy claiming their card was credited.
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          amount: expect.any(Number),
+          paymentMethod: expect.anything(),
+        }),
+      }),
+    );
+    const emitted = vi.mocked(emitEvent).mock.calls.at(-1)![0] as {
+      payload: Record<string, unknown>;
+    };
+    expect(emitted.payload).not.toHaveProperty("total");
   });
 
   it("stays pending when Razorpay accepts it but hasn't settled", async () => {

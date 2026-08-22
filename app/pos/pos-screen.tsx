@@ -3,7 +3,7 @@
 // It exists because the five screens each hand-rolled a header, and they had
 // drifted: three different back arrows (ArrowLeft in a 9×9 box, ChevronLeft,
 // and inventory's own), two different page backgrounds (`bg-neutral-950` over
-// the layout's `bg-[#0b0f14]`), and two different title sizes. None of that was
+// the layout's `bg-[var(--pos-bg)]`), and two different title sizes. None of that was
 // a decision — it was five people solving the same problem five times.
 //
 // There is no back button, deliberately. Back-to-/pos was the only way out of
@@ -48,7 +48,7 @@ export function PosScreen({
       {/* Only when there is something to put in it. An empty bar under the nav's
           own is pure lost height, and on a till height is the product grid. */}
       {actions && (
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--pos-border)] px-4">
           <div className="ml-auto flex items-center gap-2">{actions}</div>
         </header>
       )}
@@ -60,7 +60,9 @@ export function PosScreen({
               without this a screen reader lands on a document with no h1. */}
           <h1 className="sr-only">{title}</h1>
           {subtitle && (
-            <p className="mb-3 truncate text-sm text-white/45">{subtitle}</p>
+            <p className="mb-3 truncate text-sm text-[var(--pos-ink-3)]">
+              {subtitle}
+            </p>
           )}
           {children}
         </div>

@@ -202,3 +202,107 @@ export function isExpiringSoon(
   if (!Number.isFinite(ms) || ms <= 0) return false;
   return ms <= PICKUP_WARN_HOURS * 3_600_000;
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * What the counter should SAY about this collection's money.
+ *
+ * ★★ "NOTHING OWED" AND "PAID" ARE NOT THE SAME FACT, and reading one as the
+ * other is the trap this exists to close. `amountDueAtCollection` returns 0 for
+ * an order already paid online AND for one whose online payment FAILED —
+ * deliberately, because neither can be settled by a hand-over. A panel that
+ * derived its headline from the figure alone would print "Paid" over a failed
+ * payment, which is the one sentence that must never appear beside a parcel
+ * about to be given away.
+ *
+ * ★ NOR CAN IT COME FROM THE PAYMENTS LIST. Online checkout writes NO
+ * `order_payments` row (verified: `checkout-actions.ts` never touches that
+ * table) — only the counter does. So a fully-paid online collection has an
+ * EMPTY payment list, and "no payments recorded" would read as "they have paid
+ * nothing" on the commonest order in the queue.
+ *
+ * One reader, so the badge on the row and the panel behind it cannot disagree.
+ */
+export type CollectionPaymentState =
+  /** Nothing to take. Hand it over. */
+  | "settled"
+  /** A deposit is in; the rest is still owed. */
+  | "part"
+  /** The full amount is owed at the counter. */
+  | "due"
+  /** Payment failed upstream — the till cannot settle this one. */
+  | "failed";
+
+export interface CollectionPayment {
+  state: CollectionPaymentState;
+  /** The one line a cashier reads before deciding whether to ask for money. */
+  label: string;
+  paid: number;
+  due: number;
+}
+
+export function collectionPayment(input: {
+  paymentMethod: string | null | undefined;
+  paymentStatus: string | null | undefined;
+  /** Already taken AT THE COUNTER — see the note above on why this is not
+   *  the same as "already paid". */
+  paidSoFar: number;
+  /** From `amountDueAtCollection`, never recomputed here: the queue, this
+   *  panel and `markCollected` must quote one figure. */
+  amountDue: number;
+}): CollectionPayment {
+  const paid = Number.isFinite(input.paidSoFar)
+    ? Math.max(0, input.paidSoFar)
+    : 0;
+  const due = Number.isFinite(input.amountDue)
+    ? Math.max(0, input.amountDue)
+    : 0;
+  const status = input.paymentStatus ?? "";
+
+  if (due > 0) {
+    return paid > 0
+      ? {
+          state: "part",
+          label: "Part paid — the rest is due at the counter",
+          paid,
+          due,
+        }
+      : { state: "due", label: "Payment due at the counter", paid, due };
+  }
+
+  if (status === "failed") {
+    return {
+      state: "failed",
+      label: "Payment failed — this order was never settled",
+      paid,
+      due: 0,
+    };
+  }
+
+  if (status === "refunded" || status === "partially_refunded") {
+    return {
+      state: "settled",
+      label: status === "refunded" ? "Refunded in full" : "Partly refunded",
+      paid,
+      due: 0,
+    };
+  }
+
+  if (paid > 0) {
+    return { state: "settled", label: "Paid at the counter", paid, due: 0 };
+  }
+
+  if (status === "paid") {
+    return { state: "settled", label: "Paid online", paid, due: 0 };
+  }
+
+  // Nothing owed here, nothing recorded, not marked paid — a state the till
+  // cannot explain, so it says so rather than guessing "Paid".
+  return {
+    state: "settled",
+    label: "Nothing to collect at the counter",
+    paid,
+    due: 0,
+  };
+}

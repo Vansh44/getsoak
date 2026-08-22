@@ -49,9 +49,9 @@ sequence AND the spec for everything still to build.
 | **16** | Check the shelf before taking counter payment (rescoped)        | S    | ✅ done |
 | **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)    | M    | ✅ done |
 | **18** | Collection counter: deposits + expiry banner (discount dropped) | M    | ✅ done |
-| **19** | **Catalogue delta sync**                                        | M    | ⏭ next |
-| **20** | `placePosSale` round trips (11 → few)                           | M    | ⏳      |
-| **5**  | Receipts — SMS opt-out webhook, then a real send (POS 6)        | M    | ⏳      |
+| **19** | Catalogue delta sync                                            | M    | ✅ done |
+| **20** | `placePosSale` round trips (11 → few)                           | M    | ✅ done |
+| **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**    | M    | ⏭ next |
 | **6**  | Channel stock policy, per location and configurable (LOC H)     | M    | ⏳      |
 | **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)  | S    | ⏳      |
 | **8**  | More routing strategies (LOC J)                                 | M    | ⏳      |

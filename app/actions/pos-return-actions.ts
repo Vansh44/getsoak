@@ -762,7 +762,8 @@ export async function processReturn(
     actor: { type: "admin", id: op.staffId ?? null, label: op.name },
     subject: { type: "order", id: orderId, label: sale.receiptNo },
     payload: {
-      total: breakdown.total,
+      // `amount`, not `total` — see refund-actions.ts.
+      amount: breakdown.total,
       currency: "INR",
       paymentMethod: method,
       items: breakdown.lines.reduce((a, l) => a + l.quantity, 0),

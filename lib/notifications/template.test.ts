@@ -223,6 +223,72 @@ describe("default email templates", () => {
     }
   });
 
+  it("★ a refund's amount reaches the customer", () => {
+    // The emitters sent `total`, the catalog declares `amount`, and
+    // templateValues drops anything undeclared — so the figure silently
+    // vanished and the email read "Your refund has been …" with no number.
+    const withAmount = templateValues(
+      "order.refund_issued",
+      { date: new Date("2026-08-22T10:00:00Z").toISOString() },
+      { amount: 1240, currency: "INR", paymentMethod: "razorpay" },
+    );
+    expect(withAmount.amount).toBe("\u20b91,240.00");
+
+    // The old shape yields nothing at all — this is what regressed.
+    const asTotal = templateValues(
+      "order.refund_issued",
+      {},
+      { total: 1240, currency: "INR" },
+    );
+    expect(asTotal.amount).toBeUndefined();
+  });
+
+  it("★ a refund email never claims the original payment method it didn't use", () => {
+    // Both renderers said "sent to your original payment method" for EVERY
+    // method, so a store-credit refund told the shopper their card was
+    // credited when no money had left at all.
+    const credit = defaultEmailTemplate(
+      "order.refund_issued",
+      "customer",
+      {},
+      {
+        paymentMethod: "store_credit",
+      },
+    );
+    expect(credit.body).toMatch(/store credit/i);
+    expect(credit.body).not.toMatch(/original payment method/i);
+    // …and no bank timeline, because no bank is involved.
+    expect(credit.body).not.toMatch(/5–7 working days/);
+
+    const manual = defaultEmailTemplate(
+      "order.refund_issued",
+      "customer",
+      {},
+      {
+        paymentMethod: "manual",
+      },
+    );
+    expect(manual.body).not.toMatch(/original payment method/i);
+
+    // The gateway refund is the one that earns the promise.
+    const online = defaultEmailTemplate(
+      "order.refund_issued",
+      "customer",
+      {},
+      {
+        paymentMethod: "razorpay",
+      },
+    );
+    expect(online.body).toMatch(/original payment method/i);
+    expect(online.body).toMatch(/5–7 working days/);
+  });
+
+  it("falls back to copy true of any method when none is known", () => {
+    const t = defaultEmailTemplate("order.refund_issued", "customer", {}, null);
+    expect(t.body).toMatch(/on its way back to you/i);
+    expect(t.body).not.toMatch(/original payment method/i);
+  });
+
   it("opens with a readable sentence, not a bare label", () => {
     const t = defaultEmailTemplate("order.placed");
     expect(t.body.split("\n")[0]).toBe(

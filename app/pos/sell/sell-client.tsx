@@ -577,7 +577,7 @@ export function SellClient({
           till confusing to look at. Navigation, location, operator and Lock all
           live in the rail now (app/pos/pos-nav.tsx), where they are the same on
           every screen; what is left is the state of THIS screen. */}
-      <header className="flex h-11 shrink-0 items-center justify-end gap-3 border-b border-white/10 px-3 text-sm">
+      <header className="flex h-11 shrink-0 items-center justify-end gap-3 border-b border-[var(--pos-border)] px-3 text-sm">
         {/* Cache state, deliberately quiet. A cashier only needs it when
             something looks wrong — hence the click-to-refresh. */}
         <button
@@ -589,7 +589,7 @@ export function SellClient({
               ? `${catalog.count} products cached on this device. Click to refresh.`
               : "Loading the catalog…"
           }
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-white/40 transition-colors hover:bg-white/10 hover:text-white/70 disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[var(--pos-ink-3)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink-2)] disabled:opacity-60"
         >
           {catalog.syncing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -602,7 +602,7 @@ export function SellClient({
             are reachable only by search or scan. Hidden until configured,
             since "20 of 20" is noise. */}
         {coverage.configured && (
-          <span className="hidden text-white/40 sm:inline">
+          <span className="hidden text-[var(--pos-ink-3)] sm:inline">
             {coverage.shown} of {coverage.total} products
           </span>
         )}
@@ -610,7 +610,7 @@ export function SellClient({
           <button
             type="button"
             onClick={() => setLayoutOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 font-medium transition-colors hover:bg-white/20"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--pos-surface-2)] px-3 py-1.5 font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
           >
             <LayoutGrid className="h-4 w-4" strokeWidth={2} />
             Edit layout
@@ -654,7 +654,7 @@ export function SellClient({
             <>
               <div className="mb-3 flex shrink-0 gap-2">
                 <div className="relative flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
                   <input
                     ref={scanRef}
                     value={query}
@@ -673,10 +673,10 @@ export function SellClient({
                       }
                     }}
                     placeholder="Scan a barcode or search products…"
-                    className="w-full rounded-xl border border-white/15 bg-white/5 py-3 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                    className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-3 pl-9 pr-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
                   />
                   {searching && (
-                    <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+                    <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
                   )}
                 </div>
                 {/* Only rendered where the browser can actually scan — a dead
@@ -686,7 +686,7 @@ export function SellClient({
                     type="button"
                     onClick={() => setCameraOpen(true)}
                     title="Scan with the camera"
-                    className="flex shrink-0 items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 text-sm font-medium transition-colors hover:bg-white/10"
+                    className="flex shrink-0 items-center gap-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-2)]"
                   >
                     <Camera className="h-5 w-5" strokeWidth={2} />
                     <span className="hidden sm:inline">Scan</span>
@@ -695,7 +695,7 @@ export function SellClient({
               </div>
 
               {error && (
-                <div className="mb-3 shrink-0 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+                <div className="mb-3 shrink-0 rounded-lg bg-[var(--pos-danger-soft)] px-3 py-2 text-sm text-[var(--pos-danger)]">
                   {error}
                 </div>
               )}
@@ -709,14 +709,14 @@ export function SellClient({
                       type="button"
                       disabled={out}
                       onClick={() => addItem(it)}
-                      className="flex flex-col rounded-xl border border-white/10 bg-white/5 p-2 text-left transition-colors hover:bg-white/10 disabled:opacity-40"
+                      className="flex flex-col rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-2 text-left transition-colors hover:bg-[var(--pos-surface-2)] disabled:opacity-40"
                     >
                       {/* Photos make the grid scannable by eye for items without a
                       barcode (loose produce, bakery). A FIXED short height, not
                       aspect-square: on a wide till screen a square tile grew to
                       ~350px and pushed the price below the fold, so the cashier
                       scrolled to find what should be one tap away. */}
-                      <div className="mb-2 h-24 w-full overflow-hidden rounded-lg bg-white/5 sm:h-28">
+                      <div className="mb-2 h-24 w-full overflow-hidden rounded-lg bg-[var(--pos-surface)] sm:h-28">
                         {it.image ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -726,7 +726,7 @@ export function SellClient({
                             className="h-full w-full object-cover"
                           />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center text-white/20">
+                          <div className="flex h-full w-full items-center justify-center text-[var(--pos-ink-3)]">
                             <Package className="h-8 w-8" strokeWidth={1.5} />
                           </div>
                         )}
@@ -735,14 +735,14 @@ export function SellClient({
                         {it.name}
                       </span>
                       {it.variantName && (
-                        <span className="text-xs text-white/50">
+                        <span className="text-xs text-[var(--pos-ink-2)]">
                           {it.variantName}
                         </span>
                       )}
                       <span className="mt-auto pt-2 font-semibold">
                         ₹{it.price.toLocaleString("en-IN")}
                       </span>
-                      <span className="text-[11px] text-white/40">
+                      <span className="text-[11px] text-[var(--pos-ink-3)]">
                         {out
                           ? "Out of stock"
                           : it.trackInventory
@@ -753,7 +753,7 @@ export function SellClient({
                   );
                 })}
                 {items.length === 0 && !searching && (
-                  <p className="col-span-full py-10 text-center text-sm text-white/40">
+                  <p className="col-span-full py-10 text-center text-sm text-[var(--pos-ink-3)]">
                     No products match.
                   </p>
                 )}
@@ -763,17 +763,17 @@ export function SellClient({
         </div>
 
         {/* Cart */}
-        <aside className="flex w-[360px] shrink-0 flex-col border-l border-white/10 bg-black/20">
+        <aside className="flex w-[360px] shrink-0 flex-col border-l border-[var(--pos-border)] bg-[var(--pos-surface)]">
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {cart.length === 0 ? (
-              <p className="py-16 text-center text-sm text-white/40">
+              <p className="py-16 text-center text-sm text-[var(--pos-ink-3)]">
                 Scan or tap a product to start a sale.
               </p>
             ) : (
               cart.map((l) => (
                 <div
                   key={l.key}
-                  className="mb-2 rounded-xl border border-white/10 bg-white/5 p-3"
+                  className="mb-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -781,7 +781,7 @@ export function SellClient({
                         {l.name}
                       </div>
                       {l.variantName && (
-                        <div className="text-xs text-white/50">
+                        <div className="text-xs text-[var(--pos-ink-2)]">
                           {l.variantName}
                         </div>
                       )}
@@ -791,7 +791,7 @@ export function SellClient({
                       onClick={() =>
                         setCart((c) => c.filter((x) => x.key !== l.key))
                       }
-                      className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white"
+                      className="rounded p-1 text-[var(--pos-ink-3)] hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
                       aria-label="Remove"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -802,7 +802,7 @@ export function SellClient({
                       <button
                         type="button"
                         onClick={() => setQty(l.key, -1)}
-                        className="rounded-lg bg-white/10 p-1.5 hover:bg-white/20"
+                        className="rounded-lg bg-[var(--pos-surface-2)] p-1.5 hover:bg-[var(--pos-surface-3)]"
                         aria-label="Decrease"
                       >
                         <Minus className="h-4 w-4" />
@@ -813,7 +813,7 @@ export function SellClient({
                       <button
                         type="button"
                         onClick={() => setQty(l.key, 1)}
-                        className="rounded-lg bg-white/10 p-1.5 hover:bg-white/20"
+                        className="rounded-lg bg-[var(--pos-surface-2)] p-1.5 hover:bg-[var(--pos-surface-3)]"
                         aria-label="Increase"
                       >
                         <Plus className="h-4 w-4" />
@@ -822,7 +822,7 @@ export function SellClient({
                     <span
                       className={
                         l.lineDiscount > 0
-                          ? "text-sm text-white/40 line-through"
+                          ? "text-sm text-[var(--pos-ink-3)] line-through"
                           : "font-semibold"
                       }
                     >
@@ -836,7 +836,7 @@ export function SellClient({
                       no field. The server is the actual boundary. */}
                   {config.canDiscount && (
                     <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-                      <label className="flex items-center gap-1.5 text-white/50">
+                      <label className="flex items-center gap-1.5 text-[var(--pos-ink-2)]">
                         Less ₹
                         <input
                           value={l.lineDiscount || ""}
@@ -848,11 +848,11 @@ export function SellClient({
                             )
                           }
                           placeholder="0"
-                          className="w-16 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right text-white outline-none focus:border-white/40"
+                          className="w-16 rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-2 py-1 text-right text-[var(--pos-ink)] outline-none focus:border-[var(--pos-border-strong)]"
                         />
                       </label>
                       {l.lineDiscount > 0 && (
-                        <span className="font-semibold text-white">
+                        <span className="font-semibold text-[var(--pos-ink)]">
                           ₹
                           {(
                             l.unitPrice * l.quantity -
@@ -867,46 +867,48 @@ export function SellClient({
             )}
           </div>
 
-          <div className="shrink-0 border-t border-white/10 p-3">
+          <div className="shrink-0 border-t border-[var(--pos-border)] p-3">
             {/* Optional: a sale completes fine without a customer. */}
             <button
               type="button"
               onClick={() => setCustomerOpen(true)}
-              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-sm transition-colors hover:bg-white/10"
+              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--pos-surface-2)]"
             >
               {customer ? (
                 <>
-                  <UserRound className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <UserRound className="h-4 w-4 shrink-0 text-[var(--pos-ok)]" />
                   <span className="min-w-0 flex-1 truncate">
                     {customer.name}
                   </span>
                 </>
               ) : (
                 <>
-                  <UserPlus className="h-4 w-4 shrink-0 text-white/40" />
-                  <span className="flex-1 text-white/50">Add customer</span>
+                  <UserPlus className="h-4 w-4 shrink-0 text-[var(--pos-ink-3)]" />
+                  <span className="flex-1 text-[var(--pos-ink-2)]">
+                    Add customer
+                  </span>
                 </>
               )}
               {gstin && (
-                <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] tracking-wide text-white/60">
+                <span className="shrink-0 rounded bg-[var(--pos-surface-2)] px-1.5 py-0.5 text-[10px] tracking-wide text-[var(--pos-ink-2)]">
                   GST
                 </span>
               )}
             </button>
 
             <div className="mb-2 flex items-center justify-between text-sm">
-              <span className="text-white/60">Subtotal</span>
+              <span className="text-[var(--pos-ink-2)]">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>
             </div>
             {lineDiscountTotal > 0 && (
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-white/60">Line discounts</span>
+                <span className="text-[var(--pos-ink-2)]">Line discounts</span>
                 <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
               </div>
             )}
             {config.canDiscount && (
               <label className="mb-2 flex items-center justify-between gap-2 text-sm">
-                <span className="text-white/60">Discount ₹</span>
+                <span className="text-[var(--pos-ink-2)]">Discount ₹</span>
                 <input
                   value={discount || ""}
                   inputMode="numeric"
@@ -914,13 +916,13 @@ export function SellClient({
                     setDiscount(Number(e.target.value.replace(/\D/g, "")) || 0)
                   }
                   placeholder="0"
-                  className="w-24 rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-right outline-none focus:border-white/40"
+                  className="w-24 rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-2 py-1 text-right outline-none focus:border-[var(--pos-border-strong)]"
                 />
               </label>
             )}
             {tax > 0 && (
               <div className="mb-2 flex items-center justify-between text-sm">
-                <span className="text-white/60">
+                <span className="text-[var(--pos-ink-2)]">
                   Tax{config.pricesIncludeTax ? " (included)" : ""}
                 </span>
                 <span>₹{tax.toLocaleString("en-IN")}</span>
@@ -934,7 +936,7 @@ export function SellClient({
               type="button"
               disabled={cart.length === 0}
               onClick={() => setTendering(true)}
-              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               Charge ₹{estTotal.toLocaleString("en-IN")}
             </button>
@@ -947,14 +949,14 @@ export function SellClient({
                 type="button"
                 disabled={cart.length === 0 || parking}
                 onClick={handlePark}
-                className="flex-1 rounded-xl bg-white/10 py-2.5 text-sm font-medium transition-colors hover:bg-white/20 disabled:opacity-40"
+                className="flex-1 rounded-xl bg-[var(--pos-surface-2)] py-2.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
               >
                 {parking ? "Holding…" : "Hold sale"}
               </button>
               <button
                 type="button"
                 onClick={() => setParkedOpen(true)}
-                className="rounded-xl bg-white/10 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+                className="rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
               >
                 Held
                 {parked.length > 0 ? ` (${parked.length})` : ""}
@@ -967,19 +969,19 @@ export function SellClient({
       {/* Duplicate-barcode disambiguation */}
       {choices && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#12171f] p-5">
+          <div className="w-full max-w-md rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] shadow-2xl p-5">
             <div className="mb-1 flex items-center justify-between">
               <h2 className="font-semibold">Which item?</h2>
               <button
                 type="button"
                 onClick={() => setChoices(null)}
-                className="rounded p-1 text-white/50 hover:bg-white/10"
+                className="rounded p-1 text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-2)]"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <p className="mb-3 text-sm text-white/60">
+            <p className="mb-3 text-sm text-[var(--pos-ink-2)]">
               Several products share this code.
             </p>
             <div className="space-y-2">
@@ -992,11 +994,11 @@ export function SellClient({
                     setChoices(null);
                     setQuery("");
                   }}
-                  className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/5 p-3 text-left hover:bg-white/10"
+                  className="flex w-full items-center justify-between rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3 text-left hover:bg-[var(--pos-surface-2)]"
                 >
                   <span>
                     <span className="block text-sm font-medium">{c.name}</span>
-                    <span className="block text-xs text-white/50">
+                    <span className="block text-xs text-[var(--pos-ink-2)]">
                       {c.variantName ?? c.sku}
                       {c.trackInventory ? ` · ${c.stock} in stock` : ""}
                     </span>

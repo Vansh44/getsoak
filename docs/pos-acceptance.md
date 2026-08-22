@@ -2758,6 +2758,19 @@ the merchant refunds from the dashboard. Holding stock at payment was considered
 and rejected (owner, 2026-08-18) — see roadmap Step 16. This story documents
 accepted behaviour, not a bug.
 
+**PS-GW.20 ★★ — Manager approval keeps the one-tap tender**
+As a cashier, apply a discount or price override that needs approval, pay the
+full balance by Card/UPI in one tap, then enter a valid manager PIN.
+**Expect:** the approved retry submits the same full tender plus the manager
+token. It must not retry with an empty tender list just because the payment and
+first completion happened in one tap.
+
+**PS-GW.21 ★★ — A captured gateway payment is retried, never charged again**
+Capture a full Online payment, then force sale completion to return an error.
+**Expect:** the captured tender and its gateway reference remain visibly staged.
+Retrying Complete sale reuses that reference and does not open or charge a
+second Razorpay payment.
+
 ---
 
 ## 11f. Deposits and expiry at the counter _(roadmap Step 18)_
@@ -2858,6 +2871,119 @@ through `nextCursor` until every withdrawn product is gone.
 
 ---
 
+---
+
+## 11h. The collection detail panel _(roadmap Step 21)_
+
+The queue row shows a total, an item COUNT and a badge. A cashier facing a
+customer asking "which pair is this?" or "didn't I leave a deposit?" could see
+the money and not the goods — on the one counter whose central act (giving a
+parcel away) cannot be undone.
+
+**PS-CD.1 — Tapping a collection opens it**
+Tap the order reference / customer line on any queue row.
+**Expect:** a panel naming the order, its customer, its collection code, every
+line item with quantity and price, and the totals ladder.
+
+**PS-CD.2 ★ — The action buttons are NOT part of the tap target**
+Tap "Mark ready" or "Take payment" on the row.
+**Expect:** that action runs; the panel does NOT open. Wrapping the whole card
+would nest buttons inside a button — invalid markup, and on a touch till it
+makes "hand this over" ambiguous with "let me look first".
+
+**PS-CD.3 — It opens named, not on a spinner**
+Tap a row on a slow connection.
+**Expect:** the reference, customer and amount due are on screen immediately —
+they come from the row that was tapped, computed by the same helpers. Only the
+line items wait for the read.
+
+**PS-CD.4 ★★ — An order paid ONLINE does not read as unpaid**
+Open a collection that was paid at checkout.
+**Expect:** "Paid online", and no "still to collect". Online checkout writes NO
+`order_payments` row, so paid-so-far is 0 and the payment list is EMPTY on the
+commonest order in the queue; anything deriving the headline from those two
+numbers says "nothing paid" about a fully-paid order.
+
+**PS-CD.5 ★★ — A FAILED payment is never reported as paid**
+Open a collection whose online payment failed.
+**Expect:** "Payment failed — this order was never settled", in red.
+`amountDueAtCollection` returns 0 here too (deliberately — a hand-over cannot
+settle it), so the figure alone would print "Paid" over the one order that was
+never paid at all.
+
+**PS-CD.6 ★ — The payment WORD waits for the read; the AMOUNT does not**
+Open a paid-online collection and watch the payment card as it loads.
+**Expect:** "Checking payment…" then "Paid online" — never "Nothing to collect"
+first. Money OWED is authoritative on the row and shows at once; WHY nothing is
+owed is not knowable until `payment_status` arrives.
+
+**PS-CD.7 — A deposit is shown as money taken, and how**
+Open a part-paid collection.
+**Expect:** "Part paid", the balance still to collect, and a line naming each
+tender with its amount and time. A deposit visible only as a smaller balance is
+a figure to be trusted rather than checked.
+
+**PS-CD.8 — Store credit sits under what was PAID**
+Open a collection settled partly with store credit.
+**Expect:** "Store credit applied ₹15" in the payment card, and the order total
+UNCHANGED by it. Credit is a payment, not a discount (§29) — netting it off the
+ladder would make this screen and the invoice quote different sale values.
+
+**PS-CD.9 — Payment is collected from the panel**
+Open an order that owes money and tap "Take ₹45.00".
+**Expect:** the same tender pad the row opens, over the same order. Completing
+it closes both and settles the order once.
+
+**PS-CD.10 ★ — Mark ready keeps the panel open; handing over closes it**
+Tap "Mark ready" in the panel, then "Hand over".
+**Expect:** after Mark ready the panel stays open showing "Ready" — the
+customer is often standing there and the next tap is the hand-over. After the
+hand-over it closes: the parcel has left the shelf and the panel has nothing
+left to offer.
+
+**PS-CD.11 ★ — A deposit refreshes the panel rather than stranding it**
+Take a part payment from inside the panel.
+**Expect:** the balance drops immediately and the new tender appears in the
+list. The panel stays open — the order is still work.
+
+**PS-CD.12 ★★ — A gone collection renders but offers nothing**
+Open a cancelled or expired order (find it by searching its reference).
+**Expect:** it renders — the customer is standing there and the shop has to be
+able to say what happened — with the explanation, and with NO buttons.
+`markCollected`'s claim is scoped to awaiting|ready, so every control could only
+ever fail, in front of a customer.
+
+**PS-CD.13 ★★ — Another shop's collection cannot be opened**
+Call the reader with a valid order id from a different location.
+**Expect:** refused. The three predicates are the queue's — store, pickup, and
+the OPERATOR's location; the id from the client selects, it never scopes.
+
+**PS-CD.14 — Escape and the backdrop close it**
+Press Escape, or tap outside the panel.
+**Expect:** it closes without acting on the order.
+
+**PS-CD.15 ★★ — A fully refunded collection cannot leave the shop**
+Open an awaiting/ready pickup whose `payment_status` is `refunded` and try both
+the visible UI and a direct `markCollected` post.
+**Expect:** the panel says "Refunded in full" and offers neither Mark ready nor
+Hand over. The action refuses too and commits no hold, event, or collected
+claim. If a refund races an already-open panel, the final conditional UPDATE
+matches nothing after the refund's row lock releases.
+
+**PS-CD.16 ★ — Prepared means actually packed**
+Open a pickup with a promised `pickup_ready_at` and a later
+`pickup_prepared_at`.
+**Expect:** the panel labels the actual preparation time from
+`pickup_prepared_at`; the checkout promise is never presented as proof that
+staff packed the parcel.
+
+**PS-CD.17 ★★ — The newest detail read owns the next action**
+Open a stale queue row, then change the order from another till before the
+detail read lands: first cancel/collect it, then repeat by taking a deposit.
+**Expect:** the first panel removes all controls; the second displays and opens
+the tender pad for the newly reduced balance. Status and money never come from
+different snapshots on the same panel.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
@@ -2906,4 +3032,5 @@ Real and deliberate, so nobody files them as bugs:
 | **Split fulfilment / multiple parcels**                             | The schema supports many fulfilment orders and shipments, but v1 routes and books the whole physical order from one location into one parcel                                                                                                                                                                                                                                                                   |
 | **Return shipping labels**                                          | Returns/BORIS exist, but buying and tracking a reverse Shiprocket shipment is not wired                                                                                                                                                                                                                                                                                                                        |
 | **Weight disputes and COD remittance reconciliation**               | Provider operational/financial reconciliation remains in Shiprocket; StoreMink records the declared parcel and COD amount only                                                                                                                                                                                                                                                                                 |
+| **A failed online payment looks ordinary ON THE ROW**               | Found while building PS-CD.5. `amountDueAtCollection` returns 0 for a failed payment, so the queue row shows no "to pay" badge and reads like a paid collection. The PANEL now says so plainly, one tap away; the row is left alone because changing what the queue shows cannot be exercised end-to-end here                                                                                                  |
 | **Shiprocket browser/API smoke test pending**                       | Typecheck and provider/state/parser tests pass; PS-SH.1–SH.18 still require a merchant test account, migration and real webhook callbacks                                                                                                                                                                                                                                                                      |

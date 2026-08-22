@@ -136,6 +136,7 @@ export default async function PlatformDashboardLayout({
           role={viewer.role}
           firstName=""
           lastName=""
+          searchGroups={navGroups}
         />
         <div className="flex flex-1 overflow-hidden">
           {/* The operator log registry, not the merchant one: this console has

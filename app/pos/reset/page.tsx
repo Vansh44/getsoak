@@ -18,10 +18,10 @@ export default async function PosResetPage({
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-sm text-center">
           <h1 className="text-lg font-semibold">Reset link problem</h1>
-          <p className="mt-2 text-sm text-white/60">{info.error}</p>
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">{info.error}</p>
           <Link
             href="/pos/login"
-            className="mt-5 inline-block rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#0b0f14] transition-opacity hover:opacity-90"
+            className="mt-5 inline-block rounded-lg bg-[var(--pos-accent)] px-4 py-2 text-sm font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90"
           >
             Back to sign in
           </Link>

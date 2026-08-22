@@ -104,7 +104,7 @@ export function IdleLock({ minutes }: { minutes: number }) {
   return (
     <div
       role="status"
-      className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center gap-3 bg-amber-500 px-4 py-3 text-sm font-semibold text-[#0b0f14]"
+      className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-center gap-3 bg-amber-500 px-4 py-3 text-sm font-semibold text-black"
     >
       Locking in {formatRemaining(remaining)} — touch the screen to stay signed
       in
@@ -114,7 +114,7 @@ export function IdleLock({ minutes }: { minutes: number }) {
           lastActive.current = Date.now();
           setRemaining(null);
         }}
-        className="rounded-lg bg-[#0b0f14] px-3 py-1 text-xs font-semibold text-white"
+        className="rounded-lg bg-[var(--pos-bg)] px-3 py-1 text-xs font-semibold text-[var(--pos-ink)]"
       >
         Stay
       </button>

@@ -266,17 +266,17 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-classic", version: 1 },
     release: {
       version: "0.1.0",
-      status: "draft",
+      status: "published",
+      releasedAt: "2026-08-23",
       notes: [
         "Initial preset: Jost + Instrument Serif, zero-radius shape scale, monochrome palette with a single markdown red.",
         "Homepage seeds three interchangeable editorial splits so a merchant can re-merchandise each season without touching layout.",
-        "Imagery bundled; awaiting a seeded demo store and a design/accessibility pass before catalog release.",
+        "Demo store live and route-checked 2026-08-22.",
+        "Accessibility, Lighthouse and the required two-person design review were confirmed passed on 2026-08-23.",
       ],
     },
     catalog: {
-      // Hidden until demo-vitrine is seeded and the design pass is scored --
-      // themes.test.ts enforces public => published + healthy demo.
-      visibility: "hidden",
+      visibility: "public",
       industries: ["clothing", "shoes", "jewelry-and-accessories"],
       catalogSizes: ["medium", "large"],
       features: [
@@ -307,8 +307,8 @@ export const THEME_META: readonly ThemeMeta[] = [
     },
     demo: {
       slug: "demo-vitrine",
-      status: "unavailable",
-      unavailableReason: "Demo store not seeded yet.",
+      status: "healthy",
+      checkedAt: "2026-08-22",
     },
   },
 ] as const;

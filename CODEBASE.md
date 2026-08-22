@@ -214,7 +214,9 @@ wholesip/
 │   ├── dashboard/             # ★ STORE ADMIN DASHBOARD (per-store, auth-gated)
 │   │   ├── layout.tsx         # Sidebar + topbar shell (dashboard.css); independent
 │   │   │                      # location/enquiry/store chrome reads run concurrently
-│   │   │                      # so local Cloud SQL latency is paid once, not serially
+│   │   │                      # so local Cloud SQL latency is paid once, not serially;
+│   │   │                      # topbar Search/⌘K is a keyboard/touch command palette
+│   │   │                      # built only from the viewer's permission-filtered nav
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
@@ -1596,11 +1598,12 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `definitions/vitrine.ts` (a
     monochrome fashion preset for footwear/bags/accessories: Jost +
     Instrument Serif, every `shape` token `0px`, hairline borders instead of
-    cards, and one markdown red as the only hue. REGISTERED, with its ten
-    `public/themes/vitrine/*.webp` assets bundled, but held at
-    `visibility: "hidden"` / `release.status: "draft"` until `demo-vitrine` is
-    seeded and the scored design pass is done — `themes.test.ts` enforces
-    public ⇒ published + a healthy demo, so those three flip TOGETHER.
+    cards, and one markdown red as the only hue. Published on 2026-08-23 after
+    its accessibility/Lighthouse and required two-person design-review gates
+    passed. Its ten `public/themes/vitrine/*.webp` assets are bundled, and the
+    healthy `demo-vitrine` store is seeded on staging and production.
+    `visibility: public` and `status: published` expose it in both the public
+    catalog and signup picker.
     ★ Its product crops are SQUARE (1000×1000), not the 4:3 Studio/Ritual use,
     because this theme renders cards at 1:1 and a 4:3 source would be
     centre-cropped through the toe of the shoe. Imagery is rebuilt from three
@@ -1777,6 +1780,23 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
 12. **Checkout & orders security model (COD).** A signed-in shopper places an
     order from `/checkout`; `placeOrder` (`app/actions/checkout-actions.ts`) is
     the trust boundary and layers its defenses in order:
+    - **★ A DEMO STORE NEVER TAKES AN ORDER** (`isDemoStore`, lib/store/launch.ts).
+      `settings.demo` used to be read by exactly three things — SEO
+      indexability, `applyTheme`'s reset guard, and operator display — and by
+      NOTHING in checkout. So a theme's showcase store was a fully working shop:
+      anyone could sign in, add to cart and place a **cash-on-delivery** order
+      (online payment is already off, since a demo has no BYO gateway and free
+      plans lack `onlinePayments`). That wrote a real `orders` row, reserved
+      real stock and emailed a confirmation to somebody who now believed shoes
+      were coming — on a store that is public, seeded from a theme package and
+      **reset on demand**. `placeOrder` refuses FIRST, before the rate limit and
+      before any read, so a refusal leaves nothing half-written;
+      `getCheckoutConfig` returns `demo` so the screen explains instead of
+      rendering a button that always fails (§23's rule). Tested in both
+      directions, including that a normal store is unaffected.
+      ⚠ Still possible on a demo store, deliberately unfixed because none of it
+      creates a false expectation of delivery: customer signup, enquiries,
+      reviews, blog submissions and newsletter sign-ups.
     - **Auth**: `getServerUser()` (the identity seam — verifies the Firebase
       session cookie) — anonymous is rejected. **Rate limit**:
       `rateLimit("checkout:{userId}")` (Postgres, cross-instance, fails open)
@@ -2152,8 +2172,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     re-presenting one verifies perfectly every time; only
     `order_payments.reference` uniqueness stops it settling two sales, in the
     action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
-    (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
-    reserve**, so a refused payment unwinds nothing. **★ THE SHELF IS CHECKED
+    (applied, verified 2026-08-18). **★★ A ONE-TAP TENDER IS STAGED BEFORE
+    COMPLETION** — manager approval and retryable completion errors therefore
+    reuse the same tender, including the same captured gateway reference,
+    instead of submitting an empty payment or charging twice. **★ Checked BEFORE
+    the order insert and the stock reserve**, so a refused payment unwinds
+    nothing. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
     runs `shortLinesAt`, refusing before the Razorpay order exists, which
     catches the commoner stale-IndexedDB-cache case for free. That courtesy read
@@ -3472,6 +3496,60 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         are hunting one order, splitting three hits across headings makes you
         read all of them. An `others` section catches any future
         `pickup_status` rather than dropping it silently off a work queue.
+      - **★★ A ROW OPENS INTO THE ORDER** (`collection-detail.tsx`,
+        `getPickupOrderDetail`). The row carried a total, an item COUNT and a
+        badge — so a cashier could see the MONEY and not the GOODS, on the one
+        counter whose central act cannot be undone. Tapping the informational
+        half of the row (the buttons stay outside it: nesting them would be
+        invalid markup, and on a touch till it makes "hand this over" ambiguous
+        with "let me look first") opens every line item, the totals ladder, and
+        what has been paid.
+        - **★ A PANEL, NOT A ROUTE.** The returns detail is a route because it
+          is a STEP IN A FLOW. This is the opposite — the customer is standing
+          there, and everything the next tap might be (mark ready, take the
+          money, hand over) already lives in `counter-client.tsx`, wired to the
+          tender pad and the queue's refresh. A route needs a SECOND COPY of
+          that wiring, and two hand-over implementations is how two screens end
+          up disagreeing about what is owed. It renders at z-40 under the pad's
+          z-50, so "Take payment" opens the same pad over the same order and
+          completing it closes both. The panel READS and RENDERS; every button
+          calls back to the queue.
+        - **★★ "NOTHING OWED" AND "PAID" ARE NOT THE SAME FACT**
+          (`collectionPayment`, pure + tested). `amountDueAtCollection` returns
+          0 for an order paid online AND for one whose payment FAILED —
+          deliberately, since neither is settled by a hand-over — so a headline
+          derived from the figure prints **"Paid" over a failed payment**, next
+          to a parcel about to be given away. Nor can it come from the payments
+          list: online checkout writes NO `order_payments` row (verified —
+          `checkout-actions.ts` never touches that table), so the commonest
+          order in the queue has an EMPTY list and "nothing recorded" would read
+          as "they have paid nothing".
+        - **★ THE WORD WAITS FOR THE READ; THE AMOUNT DOES NOT.** `amountDue` on
+          the row is authoritative (same helper, same figure `markCollected`
+          charges), so "₹45 due" paints instantly. WHY nothing is owed needs
+          `payment_status`, and the fallback would flash "Nothing to collect at
+          the counter" a beat before "Paid online". On a screen read aloud to a
+          customer, a word that changes is worse than a word that is late.
+        - **★★ THE NEWER DETAIL READ OWNS THE NEXT ACTION.** Once it lands,
+          status, expiry and balance replace the queue snapshot for both the
+          controls and the order passed back to `counter-client`; the tender pad
+          therefore cannot open for an old amount while the panel displays a
+          new deposit. A fully refunded order offers no action, and
+          `markCollected` repeats that rule in its final conditional claim so a
+          refund racing an open panel keeps the parcel in the shop.
+          `PickupDetail.preparedAt` comes from `pickup_prepared_at` (actual
+          packing), never `pickup_ready_at` (the customer promise).
+        - **★ NO STATUS FILTER on the reader** — `findPickupByCode`'s rule. The
+          queue is a list of WORK; this is a LOOKUP, and a customer holding a
+          cancelled order is exactly when the shop must be able to say what
+          happened. It renders with NO buttons (`collectionState` decides), the
+          same rule the row follows.
+        - **★ MARK READY KEEPS IT OPEN; HANDING OVER CLOSES IT.** `settle` has
+          already dropped the row behind, so closing after Mark ready would mean
+          waiting for the 30s poll before the parcel could be given to the
+          person standing there. A deposit also keeps it open — the order is
+          still work — and re-reads, applying `partial.remaining` optimistically
+          first so no stale balance is on screen for a round trip.
       - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers
@@ -4398,6 +4476,36 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       drops any fact that came back blank. The console preview still passes
       none, deliberately — a preview shows which tokens EXIST, so it should
       show them all.
+    - **★★ A REFUND EMAIL MUST NOT PROMISE A DESTINATION IT DIDN'T USE**
+      (`lib/notifications/refund-copy.ts`, pure + tested). Both renderers said
+      _"sent to your original payment method"_ UNCONDITIONALLY — so a shopper
+      refunded to **store credit**, where no money leaves at all, was told their
+      card had been credited, and one paid by hand was promised a bank timeline
+      nobody had started. The event carried `paymentMethod` the whole time and
+      neither renderer read it (`grep -c paymentMethod` was 0 in both).
+      `refundCopy(method)` is now the ONE mapping, shared by `render.ts` and the
+      email blueprint so they cannot drift. ★ Its default is the load-bearing
+      part: an unknown method gets _"on its way back to you"_, true whatever
+      happened, and only a method we recognise earns a specific promise. The
+      "5–7 working days" line is likewise conditional — cash clears at the
+      counter and credit never leaves. To make this possible a blueprint's
+      `intro`/`closing` may now be a FUNCTION of the raw payload, because the
+      formatted `values` have already turned the enum into a display label;
+      only the refund entry uses it.
+    - **★★ AN UNDECLARED PAYLOAD KEY IS SILENTLY DROPPED, AND IT ATE THE
+      REFUND AMOUNT.** `templateValues` filters the payload to
+      `variableNamesFor(eventKey)`, so a key the catalog doesn't declare never
+      reaches a template. `order.refund_issued` declares **`amount`**; both
+      emitters sent **`total`**, and `render.ts` read `p.amount`. The result was
+      an email that said "Your refund has been …" with no figure, a `{{amount}}`
+      that rendered blank in merchant templates, and a fact row dropped as empty
+      by the rule above — three symptoms, one wrong key. Fixed at the EMITTERS,
+      not the renderer: `amount` is what the catalog declares, what merchants
+      type, and semantically right, since a partial refund is not a "total".
+      ⚠ The wrong shape was PINNED by a test (`pos-return-actions.test.ts`
+      asserted `total: 52.5`) — a test can lock a bug in as easily as it can
+      catch one, so changing an event's payload means re-reading its assertions
+      rather than trusting them.
     - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
       `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
       passed it, so EVERY email rendered as team mail: a shopper's order

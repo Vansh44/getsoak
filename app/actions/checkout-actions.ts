@@ -14,6 +14,7 @@ import {
 } from "@/drizzle/schema";
 import type { OrderInsert } from "@/drizzle/schema";
 import { getCurrentStore, getCurrentStoreId } from "@/lib/store/resolve";
+import { isDemoStore } from "@/lib/store/launch";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
@@ -529,6 +530,10 @@ export interface CheckoutConfig {
    *  DISPLAY ONLY — placeOrder recomputes and deducts it atomically, so a
    *  stale figure on screen can never overspend the balance. */
   storeCredit: number;
+  /** True on a theme's showcase store, where orders are refused. The checkout
+   *  screen reads this to explain instead of rendering a button that always
+   *  fails; placeOrder enforces it, so this is a courtesy, not the boundary. */
+  demo: boolean;
 }
 
 /** What payment methods this store's checkout offers. Server-computed; the
@@ -547,6 +552,7 @@ export async function getCheckoutConfig(): Promise<CheckoutConfig> {
     keyId: creds?.keyId ?? null,
     storeName: store.name,
     storeCredit,
+    demo: isDemoStore(store),
   };
 }
 
@@ -715,6 +721,19 @@ export async function placeOrder(
 
   if (!user) {
     return { error: "You must be logged in to checkout." };
+  }
+
+  // A theme's showcase store must never take an order. Refused HERE — before
+  // the rate limit, repricing, coupon reservation and stock reserve — so a
+  // refusal costs nothing and can leave nothing half-written. The checkout
+  // screen hides the button too (getCheckoutConfig.demo), but that is a
+  // courtesy: this is the boundary, and a server action is callable directly.
+  const demoCheck = await getCurrentStore();
+  if (isDemoStore(demoCheck)) {
+    return {
+      error:
+        "This is a demo store, so orders can't be placed here. Create your own store to start selling.",
+    };
   }
 
   // Throttle order placement per customer (abuse / accidental double-submit /

@@ -453,7 +453,12 @@ async function fanOut(
       );
       // Built AFTER the values, so a fact this particular emitter didn't
       // supply is left out rather than rendered as an empty labelled row.
-      const fallback = defaultEmailTemplate(key, audienceKey, values);
+      const fallback = defaultEmailTemplate(
+        key,
+        audienceKey,
+        values,
+        input.payload ?? null,
+      );
       emailCopy.set(audienceKey, {
         // A blank template field falls through to the built-in copy: a
         // shopper must never receive an empty subject because a merchant

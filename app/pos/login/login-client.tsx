@@ -131,19 +131,19 @@ export function PosLoginClient({
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--pos-surface-2)]">
             <Mail className="h-7 w-7" strokeWidth={1.75} />
           </div>
           <h1 className="mt-4 text-lg font-semibold">Check your email</h1>
-          <p className="mt-2 text-sm text-white/60">
-            If <span className="text-white/80">{email}</span> belongs to a staff
-            account here, we&apos;ve sent a link to reset your PIN or password.
-            It expires in 1 hour.
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
+            If <span className="text-[var(--pos-ink)]">{email}</span> belongs to
+            a staff account here, we&apos;ve sent a link to reset your PIN or
+            password. It expires in 1 hour.
           </p>
           <button
             type="button"
             onClick={() => setResetSent(false)}
-            className="mt-5 text-sm text-white/60 underline-offset-4 hover:text-white hover:underline"
+            className="mt-5 text-sm text-[var(--pos-ink-2)] underline-offset-4 hover:text-[var(--pos-ink)] hover:underline"
           >
             Back to sign in
           </button>
@@ -159,11 +159,11 @@ export function PosLoginClient({
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--pos-warn-soft)] text-[var(--pos-warn)]">
             <ShieldAlert className="h-7 w-7" strokeWidth={1.75} />
           </div>
           <h1 className="mt-4 text-lg font-semibold">Set up this device</h1>
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             Your sign-in is correct. For security the register only runs on a
             device the store owner has approved — enter a pairing code from
             Dashboard → POS → Devices to set this one up.
@@ -179,15 +179,17 @@ export function PosLoginClient({
               setPairCode(e.target.value.toUpperCase().slice(0, 8))
             }
             onKeyDown={(e) => e.key === "Enter" && submitPairing()}
-            className="mt-5 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-lg tracking-[0.3em] outline-none placeholder:tracking-normal placeholder:text-white/30 focus:border-white/40"
+            className="mt-5 w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-center text-lg tracking-[0.3em] outline-none placeholder:tracking-normal placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
           />
-          {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+          {error && (
+            <p className="mt-3 text-sm text-[var(--pos-danger)]">{error}</p>
+          )}
 
           <button
             type="button"
             disabled={pending || pairCode.trim().length !== 8}
             onClick={submitPairing}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
           >
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Set up and sign in
@@ -202,13 +204,13 @@ export function PosLoginClient({
               pendingPinRef.current = null;
               setError(null);
             }}
-            className="mt-4 text-sm text-white/50 underline-offset-4 hover:text-white hover:underline"
+            className="mt-4 text-sm text-[var(--pos-ink-2)] underline-offset-4 hover:text-[var(--pos-ink)] hover:underline"
           >
             Back to sign in
           </button>
           <Link
             href="/auth/login"
-            className="mt-3 block text-sm text-white/50 underline-offset-4 hover:text-white hover:underline"
+            className="mt-3 block text-sm text-[var(--pos-ink-2)] underline-offset-4 hover:text-[var(--pos-ink)] hover:underline"
           >
             Store owner? Sign in to approve this device
           </Link>
@@ -223,7 +225,7 @@ export function PosLoginClient({
         <div className="mb-6 text-center">
           <div className="text-lg font-semibold">Point of Sale</div>
           {locationName && (
-            <div className="mt-1 flex items-center justify-center gap-1.5 text-sm text-white/60">
+            <div className="mt-1 flex items-center justify-center gap-1.5 text-sm text-[var(--pos-ink-2)]">
               <MapPin className="h-4 w-4" strokeWidth={2} />
               {locationName}
             </div>
@@ -231,7 +233,7 @@ export function PosLoginClient({
         </div>
 
         {/* Mode toggle */}
-        <div className="mb-5 flex rounded-xl bg-white/10 p-1 text-sm">
+        <div className="mb-5 flex rounded-xl bg-[var(--pos-surface-2)] p-1 text-sm">
           {(["pin", "password"] as const).map((m) => (
             <button
               key={m}
@@ -241,7 +243,9 @@ export function PosLoginClient({
                 setError(null);
               }}
               className={`flex-1 rounded-lg py-1.5 font-medium transition-colors ${
-                mode === m ? "bg-white text-[#0b0f14]" : "text-white/70"
+                mode === m
+                  ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                  : "text-[var(--pos-ink-2)]"
               }`}
             >
               {m === "pin" ? "PIN" : "Password"}
@@ -256,11 +260,13 @@ export function PosLoginClient({
           inputMode="email"
           autoCapitalize="none"
           placeholder="Email"
-          className="mb-4 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+          className="mb-4 w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-center text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
         />
 
         {error && (
-          <p className="mb-4 text-center text-sm text-red-400">{error}</p>
+          <p className="mb-4 text-center text-sm text-[var(--pos-danger)]">
+            {error}
+          </p>
         )}
 
         {mode === "pin" ? (
@@ -270,7 +276,9 @@ export function PosLoginClient({
                 <span
                   key={i}
                   className={`h-2.5 w-2.5 rounded-full transition-colors ${
-                    i < pin.length ? "bg-white" : "bg-white/15"
+                    i < pin.length
+                      ? "bg-[var(--pos-accent)]"
+                      : "bg-[var(--pos-surface-2)]"
                   }`}
                 />
               ))}
@@ -292,7 +300,7 @@ export function PosLoginClient({
                 type="button"
                 disabled={pending || pin.length !== 8 || !email.includes("@")}
                 onClick={() => submitPin()}
-                className="flex items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+                className="flex items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
               >
                 {pending ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -310,13 +318,13 @@ export function PosLoginClient({
               type="password"
               placeholder="Password"
               onKeyDown={(e) => e.key === "Enter" && submitPassword()}
-              className="mb-4 w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+              className="mb-4 w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-center text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
             />
             <button
               type="button"
               disabled={busy || !email.includes("@") || password.length < 1}
               onClick={submitPassword}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               Sign in
@@ -328,7 +336,7 @@ export function PosLoginClient({
           type="button"
           onClick={requestReset}
           disabled={pending}
-          className="mt-6 block w-full text-center text-sm text-white/50 underline-offset-4 transition-colors hover:text-white hover:underline disabled:opacity-50"
+          className="mt-6 block w-full text-center text-sm text-[var(--pos-ink-2)] underline-offset-4 transition-colors hover:text-[var(--pos-ink)] hover:underline disabled:opacity-50"
         >
           Forgot PIN or password?
         </button>
@@ -349,7 +357,7 @@ function KeypadButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex h-14 items-center justify-center rounded-xl bg-white/10 text-xl font-medium transition-colors hover:bg-white/20 active:bg-white/30"
+      className="flex h-14 items-center justify-center rounded-xl bg-[var(--pos-surface-2)] text-xl font-medium transition-colors hover:bg-[var(--pos-surface-3)] active:bg-[var(--pos-surface-3)]"
       {...rest}
     >
       {children}

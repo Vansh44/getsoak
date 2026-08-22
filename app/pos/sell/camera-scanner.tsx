@@ -155,8 +155,8 @@ export function CameraScanner({
     // the whole task there); a contained card from `sm` up, where swallowing a
     // 27" display to show a webcam is absurd and hides the cart behind it.
     <div className="fixed inset-0 z-50 flex flex-col bg-black sm:items-center sm:justify-center sm:bg-black/80 sm:p-6">
-      <div className="flex h-full w-full flex-col overflow-hidden bg-black sm:h-[560px] sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl sm:border sm:border-white/10 sm:shadow-2xl">
-        <div className="flex items-center justify-between px-4 py-3 text-white">
+      <div className="flex h-full w-full flex-col overflow-hidden bg-black sm:h-[560px] sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl sm:border sm:border-[var(--pos-border)] sm:shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-3 text-[var(--pos-ink)]">
           <div className="flex items-center gap-2 font-semibold">
             <Camera className="h-5 w-5" strokeWidth={2} />
             Scan barcode
@@ -166,7 +166,7 @@ export function CameraScanner({
               <button
                 type="button"
                 onClick={toggleTorch}
-                className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
+                className="rounded-lg bg-[var(--pos-surface-2)] p-2 hover:bg-[var(--pos-surface-3)]"
                 aria-label={torchOn ? "Turn off light" : "Turn on light"}
               >
                 {torchOn ? (
@@ -179,7 +179,7 @@ export function CameraScanner({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg bg-white/10 p-2 hover:bg-white/20"
+              className="rounded-lg bg-[var(--pos-surface-2)] p-2 hover:bg-[var(--pos-surface-3)]"
               aria-label="Close scanner"
             >
               <X className="h-5 w-5" />
@@ -207,7 +207,7 @@ export function CameraScanner({
               <div
                 className={`h-28 w-[78%] max-w-sm rounded-2xl border-4 transition-colors sm:h-24 ${
                   flash
-                    ? "border-emerald-400 bg-emerald-400/20"
+                    ? "border-emerald-400 bg-[var(--pos-ok-soft)]"
                     : "border-white/70"
                 }`}
               />
@@ -215,7 +215,7 @@ export function CameraScanner({
           )}
 
           {starting && !unavailable && !error && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white">
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-[var(--pos-ink)]">
               <Loader2 className="h-6 w-6 animate-spin" />
             </div>
           )}
@@ -223,11 +223,11 @@ export function CameraScanner({
           {(error || unavailable) && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6 text-center">
               <div className="max-w-sm">
-                <p className="text-white">{error ?? unavailable}</p>
+                <p className="text-[var(--pos-ink)]">{error ?? unavailable}</p>
                 <button
                   type="button"
                   onClick={onClose}
-                  className="mt-4 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black"
+                  className="mt-4 rounded-lg bg-[var(--pos-accent)] px-4 py-2 text-sm font-semibold text-black"
                 >
                   Close
                 </button>
@@ -236,9 +236,9 @@ export function CameraScanner({
           )}
         </div>
 
-        <div className="px-4 py-4 text-center text-sm text-white/70">
+        <div className="px-4 py-4 text-center text-sm text-[var(--pos-ink-2)]">
           {lastCode ? (
-            <span className="text-emerald-400">Added · {lastCode}</span>
+            <span className="text-[var(--pos-ok)]">Added · {lastCode}</span>
           ) : (
             "Point the camera at the barcode"
           )}

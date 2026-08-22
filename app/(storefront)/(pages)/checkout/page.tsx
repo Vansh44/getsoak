@@ -1513,27 +1513,41 @@ export default function CheckoutPage() {
                 verb="I have read and accept the"
               />
 
+              {/* A theme's showcase store never takes an order (placeOrder
+                  refuses it). Say so plainly rather than leaving a Place Order
+                  button that fails after the shopper has filled in an address. */}
+              {payConfig?.demo && (
+                <p className={styles.demoNotice} role="status">
+                  <strong>This is a demo store.</strong> It shows what a
+                  StoreMink storefront looks like, so orders can&rsquo;t be
+                  placed and nothing here will be delivered or charged.
+                </p>
+              )}
+
               <button
                 type="button"
                 className={styles.placeBtn}
                 onClick={handlePlaceOrder}
                 disabled={
                   placing ||
+                  !!payConfig?.demo ||
                   !selected ||
                   (policyRequired && !policyAgreed) ||
                   (fulfilment === "delivery" &&
                     (shippingLoading || !selectedShippingOption))
                 }
               >
-                {placing
-                  ? "Processing…"
-                  : activePendingPayment && resolvedPayMethod === "razorpay"
-                    ? "Retry Payment"
-                    : resolvedPayMethod === "razorpay"
-                      ? "Pay & Place Order"
-                      : fulfilment === "pickup"
-                        ? "Place Order (Pay at store)"
-                        : "Place Order (COD)"}
+                {payConfig?.demo
+                  ? "Orders disabled on demo stores"
+                  : placing
+                    ? "Processing…"
+                    : activePendingPayment && resolvedPayMethod === "razorpay"
+                      ? "Retry Payment"
+                      : resolvedPayMethod === "razorpay"
+                        ? "Pay & Place Order"
+                        : fulfilment === "pickup"
+                          ? "Place Order (Pay at store)"
+                          : "Place Order (COD)"}
               </button>
               {!selected && (
                 <p className={styles.placeHint}>

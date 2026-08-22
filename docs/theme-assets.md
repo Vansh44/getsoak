@@ -83,10 +83,13 @@ runtime dependencies.
 
 - **Created:** 2026-08-19
 - **Status:** assets built and bundled; the preset is registered in
-  `THEME_DEFINITIONS` and `THEME_META` but held at `visibility: "hidden"` /
-  `release.status: "draft"` until `demo-vitrine` is seeded and the scored design
-  pass is done. This log is release evidence, not a statement that the theme has
-  passed storefront, accessibility, performance or human review.
+  `THEME_DEFINITIONS` and `THEME_META`. `demo-vitrine` is seeded on BOTH staging
+  and production and route-checked live on 2026-08-22 (shop 200 with 8 cards and
+  2 hover layers, `/size-guide` and `/our-edit` 200, all ten assets serving), so
+  `demo.status` is `healthy`. Accessibility, Lighthouse and the required
+  two-person review were confirmed passed on 2026-08-23, so the preset is now
+  published (`visibility: "public"`, `release.status: "published"`) in the
+  catalog and signup picker.
 - **Source:** generated with an image-generation tool from the prompts below; no
   third-party photograph, logo, branded product or proprietary theme reference
   was used. ⚠ Do **not** trace or reuse imagery from any live retailer's site.

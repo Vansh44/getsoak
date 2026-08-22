@@ -119,17 +119,17 @@ export function InventoryClient({
     <PosScreen title="Stock" subtitle={locationName} width="narrow">
       <div className="mb-3 flex gap-2">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
           <input
             ref={searchRef}
             value={query}
             autoFocus
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Scan or search…"
-            className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+            className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
           />
           {loading && (
-            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
           )}
         </div>
         <button
@@ -138,7 +138,7 @@ export function InventoryClient({
           className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-medium transition-colors ${
             lowOnly
               ? "bg-amber-500 text-black"
-              : "bg-white/10 hover:bg-white/20"
+              : "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
           }`}
         >
           <TriangleAlert className="h-4 w-4" strokeWidth={2} />
@@ -147,12 +147,12 @@ export function InventoryClient({
       </div>
 
       {notice && (
-        <p className="mb-3 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm text-emerald-300">
+        <p className="mb-3 rounded-lg bg-[var(--pos-ok-soft)] px-3 py-2 text-sm text-[var(--pos-ok)]">
           {notice}
         </p>
       )}
       {error && (
-        <p className="mb-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+        <p className="mb-3 rounded-lg bg-[var(--pos-danger-soft)] px-3 py-2 text-sm text-[var(--pos-danger)]">
           {error}
         </p>
       )}
@@ -176,7 +176,7 @@ export function InventoryClient({
           );
         })}
         {items.length === 0 && !loading && (
-          <p className="py-10 text-center text-sm text-white/40">
+          <p className="py-10 text-center text-sm text-[var(--pos-ink-3)]">
             {lowOnly ? "Nothing is running low." : "No products match."}
           </p>
         )}
@@ -277,9 +277,9 @@ function Row({
     });
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5">
+    <div className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)]">
       <div className="flex items-center gap-3 p-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white/5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--pos-surface)]">
           {item.image ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -289,7 +289,10 @@ function Row({
               loading="lazy"
             />
           ) : (
-            <Package className="h-4 w-4 text-white/30" strokeWidth={1.5} />
+            <Package
+              className="h-4 w-4 text-[var(--pos-ink-3)]"
+              strokeWidth={1.5}
+            />
           )}
         </span>
         <button
@@ -298,7 +301,7 @@ function Row({
           className="min-w-0 flex-1 text-left"
         >
           <span className="block truncate text-sm font-medium">{label}</span>
-          <span className="block truncate text-xs text-white/50">
+          <span className="block truncate text-xs text-[var(--pos-ink-2)]">
             {item.sku ?? item.barcode ?? "—"}
           </span>
         </button>
@@ -306,7 +309,7 @@ function Row({
         <div className="flex shrink-0 items-center gap-1.5">
           {item.low && (
             <TriangleAlert
-              className="h-4 w-4 text-amber-400"
+              className="h-4 w-4 text-[var(--pos-warn)]"
               strokeWidth={2}
               aria-label="Low stock"
             />
@@ -316,13 +319,13 @@ function Row({
             disabled={pending}
             onClick={() => quick(-1)}
             aria-label={`One less ${label}`}
-            className="rounded-lg bg-white/10 p-1.5 transition-colors hover:bg-white/20 disabled:opacity-40"
+            className="rounded-lg bg-[var(--pos-surface-2)] p-1.5 transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
           >
             <Minus className="h-4 w-4" />
           </button>
           <span
             className={`w-10 text-center text-lg font-bold ${
-              item.low ? "text-amber-400" : ""
+              item.low ? "text-[var(--pos-warn)]" : ""
             }`}
           >
             {item.onHand}
@@ -332,7 +335,7 @@ function Row({
             disabled={pending}
             onClick={() => quick(1)}
             aria-label={`One more ${label}`}
-            className="rounded-lg bg-white/10 p-1.5 transition-colors hover:bg-white/20 disabled:opacity-40"
+            className="rounded-lg bg-[var(--pos-surface-2)] p-1.5 transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -340,7 +343,7 @@ function Row({
       </div>
 
       {open && (
-        <div className="border-t border-white/10 p-3">
+        <div className="border-t border-[var(--pos-border)] p-3">
           <div className="mb-2 flex flex-wrap gap-1.5">
             {(Object.keys(MODE_META) as Mode[]).map((m) => {
               // Nowhere to send stock in a single-location store.
@@ -352,8 +355,8 @@ function Row({
                   onClick={() => setMode(m)}
                   className={`rounded-lg px-2.5 py-1.5 text-sm font-medium transition-colors ${
                     mode === m
-                      ? "bg-white text-[#0b0f14]"
-                      : "bg-white/10 hover:bg-white/20"
+                      ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                      : "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
                   }`}
                 >
                   {MODE_META[m].label}
@@ -364,7 +367,7 @@ function Row({
 
           <div className="flex flex-wrap items-end gap-2">
             <label className="min-w-24 flex-1">
-              <span className="mb-1 block text-xs text-white/50">
+              <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                 {mode === "count" ? "Counted" : "Quantity"}
               </span>
               <input
@@ -372,20 +375,26 @@ function Row({
                 inputMode="numeric"
                 onChange={(e) => setValue(e.target.value.replace(/[^\d]/g, ""))}
                 placeholder="0"
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-right outline-none focus:border-white/40"
+                className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-right outline-none focus:border-[var(--pos-border-strong)]"
               />
             </label>
 
             {mode === "transfer" && (
               <label className="min-w-36 flex-1">
-                <span className="mb-1 block text-xs text-white/50">To</span>
+                <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
+                  To
+                </span>
                 <select
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
-                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 outline-none focus:border-white/40"
+                  className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 outline-none focus:border-[var(--pos-border-strong)]"
                 >
                   {targets.map((t) => (
-                    <option key={t.id} value={t.id} className="bg-[#0b0f14]">
+                    <option
+                      key={t.id}
+                      value={t.id}
+                      className="bg-[var(--pos-bg)]"
+                    >
                       {t.name}
                     </option>
                   ))}
@@ -394,7 +403,7 @@ function Row({
             )}
 
             <label className="min-w-36 flex-[2]">
-              <span className="mb-1 block text-xs text-white/50">
+              <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                 Reason (optional)
               </span>
               <input
@@ -403,7 +412,7 @@ function Row({
                 placeholder={
                   mode === "count" ? "e.g. weekly stocktake" : "e.g. damaged"
                 }
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 outline-none focus:border-white/40"
+                className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 outline-none focus:border-[var(--pos-border-strong)]"
               />
             </label>
 
@@ -411,7 +420,7 @@ function Row({
               type="button"
               disabled={pending || !valid}
               onClick={submit}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               {pending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -423,7 +432,7 @@ function Row({
           </div>
 
           {mode === "count" && (
-            <p className="mt-2 text-xs text-white/40">
+            <p className="mt-2 text-xs text-[var(--pos-ink-3)]">
               Saved as the difference from {item.onHand}, so a sale rung while
               you were counting isn&apos;t wiped out.
             </p>

@@ -17,7 +17,7 @@ export default async function PosRegisterPage({
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-sm text-center">
           <h1 className="text-lg font-semibold">Invitation link problem</h1>
-          <p className="mt-2 text-sm text-white/60">{info.error}</p>
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">{info.error}</p>
         </div>
       </div>
     );
