@@ -1777,6 +1777,23 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
 12. **Checkout & orders security model (COD).** A signed-in shopper places an
     order from `/checkout`; `placeOrder` (`app/actions/checkout-actions.ts`) is
     the trust boundary and layers its defenses in order:
+    - **★ A DEMO STORE NEVER TAKES AN ORDER** (`isDemoStore`, lib/store/launch.ts).
+      `settings.demo` used to be read by exactly three things — SEO
+      indexability, `applyTheme`'s reset guard, and operator display — and by
+      NOTHING in checkout. So a theme's showcase store was a fully working shop:
+      anyone could sign in, add to cart and place a **cash-on-delivery** order
+      (online payment is already off, since a demo has no BYO gateway and free
+      plans lack `onlinePayments`). That wrote a real `orders` row, reserved
+      real stock and emailed a confirmation to somebody who now believed shoes
+      were coming — on a store that is public, seeded from a theme package and
+      **reset on demand**. `placeOrder` refuses FIRST, before the rate limit and
+      before any read, so a refusal leaves nothing half-written;
+      `getCheckoutConfig` returns `demo` so the screen explains instead of
+      rendering a button that always fails (§23's rule). Tested in both
+      directions, including that a normal store is unaffected.
+      ⚠ Still possible on a demo store, deliberately unfixed because none of it
+      creates a false expectation of delivery: customer signup, enquiries,
+      reviews, blog submissions and newsletter sign-ups.
     - **Auth**: `getServerUser()` (the identity seam — verifies the Firebase
       session cookie) — anonymous is rejected. **Rate limit**:
       `rateLimit("checkout:{userId}")` (Postgres, cross-instance, fails open)

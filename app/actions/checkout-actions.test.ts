@@ -181,6 +181,35 @@ describe("placeOrder", () => {
     expect("error" in result && result.error).toMatch(/logged in/i);
   });
 
+  it("★ refuses to take an order on a demo store, before any work", async () => {
+    // A theme's showcase store is publicly reachable and reset on demand, so it
+    // must never write an order somebody believes is real. Refused before the
+    // rate limit and before any DB read, so a refusal leaves nothing behind.
+    const { getCurrentStore } = await import("@/lib/store/resolve");
+    vi.mocked(getCurrentStore).mockResolvedValueOnce({
+      id: STORE,
+      name: "Vitrine Demo",
+      settings: { demo: true },
+    } as any);
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("error" in result && result.error).toMatch(/demo store/i);
+    // Nothing was priced, reserved or written.
+    expect(vi.mocked(rateLimit)).not.toHaveBeenCalled();
+  });
+
+  it("still takes orders on a normal store (the guard is not over-broad)", async () => {
+    const { getCurrentStore } = await import("@/lib/store/resolve");
+    vi.mocked(getCurrentStore).mockResolvedValueOnce({
+      id: STORE,
+      name: "Real Store",
+      settings: {},
+    } as any);
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("error" in result && /demo store/i.test(String(result.error))).toBe(
+      false,
+    );
+  });
+
   it("rejects an empty cart", async () => {
     const result = await placeOrder(validForm, []);
     expect("error" in result && result.error).toMatch(/empty/i);

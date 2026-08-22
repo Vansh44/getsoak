@@ -629,6 +629,23 @@
   cursor: not-allowed;
 }
 
+/* Shown on a theme's showcase store, where placeOrder refuses. Uses the
+   error-soft surface rather than a warning yellow: this is not something the
+   shopper can fix by retrying, it is a statement about the store. */
+.demoNotice {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-control);
+  background: var(--sm-error-soft);
+  color: var(--sm-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.demoNotice strong {
+  font-weight: 600;
+}
+
 .placeHint {
   margin-top: 10px;
   text-align: center;

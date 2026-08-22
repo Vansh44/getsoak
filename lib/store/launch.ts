@@ -42,6 +42,25 @@ export function isStoreLaunched(
 }
 
 /**
+ * Is this a theme's showcase store rather than a real merchant's shop?
+ *
+ * Demo stores are seeded from a theme package, publicly reachable, and reset on
+ * demand — so they must never accept anything a real shop would treat as a
+ * commitment. A visitor CAN sign in and place a cash-on-delivery order on one
+ * otherwise: it writes a real `orders` row, reserves real stock, and emails a
+ * confirmation to somebody who now believes shoes are coming.
+ *
+ * Kept beside `isStoreLaunched` because both answer "what is this store FOR",
+ * both read `stores.settings`, and both are consulted by unrelated subsystems
+ * that must not each re-derive the rule.
+ */
+export function isDemoStore(
+  store: Pick<Store, "settings"> | null | undefined,
+): boolean {
+  return store?.settings?.demo === true;
+}
+
+/**
  * Is this store eligible to appear in search at all?
  *
  * Keep this as the one gate shared by page metadata, robots, sitemaps and the
@@ -52,7 +71,7 @@ export function isStoreLaunched(
 export function isStoreSearchIndexable(
   store: Pick<Store, "settings"> | null | undefined,
 ): boolean {
-  return isStoreLaunched(store) && store?.settings?.demo !== true;
+  return isStoreLaunched(store) && !isDemoStore(store);
 }
 
 /**
