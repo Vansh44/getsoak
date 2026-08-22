@@ -1596,11 +1596,14 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `definitions/vitrine.ts` (a
     monochrome fashion preset for footwear/bags/accessories: Jost +
     Instrument Serif, every `shape` token `0px`, hairline borders instead of
-    cards, and one markdown red as the only hue. REGISTERED, with its ten
-    `public/themes/vitrine/*.webp` assets bundled, but held at
-    `visibility: "hidden"` / `release.status: "draft"` until `demo-vitrine` is
-    seeded and the scored design pass is done — `themes.test.ts` enforces
-    public ⇒ published + a healthy demo, so those three flip TOGETHER.
+    cards, and one markdown red as the only hue. PUBLIC since
+    2026-08-22 (`published` + a `healthy` demo — `themes.test.ts` enforces that
+    trio, so they flip TOGETHER), with its ten
+    `public/themes/vitrine/*.webp` assets bundled and `demo-vitrine` seeded on
+    staging and production. ⚠ Shipped on the store owner's review ALONE, where
+    docs/theme-acceptance.md §5 asks for two reviewers and §4 for
+    accessibility/Lighthouse evidence that was never collected; both are open
+    rows in that doc's §7 baseline, alongside Studio's and Ritual's.
     ★ Its product crops are SQUARE (1000×1000), not the 4:3 Studio/Ritual use,
     because this theme renders cards at 1:1 and a 4:3 source would be
     centre-cropped through the toe of the shoe. Imagery is rebuilt from three

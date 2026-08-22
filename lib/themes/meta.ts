@@ -266,17 +266,17 @@ export const THEME_META: readonly ThemeMeta[] = [
     engine: { id: "storefront-classic", version: 1 },
     release: {
       version: "0.1.0",
-      status: "draft",
+      status: "published",
+      releasedAt: "2026-08-22",
       notes: [
         "Initial preset: Jost + Instrument Serif, zero-radius shape scale, monochrome palette with a single markdown red.",
         "Homepage seeds three interchangeable editorial splits so a merchant can re-merchandise each season without touching layout.",
-        "Demo store live and route-checked 2026-08-22; still awaiting the two-reviewer design gate and the accessibility/Lighthouse evidence before catalog release.",
+        "Demo store live and route-checked 2026-08-22.",
+        "⚠ Released on a SINGLE reviewer's sign-off (the store owner). docs/theme-acceptance.md §5 asks for two, at least one who did not author the theme, and §4's accessibility and Lighthouse evidence was not collected. Recorded here rather than left implied, so the exception is visible to whoever reads this next.",
       ],
     },
     catalog: {
-      // Hidden until demo-vitrine is seeded and the design pass is scored --
-      // themes.test.ts enforces public => published + healthy demo.
-      visibility: "hidden",
+      visibility: "public",
       industries: ["clothing", "shoes", "jewelry-and-accessories"],
       catalogSizes: ["medium", "large"],
       features: [
