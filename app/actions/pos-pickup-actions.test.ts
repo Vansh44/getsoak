@@ -9,6 +9,8 @@
 //      OVER by the value of every collection it took (CODEBASE §23).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { makeDbMock } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({
@@ -51,6 +53,7 @@ import { emitEvent } from "@/lib/notifications/record";
 import { commitHold } from "@/lib/inventory/reservations";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import {
+  getPickupOrderDetail,
   getPickupQueue,
   markCollected,
   markReadyForPickup,
@@ -421,6 +424,184 @@ describe("markCollected — no open shift", () => {
     vi.mocked(getStoreSettings).mockRejectedValue(new Error("db down"));
     dbHolder.current = seed(UNPAID);
     expect((await markCollected("ord-1", cash(340))).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One collection, fully described (roadmap Step 21)
+//
+// The queue row carried a total, an item COUNT and a badge. A cashier facing a
+// customer asking "which pair is this?" could see the money and not the goods —
+// on the one counter whose central act cannot be undone.
+
+describe("getPickupOrderDetail", () => {
+  const ORDER = {
+    id: "ord-1",
+    order_ref: "ORD100110006",
+    pickup_code: "K4M28PQR",
+    shipping_address: {
+      firstName: "Asha",
+      lastName: "R",
+      phone: "9876543210",
+    },
+    subtotal: "47.00",
+    discount: "4.00",
+    tax: "2.00",
+    tax_inclusive: false,
+    shipping: "0.00",
+    store_credit_used: "15.00",
+    total: "340.00",
+    payment_method: "pay_at_store",
+    payment_status: "pending",
+    created_at: "2026-08-20T09:00:00Z",
+    expires_at: null,
+    ready_at: null,
+    collected_at: null,
+    status: "ready",
+  };
+  /** The reader's four reads, in the order they are issued: the order, then
+   *  lines, payments and deposits together. */
+  const seedDetail = (order: any = ORDER, paid = "200") =>
+    makeDbMock({
+      selectQueue: [
+        order ? [order] : [],
+        [
+          {
+            name: "Amul Taaza Toned Milk",
+            variant_name: "1 L",
+            quantity: 2,
+            price: "20.00",
+            line_discount: "4.00",
+            total: "36.00",
+          },
+          {
+            name: "Tata Salt",
+            variant_name: null,
+            quantity: 1,
+            price: "5.00",
+            line_discount: "0.00",
+            total: "5.00",
+          },
+        ],
+        [
+          {
+            method: "cash",
+            amount: paid,
+            reference: null,
+            captured_at: "2026-08-21T09:30:00Z",
+          },
+        ],
+        [{ order_id: "ord-1", paid }],
+      ],
+    });
+
+  it("returns the goods, the totals and what was taken", async () => {
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.detail).toMatchObject({
+      orderRef: "ORD100110006",
+      customerName: "Asha R",
+      customerPhone: "9876543210",
+      total: 340,
+      subtotal: 47,
+      discount: 4,
+      storeCreditUsed: 15,
+      paidSoFar: 200,
+    });
+    expect(res.detail!.lines).toHaveLength(2);
+    expect(res.detail!.lines[0]).toMatchObject({
+      name: "Amul Taaza Toned Milk",
+      variantName: "1 L",
+      quantity: 2,
+      price: 20,
+      lineDiscount: 4,
+    });
+    expect(res.detail!.payments[0]).toMatchObject({
+      method: "cash",
+      amount: 200,
+    });
+  });
+
+  it("★ counts items from the LINES, so the heading cannot contradict them", async () => {
+    // findPickupByCode once returned a hardcoded 0 here, which rendered
+    // "0 items" directly above two products. 2 + 1, summed from the rows the
+    // panel is about to draw — never a separate count that can disagree.
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.detail!.itemCount).toBe(3);
+  });
+
+  it("quotes the SAME balance markCollected charges", async () => {
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("ord-1");
+    // 340 owed less the 200 deposit — amountDueAtCollection, not arithmetic
+    // repeated here.
+    expect(res.detail!.amountDue).toBe(140);
+  });
+
+  it("formats the collection code the way the customer reads it", async () => {
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.detail!.collectionCode).toBe("K4M2-8PQR");
+  });
+
+  it("★ has NO status filter — a gone order must still be describable", async () => {
+    // findPickupByCode's rule. The queue is a list of WORK and drops collected
+    // and expired orders; this is a LOOKUP, and a customer at the counter
+    // holding a cancelled order is exactly when the shop must be able to say
+    // what happened.
+    dbHolder.current = seedDetail({ ...ORDER, status: "expired" });
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.error).toBeUndefined();
+    expect(res.detail!.status).toBe("expired");
+  });
+
+  it("refuses when signed out", async () => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(null);
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.error).toMatch(/signed in/i);
+    expect(res.detail).toBeUndefined();
+  });
+
+  it("refuses an id that is not a collection at this shop", async () => {
+    dbHolder.current = seedDetail(null);
+    const res = await getPickupOrderDetail("ord-x");
+    expect(res.error).toMatch(/isn't a collection at this shop/i);
+    expect(res.detail).toBeUndefined();
+  });
+
+  it("refuses an empty id without touching the database", async () => {
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("");
+    expect(res.error).toMatch(/invalid order/i);
+    expect(dbHolder.current.calls.where).toHaveLength(0);
+  });
+
+  it("★★ scopes to the store, the shop and pickups — the queue's own three", () => {
+    // ⚠ The db mock does not evaluate WHERE clauses, so this is a SOURCE check
+    // (the pickup-count.test.ts pattern). The id comes from the client and
+    // SELECTS a row; it must never be what scopes the read, or pasting a UUID
+    // describes another branch's collection.
+    const src = readFileSync(
+      join(process.cwd(), "app", "actions", "pos-pickup-actions.ts"),
+      "utf8",
+    );
+    // ⚠ BOUNDED TO THE FUNCTION. The first version of this sliced to EOF, so
+    // it matched the same predicate in markCollected and PASSED with the
+    // reader's own location scope deleted — a guard that cannot fail. Caught by
+    // mutating the source; the identical trap is documented in
+    // app/pos/pos-theme-coverage.test.ts.
+    const from = src.indexOf("export async function getPickupOrderDetail");
+    const rest = src.slice(from + 1);
+    const to = rest.search(/\nexport (async function|interface|const) /);
+    const body = to === -1 ? rest : rest.slice(0, to);
+    for (const predicate of [
+      /eq\(orders\.storeId, op\.storeId\)/,
+      /eq\(orders\.pickupLocationId, op\.locationId\)/,
+      /eq\(orders\.fulfilmentType, "pickup"\)/,
+    ]) {
+      expect(body).toMatch(predicate);
+    }
   });
 });
 

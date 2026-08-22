@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   collectionNote,
+  collectionPayment,
   collectionState,
   handoverGate,
   isCollectable,
@@ -248,5 +249,96 @@ describe("isExpiringSoon", () => {
     // The shop seeing "3 expiring" while the customer was nudged on a different
     // clock is the drift that makes staff distrust both numbers.
     expect(PICKUP_WARN_HOURS).toBe(48);
+  });
+});
+
+describe("collectionPayment", () => {
+  const base = {
+    paymentMethod: "pay_at_store",
+    paymentStatus: "pending",
+    paidSoFar: 0,
+    amountDue: 0,
+  };
+
+  it("★★ an order paid ONLINE reads as paid, not as 'nothing paid'", () => {
+    // The trap this helper exists for. Online checkout writes NO
+    // `order_payments` row, so the commonest collection in the queue has an
+    // EMPTY payment list and paidSoFar 0. Anything deriving its headline from
+    // those two numbers says "nothing paid" about a fully-paid order.
+    const p = collectionPayment({
+      paymentMethod: "razorpay",
+      paymentStatus: "paid",
+      paidSoFar: 0,
+      amountDue: 0,
+    });
+    expect(p.state).toBe("settled");
+    expect(p.label).toBe("Paid online");
+  });
+
+  it("★★ a FAILED payment is never reported as paid", () => {
+    // amountDueAtCollection returns 0 here too — deliberately, because a
+    // hand-over cannot settle it — so the figure alone would print "Paid"
+    // over the one order that was never paid at all.
+    const p = collectionPayment({
+      paymentMethod: "razorpay",
+      paymentStatus: "failed",
+      paidSoFar: 0,
+      amountDue: 0,
+    });
+    expect(p.state).toBe("failed");
+    expect(p.label).not.toMatch(/paid/i);
+  });
+
+  it("the full amount owed reads as due", () => {
+    const p = collectionPayment({ ...base, amountDue: 45 });
+    expect(p.state).toBe("due");
+    expect(p.due).toBe(45);
+    expect(p.paid).toBe(0);
+  });
+
+  it("a deposit reads as part paid, carrying both halves", () => {
+    const p = collectionPayment({ ...base, paidSoFar: 200, amountDue: 140 });
+    expect(p.state).toBe("part");
+    expect(p.paid).toBe(200);
+    expect(p.due).toBe(140);
+  });
+
+  it("settled at the counter is told apart from settled online", () => {
+    const p = collectionPayment({
+      ...base,
+      paymentStatus: "paid",
+      paidSoFar: 340,
+      amountDue: 0,
+    });
+    expect(p.state).toBe("settled");
+    expect(p.label).toBe("Paid at the counter");
+  });
+
+  it("a refund is not silently reported as an ordinary settled order", () => {
+    expect(
+      collectionPayment({ ...base, paymentStatus: "refunded" }).label,
+    ).toMatch(/refunded/i);
+    expect(
+      collectionPayment({ ...base, paymentStatus: "partially_refunded" }).label,
+    ).toMatch(/refunded/i);
+  });
+
+  it("★ it never invents a figure — the due amount is the caller's", () => {
+    // The queue, this panel and markCollected must quote ONE number, so this
+    // helper reads amountDueAtCollection's answer and never recomputes it from
+    // total − paid. A total is not even passed in.
+    const p = collectionPayment({ ...base, paidSoFar: 10, amountDue: 999 });
+    expect(p.due).toBe(999);
+  });
+
+  it("a malformed figure is floored rather than propagated", () => {
+    const p = collectionPayment({
+      ...base,
+      paidSoFar: Number.NaN,
+      amountDue: -5,
+    });
+    expect(p.paid).toBe(0);
+    expect(p.due).toBe(0);
+    expect(p.state).toBe("settled");
   });
 });

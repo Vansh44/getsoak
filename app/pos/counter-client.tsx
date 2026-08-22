@@ -38,6 +38,7 @@ import Link from "next/link";
 import {
   AlertTriangle,
   Check,
+  ChevronRight,
   Loader2,
   PackageCheck,
   RotateCcw,
@@ -66,6 +67,7 @@ import {
 } from "@/app/actions/pos-return-actions";
 import type { PosTender } from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
+import { CollectionDetail } from "./collection-detail";
 import { PosScreen } from "./pos-screen";
 import { usePoll } from "@/lib/pos/use-poll";
 import { fetchPickupQueue } from "@/lib/pos/live";
@@ -157,6 +159,12 @@ export function CounterClient({
   const [collectionCredit, setCollectionCredit] = useState<number | null>(null);
   const [confirmUnprepared, setConfirmUnprepared] =
     useState<PickupOrder | null>(null);
+  /** The collection whose full detail is open. Holds the ROW, so the panel can
+   *  paint its header before the read lands. */
+  const [detailFor, setDetailFor] = useState<PickupOrder | null>(null);
+  /** Bumped when something changes the money on the open order — a deposit
+   *  leaves the panel showing figures the server has already moved past. */
+  const [detailReload, setDetailReload] = useState(0);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
 
@@ -309,11 +317,13 @@ export function CounterClient({
     setResults((cur) => (cur ? cur.filter((r) => rowId(r) !== id) : cur));
   };
 
+  /** Returns whether it worked, so the detail panel can stay open on a
+   *  "Mark ready" and close on a hand-over. */
   const act = async (
     id: string,
     fn: (id: string) => Promise<{ success?: boolean; error?: string }>,
     message: string,
-  ) => {
+  ): Promise<boolean> => {
     setBusy(id);
     const res = await fn(id);
     setBusy(null);
@@ -321,9 +331,10 @@ export function CounterClient({
       toast.error(res.error);
       // Refused means the list is stale — someone else got there first.
       refreshQueue();
-      return;
+      return false;
     }
     settle(id, message);
+    return true;
   };
 
   /**
@@ -353,7 +364,11 @@ export function CounterClient({
       o.id,
       (id) => markCollected(id, [], { acknowledgeUnprepared: acked }),
       "Handed over.",
-    );
+    ).then((ok) => {
+      // The order has left the shelf, so the panel describing it has nothing
+      // left to offer. A no-op when the hand-over came from the row.
+      if (ok) setDetailFor(null);
+    });
   };
 
   const takePayment = async (tenders: PosTender[]) => {
@@ -382,6 +397,23 @@ export function CounterClient({
         `₹${res.partial.paid.toLocaleString("en-IN")} taken. ₹${res.partial.remaining.toLocaleString("en-IN")} still to pay — the order stays on the shelf.`,
       );
       refreshQueue();
+      // The panel stays OPEN — the order is still work — but its figures have
+      // just moved, and a deposit shown as "still to collect ₹340" is the
+      // Step 18 bug on a different screen. Applied optimistically from the
+      // server's own answer so nothing stale is on screen for the length of a
+      // round trip, THEN re-read: `remaining` is authoritative, but the
+      // payments list underneath it can only come from the database.
+      const taken = res.partial;
+      setDetailFor((cur) =>
+        cur && cur.id === o.id
+          ? {
+              ...cur,
+              amountDue: taken.remaining,
+              paidSoFar: cur.paidSoFar + taken.paid,
+            }
+          : cur,
+      );
+      setDetailReload((k) => k + 1);
       return {};
     }
 
@@ -391,6 +423,7 @@ export function CounterClient({
         ? `Handed over. Change ₹${res.changeDue.toLocaleString("en-IN")}.`
         : "Paid and handed over.",
     );
+    setDetailFor(null);
     return {};
   };
 
@@ -459,58 +492,70 @@ export function CounterClient({
             : "border-[var(--pos-border)] bg-[var(--pos-surface)]"
         }`}
       >
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="font-mono text-base font-semibold">
-            {o.orderRef}
-          </span>
-          {/* ★ BOTH BADGES ARE SEARCH-ONLY. Under a section heading they repeat
+        {/* ★ THE INFORMATIONAL HALF OF THE ROW OPENS THE ORDER; the action
+          buttons below stay outside it. Wrapping the WHOLE card would nest
+          those buttons inside a button — invalid, and on a touch till it makes
+          "Hand over" ambiguous with "let me look at this first". */}
+        <button
+          type="button"
+          onClick={() => setDetailFor(o)}
+          aria-label={`Open ${o.orderRef}`}
+          className="group w-full rounded-lg text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--pos-accent)]"
+        >
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="font-mono text-base font-semibold group-hover:underline">
+              {o.orderRef}
+            </span>
+            {/* ★ BOTH BADGES ARE SEARCH-ONLY. Under a section heading they repeat
             it — "Collection" on every row of a list called Pickups, "Ready"
             under a heading that says Ready to collect — and a badge that always
             says the same thing is the kind of noise people stop reading. In
             search results there is no heading, and the list mixes collections
             with returnable past orders, so both earn their place. */}
-          {searching && (
-            <>
-              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-[var(--pos-info)]">
-                Collection
-              </span>
-              {o.status === "ready" && (
-                <span className="rounded-full bg-[var(--pos-ok-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-ok)]">
-                  Ready
+            {searching && (
+              <>
+                <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-[var(--pos-info)]">
+                  Collection
                 </span>
-              )}
-            </>
-          )}
-          {/* Whether to ask for money is the first thing the cashier needs to
+                {o.status === "ready" && (
+                  <span className="rounded-full bg-[var(--pos-ok-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-ok)]">
+                    Ready
+                  </span>
+                )}
+              </>
+            )}
+            {/* Whether to ask for money is the first thing the cashier needs to
             know — before they open the order, not after. Silent once the order
             is gone: nothing is owed on something that will not be handed over,
             and "₹45 to pay" beside a cancelled order invites taking it. */}
-          {o.amountDue > 0 && !gone && (
-            <span className="rounded-full bg-[var(--pos-warn-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-warn)]">
-              {money(o.amountDue)} to pay
+            {o.amountDue > 0 && !gone && (
+              <span className="rounded-full bg-[var(--pos-warn-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-warn)]">
+                {money(o.amountDue)} to pay
+              </span>
+            )}
+            <span className="ml-auto flex items-baseline gap-1 text-base font-semibold">
+              {money(o.total)}
+              <ChevronRight className="h-4 w-4 self-center text-[var(--pos-ink-3)]" />
             </span>
-          )}
-          <span className="ml-auto text-base font-semibold">
-            {money(o.total)}
-          </span>
-        </div>
-        <p
-          className={`mt-1 text-sm ${gone ? "text-[var(--pos-ink-3)]" : "text-[var(--pos-ink-2)]"}`}
-        >
-          {o.customerName ?? "Customer"} · {o.itemCount} item
-          {o.itemCount === 1 ? "" : "s"}
-          {/* Only while the countdown is still RUNNING. Past the deadline
+          </div>
+          <p
+            className={`mt-1 text-sm ${gone ? "text-[var(--pos-ink-3)]" : "text-[var(--pos-ink-2)]"}`}
+          >
+            {o.customerName ?? "Customer"} · {o.itemCount} item
+            {o.itemCount === 1 ? "" : "s"}
+            {/* Only while the countdown is still RUNNING. Past the deadline
             expiryLabel just says "Expired", which sat immediately beside a note
             saying the order could still be handed over — two contradictory
             answers to the same question. The note is the better one, so it
             wins, and it carries the date itself on a gone order. */}
-          {o.paidSoFar > 0
-            ? ` · ₹${o.paidSoFar.toLocaleString("en-IN")} paid`
-            : ""}
-          {o.expiresAt && state === "collectable"
-            ? ` · ${expiryLabel(o.expiresAt)}`
-            : ""}
-        </p>
+            {o.paidSoFar > 0
+              ? ` · ₹${o.paidSoFar.toLocaleString("en-IN")} paid`
+              : ""}
+            {o.expiresAt && state === "collectable"
+              ? ` · ${expiryLabel(o.expiresAt)}`
+              : ""}
+          </p>
+        </button>
 
         {/* ★ THE NOTE REPLACES THE GUESS. The old failure path returned "That
           order isn't waiting for collection here. It may already have been
@@ -559,7 +604,7 @@ export function CounterClient({
               className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 ${
                 o.status === "awaiting" && canFulfilPickup
                   ? "bg-[var(--pos-surface-2)] font-medium hover:bg-[var(--pos-surface-3)]"
-                  : "bg-emerald-600 font-semibold hover:bg-emerald-500"
+                  : "bg-emerald-600 font-semibold text-white hover:bg-emerald-500"
               }`}
             >
               {busy === o.id ? (
@@ -785,6 +830,31 @@ export function CounterClient({
             {pastOrders.map(renderPastOrder)}
           </Section>
         </>
+      )}
+
+      {/* ★ BELOW THE PAD (z-40 vs z-50): "Take payment" here opens the same
+        tender pad over the same order, and completing it closes both. */}
+      {detailFor && (
+        <CollectionDetail
+          key={detailFor.id}
+          order={detailFor}
+          reloadKey={detailReload}
+          canFulfilPickup={canFulfilPickup}
+          busy={busy === detailFor.id}
+          onClose={() => setDetailFor(null)}
+          onMarkReady={() => {
+            const o = detailFor;
+            void act(o.id, markReadyForPickup, "Marked ready.").then((ok) => {
+              // Stays OPEN on success, unlike a hand-over: the customer is
+              // often standing there, and this is the one flow where the next
+              // tap is immediately "Hand over". `settle` has already dropped
+              // the row behind, so closing would mean waiting for the poll to
+              // bring it back before it could be given to them.
+              if (ok) setDetailFor({ ...o, status: "ready" });
+            });
+          }}
+          onHandOver={() => handOver(detailFor)}
+        />
       )}
 
       {tendering && (

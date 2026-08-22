@@ -3492,6 +3492,51 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         are hunting one order, splitting three hits across headings makes you
         read all of them. An `others` section catches any future
         `pickup_status` rather than dropping it silently off a work queue.
+      - **★★ A ROW OPENS INTO THE ORDER** (`collection-detail.tsx`,
+        `getPickupOrderDetail`). The row carried a total, an item COUNT and a
+        badge — so a cashier could see the MONEY and not the GOODS, on the one
+        counter whose central act cannot be undone. Tapping the informational
+        half of the row (the buttons stay outside it: nesting them would be
+        invalid markup, and on a touch till it makes "hand this over" ambiguous
+        with "let me look first") opens every line item, the totals ladder, and
+        what has been paid.
+        - **★ A PANEL, NOT A ROUTE.** The returns detail is a route because it
+          is a STEP IN A FLOW. This is the opposite — the customer is standing
+          there, and everything the next tap might be (mark ready, take the
+          money, hand over) already lives in `counter-client.tsx`, wired to the
+          tender pad and the queue's refresh. A route needs a SECOND COPY of
+          that wiring, and two hand-over implementations is how two screens end
+          up disagreeing about what is owed. It renders at z-40 under the pad's
+          z-50, so "Take payment" opens the same pad over the same order and
+          completing it closes both. The panel READS and RENDERS; every button
+          calls back to the queue.
+        - **★★ "NOTHING OWED" AND "PAID" ARE NOT THE SAME FACT**
+          (`collectionPayment`, pure + tested). `amountDueAtCollection` returns
+          0 for an order paid online AND for one whose payment FAILED —
+          deliberately, since neither is settled by a hand-over — so a headline
+          derived from the figure prints **"Paid" over a failed payment**, next
+          to a parcel about to be given away. Nor can it come from the payments
+          list: online checkout writes NO `order_payments` row (verified —
+          `checkout-actions.ts` never touches that table), so the commonest
+          order in the queue has an EMPTY list and "nothing recorded" would read
+          as "they have paid nothing".
+        - **★ THE WORD WAITS FOR THE READ; THE AMOUNT DOES NOT.** `amountDue` on
+          the row is authoritative (same helper, same figure `markCollected`
+          charges), so "₹45 due" paints instantly. WHY nothing is owed needs
+          `payment_status`, and the fallback would flash "Nothing to collect at
+          the counter" a beat before "Paid online". On a screen read aloud to a
+          customer, a word that changes is worse than a word that is late.
+        - **★ NO STATUS FILTER on the reader** — `findPickupByCode`'s rule. The
+          queue is a list of WORK; this is a LOOKUP, and a customer holding a
+          cancelled order is exactly when the shop must be able to say what
+          happened. It renders with NO buttons (`collectionState` decides), the
+          same rule the row follows.
+        - **★ MARK READY KEEPS IT OPEN; HANDING OVER CLOSES IT.** `settle` has
+          already dropped the row behind, so closing after Mark ready would mean
+          waiting for the 30s poll before the parcel could be given to the
+          person standing there. A deposit also keeps it open — the order is
+          still work — and re-reads, applying `partial.remaining` optimistically
+          first so no stale balance is on screen for a round trip.
       - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers

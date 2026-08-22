@@ -103,6 +103,48 @@ describe("POS theme coverage", () => {
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
+  it("a solid semantic fill always names its own foreground", () => {
+    // ★★ THE THIRD TIME THIS EXACT FAULT SHIPPED. `.pos-root` sets
+    // `color: var(--pos-ink)`, which on the light theme is near-black — so a
+    // button that paints itself emerald-600 and says nothing about text
+    // inherits dark ink onto a saturated green fill and the label all but
+    // disappears. It is invisible in review because on the DARK theme the
+    // inherited ink was already light, and invisible in the colour guard above
+    // because nothing here is out of range: the fault is a MISSING class, not
+    // a wrong one.
+    //
+    // Scoped to the individual quoted string, not the file, because these live
+    // in ternary branches — the other branch's `text-white` says nothing about
+    // this one's fill.
+    const SOLID =
+      /bg-(?:emerald|green|red|rose|amber|orange|sky|blue)-(?:500|600|700|800|900)/;
+    const FOREGROUND = /text-white|text-black|text-\[/;
+    const offenders: string[] = [];
+    for (const dir of ["app/pos", "components/pos"]) {
+      const walk = (d: string): void => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = join(d, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (e.name.endsWith(".tsx")) {
+            for (const lit of readFileSync(full, "utf8").match(/"[^"\n]*"/g) ??
+              []) {
+              // A `hover:` fill repaints on hover only; the resting state's
+              // string is what has to carry the foreground.
+              const resting = lit.replace(/hover:\S+/g, "");
+              if (SOLID.test(resting) && !FOREGROUND.test(lit)) {
+                offenders.push(
+                  `${full.replace(process.cwd() + "/", "")}: ${lit}`,
+                );
+              }
+            }
+          }
+        }
+      };
+      walk(join(process.cwd(), dir));
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+
   it("the token block defines every variable the till reads", () => {
     const css = read("pos.css");
     const declared = new Set(
@@ -116,6 +158,7 @@ describe("POS theme coverage", () => {
       "pos-nav.tsx",
       "pos-screen.tsx",
       "sell/tender-panel.tsx",
+      "collection-detail.tsx",
       "sell/sell-client.tsx",
       "login/login-client.tsx",
     ]) {

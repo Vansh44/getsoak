@@ -334,7 +334,7 @@ function Stepper({ step }: { step: Step }) {
           key={s}
           className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
             i < idx
-              ? "bg-emerald-600 text-[var(--pos-ink)]"
+              ? "bg-emerald-600 text-white"
               : i === idx
                 ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
                 : "bg-[var(--pos-surface-2)] text-[var(--pos-ink-3)]"

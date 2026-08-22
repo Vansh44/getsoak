@@ -115,7 +115,7 @@ export function ReceiptOverlay({
             className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold ${
               reprint
                 ? "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
-                : "bg-emerald-600 hover:bg-emerald-500"
+                : "bg-emerald-600 text-white hover:bg-emerald-500"
             }`}
           >
             <X className="h-4 w-4" strokeWidth={2} />

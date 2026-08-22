@@ -344,6 +344,204 @@ export async function getPickupQueue(
   }
 }
 
+export interface PickupDetailLine {
+  name: string;
+  variantName: string | null;
+  quantity: number;
+  /** Unit price BEFORE any line markdown, so "2 × ₹100 … less ₹30" adds up. */
+  price: number;
+  lineDiscount: number;
+  total: number;
+}
+
+export interface PickupDetailPayment {
+  method: string;
+  amount: number;
+  reference: string | null;
+  capturedAt: string;
+}
+
+export interface PickupDetail extends PickupOrder {
+  collectionCode: string | null;
+  customerPhone: string | null;
+  readyAt: string | null;
+  collectedAt: string | null;
+  lines: PickupDetailLine[];
+  subtotal: number;
+  discount: number;
+  tax: number;
+  taxInclusive: boolean;
+  shipping: number;
+  /** A PAYMENT, not a discount (§29) — shown under what was paid, never
+   *  subtracted from the totals ladder, or the invoice and this screen would
+   *  quote different sale values for the same order. */
+  storeCreditUsed: number;
+  paymentMethod: string | null;
+  paymentStatus: string | null;
+  /** Only ever written by the COUNTER. Online checkout records no payment row,
+   *  so an empty list here does not mean the customer has paid nothing. */
+  payments: PickupDetailPayment[];
+}
+
+/**
+ * ONE collection, fully described — its goods, what has been paid, what is
+ * still owed.
+ *
+ * ★ WHY THIS EXISTS. The queue row carried a total, an item COUNT and a badge,
+ * and nothing else. A cashier facing a customer asking "which pair is this?" or
+ * "didn't I leave a deposit?" could not answer from the till — they could see
+ * the money and not the goods. Handing a parcel over is the one irreversible
+ * act at this counter, so being unable to look inside it first is the wrong way
+ * round.
+ *
+ * ★ NO STATUS FILTER, deliberately — `findPickupByCode`'s rule. The queue is a
+ * list of WORK and drops collected and expired orders; this is a LOOKUP, and a
+ * customer standing at the counter holding a cancelled order is exactly when
+ * the shop most needs to be able to say what happened. `collectionState` on the
+ * client then decides what may still be DONE with it.
+ *
+ * ★ SCOPED TO THE OPERATOR'S SHOP, never to an id from the client — the same
+ * three predicates the queue uses, so pasting a UUID cannot describe another
+ * branch's collection.
+ */
+export async function getPickupOrderDetail(
+  orderId: string,
+): Promise<{ detail?: PickupDetail; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+  if (typeof orderId !== "string" || !orderId)
+    return { error: "Invalid order." };
+
+  try {
+    const row = await withService(async (db) => {
+      const found = await db
+        .select({
+          id: orders.id,
+          order_ref: orders.orderRef,
+          pickup_code: orders.pickupCode,
+          shipping_address: orders.shippingAddress,
+          subtotal: orders.subtotal,
+          discount: orders.discount,
+          tax: orders.tax,
+          tax_inclusive: orders.taxInclusive,
+          shipping: orders.shipping,
+          store_credit_used: orders.storeCreditUsed,
+          total: orders.total,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+          created_at: orders.createdAt,
+          expires_at: orders.pickupExpiresAt,
+          ready_at: orders.pickupReadyAt,
+          collected_at: orders.collectedAt,
+          status: orders.pickupStatus,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, op.storeId),
+            eq(orders.fulfilmentType, "pickup"),
+            eq(orders.pickupLocationId, op.locationId),
+          ),
+        )
+        .limit(1);
+      return found[0] ?? null;
+    });
+
+    if (!row) return { error: "That order isn't a collection at this shop." };
+
+    // Separate round trips rather than one transaction: they are independent,
+    // and statements inside a single withService share a client and run
+    // SERIALLY (the §22 Step 20 finding).
+    const [lines, payments, deposits] = await Promise.all([
+      withService((db) =>
+        db
+          .select({
+            name: orderItems.name,
+            variant_name: orderItems.variantName,
+            quantity: orderItems.quantity,
+            price: orderItems.price,
+            line_discount: orderItems.lineDiscount,
+            total: orderItems.total,
+          })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId)),
+      ),
+      withService((db) =>
+        db
+          .select({
+            method: orderPayments.method,
+            amount: orderPayments.amount,
+            reference: orderPayments.reference,
+            captured_at: orderPayments.capturedAt,
+          })
+          .from(orderPayments)
+          .where(eq(orderPayments.orderId, orderId))
+          .orderBy(asc(orderPayments.capturedAt)),
+      ),
+      paidSoFarFor([orderId]),
+    ]);
+
+    const addr = (row.shipping_address ?? {}) as Record<string, unknown>;
+    const name =
+      [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() || null;
+    const phone = typeof addr.phone === "string" ? addr.phone : null;
+    const paidSoFar = deposits.get(orderId) ?? 0;
+
+    return {
+      detail: {
+        id: row.id,
+        orderRef: row.order_ref ?? "",
+        collectionCode: row.pickup_code
+          ? formatCollectionCode(row.pickup_code)
+          : null,
+        customerName: name,
+        customerPhone: phone,
+        itemCount: lines.reduce((n, l) => n + (Number(l.quantity) || 0), 0),
+        subtotal: Number(row.subtotal) || 0,
+        discount: Number(row.discount) || 0,
+        tax: Number(row.tax) || 0,
+        taxInclusive: Boolean(row.tax_inclusive),
+        shipping: Number(row.shipping) || 0,
+        storeCreditUsed: Number(row.store_credit_used) || 0,
+        total: Number(row.total) || 0,
+        // The SAME helper the queue quotes and markCollected charges.
+        amountDue: amountDueAtCollection({
+          paymentMethod: row.payment_method,
+          paymentStatus: row.payment_status,
+          total: row.total,
+          paidSoFar,
+        }),
+        paidSoFar,
+        paymentMethod: row.payment_method,
+        paymentStatus: row.payment_status,
+        placedAt: row.created_at,
+        expiresAt: row.expires_at,
+        readyAt: row.ready_at,
+        collectedAt: row.collected_at,
+        status: row.status ?? "awaiting",
+        lines: lines.map((l) => ({
+          name: l.name ?? "Item",
+          variantName: l.variant_name ?? null,
+          quantity: Number(l.quantity) || 0,
+          price: Number(l.price) || 0,
+          lineDiscount: Number(l.line_discount) || 0,
+          total: Number(l.total) || 0,
+        })),
+        payments: payments.map((p) => ({
+          method: p.method ?? "",
+          amount: Number(p.amount) || 0,
+          reference: p.reference ?? null,
+          capturedAt: p.captured_at,
+        })),
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't load that order.") };
+  }
+}
+
 const OVERPAID = "sm:overpaid";
 const CREDIT_MOVED = "sm:credit-moved";
 const PAYMENT_MOVED = "sm:payment-moved";
