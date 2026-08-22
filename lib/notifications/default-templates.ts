@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import { getEventDef, type EventKey } from "./events";
+import { refundCopy } from "./refund-copy";
 import { BASE_VARIABLES, variablesFor } from "./variables";
 import { HIDDEN_VARIABLES } from "./format";
 
@@ -89,12 +90,20 @@ interface TemplateFact {
   token: string;
 }
 
+/**
+ * `intro`/`closing` may be a function of the event's RAW payload when the
+ * honest sentence depends on what actually happened — a refund's wording turns
+ * on the method it was settled by, and the formatted `values` have already lost
+ * the raw enum. Everything else stays a plain string.
+ */
+type BlueprintCopy = string | ((payload: Record<string, unknown>) => string);
+
 interface TemplateBlueprint {
   subject: string;
-  intro: string;
+  intro: BlueprintCopy;
   facts?: TemplateFact[];
   spotlight?: { label: string; token: string; hint?: string };
-  closing?: string;
+  closing?: BlueprintCopy;
 }
 
 /**
@@ -156,14 +165,19 @@ const CUSTOMER_BLUEPRINTS: Partial<Record<EventKey, TemplateBlueprint>> = {
   },
   "order.refund_issued": {
     subject: "Refund issued for order {{subject_label}}",
-    intro: "Your refund has been sent to your original payment method.",
+    // ★ Method-aware: this said "sent to your original payment method" for
+    // every refund, including store credit, where no money leaves at all.
+    intro: (p) =>
+      `Your refund has been ${refundCopy(p.paymentMethod).destination}.`,
     facts: [
       { label: "Order", token: "subject_label" },
       { label: "Refund amount", token: "amount" },
       { label: "Issued", token: "date" },
     ],
-    closing:
-      "Most banks show refunds within 5–7 working days. Your bank may take a little longer.",
+    closing: (p) =>
+      refundCopy(p.paymentMethod).bankDelay
+        ? "Most banks show refunds within 5–7 working days. Your bank may take a little longer."
+        : "",
   },
   "order.ready_for_pickup": {
     subject: "Order {{subject_label}} is ready for pickup",
@@ -426,10 +440,21 @@ function renderFacts(
   return rows ? `<ul class="email-details">\n${rows}\n</ul>` : "";
 }
 
+function resolveCopy(
+  copy: BlueprintCopy | undefined,
+  payload: Record<string, unknown>,
+): string {
+  if (!copy) return "";
+  return typeof copy === "function" ? copy(payload) : copy;
+}
+
 function renderBlueprint(
   blueprint: TemplateBlueprint,
   values: Record<string, string> | undefined,
+  payload: Record<string, unknown>,
 ): DefaultTemplate {
+  const intro = resolveCopy(blueprint.intro, payload);
+  const closing = resolveCopy(blueprint.closing, payload);
   const spotlight =
     blueprint.spotlight && hasValue(blueprint.spotlight.token, values)
       ? [
@@ -446,10 +471,10 @@ function renderBlueprint(
   return {
     subject: blueprint.subject,
     body: [
-      `<p class="email-lead">${blueprint.intro}</p>`,
+      `<p class="email-lead">${intro}</p>`,
       spotlight,
       renderFacts(blueprint.facts ?? [], values),
-      blueprint.closing ? `<p class="email-note">${blueprint.closing}</p>` : "",
+      closing ? `<p class="email-note">${closing}</p>` : "",
     ]
       .filter(Boolean)
       .join("\n"),
@@ -485,6 +510,9 @@ export function defaultEmailTemplate(
    * exist, so it should show them all.
    */
   values?: Record<string, string>,
+  /** The event's RAW payload, for copy that must branch on an enum the
+   *  formatted `values` have already turned into a display label. */
+  payload?: Record<string, unknown> | null,
 ): DefaultTemplate {
   const def = getEventDef(eventKey);
   const label = def?.label ?? "Notification";
@@ -493,7 +521,7 @@ export function defaultEmailTemplate(
   const blueprint = isCustomer
     ? CUSTOMER_BLUEPRINTS[eventKey as EventKey]
     : TEAM_BLUEPRINTS[eventKey as EventKey];
-  if (blueprint) return renderBlueprint(blueprint, values);
+  if (blueprint) return renderBlueprint(blueprint, values, payload ?? {});
 
   // Hand-written copy wins over the generated fact list (see BESPOKE).
   const bespoke = !isCustomer ? BESPOKE[eventKey] : undefined;

@@ -346,7 +346,10 @@ export async function refundOrder(
       customerId: res.customerId ?? null,
       payload: {
         orderRef: res.orderRef ?? "",
-        total: res.amount ?? 0,
+        // `amount` — the name variables.ts declares and both renderers read.
+        // It was `total`, which templateValues drops as undeclared, so the
+        // customer's refund email went out with no figure in it at all.
+        amount: res.amount ?? 0,
         currency: "INR",
         paymentMethod: input.method,
       },

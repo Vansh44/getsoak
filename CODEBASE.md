@@ -4418,6 +4418,36 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       drops any fact that came back blank. The console preview still passes
       none, deliberately — a preview shows which tokens EXIST, so it should
       show them all.
+    - **★★ A REFUND EMAIL MUST NOT PROMISE A DESTINATION IT DIDN'T USE**
+      (`lib/notifications/refund-copy.ts`, pure + tested). Both renderers said
+      _"sent to your original payment method"_ UNCONDITIONALLY — so a shopper
+      refunded to **store credit**, where no money leaves at all, was told their
+      card had been credited, and one paid by hand was promised a bank timeline
+      nobody had started. The event carried `paymentMethod` the whole time and
+      neither renderer read it (`grep -c paymentMethod` was 0 in both).
+      `refundCopy(method)` is now the ONE mapping, shared by `render.ts` and the
+      email blueprint so they cannot drift. ★ Its default is the load-bearing
+      part: an unknown method gets _"on its way back to you"_, true whatever
+      happened, and only a method we recognise earns a specific promise. The
+      "5–7 working days" line is likewise conditional — cash clears at the
+      counter and credit never leaves. To make this possible a blueprint's
+      `intro`/`closing` may now be a FUNCTION of the raw payload, because the
+      formatted `values` have already turned the enum into a display label;
+      only the refund entry uses it.
+    - **★★ AN UNDECLARED PAYLOAD KEY IS SILENTLY DROPPED, AND IT ATE THE
+      REFUND AMOUNT.** `templateValues` filters the payload to
+      `variableNamesFor(eventKey)`, so a key the catalog doesn't declare never
+      reaches a template. `order.refund_issued` declares **`amount`**; both
+      emitters sent **`total`**, and `render.ts` read `p.amount`. The result was
+      an email that said "Your refund has been …" with no figure, a `{{amount}}`
+      that rendered blank in merchant templates, and a fact row dropped as empty
+      by the rule above — three symptoms, one wrong key. Fixed at the EMITTERS,
+      not the renderer: `amount` is what the catalog declares, what merchants
+      type, and semantically right, since a partial refund is not a "total".
+      ⚠ The wrong shape was PINNED by a test (`pos-return-actions.test.ts`
+      asserted `total: 52.5`) — a test can lock a bug in as easily as it can
+      catch one, so changing an event's payload means re-reading its assertions
+      rather than trusting them.
     - **THE QUEUE ROW CARRIES `recipient_type`, AND THE WORKER MUST USE IT.**
       `renderNotificationEmail`'s `isTeam` defaults to TRUE and the worker never
       passed it, so EVERY email rendered as team mail: a shopper's order

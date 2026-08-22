@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 
 import { getEventDef, type Audience } from "./events";
+import { refundCopy } from "./refund-copy";
 
 export interface RenderableEvent {
   type: string;
@@ -172,10 +173,14 @@ export function renderNotification(
 
     case "order.refund_issued": {
       const amount = money(p.amount, currency);
+      // Both emitters send `amount`; `total` here silently rendered nothing.
+      const copy = refundCopy(p.paymentMethod);
       return audience === "customer"
         ? {
             title: "Refund on its way",
-            body: `${amount ?? "Your refund"} has been sent back to your original payment method. Banks usually take 5–7 working days.`,
+            body: `${amount ?? "Your refund"} has been ${copy.destination}.${
+              copy.bankDelay ? " Banks usually take 5–7 working days." : ""
+            }`,
             url: customerOrderUrl(event),
           }
         : {

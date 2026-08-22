@@ -192,10 +192,17 @@ describe("processReturn", () => {
 
   it("emits order.refund_issued with what actually went back", async () => {
     await processReturn("o1", [{ orderItemId: "li-b", quantity: 1 }], "upi");
+    // ★ `amount`, not `total`. The catalog declares `amount` for this event and
+    // templateValues drops anything undeclared, so `total` meant the customer's
+    // refund email carried no figure at all. `paymentMethod` is what keeps the
+    // copy from claiming a card was credited when it wasn't.
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "order.refund_issued",
-        payload: expect.objectContaining({ total: 52.5, paymentMethod: "upi" }),
+        payload: expect.objectContaining({
+          amount: 52.5,
+          paymentMethod: "upi",
+        }),
       }),
     );
   });
