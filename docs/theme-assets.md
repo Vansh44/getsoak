@@ -83,9 +83,13 @@ runtime dependencies.
 
 - **Created:** 2026-08-19
 - **Status:** assets built and bundled; the preset is registered in
-  `THEME_DEFINITIONS` and `THEME_META` but held at `visibility: "hidden"` /
-  `release.status: "draft"` until `demo-vitrine` is seeded and the scored design
-  pass is done. This log is release evidence, not a statement that the theme has
+  `THEME_DEFINITIONS` and `THEME_META`. `demo-vitrine` is seeded on BOTH staging
+  and production and route-checked live on 2026-08-22 (shop 200 with 8 cards and
+  2 hover layers, `/size-guide` and `/our-edit` 200, all ten assets serving), so
+  `demo.status` is `healthy`. Still held at `visibility: "hidden"` /
+  `release.status: "draft"` pending §5's two-reviewer design gate and the §4
+  accessibility/Lighthouse evidence — neither of which the theme's author can
+  sign off. This log is release evidence, not a statement that the theme has
   passed storefront, accessibility, performance or human review.
 - **Source:** generated with an image-generation tool from the prompts below; no
   third-party photograph, logo, branded product or proprietary theme reference
