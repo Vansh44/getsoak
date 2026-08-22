@@ -1,6 +1,7 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { TenderPanel } from "./tender-panel";
+import type { PosTender } from "@/app/actions/pos-sale-actions";
 
 // The pad is where a cashier decides what physically happened to the money, so
 // these assert the WORDS and the ROUTE through it, not just that it renders.
@@ -8,7 +9,13 @@ import { TenderPanel } from "./tender-panel";
 // as two unverified records, then asked for a "split payment option" days after
 // unknowingly performing one — so naming and discoverability ARE the feature.
 function setup(over: Partial<Parameters<typeof TenderPanel>[0]> = {}) {
-  const onComplete = vi.fn(async () => ({}));
+  // Typed, so the call assertions below can read the tenders it was given.
+  const onComplete = vi.fn<
+    (
+      tenders: PosTender[],
+      approvalToken?: string,
+    ) => Promise<{ error?: string; needsApproval?: boolean }>
+  >(async () => ({}));
   render(
     <TenderPanel
       total={500}
@@ -55,27 +62,45 @@ describe("tender pad — the options screen", () => {
 });
 
 describe("tender pad — paying in one method", () => {
-  it("fills the amount in — the cashier already said it pays the whole sale", () => {
+  it("★ offers NO amount box — the figure is not in question", () => {
     setup();
     fireEvent.click(tile(/card machine/i));
-    // Not a placeholder: a real value, so one tap finishes the sale.
-    expect(screen.getByPlaceholderText(/amount/i)).toHaveValue("500");
-    // And the button says what it will do, with the figure on it.
-    expect(tile(/add ₹500/i)).toBeVisible();
+    // An editable amount here is how a full payment silently becomes a part
+    // one: a single keystroke turned a ₹599 charge into ₹59 on a real till,
+    // with a part-payment banner as the only warning.
+    expect(screen.queryByPlaceholderText(/amount/i)).toBeNull();
+    // The action carries the figure AND says the sale ends here.
+    expect(tile(/complete sale · ₹500/i)).toBeVisible();
   });
 
-  it("takes the whole balance in one tap", () => {
-    setup();
+  it("★ shows ONE action, not a charge plus a dead confirm", async () => {
+    const { onComplete } = setup();
     fireEvent.click(tile(/card machine/i));
-    fireEvent.click(tile(/add ₹500/i));
-    expect(screen.getByText("Paid in full")).toBeVisible();
-    expect(screen.getByText("Card machine")).toBeVisible();
+    // Previously: "Add ₹500" plus a disabled "Complete sale" underneath — two
+    // buttons for a sale with one remaining action.
+    expect(
+      screen.queryByRole("button", { name: /^complete sale$/i }),
+    ).toBeNull();
+    fireEvent.click(tile(/complete sale · ₹500/i));
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    // Staged AND submitted from the single tap.
+    expect(onComplete.mock.calls[0][0]).toEqual([
+      { method: "card", amount: 500 },
+    ]);
   });
 
-  it("puts the amount on the gateway button too", () => {
+  it("locks the gateway amount too, and charges it in one tap", () => {
     setup();
     fireEvent.click(tile(/charge online/i));
+    expect(screen.queryByPlaceholderText(/amount/i)).toBeNull();
     expect(tile(/charge ₹500/i)).toBeVisible();
+  });
+
+  it("keeps the amount editable for CASH, which can be over-handed", () => {
+    setup();
+    fireEvent.click(tile(/^cash/i));
+    // ₹600 for a ₹500 sale is ordinary, and change has to come from somewhere.
+    expect(screen.getByPlaceholderText(/amount/i)).toBeVisible();
   });
 
   it("can be backed out of without losing the sale", () => {
@@ -122,6 +147,9 @@ describe("tender pad — splitting", () => {
 
   it("names a staged tender the way its tile is named", () => {
     setup();
+    // A PART payment goes through Split — a method tile pays the whole sale
+    // and offers no amount box at all.
+    fireEvent.click(tile(/split payment/i));
     fireEvent.click(tile(/upi app/i));
     fireEvent.change(screen.getByPlaceholderText(/amount/i), {
       target: { value: "300" },

@@ -161,7 +161,7 @@ export function LayoutEditMode({
     >
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Contextual bar — the register's own header stays put above it. */}
-        <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+        <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] px-3 py-2">
           <div className="text-sm">
             <span className="font-semibold">Editing layout</span>
             <span className="text-[var(--pos-ink-2)]">
@@ -193,7 +193,7 @@ export function LayoutEditMode({
               type="button"
               onClick={() => onSave(entries)}
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}
               Save
@@ -255,7 +255,7 @@ export function LayoutEditMode({
       {/* Follows the finger, so it's clear what is being dropped where. */}
       <DragOverlay dropAnimation={null}>
         {dragging && (
-          <div className="pointer-events-none flex items-center gap-2 rounded-xl border border-emerald-400/60 bg-[var(--pos-bg)] p-2 shadow-2xl">
+          <div className="pointer-events-none flex items-center gap-2 rounded-xl border border-[var(--pos-ok-border)] bg-[var(--pos-bg)] p-2 shadow-2xl">
             <Thumb item={dragging} className="h-10 w-10 rounded-lg" />
             <span className="max-w-[10rem] truncate text-sm font-medium">
               {dragging.name}
@@ -280,7 +280,7 @@ function GridDropArea({
       ref={setNodeRef}
       className={`min-h-0 flex-1 overflow-y-auto rounded-xl border-2 border-dashed p-2 transition-colors ${
         isOver
-          ? "border-emerald-500/60 bg-emerald-500/5"
+          ? "border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)]"
           : "border-[var(--pos-border)]"
       }`}
     >

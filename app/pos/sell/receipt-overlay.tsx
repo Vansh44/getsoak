@@ -65,7 +65,7 @@ export function ReceiptOverlay({
           className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
             reprint
               ? "bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)]"
-              : "bg-emerald-500/15 text-emerald-400"
+              : "bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]"
           }`}
         >
           {reprint ? (
@@ -79,9 +79,9 @@ export function ReceiptOverlay({
         </h2>
 
         {!reprint && receipt && receipt.changeDue > 0 && (
-          <div className="mt-3 rounded-xl bg-amber-400/15 px-4 py-3">
-            <div className="text-sm text-amber-200">Change due</div>
-            <div className="text-2xl font-bold text-amber-100">
+          <div className="mt-3 rounded-xl bg-[var(--pos-warn-soft)] px-4 py-3">
+            <div className="text-sm text-[var(--pos-warn)]">Change due</div>
+            <div className="text-2xl font-bold text-[var(--pos-warn)]">
               ₹{money(receipt.changeDue)}
             </div>
           </div>
@@ -92,7 +92,9 @@ export function ReceiptOverlay({
             {receipt.receiptNo} · ₹{money(receipt.total)}
           </p>
         )}
-        {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+        {error && (
+          <p className="mt-2 text-sm text-[var(--pos-danger)]">{error}</p>
+        )}
         {!receipt && !error && (
           <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-[var(--pos-ink-3)]" />
         )}

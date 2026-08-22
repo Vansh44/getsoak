@@ -695,7 +695,7 @@ export function SellClient({
               </div>
 
               {error && (
-                <div className="mb-3 shrink-0 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+                <div className="mb-3 shrink-0 rounded-lg bg-[var(--pos-danger-soft)] px-3 py-2 text-sm text-[var(--pos-danger)]">
                   {error}
                 </div>
               )}
@@ -876,7 +876,7 @@ export function SellClient({
             >
               {customer ? (
                 <>
-                  <UserRound className="h-4 w-4 shrink-0 text-emerald-400" />
+                  <UserRound className="h-4 w-4 shrink-0 text-[var(--pos-ok)]" />
                   <span className="min-w-0 flex-1 truncate">
                     {customer.name}
                   </span>
@@ -936,7 +936,7 @@ export function SellClient({
               type="button"
               disabled={cart.length === 0}
               onClick={() => setTendering(true)}
-              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               Charge ₹{estTotal.toLocaleString("en-IN")}
             </button>

@@ -147,12 +147,12 @@ export function InventoryClient({
       </div>
 
       {notice && (
-        <p className="mb-3 rounded-lg bg-emerald-500/15 px-3 py-2 text-sm text-emerald-300">
+        <p className="mb-3 rounded-lg bg-[var(--pos-ok-soft)] px-3 py-2 text-sm text-[var(--pos-ok)]">
           {notice}
         </p>
       )}
       {error && (
-        <p className="mb-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+        <p className="mb-3 rounded-lg bg-[var(--pos-danger-soft)] px-3 py-2 text-sm text-[var(--pos-danger)]">
           {error}
         </p>
       )}
@@ -309,7 +309,7 @@ function Row({
         <div className="flex shrink-0 items-center gap-1.5">
           {item.low && (
             <TriangleAlert
-              className="h-4 w-4 text-amber-400"
+              className="h-4 w-4 text-[var(--pos-warn)]"
               strokeWidth={2}
               aria-label="Low stock"
             />
@@ -325,7 +325,7 @@ function Row({
           </button>
           <span
             className={`w-10 text-center text-lg font-bold ${
-              item.low ? "text-amber-400" : ""
+              item.low ? "text-[var(--pos-warn)]" : ""
             }`}
           >
             {item.onHand}
@@ -420,7 +420,7 @@ function Row({
               type="button"
               disabled={pending || !valid}
               onClick={submit}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               {pending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

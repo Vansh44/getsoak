@@ -276,7 +276,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                   type="button"
                   disabled={nothingChosen || pending}
                   onClick={submit}
-                  className="ml-auto inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3.5 font-semibold hover:bg-emerald-500 disabled:opacity-40"
+                  className="ml-auto inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3.5 font-semibold hover:bg-emerald-500 disabled:opacity-40 text-white"
                 >
                   {pending ? (
                     <Loader2 className="h-5 w-5 animate-spin" />

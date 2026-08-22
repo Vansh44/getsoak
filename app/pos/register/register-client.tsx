@@ -192,7 +192,7 @@ export function RegisterClient({
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]">
             <Check className="h-7 w-7" strokeWidth={2.5} />
           </div>
           <h1 className="mt-4 text-lg font-semibold">
@@ -226,7 +226,9 @@ export function RegisterClient({
         <Stepper step={step} />
 
         {error && (
-          <p className="mb-4 text-center text-sm text-red-400">{error}</p>
+          <p className="mb-4 text-center text-sm text-[var(--pos-danger)]">
+            {error}
+          </p>
         )}
 
         {step === "password" && (
@@ -385,7 +387,7 @@ function Primary({
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-50"
+      className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-50 text-white"
     >
       {busy && <Loader2 className="h-4 w-4 animate-spin" />}
       {children}

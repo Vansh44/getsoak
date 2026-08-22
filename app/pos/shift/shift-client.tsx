@@ -147,12 +147,14 @@ export function ShiftClient({
                   className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-right text-lg outline-none focus:border-[var(--pos-border-strong)]"
                 />
               </label>
-              {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+              {error && (
+                <p className="mt-2 text-sm text-[var(--pos-danger)]">{error}</p>
+              )}
               <button
                 type="button"
                 disabled={pending || float.trim() === ""}
                 onClick={() => run(() => openShift(Number(float)))}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
               >
                 {pending && <Loader2 className="h-4 w-4 animate-spin" />}
                 Open shift
@@ -218,8 +220,8 @@ export function ShiftClient({
             <div
               className={`mt-3 rounded-xl border p-3 ${
                 s.varianceState === "balanced"
-                  ? "border-emerald-500/30 bg-emerald-500/10"
-                  : "border-amber-500/30 bg-amber-500/10"
+                  ? "border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)]"
+                  : "border-[var(--pos-warn-border)] bg-[var(--pos-warn-soft)]"
               }`}
             >
               <div className="flex items-center justify-between text-sm">
@@ -375,7 +377,7 @@ export function ShiftClient({
                           ),
                         )
                       }
-                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
                     >
                       Record
                     </button>
@@ -387,7 +389,7 @@ export function ShiftClient({
         )}
 
         {error && (
-          <p className="rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-300">
+          <p className="rounded-lg bg-[var(--pos-danger-soft)] px-3 py-2 text-sm text-[var(--pos-danger)]">
             {error}
           </p>
         )}
@@ -445,7 +447,7 @@ export function ShiftClient({
                     type="button"
                     disabled={pending || counted.trim() === ""}
                     onClick={() => run(() => closeShift(Number(counted), note))}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
                   >
                     {pending && <Loader2 className="h-4 w-4 animate-spin" />}
                     Close shift

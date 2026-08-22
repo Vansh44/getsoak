@@ -207,7 +207,7 @@ export function CameraScanner({
               <div
                 className={`h-28 w-[78%] max-w-sm rounded-2xl border-4 transition-colors sm:h-24 ${
                   flash
-                    ? "border-emerald-400 bg-emerald-400/20"
+                    ? "border-emerald-400 bg-[var(--pos-ok-soft)]"
                     : "border-white/70"
                 }`}
               />
@@ -238,7 +238,7 @@ export function CameraScanner({
 
         <div className="px-4 py-4 text-center text-sm text-[var(--pos-ink-2)]">
           {lastCode ? (
-            <span className="text-emerald-400">Added · {lastCode}</span>
+            <span className="text-[var(--pos-ok)]">Added · {lastCode}</span>
           ) : (
             "Point the camera at the barcode"
           )}

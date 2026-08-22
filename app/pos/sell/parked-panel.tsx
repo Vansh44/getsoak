@@ -124,7 +124,7 @@ export function ParkedPanel({
                   disabled={busy !== null}
                   onClick={() => handleDiscard(s)}
                   aria-label={`Discard ${parkedSaleLabel(s)}`}
-                  className="shrink-0 rounded-lg p-2 text-[var(--pos-ink-3)] transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                  className="shrink-0 rounded-lg p-2 text-[var(--pos-ink-3)] transition-colors hover:bg-[var(--pos-danger-soft)] hover:text-[var(--pos-danger)] disabled:opacity-50"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>

@@ -74,6 +74,35 @@ describe("POS theme coverage", () => {
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
+  it("no semantic colour is left at a dark-ground lightness", () => {
+    // ★★ SEMANTIC COLOUR IS TWO DECISIONS. The hue carries across themes; the
+    // lightness does not. These all shipped in the 100-400 range because they
+    // were picked to glow on a near-black till, and on the light one "Change
+    // due ₹48.00" was pale amber on pale amber — invisible — as were both
+    // pickup queue headings. Hue stays a Tailwind utility; lightness must come
+    // from a token.
+    const offenders: string[] = [];
+    for (const dir of ["app/pos", "components/pos"]) {
+      const walk = (d: string): void => {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = join(d, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (e.name.endsWith(".tsx")) {
+            for (const m of readFileSync(full, "utf8").matchAll(
+              /text-(?:emerald|amber|red|sky|green|orange)-[1-4]00/g,
+            )) {
+              offenders.push(
+                `${full.replace(process.cwd() + "/", "")}: ${m[0]}`,
+              );
+            }
+          }
+        }
+      };
+      walk(join(process.cwd(), dir));
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+  });
+
   it("the token block defines every variable the till reads", () => {
     const css = read("pos.css");
     const declared = new Set(

@@ -168,7 +168,7 @@ export function AuthorizeDevice({
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
       <div className="w-full max-w-md">
-        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/15 text-amber-200">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--pos-warn-soft)] text-[var(--pos-warn)]">
           <ShieldCheck className="h-7 w-7" strokeWidth={1.75} />
         </div>
         <h1 className="text-center text-xl font-semibold">

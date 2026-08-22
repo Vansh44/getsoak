@@ -181,6 +181,13 @@ export function TenderPanel({
   const remaining = changeDue(total, paid);
   const entered = Number(amount) || 0;
   const change = method === "cash" ? changeDue(entered, remaining) : 0;
+  // Cash can be over-handed (change), and a split is a part by definition.
+  // Every other single-method payment settles the balance exactly.
+  const amountIsEditable = splitting || method === "cash";
+  // Store credit already renders its own "Apply ₹N" action above, bounded by
+  // the balance on the account — a second full-width button under it would be
+  // the same tap twice.
+  const hasOwnAction = method === "store_credit";
 
   // ★ OFFERED ONLY WHEN THERE IS SOMETHING TO SPEND. A greyed-out "Store
   // credit" button on every walk-in sale is a control that never works and one
@@ -261,6 +268,41 @@ export function TenderPanel({
     }
   };
 
+  /**
+   * ★★ ONE TAP, NOT TWO. A card/UPI/gateway payment for the whole balance left
+   * the cashier looking at "Charge ₹52" and a separate "Complete sale" that
+   * could do nothing else — the sale was fully covered the instant the tender
+   * landed, so the second button was a question with one answer.
+   *
+   * Cash and splits keep the explicit confirm: cash can be over-handed and the
+   * change is worth reading before committing, and a split is by definition
+   * unfinished when a tender is added.
+   */
+  const settleNow = async (value: number) => {
+    if (value <= 0) return;
+    setBusy(true);
+    setError(null);
+    let tender: PosTender;
+    if (method === "razorpay") {
+      if (!onTakeOnline) return setBusy(false);
+      const res = await onTakeOnline(value);
+      if (res.error || !res.reference) {
+        setBusy(false);
+        setError(res.error ?? "That payment didn't go through.");
+        return;
+      }
+      tender = { method: "razorpay", amount: value, reference: res.reference };
+    } else {
+      tender = {
+        method,
+        amount: value,
+        ...(reference ? { reference } : {}),
+      };
+    }
+    setBusy(false);
+    await finish(undefined, [...taken, tender]);
+  };
+
   const addTender = (value: number) => {
     if (value <= 0) return;
     // ★ Clamped to what is actually on the account. The server refuses an
@@ -291,10 +333,13 @@ export function TenderPanel({
     setStage("options");
   };
 
-  const finish = async (approvalToken?: string) => {
+  const finish = async (approvalToken?: string, tenders?: PosTender[]) => {
     setBusy(true);
     setError(null);
-    const res = await onComplete(taken, approvalToken);
+    // ★ Takes the list explicitly so a one-tap settle can pass the tender it
+    // just created: setTaken is async, so reading state here would submit the
+    // sale WITHOUT the payment that triggered it.
+    const res = await onComplete(tenders ?? taken, approvalToken);
     setBusy(false);
     // Only open the PIN pad where a manager could actually approve. Without the
     // guard a caller with no approval path would show a keypad that can never
@@ -347,11 +392,13 @@ export function TenderPanel({
         {/* Manager approval gate */}
         {managerPin !== null ? (
           <div>
-            <div className="mb-3 flex items-center gap-2 text-amber-300">
+            <div className="mb-3 flex items-center gap-2 text-[var(--pos-warn)]">
               <ShieldCheck className="h-5 w-5" strokeWidth={2} />
               <span className="font-semibold">Manager approval needed</span>
             </div>
-            {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
+            {error && (
+              <p className="mb-3 text-sm text-[var(--pos-danger)]">{error}</p>
+            )}
             <input
               value={pin}
               type="password"
@@ -380,7 +427,7 @@ export function TenderPanel({
                 type="button"
                 disabled={busy || pin.length !== 8}
                 onClick={approveAndFinish}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-40"
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-40 text-white"
               >
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 Approve
@@ -397,7 +444,7 @@ export function TenderPanel({
                 ₹{(covered ? total : remaining).toLocaleString("en-IN")}
               </div>
               {change > 0 && (
-                <div className="mt-1 text-sm text-emerald-400">
+                <div className="mt-1 text-sm text-[var(--pos-ok)]">
                   Change ₹{change.toLocaleString("en-IN")}
                 </div>
               )}
@@ -607,60 +654,83 @@ export function TenderPanel({
                   </p>
                 )}
 
-                <div className="mb-2 flex gap-2">
-                  <input
-                    value={amount}
-                    inputMode="decimal"
-                    autoFocus
-                    placeholder={`Amount (₹${remaining})`}
-                    onChange={(e) =>
-                      setAmount(e.target.value.replace(/[^\d.]/g, ""))
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        // ★ In split mode a blank box means "I haven't said how
-                        // much yet", NOT "all of it" — defaulting there would
-                        // quietly settle the sale the cashier was dividing.
-                        const value = splitting
-                          ? entered
-                          : entered || remaining;
-                        if (!value) return;
-                        if (method === "razorpay") takeOnline(value);
-                        else addTender(value);
+                {/* ★★ THE AMOUNT IS ONLY A QUESTION IN TWO CASES: the cashier
+                    is splitting, or it is CASH, which can be over-handed and
+                    produce change. Picking a card/UPI/gateway tile already
+                    said "this pays the whole sale", so leaving the figure
+                    editable there just invites the accident it was meant to
+                    remove — one keystroke turned a ₹599 charge into ₹59 with a
+                    part-payment banner as the only warning. Non-cash,
+                    non-split now shows no box at all: the balance is the
+                    heading, and the button carries it. */}
+                {amountIsEditable ? (
+                  <div className="mb-2 flex gap-2">
+                    <input
+                      value={amount}
+                      inputMode="decimal"
+                      autoFocus
+                      placeholder={`Amount (₹${remaining})`}
+                      onChange={(e) =>
+                        setAmount(e.target.value.replace(/[^\d.]/g, ""))
                       }
-                    }}
-                    className="flex-1 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none focus:border-[var(--pos-border-strong)]"
-                  />
-                  {method === "razorpay" ? (
-                    <button
-                      type="button"
-                      disabled={busy || (splitting && !entered)}
-                      onClick={() =>
-                        takeOnline(splitting ? entered : entered || remaining)
-                      }
-                      className="flex items-center gap-2 rounded-xl bg-[var(--pos-surface-2)] px-4 text-sm font-medium hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
-                    >
-                      {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {entered > 0
-                        ? `Charge ₹${entered.toLocaleString("en-IN")}`
-                        : "Charge"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={splitting && !entered}
-                      onClick={() =>
-                        addTender(splitting ? entered : entered || remaining)
-                      }
-                      className="rounded-xl bg-[var(--pos-surface-2)] px-4 text-sm font-medium hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
-                    >
-                      {entered > 0
-                        ? `Add ₹${entered.toLocaleString("en-IN")}`
-                        : "Add"}
-                    </button>
-                  )}
-                </div>
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          // ★ In split mode a blank box means "I haven't said how
+                          // much yet", NOT "all of it" — defaulting there would
+                          // quietly settle the sale the cashier was dividing.
+                          const value = splitting
+                            ? entered
+                            : entered || remaining;
+                          if (!value) return;
+                          if (method === "razorpay") takeOnline(value);
+                          else addTender(value);
+                        }
+                      }}
+                      className="flex-1 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none focus:border-[var(--pos-border-strong)]"
+                    />
+                    {method === "razorpay" ? (
+                      <button
+                        type="button"
+                        disabled={busy || (splitting && !entered)}
+                        onClick={() =>
+                          takeOnline(splitting ? entered : entered || remaining)
+                        }
+                        className="flex items-center gap-2 rounded-xl bg-[var(--pos-surface-2)] px-4 text-sm font-medium hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
+                      >
+                        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {entered > 0
+                          ? `Charge ₹${entered.toLocaleString("en-IN")}`
+                          : "Charge"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={splitting && !entered}
+                        onClick={() =>
+                          addTender(splitting ? entered : entered || remaining)
+                        }
+                        className="rounded-xl bg-[var(--pos-surface-2)] px-4 text-sm font-medium hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
+                      >
+                        {entered > 0
+                          ? `Add ₹${entered.toLocaleString("en-IN")}`
+                          : "Add"}
+                      </button>
+                    )}
+                  </div>
+                ) : hasOwnAction ? null : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => settleNow(remaining)}
+                    className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--pos-accent)] py-3 text-sm font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90 disabled:opacity-40"
+                  >
+                    {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {method === "razorpay"
+                      ? `Charge ₹${remaining.toLocaleString("en-IN")}`
+                      : `${confirmLabel} · ₹${remaining.toLocaleString("en-IN")}`}
+                  </button>
+                )}
 
                 {/* ★ NOT for a gateway payment: its reference is the gateway's
                     own payment id, returned by the server after verification.
@@ -720,21 +790,32 @@ export function TenderPanel({
               </label>
             )}
 
-            {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
+            {error && (
+              <p className="mb-2 text-sm text-[var(--pos-danger)]">{error}</p>
+            )}
 
             {/* ★ NEVER GATED ON THE EMAIL. A typo or an empty box must not stop
                 someone paying — the paper receipt is the real one, and a till
                 that refuses a sale over an optional field is unusable
                 (roadmap invariant 6). */}
-            <button
-              type="button"
-              disabled={busy || taken.length === 0 || !covered}
-              onClick={() => finish()}
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
-            >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {confirmLabel}
-            </button>
+            {/* ★ HIDDEN on the one-tap path, where the button above already
+                settles and completes. Leaving it there put two buttons on
+                screen for a sale with one remaining action, the second of them
+                permanently disabled until the first was pressed — which reads
+                as a broken form, not a sequence. It stays for cash (change is
+                worth reading first), for splits (unfinished by definition) and
+                once the balance is covered. */}
+            {(amountIsEditable || hasOwnAction || covered) && (
+              <button
+                type="button"
+                disabled={busy || taken.length === 0 || !covered}
+                onClick={() => finish()}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 font-semibold text-white transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                {confirmLabel}
+              </button>
+            )}
           </>
         )}
       </div>

@@ -471,11 +471,11 @@ export function CounterClient({
             with returnable past orders, so both earn their place. */}
           {searching && (
             <>
-              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-sky-300">
+              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-xs font-medium text-[var(--pos-info)]">
                 Collection
               </span>
               {o.status === "ready" && (
-                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-300">
+                <span className="rounded-full bg-[var(--pos-ok-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-ok)]">
                   Ready
                 </span>
               )}
@@ -486,7 +486,7 @@ export function CounterClient({
             is gone: nothing is owed on something that will not be handed over,
             and "₹45 to pay" beside a cancelled order invites taking it. */}
           {o.amountDue > 0 && !gone && (
-            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-300">
+            <span className="rounded-full bg-[var(--pos-warn-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-warn)]">
               {money(o.amountDue)} to pay
             </span>
           )}
@@ -520,7 +520,7 @@ export function CounterClient({
           <p
             className={`mt-2 rounded-lg px-3 py-2 text-sm ${
               state === "lapsed"
-                ? "bg-amber-500/10 text-amber-200"
+                ? "bg-[var(--pos-warn-soft)] text-[var(--pos-warn)]"
                 : "bg-[var(--pos-surface)] text-[var(--pos-ink-2)]"
             }`}
           >
@@ -540,7 +540,7 @@ export function CounterClient({
                 type="button"
                 disabled={busy === o.id}
                 onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 text-white"
               >
                 <PackageCheck className="h-4 w-4" />
                 Mark ready
@@ -664,7 +664,7 @@ export function CounterClient({
       </form>
 
       {error && (
-        <p className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+        <p className="mb-4 rounded-xl border border-[var(--pos-danger-border)] bg-[var(--pos-danger-soft)] px-4 py-3 text-sm text-[var(--pos-danger)]">
           {error}
         </p>
       )}
@@ -752,7 +752,7 @@ export function CounterClient({
               headings, which are permanent structure. A banner that is always
               there is a banner nobody reads. */}
           {expiringSoon.length > 0 && (
-            <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-[var(--pos-warn-border)] bg-[var(--pos-warn-soft)] px-3 py-2 text-sm text-[var(--pos-warn)]">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span>
                 <strong className="font-semibold">{expiringSoon.length}</strong>{" "}
@@ -830,7 +830,7 @@ export function CounterClient({
                   setConfirmUnprepared(null);
                   handOver(o, true);
                 }}
-                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500"
+                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 text-white"
               >
                 Yes, hand over
               </button>
@@ -881,13 +881,13 @@ function rowId(row: CounterRow): string {
 const TONES = {
   work: {
     bar: "bg-amber-400",
-    title: "text-amber-200/90",
-    pill: "bg-amber-400/20 text-amber-200",
+    title: "text-[var(--pos-warn)]",
+    pill: "bg-[var(--pos-warn-soft)] text-[var(--pos-warn)]",
   },
   waiting: {
     bar: "bg-emerald-400",
-    title: "text-emerald-200/90",
-    pill: "bg-emerald-400/20 text-emerald-200",
+    title: "text-[var(--pos-ok)]",
+    pill: "bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]",
   },
   neutral: {
     bar: "bg-[var(--pos-surface-3)]",

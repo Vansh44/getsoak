@@ -131,7 +131,7 @@ export function SalesClient({
       </div>
 
       {error && (
-        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+        <p className="rounded-xl border border-[var(--pos-danger-border)] bg-[var(--pos-danger-soft)] px-4 py-3 text-sm text-[var(--pos-danger)]">
           {error}
         </p>
       )}
@@ -164,7 +164,7 @@ export function SalesClient({
                     {s.receiptNo}
                   </span>
                   {s.refunded && (
-                    <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[11px] font-medium text-red-300">
+                    <span className="rounded-full bg-[var(--pos-danger-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--pos-danger)]">
                       Cancelled
                     </span>
                   )}

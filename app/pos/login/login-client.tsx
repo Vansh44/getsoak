@@ -159,7 +159,7 @@ export function PosLoginClient({
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--pos-warn-soft)] text-[var(--pos-warn)]">
             <ShieldAlert className="h-7 w-7" strokeWidth={1.75} />
           </div>
           <h1 className="mt-4 text-lg font-semibold">Set up this device</h1>
@@ -181,13 +181,15 @@ export function PosLoginClient({
             onKeyDown={(e) => e.key === "Enter" && submitPairing()}
             className="mt-5 w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-center text-lg tracking-[0.3em] outline-none placeholder:tracking-normal placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
           />
-          {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+          {error && (
+            <p className="mt-3 text-sm text-[var(--pos-danger)]">{error}</p>
+          )}
 
           <button
             type="button"
             disabled={pending || pairCode.trim().length !== 8}
             onClick={submitPairing}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
           >
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Set up and sign in
@@ -262,7 +264,9 @@ export function PosLoginClient({
         />
 
         {error && (
-          <p className="mb-4 text-center text-sm text-red-400">{error}</p>
+          <p className="mb-4 text-center text-sm text-[var(--pos-danger)]">
+            {error}
+          </p>
         )}
 
         {mode === "pin" ? (
@@ -296,7 +300,7 @@ export function PosLoginClient({
                 type="button"
                 disabled={pending || pin.length !== 8 || !email.includes("@")}
                 onClick={() => submitPin()}
-                className="flex items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+                className="flex items-center justify-center rounded-xl bg-emerald-600 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
               >
                 {pending ? (
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -320,7 +324,7 @@ export function PosLoginClient({
               type="button"
               disabled={busy || !email.includes("@") || password.length < 1}
               onClick={submitPassword}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-sm font-semibold transition-colors hover:bg-emerald-500 disabled:opacity-40 text-white"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               Sign in
