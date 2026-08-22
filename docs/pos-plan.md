@@ -534,8 +534,10 @@ RPC, so both legs of a transfer commit or neither does).
 `app/actions/pos-inventory-actions.ts`, gated on `adjust_inventory`.
 Location-scope enforced server-side from the session.
 
-REMAINING: `/dashboard/inventory` still writes to the store's DEFAULT location,
-so the desk view cannot yet target a specific shop.
+(The former REMAINING — "`/dashboard/inventory` still writes to the DEFAULT
+location" — is CLOSED. The desk view takes a `locationId`: see
+`app/dashboard/inventory/page.tsx` and `inventory-management-view.tsx`, and
+LOC Phase C in CODEBASE §23. Single-location stores see no selector.)
 
 ### Phase 5 — Returns/BORIS + store credit + gift cards
 
