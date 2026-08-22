@@ -419,6 +419,27 @@ Same, via Staff → deactivate.
 **Expect:** identical success message both times (enumeration-safe); only the
 inbox differs. The link is single-use, 1 hour.
 
+**PS-6.10a ★★ — Permanent store deletion removes registered POS identities**
+Register a cashier or manager, permanently delete the store from the operator
+console, recreate the store, and invite the same email again.
+**Expect:** registration can create a fresh account with a fresh password. The
+delete path must collect `pos_staff.user_id` before the database cascade; the
+cascade removes the staff row but cannot remove its Identity Platform login.
+
+**PS-6.10b ★★ — Store deletion is complete without breaking shared people**
+Give one Firebase identity a role in the store being deleted and a second
+StoreMink role (another store or the platform console). Add unused Media Library
+files, an uploaded-but-unsaved image/video, a custom domain, a store-policy
+acceptance, a reconciliation item and a platform-announcement recipient; then
+permanently delete the store.
+**Expect:** every store-owned SQL row is cascade-deleted; referenced and
+abandoned objects below `stores/{storeId}/` are gone; custom-domain certificate,
+authorized-domain, Search Console, Site Verification and any legacy Resend
+domain resources are removed.
+The shared identity still signs in to its remaining role. A failed external
+cleanup is shown to the operator as a warning instead of being reported as a
+complete purge.
+
 **PS-6.11 — Idle auto-lock**
 Sign in with a PIN, leave the till for `pos.idleLockMinutes` (default 10).
 **Expect:** a **5-minute** countdown ("Locking in 1:58"), then locked. Touching

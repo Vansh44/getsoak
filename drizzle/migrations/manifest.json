@@ -332,6 +332,28 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260823_0014_store_deletion_cascade",
+      "description": "Cascade every direct store relationship so permanent tenant deletion leaves no detached rows",
+      "file": "sql/20260823_0014_store_deletion_cascade.sql",
+      "transaction": true,
+      "requires": ["20260822_0013_payment_shift_attribution"],
+      "verify": {
+        "constraints": [
+          "billing_reconciliation_items_store_id_fkey",
+          "legal_acceptances_store_id_fkey",
+          "platform_announcement_recipients_store_id_fkey"
+        ],
+        "functions": ["legal_acceptances_append_only()"],
+        "queries": [
+          {
+            "name": "every direct store foreign key cascades on deletion",
+            "sql": "select count(*)::text from pg_constraint where contype = 'f' and confrelid = 'public.stores'::regclass and confdeltype <> 'c'",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

@@ -4,6 +4,8 @@ import { rateLimit } from "@/lib/rate-limit";
 import { gcsConfigured, gcsUploadObject } from "@/lib/storage/gcs";
 import { processImageUpload } from "@/lib/storage/process-image";
 import { logError } from "@/lib/observability/logger";
+import { storeUploadPath } from "@/lib/storage/paths";
+import { resolveUploadOwner } from "@/lib/storage/upload-owner";
 
 // Run on the Node runtime: uploads are optimized with sharp and stored to
 // Google Cloud Storage server-side.
@@ -15,6 +17,13 @@ export async function POST(request: Request) {
   const user = await getServerUser();
   if (!user) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
+  const owner = await resolveUploadOwner(user);
+  if (!owner) {
+    return NextResponse.json(
+      { error: "You don't have access to upload here." },
+      { status: 403 },
+    );
   }
 
   // Throttle per user — image processing is CPU-bound, so cap how fast a single
@@ -41,10 +50,7 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("file");
-  const folder = ((form.get("folder") as string) || "").replace(
-    /[^a-z0-9/_-]/gi,
-    "",
-  );
+  const folder = (form.get("folder") as string) || "";
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "No file provided." }, { status: 400 });
@@ -61,7 +67,11 @@ export async function POST(request: Request) {
   const { bytes, contentType, ext } = processed.data;
 
   const fileName = `${Math.random().toString(36).substring(2, 12)}_${Date.now()}.${ext}`;
-  const filePath = folder ? `${folder}/${fileName}` : fileName;
+  const filePath = storeUploadPath(
+    owner.kind === "store" ? owner.storeId : null,
+    folder,
+    fileName,
+  );
 
   if (!gcsConfigured) {
     logError("upload: GCS not configured", new Error("GCS_BUCKET unset"), {

@@ -3,6 +3,7 @@
 import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { deleteAuthUser } from "@/lib/auth/firebase-users";
+import { isFirebaseAdminConfigured } from "@/lib/auth/firebase-admin";
 import { logError } from "@/lib/observability/logger";
 import { getServerUser } from "@/lib/auth/server-user";
 import { withService } from "@/lib/db/client";
@@ -17,12 +18,18 @@ import {
   cardColors,
   categories,
   emailCampaigns,
+  homepageSections,
+  mediaAssets,
+  orderReturns,
   planEvents,
   planPrices,
   platformAdmins,
+  posStaff,
   productReviews,
   productVariants,
   products,
+  storeBillingSettings,
+  storeChrome,
   storePages,
   storePaymentProviders,
   stores,
@@ -45,6 +52,9 @@ import {
   type TaxSettingsInput,
 } from "@/lib/billing/platform-settings";
 import { deleteStorageUrls } from "@/lib/storage/cleanup";
+import { gcsDeletePrefix } from "@/lib/storage/gcs";
+import { storeStoragePrefix } from "@/lib/storage/paths";
+import { cleanupDetachedDomain } from "@/lib/domains/cleanup";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 import {
   EXTRA_LOCATION_KEY,
@@ -271,6 +281,7 @@ export async function listAllStores(q?: string): Promise<PlatformStoreRow[]> {
 export interface ActionResult {
   success?: boolean;
   error?: string;
+  warning?: string;
 }
 
 // Suspend / reactivate a store (platform superadmin only). A suspended store
@@ -530,36 +541,45 @@ export async function getStoreAudit(
 
 // Any managed media public URL — Supabase (…/object/public/media/…) OR Google
 // Cloud Storage (storage.googleapis.com/<bucket>/…), since a store's media may
-// straddle both during the Phase 3 migration. Store media isn't namespaced by
-// store in the bucket, so we can't purge by prefix — instead we scrape every
-// media URL out of the store's own rows (product images, blog bodies, brand
-// logo, page sections…) before the DB rows cascade away, then delete those
-// files (deleteStorageUrls routes each URL to the right backend).
+// straddle both during the Phase 3 migration. Historical GCS media was not
+// always store-prefixed, so scrape every URL from the store's rows before they
+// cascade. GCS objects are deleted; legacy Supabase URLs are counted and shown
+// to the operator because this GCS-only app no longer has credentials that can
+// delete those external objects.
 const MEDIA_URL_RE =
   /https?:\/\/[^"'\s)]*(?:\/object\/public\/media\/|storage\.googleapis\.com\/[^/"'\s)]+\/)[^"'\s)]+/g;
 
 // Every store-scoped table that can hold an uploaded image (product/variant
-// galleries, category tiles, blog covers+bodies, page sections, review photos,
-// campaign HTML, colour-card art, customer avatars). Selecting all columns +
-// JSON scan means a new image column is covered automatically.
+// galleries, category tiles, blog covers+bodies, both generations of builder
+// sections/chrome, review/return photos, campaign HTML, billing branding,
+// colour-card art, customer avatars and the media library itself). Selecting
+// all columns + JSON scan means a new media column on one of these tables is
+// covered automatically. New uploads are also store-prefixed in GCS, so the
+// prefix purge below catches abandoned files that have no row at all.
 const MEDIA_TABLES = [
   products,
   productVariants,
   categories,
   blogs,
   blogComments,
+  homepageSections,
   storePages,
+  storeChrome,
   productReviews,
+  orderReturns,
   emailCampaigns,
   cardColors,
+  storeBillingSettings,
+  mediaAssets,
   users,
 ];
 
 // PERMANENTLY delete a store and everything belonging to it (platform
 // superadmin only). Irreversible. Every store-scoped table FKs stores(id) with
 // ON DELETE CASCADE, so one DELETE removes all DB rows; we additionally purge
-// the store's uploaded media and delete its owner/staff login accounts (neither
-// cascades from the stores table).
+// the store's uploaded media, custom-domain control-plane resources and login
+// accounts that are no longer attached to any other StoreMink role (none of
+// those external resources cascade from the stores table).
 export async function deleteStore(storeId: string): Promise<ActionResult> {
   const viewer = await getPlatformViewer();
   if (viewer?.role !== "superadmin") {
@@ -573,6 +593,17 @@ export async function deleteStore(storeId: string): Promise<ActionResult> {
 
   const mediaUrls = new Set<string>();
   const authUserIds = new Set<string>();
+  const authEmailsById = new Map<string, Set<string>>();
+  let customDomain: string | null = null;
+  let legacyResendDomainId: string | null = null;
+  const addAuthCandidate = (id: string | null, email?: string | null) => {
+    if (!id) return;
+    authUserIds.add(id);
+    if (!email) return;
+    const emails = authEmailsById.get(id) ?? new Set<string>();
+    emails.add(email.trim().toLowerCase());
+    authEmailsById.set(id, emails);
+  };
   const scan = (obj: unknown) => {
     for (const m of JSON.stringify(obj ?? "").match(MEDIA_URL_RE) ?? [])
       mediaUrls.add(m);
@@ -581,25 +612,41 @@ export async function deleteStore(storeId: string): Promise<ActionResult> {
   try {
     const found = await withService(async (db) => {
       const storeRows = await db
-        .select({ id: stores.id, settings: stores.settings })
+        .select({
+          id: stores.id,
+          settings: stores.settings,
+          custom_domain: stores.customDomain,
+        })
         .from(stores)
         .where(eq(stores.id, storeId))
         .limit(1);
       if (!storeRows[0]) return null;
       scan(storeRows[0].settings);
+      customDomain = storeRows[0].custom_domain;
+      const settings = (storeRows[0].settings ?? {}) as Record<string, unknown>;
+      legacyResendDomainId =
+        typeof settings.resend_domain_id === "string"
+          ? settings.resend_domain_id
+          : null;
 
-      // Login accounts to delete (auth.users). admins.id AND users.id are both
-      // auth user ids; their rows cascade with the store, so collect ids first.
+      // Login accounts to delete (Identity Platform). admins.id, users.id and
+      // pos_staff.user_id are auth user ids; their rows cascade with the store,
+      // so collect the ids before that relationship disappears.
       const staff = await db
-        .select({ id: admins.id })
+        .select({ id: admins.id, email: admins.email })
         .from(admins)
         .where(eq(admins.storeId, storeId));
       const customerRows = await db
-        .select({ id: users.id })
+        .select({ id: users.id, email: users.email })
         .from(users)
         .where(eq(users.storeId, storeId));
-      for (const r of staff) authUserIds.add(r.id);
-      for (const r of customerRows) authUserIds.add(r.id);
+      const posStaffRows = await db
+        .select({ user_id: posStaff.userId, email: posStaff.email })
+        .from(posStaff)
+        .where(eq(posStaff.storeId, storeId));
+      for (const r of staff) addAuthCandidate(r.id, r.email);
+      for (const r of customerRows) addAuthCandidate(r.id, r.email);
+      for (const r of posStaffRows) addAuthCandidate(r.user_id, r.email);
 
       // Media URLs referenced anywhere in the store's rows (scanned as JSON so
       // we catch image fields, jsonb arrays AND HTML bodies).
@@ -626,18 +673,121 @@ export async function deleteStore(storeId: string): Promise<ActionResult> {
     return { error: "Could not delete the store. Please try again." };
   }
 
-  // Best-effort cleanup of things that DON'T cascade from stores. The store is
-  // already gone (its cascade removed the Cloud SQL admins/users rows), so these
-  // failures are logged but not surfaced. Remove the Identity Platform logins.
-  await deleteStorageUrls(Array.from(mediaUrls));
-  for (const id of authUserIds) {
-    await deleteAuthUser(id).catch((err) =>
-      console.error("deleteStore (auth user)", id, err),
+  // Cleanup of things that DON'T cascade from stores. The individual helpers
+  // are idempotent, and any partial failure is surfaced to the operator instead
+  // of silently pretending the purge was complete.
+  const cleanupFailures: string[] = [];
+
+  const urlCleanup = await deleteStorageUrls(Array.from(mediaUrls));
+  if ((urlCleanup?.failed ?? 0) > 0) {
+    cleanupFailures.push(`${urlCleanup.failed} referenced media object(s)`);
+  }
+  if ((urlCleanup?.unmanaged ?? 0) > 0) {
+    cleanupFailures.push(
+      `${urlCleanup.unmanaged} legacy/external media object(s) not managed by GCS`,
     );
+  }
+  const prefixCleanup = await gcsDeletePrefix(storeStoragePrefix(storeId));
+  if (prefixCleanup.error || prefixCleanup.failed > 0) {
+    cleanupFailures.push("store media prefix");
+  }
+
+  if (customDomain || legacyResendDomainId) {
+    try {
+      const domainCleanup = await cleanupDetachedDomain(
+        customDomain,
+        "deleteStore",
+        legacyResendDomainId,
+      );
+      cleanupFailures.push(...domainCleanup.failures);
+    } catch (err) {
+      logError("deleteStore (custom domain cleanup)", err, {
+        storeId,
+        domain: customDomain,
+      });
+      cleanupFailures.push("custom-domain resources");
+    }
+  }
+
+  // A Firebase identity may also be a customer, admin or POS operator in a
+  // different store, or a platform operator. Delete only identities left with
+  // no StoreMink role after the store cascade; otherwise deleting one tenant
+  // would break access to another.
+  const retainedAuthIds = new Set<string>();
+  if (authUserIds.size > 0 && !isFirebaseAdminConfigured()) {
+    cleanupFailures.push("Identity Platform is not configured");
+  } else if (authUserIds.size > 0) {
+    try {
+      const candidates = [...authUserIds];
+      const candidateEmails = [
+        ...new Set(
+          [...authEmailsById.values()].flatMap((emails) => [...emails]),
+        ),
+      ];
+      await withService(async (db) => {
+        const remainingAdmins = await db
+          .select({ id: admins.id })
+          .from(admins)
+          .where(inArray(admins.id, candidates));
+        const remainingCustomers = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(inArray(users.id, candidates));
+        const remainingPosStaff = await db
+          .select({ id: posStaff.userId })
+          .from(posStaff)
+          .where(inArray(posStaff.userId, candidates));
+        for (const row of [...remainingAdmins, ...remainingCustomers]) {
+          retainedAuthIds.add(row.id);
+        }
+        for (const row of remainingPosStaff) {
+          if (row.id) retainedAuthIds.add(row.id);
+        }
+
+        if (candidateEmails.length > 0) {
+          const operators = await db
+            .select({ email: platformAdmins.email })
+            .from(platformAdmins)
+            .where(inArray(platformAdmins.email, candidateEmails));
+          const operatorEmails = new Set(
+            operators.map((row) => row.email.trim().toLowerCase()),
+          );
+          for (const [id, emails] of authEmailsById) {
+            if ([...emails].some((email) => operatorEmails.has(email))) {
+              retainedAuthIds.add(id);
+            }
+          }
+        }
+      });
+    } catch (err) {
+      // Fail safe: if the cross-store reference check is unavailable, retain
+      // every login. Deleting a possibly-shared identity is worse than leaving
+      // an orphan for an operator to retry.
+      logError("deleteStore (auth reference check)", err, { storeId });
+      cleanupFailures.push("login-account reference check");
+      for (const id of authUserIds) retainedAuthIds.add(id);
+    }
+
+    for (const id of authUserIds) {
+      if (retainedAuthIds.has(id)) continue;
+      try {
+        await deleteAuthUser(id);
+      } catch (err) {
+        logError("deleteStore (auth user)", err, { storeId, userId: id });
+        cleanupFailures.push(`login account ${id}`);
+      }
+    }
   }
 
   revalidateTag(STORE_TAG, "max");
-  return { success: true };
+  return cleanupFailures.length
+    ? {
+        success: true,
+        warning: `The store data was deleted, but cleanup still needs attention: ${cleanupFailures.join(
+          ", ",
+        )}.`,
+      }
+    : { success: true };
 }
 
 // ---------------------------------------------------------------------------

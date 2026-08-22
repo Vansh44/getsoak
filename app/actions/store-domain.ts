@@ -18,7 +18,8 @@ import {
   routingRecords,
   dnsRecordName,
 } from "@/lib/domains/domain";
-import { deprovision, getCertConfig } from "@/lib/domains/certificates";
+import { getCertConfig } from "@/lib/domains/certificates";
+import { cleanupDetachedDomain } from "@/lib/domains/cleanup";
 import {
   reconcileDomainForStore,
   readStoreDomainRow,
@@ -26,7 +27,6 @@ import {
   UPGRADE_MESSAGE,
 } from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
-import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
 import { ROOT_DOMAIN, SEARCH_INDEXABLE } from "@/lib/store/host";
 import {
   ensureGoogleCoverageForStore,
@@ -37,7 +37,6 @@ import {
   deriveGoogleIndexingHealth,
   type GoogleIndexingHealth,
 } from "@/lib/seo/indexing-health";
-import { removeGoogleCustomDomain } from "@/lib/seo/search-engines";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -73,38 +72,6 @@ function getResend(): Resend | null {
 function clean(v: string | null | undefined): string | null {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s ? s : null;
-}
-
-async function cleanupDetachedDomain(
-  domain: string,
-  operation: "updateCustomDomain" | "disconnectDomain",
-): Promise<void> {
-  const gone = await deprovision(domain);
-  if (gone.error)
-    logError(`${operation} (deprovision)`, gone.error, { domain });
-
-  // Stop trusting a hostname we no longer serve for Google sign-in.
-  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
-  if (deauth.error)
-    logError(`${operation} (deauthorize)`, deauth.error, { domain });
-
-  // The database write above removed the public META token first. Google can
-  // now safely release both the URL-prefix property and our ownership record.
-  const google = await removeGoogleCustomDomain(domain);
-  if (!google.searchConsole.ok && !google.searchConsole.skipped) {
-    logError(
-      `${operation} (remove Search Console property)`,
-      google.searchConsole.error,
-      { domain, status: google.searchConsole.status },
-    );
-  }
-  if (!google.siteVerification.ok && !google.siteVerification.skipped) {
-    logError(
-      `${operation} (remove Site Verification ownership)`,
-      google.siteVerification.error,
-      { domain, status: google.siteVerification.status },
-    );
-  }
 }
 
 /**
@@ -209,7 +176,17 @@ export async function updateCustomDomain(
   // and a cleanup failure must not fail the change they asked for.
   const previous = store?.custom_domain ?? null;
   if (previous && previous !== cleanDomain) {
-    after(() => cleanupDetachedDomain(previous, "updateCustomDomain"));
+    const legacyResendDomainId =
+      typeof settings.resend_domain_id === "string"
+        ? settings.resend_domain_id
+        : null;
+    after(() =>
+      cleanupDetachedDomain(
+        previous,
+        "updateCustomDomain",
+        legacyResendDomainId,
+      ),
+    );
   }
   return { success: true };
 }
@@ -509,6 +486,8 @@ export async function disconnectDomain(): Promise<DomainResult> {
   >;
   const next = { ...settings };
   delete next.custom_domain_verified;
+  delete next.resend_domain_id;
+  delete next.resend_domain_verified;
   delete next.domain_challenge;
   delete next.domain_challenges;
   delete next.domain_cert_state;
@@ -537,6 +516,12 @@ export async function disconnectDomain(): Promise<DomainResult> {
   revalidateTag(STORE_TAG, "max");
   after(() => reconcileStoreSearchSource(storeId));
 
-  await cleanupDetachedDomain(domain, "disconnectDomain");
+  await cleanupDetachedDomain(
+    domain,
+    "disconnectDomain",
+    typeof settings.resend_domain_id === "string"
+      ? settings.resend_domain_id
+      : null,
+  );
   return { success: true };
 }
