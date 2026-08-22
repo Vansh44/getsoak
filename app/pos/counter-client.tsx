@@ -455,8 +455,8 @@ export function CounterClient({
           // at all because the customer is standing there and the counter has to
           // be able to say what happened.
           gone
-            ? "border-white/5 bg-white/[0.02] text-white/50"
-            : "border-white/10 bg-white/5"
+            ? "border-[var(--pos-border)] bg-[var(--pos-surface)] text-[var(--pos-ink-2)]"
+            : "border-[var(--pos-border)] bg-[var(--pos-surface)]"
         }`}
       >
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -495,7 +495,7 @@ export function CounterClient({
           </span>
         </div>
         <p
-          className={`mt-1 text-sm ${gone ? "text-white/40" : "text-white/60"}`}
+          className={`mt-1 text-sm ${gone ? "text-[var(--pos-ink-3)]" : "text-[var(--pos-ink-2)]"}`}
         >
           {o.customerName ?? "Customer"} · {o.itemCount} item
           {o.itemCount === 1 ? "" : "s"}
@@ -521,7 +521,7 @@ export function CounterClient({
             className={`mt-2 rounded-lg px-3 py-2 text-sm ${
               state === "lapsed"
                 ? "bg-amber-500/10 text-amber-200"
-                : "bg-white/5 text-white/55"
+                : "bg-[var(--pos-surface)] text-[var(--pos-ink-2)]"
             }`}
           >
             {note}
@@ -558,7 +558,7 @@ export function CounterClient({
               onClick={() => handOver(o)}
               className={`inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm disabled:opacity-50 ${
                 o.status === "awaiting" && canFulfilPickup
-                  ? "bg-white/10 font-medium hover:bg-white/20"
+                  ? "bg-[var(--pos-surface-2)] font-medium hover:bg-[var(--pos-surface-3)]"
                   : "bg-emerald-600 font-semibold hover:bg-emerald-500"
               }`}
             >
@@ -582,14 +582,14 @@ export function CounterClient({
   const renderPastOrder = (o: FoundOrder) => (
     <li
       key={`past:${o.orderId}`}
-      className="rounded-xl border border-white/10 bg-white/5 p-4"
+      className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="font-mono text-base font-semibold">{o.label}</span>
         {/* Said up front, so the cashier knows before they open it that this
             one depends on the shop's BORIS settings. */}
         {o.broughtIn && (
-          <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-medium text-white/70">
+          <span className="rounded-full bg-[var(--pos-surface-2)] px-2 py-0.5 text-xs font-medium text-[var(--pos-ink-2)]">
             Bought elsewhere
           </span>
         )}
@@ -597,7 +597,7 @@ export function CounterClient({
           {money(o.total)}
         </span>
       </div>
-      <p className="mt-1 text-sm text-white/60">
+      <p className="mt-1 text-sm text-[var(--pos-ink-2)]">
         {fmtDate(o.createdAt)}
         {o.paymentMethod === "razorpay"
           ? " · paid online"
@@ -608,7 +608,7 @@ export function CounterClient({
       <div className="mt-3">
         <Link
           href={`/pos/returns/${o.orderId}`}
-          className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--pos-surface-2)] px-4 py-2.5 text-sm font-medium hover:bg-[var(--pos-surface-3)]"
         >
           <RotateCcw className="h-4 w-4" />
           Take return
@@ -640,7 +640,7 @@ export function CounterClient({
           if (trimmed.length >= 4) runSearch(trimmed);
         }}
       >
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-white/40" />
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--pos-ink-3)]" />
         <input
           ref={boxRef}
           value={query}
@@ -656,10 +656,10 @@ export function CounterClient({
               ? "Order number, phone or email — or scan a code…"
               : "Scan a collection code, or type an order number, phone or email…"
           }
-          className="w-full rounded-xl border border-white/10 bg-white/5 py-3.5 pl-11 pr-11 text-base outline-none focus:border-white/30"
+          className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-3.5 pl-11 pr-11 text-base outline-none focus:border-[var(--pos-border-strong)]"
         />
         {pending && (
-          <Loader2 className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-white/40" />
+          <Loader2 className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
         )}
       </form>
 
@@ -670,15 +670,15 @@ export function CounterClient({
       )}
 
       {tooShort && (
-        <p className="mb-3 text-sm text-white/50">
+        <p className="mb-3 text-sm text-[var(--pos-ink-2)]">
           Type a bit more — at least 4 characters.
         </p>
       )}
 
       {!error && rows.length === 0 && !pending && (
-        <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-10 text-center">
+        <div className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-10 text-center">
           {searching && searched ? (
-            <p className="text-sm text-white/60">
+            <p className="text-sm text-[var(--pos-ink-2)]">
               Nothing found for “{trimmed}”. Check the number, or try their
               phone.
             </p>
@@ -687,20 +687,20 @@ export function CounterClient({
             // here; the screen is waiting to be given a number, and saying
             // "nothing found" before anyone has searched reads like a fault.
             <>
-              <p className="text-sm text-white/60">
+              <p className="text-sm text-[var(--pos-ink-2)]">
                 Search for the order the customer is bringing back.
               </p>
-              <p className="mt-1 text-sm text-white/40">
+              <p className="mt-1 text-sm text-[var(--pos-ink-3)]">
                 Their order number, the phone or email they ordered with, or a
                 scanned collection code.
               </p>
             </>
           ) : (
             <>
-              <p className="text-sm text-white/60">
+              <p className="text-sm text-[var(--pos-ink-2)]">
                 Nothing waiting to be collected.
               </p>
-              <p className="mt-1 text-sm text-white/40">
+              <p className="mt-1 text-sm text-[var(--pos-ink-3)]">
                 {canRefund
                   ? "Search above to find a past order for a return."
                   : "Scan a collection code to find an order."}
@@ -809,9 +809,9 @@ export function CounterClient({
         does. */}
       {confirmUnprepared && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 p-5 ring-1 ring-white/10">
+          <div className="w-full max-w-sm rounded-2xl bg-[var(--pos-surface)] p-5 ring-1 ring-[var(--pos-border)]">
             <h2 className="text-lg font-semibold">Not marked ready yet</h2>
-            <p className="mt-2 text-sm text-white/65">
+            <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
               Nobody has checked {confirmUnprepared.orderRef} off as packed. Do
               you have the goods to hand over now?
             </p>
@@ -819,7 +819,7 @@ export function CounterClient({
               <button
                 type="button"
                 onClick={() => setConfirmUnprepared(null)}
-                className="flex-1 rounded-lg bg-white/10 px-4 py-2.5 text-sm font-medium hover:bg-white/20"
+                className="flex-1 rounded-lg bg-[var(--pos-surface-2)] px-4 py-2.5 text-sm font-medium hover:bg-[var(--pos-surface-3)]"
               >
                 Not yet
               </button>
@@ -890,9 +890,9 @@ const TONES = {
     pill: "bg-emerald-400/20 text-emerald-200",
   },
   neutral: {
-    bar: "bg-white/20",
-    title: "text-white/40",
-    pill: "bg-white/10 text-white/60",
+    bar: "bg-[var(--pos-surface-3)]",
+    title: "text-[var(--pos-ink-3)]",
+    pill: "bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)]",
   },
 } as const;
 
@@ -937,10 +937,10 @@ function Section({
         </h2>
       </div>
       {hint && count > 0 && (
-        <p className="mb-2 pl-3.5 text-xs text-white/35">{hint}</p>
+        <p className="mb-2 pl-3.5 text-xs text-[var(--pos-ink-3)]">{hint}</p>
       )}
       {count === 0 && empty ? (
-        <p className="pl-3.5 text-sm text-white/25">{empty}</p>
+        <p className="pl-3.5 text-sm text-[var(--pos-ink-3)]">{empty}</p>
       ) : (
         <ul className="space-y-3 pl-3.5">{children}</ul>
       )}

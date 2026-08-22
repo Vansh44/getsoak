@@ -68,13 +68,14 @@ export function ResetClient({
           <h1 className="mt-4 text-lg font-semibold">
             Your {label} is updated
           </h1>
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             Sign in at your shop&apos;s register with{" "}
-            <span className="text-white/80">{email}</span> and your new {label}.
+            <span className="text-[var(--pos-ink)]">{email}</span> and your new{" "}
+            {label}.
           </p>
           <Link
             href="/pos/login"
-            className="mt-5 inline-block rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#0b0f14] transition-opacity hover:opacity-90"
+            className="mt-5 inline-block rounded-lg bg-[var(--pos-accent)] px-4 py-2 text-sm font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90"
           >
             Go to sign in
           </Link>
@@ -88,17 +89,19 @@ export function ResetClient({
       <div className="w-full max-w-xs">
         <div className="mb-6 text-center">
           <div className="text-lg font-semibold">Hello, {name}</div>
-          <div className="mt-1 text-sm text-white/60">{email}</div>
+          <div className="mt-1 text-sm text-[var(--pos-ink-2)]">{email}</div>
         </div>
 
-        <div className="mb-5 flex rounded-xl bg-white/10 p-1 text-sm">
+        <div className="mb-5 flex rounded-xl bg-[var(--pos-surface-2)] p-1 text-sm">
           {(["pin", "password"] as const).map((m) => (
             <button
               key={m}
               type="button"
               onClick={() => switchMode(m)}
               className={`flex-1 rounded-lg py-1.5 font-medium transition-colors ${
-                mode === m ? "bg-white text-[#0b0f14]" : "text-white/70"
+                mode === m
+                  ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                  : "text-[var(--pos-ink-2)]"
               }`}
             >
               {m === "pin" ? "New PIN" : "New password"}
@@ -124,7 +127,7 @@ export function ResetClient({
                   : e.target.value,
               )
             }
-            className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+            className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
           />
           <input
             value={confirm}
@@ -140,7 +143,7 @@ export function ResetClient({
                   : e.target.value,
               )
             }
-            className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+            className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
           />
           <button
             type="button"

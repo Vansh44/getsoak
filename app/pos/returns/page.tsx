@@ -28,7 +28,7 @@ export default async function PosReturnsPage() {
   if (!posCan(operator.role, "refund")) {
     return (
       <div className="min-h-0 flex-1 overflow-y-auto p-6">
-        <p className="mx-auto max-w-md rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-white/70">
+        <p className="mx-auto max-w-md rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-6 text-center text-sm text-[var(--pos-ink-2)]">
           You don&apos;t have permission to take returns. Ask a manager.
         </p>
       </div>

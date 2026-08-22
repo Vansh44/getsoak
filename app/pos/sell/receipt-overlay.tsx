@@ -60,11 +60,11 @@ export function ReceiptOverlay({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="tr-no-print w-full max-w-sm rounded-2xl border border-white/10 bg-[#12171f] p-5 text-center">
+      <div className="tr-no-print w-full max-w-sm rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] shadow-2xl p-5 text-center">
         <div
           className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
             reprint
-              ? "bg-white/10 text-white/70"
+              ? "bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)]"
               : "bg-emerald-500/15 text-emerald-400"
           }`}
         >
@@ -88,13 +88,13 @@ export function ReceiptOverlay({
         )}
 
         {receipt && (
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             {receipt.receiptNo} · ₹{money(receipt.total)}
           </p>
         )}
         {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
         {!receipt && !error && (
-          <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-white/40" />
+          <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-[var(--pos-ink-3)]" />
         )}
 
         <div className="mt-5 flex gap-2">
@@ -102,7 +102,7 @@ export function ReceiptOverlay({
             type="button"
             disabled={!receipt}
             onClick={() => window.print()}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/10 py-3 text-sm font-semibold hover:bg-white/20 disabled:opacity-40"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--pos-surface-2)] py-3 text-sm font-semibold hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
           >
             <Printer className="h-4 w-4" strokeWidth={2} />
             Print
@@ -112,7 +112,7 @@ export function ReceiptOverlay({
             onClick={onClose}
             className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold ${
               reprint
-                ? "bg-white/10 hover:bg-white/20"
+                ? "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
                 : "bg-emerald-600 hover:bg-emerald-500"
             }`}
           >
@@ -120,7 +120,7 @@ export function ReceiptOverlay({
             {reprint ? "Done" : "New sale"}
           </button>
         </div>
-        <p className="mt-2 text-[11px] text-white/40">
+        <p className="mt-2 text-[11px] text-[var(--pos-ink-3)]">
           {reprint
             ? "Press Enter to close"
             : "Press Enter to start the next sale"}

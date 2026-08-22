@@ -107,13 +107,13 @@ export function AuthorizeDevice({
           <button
             type="button"
             onClick={() => setFull(null)}
-            className="mb-4 inline-flex items-center gap-1.5 text-sm text-white/50 transition-colors hover:text-white"
+            className="mb-4 inline-flex items-center gap-1.5 text-sm text-[var(--pos-ink-2)] transition-colors hover:text-[var(--pos-ink)]"
           >
             <ArrowLeft className="h-4 w-4" strokeWidth={2} />
             Back
           </button>
           <h1 className="text-xl font-semibold">Replace a device</h1>
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             {locationName} already has its {full.cap} authorized devices. Pick
             one to retire and this device takes its place — the one you choose
             is signed out of the register.
@@ -123,16 +123,16 @@ export function AuthorizeDevice({
             {full.devices.map((d) => (
               <li
                 key={d.id}
-                className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3"
+                className="flex items-center gap-3 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3"
               >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/10 text-white/60">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)]">
                   <Monitor className="h-5 w-5" strokeWidth={1.75} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-semibold">
                     {d.label || "Register"}
                   </div>
-                  <div className="truncate text-xs text-white/45">
+                  <div className="truncate text-xs text-[var(--pos-ink-3)]">
                     {lastUsed(d.lastSeenAt)}
                     {d.authorizedBy ? ` · added by ${d.authorizedBy}` : ""}
                   </div>
@@ -141,7 +141,7 @@ export function AuthorizeDevice({
                   type="button"
                   onClick={() => swap(d)}
                   disabled={pending}
-                  className="shrink-0 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-[#0b0f14] transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="shrink-0 rounded-lg bg-[var(--pos-accent)] px-3.5 py-2 text-sm font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {pending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -156,7 +156,7 @@ export function AuthorizeDevice({
           {/* Ordered least-recently-used first, but the owner decides. The
               machine picking would retire whichever till the heuristic liked,
               mid-shift, with nobody told. */}
-          <p className="mt-4 text-xs text-white/35">
+          <p className="mt-4 text-xs text-[var(--pos-ink-3)]">
             Listed with the least recently used first. You can also manage
             devices in Dashboard → POS → Devices.
           </p>
@@ -177,7 +177,7 @@ export function AuthorizeDevice({
 
         {canAuthorize ? (
           <>
-            <p className="mt-2 text-center text-sm text-white/60">
+            <p className="mt-2 text-center text-sm text-[var(--pos-ink-2)]">
               Your staff can only sign into POS on a device you&apos;ve
               authorized. Authorize this one so cashiers and managers can log in
               here — their personal phones won&apos;t work.
@@ -187,7 +187,7 @@ export function AuthorizeDevice({
                 value={locationId}
                 onChange={(e) => setLocationId(e.target.value)}
                 aria-label="Location this device sells at"
-                className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5 text-sm outline-none"
+                className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface-2)] px-3 py-2.5 text-sm outline-none"
               >
                 {locations.map((l) => (
                   <option key={l.id} value={l.id} className="text-black">
@@ -199,7 +199,7 @@ export function AuthorizeDevice({
                 type="button"
                 onClick={authorize}
                 disabled={pending || !locationId}
-                className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-[#0b0f14] transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--pos-accent)] px-4 py-2.5 text-sm font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {pending && <Loader2 className="h-4 w-4 animate-spin" />}
                 Authorize this device
@@ -210,7 +210,7 @@ export function AuthorizeDevice({
           // A delegated dashboard admin: authorize_device is SUPERADMIN_ONLY,
           // because a device grant is permanent until revoked and is what lets
           // staff take money at all.
-          <p className="mt-2 text-center text-sm text-white/60">
+          <p className="mt-2 text-center text-sm text-[var(--pos-ink-2)]">
             This browser isn&apos;t an authorized POS device. The store owner
             can authorize it, or send you a pairing code from Point of
             Sale&nbsp;→&nbsp;Devices in the dashboard.

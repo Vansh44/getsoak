@@ -198,12 +198,12 @@ export function RegisterClient({
           <h1 className="mt-4 text-lg font-semibold">
             You&apos;re all set, {name}
           </h1>
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             Your {role} account is ready. Sign in at your shop&apos;s register
-            with <span className="text-white/80">{email}</span> and your 8-digit
-            PIN.
+            with <span className="text-[var(--pos-ink)]">{email}</span> and your
+            8-digit PIN.
           </p>
-          {/* <p className="mt-5 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-sm text-white/60">
+          {/* <p className="mt-5 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-left text-sm text-[var(--pos-ink-2)]">
             For security, the register only works on a device your store owner
             has set up — so you can&apos;t sell from this phone. Everything is
             saved; just use the shop&apos;s device.
@@ -218,7 +218,7 @@ export function RegisterClient({
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
           <div className="text-lg font-semibold">Welcome, {name}</div>
-          <div className="mt-1 text-sm text-white/60">
+          <div className="mt-1 text-sm text-[var(--pos-ink-2)]">
             Set up your {role} access · {email}
           </div>
         </div>
@@ -253,7 +253,7 @@ export function RegisterClient({
           <div className="space-y-3">
             {!phoneSent ? (
               <>
-                <div className="pos-phone rounded-xl border border-white/15 bg-white/5 px-3 py-2">
+                <div className="pos-phone rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2">
                   <PhoneInput
                     international
                     defaultCountry="IN"
@@ -285,7 +285,7 @@ export function RegisterClient({
                     setPhoneSent(false);
                     setPhoneCode("");
                   }}
-                  className="block w-full text-center text-sm text-white/50 hover:text-white"
+                  className="block w-full text-center text-sm text-[var(--pos-ink-2)] hover:text-[var(--pos-ink)]"
                 >
                   Use a different number
                 </button>
@@ -332,10 +332,10 @@ function Stepper({ step }: { step: Step }) {
           key={s}
           className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
             i < idx
-              ? "bg-emerald-600 text-white"
+              ? "bg-emerald-600 text-[var(--pos-ink)]"
               : i === idx
-                ? "bg-white text-[#0b0f14]"
-                : "bg-white/10 text-white/40"
+                ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                : "bg-[var(--pos-surface-2)] text-[var(--pos-ink-3)]"
           }`}
         >
           {i < idx ? <Check className="h-3.5 w-3.5" /> : i + 1}
@@ -366,7 +366,7 @@ function Input({
       autoCapitalize="none"
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+      className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
     />
   );
 }

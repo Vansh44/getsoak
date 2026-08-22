@@ -8,6 +8,7 @@ import { posNavFor } from "@/lib/pos/nav";
 import { countPickupsWaiting } from "@/lib/pos/pickup-count";
 import { IdleLock } from "./idle-lock";
 import { PosNav } from "./pos-nav";
+import "./pos.css";
 
 export const metadata = { title: "Register — Point of Sale" };
 
@@ -26,12 +27,12 @@ export default async function PosLayout({
   const state = getPosState(store);
   if (!state.posAvailable || !state.posEnabled) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0b0f14] p-6 text-white">
+      <div className="pos-root flex min-h-screen items-center justify-center p-6">
         <div className="max-w-sm text-center">
           <h1 className="text-lg font-semibold">
             Point of Sale isn&apos;t available
           </h1>
-          <p className="mt-2 text-sm text-white/60">
+          <p className="mt-2 text-sm text-[var(--pos-ink-2)]">
             This store hasn&apos;t enabled POS. A store owner can turn it on
             from the dashboard.
           </p>
@@ -64,9 +65,7 @@ export default async function PosLayout({
   // Signed out, there is nothing to navigate: the login, registration and reset
   // screens get the plain shell, exactly as the idle lock does.
   if (!operator) {
-    return (
-      <div className="min-h-screen bg-[#0b0f14] text-white">{children}</div>
-    );
+    return <div className="pos-root min-h-screen">{children}</div>;
   }
 
   const locking = !isIdleLockExempt(operator.role);

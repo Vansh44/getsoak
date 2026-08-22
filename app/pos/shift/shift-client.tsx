@@ -119,13 +119,13 @@ export function ShiftClient({
   if (!initial) {
     return (
       <Shell locationName={locationName}>
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+        <div className="rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-6 text-center">
           <Banknote
-            className="mx-auto h-8 w-8 text-white/40"
+            className="mx-auto h-8 w-8 text-[var(--pos-ink-3)]"
             strokeWidth={1.5}
           />
           <h2 className="mt-3 font-semibold">No shift open</h2>
-          <p className="mx-auto mt-1 max-w-sm text-sm text-white/50">
+          <p className="mx-auto mt-1 max-w-sm text-sm text-[var(--pos-ink-2)]">
             {required
               ? "This store requires an open shift before selling."
               : "Open one to reconcile the drawer at the end of the day."}
@@ -134,7 +134,7 @@ export function ShiftClient({
           {canManage ? (
             <div className="mx-auto mt-5 max-w-xs">
               <label className="block text-left">
-                <span className="mb-1 block text-xs text-white/50">
+                <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                   Opening float (cash in the drawer now)
                 </span>
                 <input
@@ -144,7 +144,7 @@ export function ShiftClient({
                   }
                   inputMode="decimal"
                   placeholder="0"
-                  className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-right text-lg outline-none focus:border-white/40"
+                  className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-right text-lg outline-none focus:border-[var(--pos-border-strong)]"
                 />
               </label>
               {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
@@ -159,7 +159,7 @@ export function ShiftClient({
               </button>
             </div>
           ) : (
-            <p className="mt-4 text-sm text-white/40">
+            <p className="mt-4 text-sm text-[var(--pos-ink-3)]">
               Ask a manager to open the drawer.
             </p>
           )}
@@ -174,20 +174,20 @@ export function ShiftClient({
   return (
     <Shell locationName={locationName}>
       <div className="space-y-3">
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+        <div className="rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <div>
               <h2 className="font-semibold">
                 {closed ? "Shift closed" : "Shift open"}
               </h2>
-              <p className="text-sm text-white/50">
+              <p className="text-sm text-[var(--pos-ink-2)]">
                 Opened {when(s.openedAt)}
                 {s.openedByName ? ` by ${s.openedByName}` : ""}
                 {closed && s.closedAt ? ` · closed ${when(s.closedAt)}` : ""}
               </p>
             </div>
             <div className="text-right">
-              <div className="text-xs text-white/50">
+              <div className="text-xs text-[var(--pos-ink-2)]">
                 {closed ? "Expected at close" : "Expected in drawer"}
               </div>
               <div className="text-2xl font-bold">{money(s.expectedCash)}</div>
@@ -208,7 +208,7 @@ export function ShiftClient({
             {s.drops > 0 && (
               <Row label="Dropped to safe" value={s.drops} sign="−" />
             )}
-            <div className="!mt-2 flex items-center justify-between border-t border-white/10 pt-2 font-semibold">
+            <div className="!mt-2 flex items-center justify-between border-t border-[var(--pos-border)] pt-2 font-semibold">
               <dt>Expected</dt>
               <dd>{money(s.expectedCash)}</dd>
             </div>
@@ -223,11 +223,11 @@ export function ShiftClient({
               }`}
             >
               <div className="flex items-center justify-between text-sm">
-                <span className="text-white/70">Counted</span>
+                <span className="text-[var(--pos-ink-2)]">Counted</span>
                 <span className="font-semibold">{money(s.countedCash)}</span>
               </div>
               <div className="mt-1 flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-sm text-white/70">
+                <span className="flex items-center gap-1.5 text-sm text-[var(--pos-ink-2)]">
                   {s.varianceState === "short" ? (
                     <TrendingDown className="h-4 w-4" />
                   ) : s.varianceState === "over" ? (
@@ -244,27 +244,31 @@ export function ShiftClient({
                   {money(s.variance ?? 0)}
                 </span>
               </div>
-              {s.note && <p className="mt-2 text-sm text-white/60">{s.note}</p>}
+              {s.note && (
+                <p className="mt-2 text-sm text-[var(--pos-ink-2)]">{s.note}</p>
+              )}
             </div>
           )}
         </div>
 
         {/* Takings — cash is only part of the day. */}
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+        <div className="rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
           <h3 className="mb-2 font-semibold">
             Takings
-            <span className="ml-2 text-sm font-normal text-white/50">
+            <span className="ml-2 text-sm font-normal text-[var(--pos-ink-2)]">
               {s.saleCount} {s.saleCount === 1 ? "sale" : "sales"} ·{" "}
               {money(s.grossSales)}
             </span>
           </h3>
           {Object.keys(s.byMethod).length === 0 ? (
-            <p className="text-sm text-white/40">No sales on this shift yet.</p>
+            <p className="text-sm text-[var(--pos-ink-3)]">
+              No sales on this shift yet.
+            </p>
           ) : (
             <dl className="space-y-1.5 text-sm">
               {Object.entries(s.byMethod).map(([method, amount]) => (
                 <div key={method} className="flex justify-between">
-                  <dt className="text-white/60">
+                  <dt className="text-[var(--pos-ink-2)]">
                     {METHOD_LABEL[method] ?? method.replace(/_/g, " ")}
                   </dt>
                   <dd>{money(amount)}</dd>
@@ -276,15 +280,17 @@ export function ShiftClient({
 
         {/* Cash movements */}
         {(s.movements.length > 0 || (!closed && canManage)) && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
             <h3 className="mb-2 font-semibold">Cash movements</h3>
             {s.movements.length === 0 ? (
-              <p className="text-sm text-white/40">Nothing banked yet.</p>
+              <p className="text-sm text-[var(--pos-ink-3)]">
+                Nothing banked yet.
+              </p>
             ) : (
               <ul className="mb-3 space-y-1.5 text-sm">
                 {s.movements.map((m) => (
                   <li key={m.id} className="flex justify-between gap-2">
-                    <span className="min-w-0 text-white/60">
+                    <span className="min-w-0 text-[var(--pos-ink-2)]">
                       {MOVEMENT_META[m.type].label}
                       {m.reason ? ` · ${m.reason}` : ""}
                       {m.byName ? ` · ${m.byName}` : ""}
@@ -315,8 +321,8 @@ export function ShiftClient({
                           title={MOVEMENT_META[t].hint}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                             movement === t
-                              ? "bg-white text-[#0b0f14]"
-                              : "bg-white/10 hover:bg-white/20"
+                              ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                              : "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
                           }`}
                         >
                           <Icon className="h-4 w-4" strokeWidth={2} />
@@ -330,7 +336,7 @@ export function ShiftClient({
                 {movement && (
                   <div className="mt-3 flex flex-wrap items-end gap-2">
                     <label className="min-w-28 flex-1">
-                      <span className="mb-1 block text-xs text-white/50">
+                      <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                         Amount
                       </span>
                       <input
@@ -343,18 +349,18 @@ export function ShiftClient({
                         }
                         inputMode="decimal"
                         placeholder="0"
-                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-right outline-none focus:border-white/40"
+                        className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-right outline-none focus:border-[var(--pos-border-strong)]"
                       />
                     </label>
                     <label className="min-w-40 flex-[2]">
-                      <span className="mb-1 block text-xs text-white/50">
+                      <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                         Reason (optional)
                       </span>
                       <input
                         value={movementReason}
                         onChange={(e) => setMovementReason(e.target.value)}
                         placeholder="e.g. banked at 4pm"
-                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 outline-none focus:border-white/40"
+                        className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 outline-none focus:border-[var(--pos-border-strong)]"
                       />
                     </label>
                     <button
@@ -388,12 +394,12 @@ export function ShiftClient({
 
         {/* Close */}
         {!closed && canManage && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+          <div className="rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
             {!closing ? (
               <button
                 type="button"
                 onClick={() => setClosing(true)}
-                className="inline-flex items-center gap-2 rounded-xl bg-white/10 px-4 py-2.5 text-sm font-semibold transition-colors hover:bg-white/20"
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)]"
               >
                 <Lock className="h-4 w-4" strokeWidth={2} />
                 Close shift
@@ -401,14 +407,14 @@ export function ShiftClient({
             ) : (
               <>
                 <h3 className="font-semibold">Count the drawer</h3>
-                <p className="mb-3 text-sm text-white/50">
+                <p className="mb-3 text-sm text-[var(--pos-ink-2)]">
                   Enter what is physically there. The expected figure is hidden
                   until you have — a count you can see the answer to is not a
                   count.
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
                   <label className="min-w-32 flex-1">
-                    <span className="mb-1 block text-xs text-white/50">
+                    <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                       Counted cash
                     </span>
                     <input
@@ -419,18 +425,18 @@ export function ShiftClient({
                       }
                       inputMode="decimal"
                       placeholder="0"
-                      className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-right text-lg outline-none focus:border-white/40"
+                      className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-right text-lg outline-none focus:border-[var(--pos-border-strong)]"
                     />
                   </label>
                   <label className="min-w-40 flex-[2]">
-                    <span className="mb-1 block text-xs text-white/50">
+                    <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
                       Note (optional)
                     </span>
                     <input
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
                       placeholder="e.g. 50 short, till jam at 3pm"
-                      className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 outline-none focus:border-white/40"
+                      className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 outline-none focus:border-[var(--pos-border-strong)]"
                     />
                   </label>
                 </div>
@@ -447,7 +453,7 @@ export function ShiftClient({
                   <button
                     type="button"
                     onClick={() => setClosing(false)}
-                    className="rounded-xl bg-white/10 px-4 py-2.5 text-sm font-medium transition-colors hover:bg-white/20"
+                    className="rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
                   >
                     Cancel
                   </button>
@@ -472,7 +478,7 @@ function Row({
 }) {
   return (
     <div className="flex justify-between">
-      <dt className="text-white/60">{label}</dt>
+      <dt className="text-[var(--pos-ink-2)]">{label}</dt>
       <dd>
         {sign === "−" ? "−" : sign === "+" ? "+" : ""}
         {money(value)}

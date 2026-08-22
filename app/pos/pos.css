@@ -1,0 +1,59 @@
+/* ===========================================================================
+   POS surface tokens.
+   ---------------------------------------------------------------------------
+   The till was built dark: ~500 hardcoded `bg-white/5`, `text-white/60`,
+   `border-white/15` and `bg-[#0b0f14]` utilities spread across 24 files. That
+   made "make it light" a 24-file rewrite rather than a decision, so the theme
+   was effectively unchangeable.
+
+   Every one of those is now an arbitrary-value utility reading a variable from
+   here, which means the palette lives in ONE place and a light/dark flip is
+   editing this block. Semantic colours (emerald confirm, amber warning, red
+   destructive) deliberately stay as Tailwind utilities — they mean the same
+   thing on any ground and should not be themed away.
+
+   ⚠ Scoped to `.pos-root`, applied once in app/pos/layout.tsx. It must not
+   leak into the dashboard or the storefront, which have their own systems
+   (the dash and sm token families).
+   =========================================================================== */
+
+.pos-root {
+  /* Ground and raised surfaces, lightest → most raised. On a light till the
+     "raised" direction is toward grey, not toward white. */
+  --pos-bg: #f1f2f4;
+  --pos-surface: #ffffff;
+  --pos-surface-2: #e9ebee;
+  --pos-surface-3: #dcdfe4;
+
+  /* Text, strongest → faintest. */
+  --pos-ink: #14181f;
+  --pos-ink-2: #5c6470;
+  --pos-ink-3: #8b939f;
+
+  --pos-border: #d6dae0;
+  --pos-border-strong: #b8bec8;
+
+  /* The primary action. Dark on light, so it stays the loudest thing on a
+     screen whose ground is now pale. */
+  --pos-accent: #14181f;
+  --pos-on-accent: #ffffff;
+
+  background: var(--pos-bg);
+  color: var(--pos-ink);
+}
+
+/* The dark palette this shipped with, kept whole so the decision is reversible
+   and so a future per-merchant preference has somewhere to point. */
+.pos-root[data-pos-theme="dark"] {
+  --pos-bg: #0b0f14;
+  --pos-surface: rgba(255, 255, 255, 0.05);
+  --pos-surface-2: rgba(255, 255, 255, 0.1);
+  --pos-surface-3: rgba(255, 255, 255, 0.2);
+  --pos-ink: #ffffff;
+  --pos-ink-2: rgba(255, 255, 255, 0.7);
+  --pos-ink-3: rgba(255, 255, 255, 0.4);
+  --pos-border: rgba(255, 255, 255, 0.15);
+  --pos-border-strong: rgba(255, 255, 255, 0.3);
+  --pos-accent: #ffffff;
+  --pos-on-accent: #0b0f14;
+}

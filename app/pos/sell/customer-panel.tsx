@@ -74,13 +74,13 @@ export function CustomerPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-16">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b0f14] p-4 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-bg)] p-4 shadow-2xl">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold">Customer</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+            className="rounded-lg p-1.5 text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -93,14 +93,14 @@ export function CustomerPanel({
               <div className="truncate text-sm font-medium">
                 {customer.name}
               </div>
-              <div className="truncate text-xs text-white/50">
+              <div className="truncate text-xs text-[var(--pos-ink-2)]">
                 {customer.phone}
               </div>
             </div>
             <button
               type="button"
               onClick={() => onPick(null)}
-              className="shrink-0 rounded-lg px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white"
+              className="shrink-0 rounded-lg px-2 py-1 text-xs text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
             >
               Remove
             </button>
@@ -108,16 +108,16 @@ export function CustomerPanel({
         ) : (
           <>
             <div className="relative mb-2">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
               <input
                 value={query}
                 autoFocus
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Phone, name or email…"
-                className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
               />
               {searching && (
-                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-white/40" />
+                <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
               )}
             </div>
 
@@ -129,15 +129,15 @@ export function CustomerPanel({
                   key={c.id}
                   type="button"
                   onClick={() => onPick(c)}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/10"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[var(--pos-surface-2)]"
                 >
                   <UserRound
-                    className="h-4 w-4 shrink-0 text-white/40"
+                    className="h-4 w-4 shrink-0 text-[var(--pos-ink-3)]"
                     strokeWidth={2}
                   />
                   <span className="min-w-0">
                     <span className="block truncate text-sm">{c.name}</span>
-                    <span className="block truncate text-xs text-white/50">
+                    <span className="block truncate text-xs text-[var(--pos-ink-2)]">
                       {c.phone}
                       {c.email ? ` · ${c.email}` : ""}
                     </span>
@@ -146,7 +146,9 @@ export function CustomerPanel({
               ))}
               {q.length >= 2 && !searching && visible.length === 0 && (
                 <div className="px-1 py-4 text-center">
-                  <p className="text-sm text-white/40">No customer found.</p>
+                  <p className="text-sm text-[var(--pos-ink-3)]">
+                    No customer found.
+                  </p>
                   <button
                     type="button"
                     onClick={() => {
@@ -160,12 +162,12 @@ export function CustomerPanel({
                         email: "",
                       });
                     }}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-white/20"
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[var(--pos-surface-2)] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
                   >
                     <UserPlus className="h-4 w-4" />
                     Add as a new customer
                   </button>
-                  <p className="mt-2 text-xs text-white/30">
+                  <p className="mt-2 text-xs text-[var(--pos-ink-3)]">
                     Or leave it — the sale can go through without one.
                   </p>
                 </div>
@@ -175,8 +177,8 @@ export function CustomerPanel({
         )}
 
         {draft && !customer && (
-          <div className="mb-4 rounded-xl border border-white/15 bg-white/5 p-3">
-            <div className="mb-2 text-xs font-medium text-white/60">
+          <div className="mb-4 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3">
+            <div className="mb-2 text-xs font-medium text-[var(--pos-ink-2)]">
               New customer
             </div>
             <div className="grid gap-2">
@@ -185,7 +187,7 @@ export function CustomerPanel({
                 autoFocus={!draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
                 placeholder="Name"
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
               />
               <input
                 value={draft.phone}
@@ -193,19 +195,19 @@ export function CustomerPanel({
                 autoFocus={!!draft.name}
                 onChange={(e) => setDraft({ ...draft, phone: e.target.value })}
                 placeholder="Mobile number"
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
               />
               <input
                 value={draft.email}
                 inputMode="email"
                 onChange={(e) => setDraft({ ...draft, email: e.target.value })}
                 placeholder="Email (optional)"
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-white/30 focus:border-white/40"
+                className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
               />
             </div>
             {/* The mobile is what a later signup matches on, so it earns a line
                 of explanation rather than just being required. */}
-            <p className="mt-2 text-xs text-white/35">
+            <p className="mt-2 text-xs text-[var(--pos-ink-3)]">
               The mobile links this to their account if they ever sign up
               online.
             </p>
@@ -237,7 +239,7 @@ export function CustomerPanel({
                   setDraft(null);
                   setError(null);
                 }}
-                className="rounded-lg px-3 py-2 text-sm text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                className="rounded-lg px-3 py-2 text-sm text-[var(--pos-ink-2)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
               >
                 Cancel
               </button>
@@ -247,7 +249,7 @@ export function CustomerPanel({
 
         {gstEnabled && (
           <label className="block">
-            <span className="mb-1 block text-xs text-white/50">
+            <span className="mb-1 block text-xs text-[var(--pos-ink-2)]">
               GSTIN (for a business invoice)
             </span>
             <input
@@ -258,7 +260,7 @@ export function CustomerPanel({
               placeholder="22AAAAA0000A1Z5"
               autoCapitalize="characters"
               autoCorrect="off"
-              className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2.5 text-sm tracking-wide outline-none placeholder:tracking-normal placeholder:text-white/25 focus:border-white/40"
+              className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm tracking-wide outline-none placeholder:tracking-normal placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
             />
           </label>
         )}
@@ -266,7 +268,7 @@ export function CustomerPanel({
         <button
           type="button"
           onClick={onClose}
-          className="mt-4 w-full rounded-xl bg-white/10 py-2.5 text-sm font-semibold transition-colors hover:bg-white/20"
+          className="mt-4 w-full rounded-xl bg-[var(--pos-surface-2)] py-2.5 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)]"
         >
           Done
         </button>

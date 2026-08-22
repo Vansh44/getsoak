@@ -89,7 +89,7 @@ export function SalesClient({
   return (
     // Chrome from PosScreen: no hand-rolled back arrow (the rail is the way
     // out, and it goes anywhere in one tap), and no page background of its own —
-    // this screen used to paint `bg-neutral-950` over the shell's `bg-[#0b0f14]`,
+    // this screen used to paint `bg-neutral-950` over the shell's `bg-[var(--pos-bg)]`,
     // so the app had two darks depending which screen you were on.
     <PosScreen title="Sales" subtitle={`${sales.length} shown`}>
       <form
@@ -99,12 +99,12 @@ export function SalesClient({
           search(query);
         }}
       >
-        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-white/40" />
+        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
         <input
           value={query}
           onChange={(e) => search(e.target.value)}
           placeholder="Receipt number, order number or customer…"
-          className="w-full rounded-xl border border-white/10 bg-white/5 py-3 pr-4 pl-10 text-base outline-none focus:border-white/30"
+          className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-3 pr-4 pl-10 text-base outline-none focus:border-[var(--pos-border-strong)]"
         />
       </form>
 
@@ -121,8 +121,8 @@ export function SalesClient({
             aria-pressed={range === r.key}
             className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
               range === r.key
-                ? "bg-white text-[#0b0f14]"
-                : "bg-white/10 text-white/70 hover:bg-white/20 hover:text-white"
+                ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                : "bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-3)] hover:text-[var(--pos-ink)]"
             }`}
           >
             {r.label}
@@ -137,7 +137,7 @@ export function SalesClient({
       )}
 
       {!error && sales.length === 0 && (
-        <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-8 text-center text-sm text-white/60">
+        <p className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-8 text-center text-sm text-[var(--pos-ink-2)]">
           {/* Naming the filter matters: "No sales yet at this shop" under a
               Today chip reads as "this till has never sold anything", which
               for a shop that opened an hour ago is alarming and wrong. */}
@@ -155,9 +155,9 @@ export function SalesClient({
             <button
               type="button"
               onClick={() => setOpenId(s.id)}
-              className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-4 text-left transition-colors hover:bg-white/10"
+              className="flex w-full items-center gap-3 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4 text-left transition-colors hover:bg-[var(--pos-surface-2)]"
             >
-              <Receipt className="h-5 w-5 shrink-0 text-white/40" />
+              <Receipt className="h-5 w-5 shrink-0 text-[var(--pos-ink-3)]" />
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-mono text-sm font-semibold">
@@ -169,7 +169,7 @@ export function SalesClient({
                     </span>
                   )}
                 </span>
-                <span className="block text-sm text-white/60">
+                <span className="block text-sm text-[var(--pos-ink-2)]">
                   {when(s.createdAt)} · {s.itemCount} item
                   {s.itemCount === 1 ? "" : "s"}
                   {s.customerName ? ` · ${s.customerName}` : ""}
@@ -183,7 +183,7 @@ export function SalesClient({
             {canRefund && !s.refunded && (
               <Link
                 href={`/pos/returns/${s.id}`}
-                className="mt-1 ml-11 inline-flex items-center gap-1.5 text-xs font-medium text-white/50 transition-colors hover:text-white"
+                className="mt-1 ml-11 inline-flex items-center gap-1.5 text-xs font-medium text-[var(--pos-ink-2)] transition-colors hover:text-[var(--pos-ink)]"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 Return items
@@ -194,7 +194,9 @@ export function SalesClient({
       </ul>
 
       {pending && (
-        <p className="mt-4 text-center text-sm text-white/40">Searching…</p>
+        <p className="mt-4 text-center text-sm text-[var(--pos-ink-3)]">
+          Searching…
+        </p>
       )}
 
       {openId && (

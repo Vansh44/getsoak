@@ -177,7 +177,15 @@ export function PosNav({
 
   return (
     <div
-      className="flex h-dvh overflow-hidden bg-[#0b0f14] text-white"
+      // ★★ `pos-root` DEFINES THE POS TOKENS, so it must sit on the
+      // outermost element of EVERY branch of app/pos/layout.tsx. It did not:
+      // the signed-in branch returned <PosNav> bare, so on /pos/sell every
+      // `bg-[var(--pos-surface)]` resolved to an undefined variable and the
+      // whole register rendered with no backgrounds at all — panels, the
+      // tender modal and the nav drawer all transparent over the scrim. The
+      // signed-out branch was wrapped, which is why /pos/login looked correct
+      // and hid the fault. Pinned by pos-theme-coverage.test.ts.
+      className="pos-root flex h-dvh overflow-hidden bg-[var(--pos-bg)] text-[var(--pos-ink)]"
       // ★ Stops iOS rubber-band overscroll from revealing the page behind the
       // register. The body is near-white (globals.css), so a bounce on a till
       // flashes a white band under a dark full-screen app. Scoped to this
@@ -187,13 +195,13 @@ export function PosNav({
     >
       {/* ── Content, under the one top bar ───────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-white/10 px-2">
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--pos-border)] px-2">
           <button
             type="button"
             onClick={() => setOpen(true)}
             aria-label="Open the register menu"
             aria-expanded={open}
-            className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+            className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[var(--pos-ink)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
           >
             <Menu className="h-6 w-6" strokeWidth={2} />
             {/* ★ THE COUNT, NOT A DOT. With the rail gone this is the only place
@@ -209,7 +217,7 @@ export function PosNav({
           <span className="truncate text-base font-semibold">
             {activeItem?.label ?? "Register"}
           </span>
-          <span className="ml-auto flex min-w-0 items-center gap-3 truncate pr-1 text-xs text-white/50">
+          <span className="ml-auto flex min-w-0 items-center gap-3 truncate pr-1 text-xs text-[var(--pos-ink-2)]">
             <span className="flex min-w-0 items-center gap-1.5 truncate">
               <MapPin className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
               <span className="truncate">{locationName}</span>
@@ -219,7 +227,7 @@ export function PosNav({
                 someone else left unlocked should be able to see that at a
                 glance. Dropped on a phone, where the width is not there. */}
             <span
-              className="hidden min-w-0 truncate border-l border-white/10 pl-3 sm:block"
+              className="hidden min-w-0 truncate border-l border-[var(--pos-border)] pl-3 sm:block"
               title={`${operatorName} · ${ROLE_LABEL[role] ?? role}`}
             >
               {operatorName}
@@ -243,9 +251,9 @@ export function PosNav({
           />
           <nav
             aria-label="Register"
-            className="absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col border-r border-white/10 bg-[#12171f]"
+            className="absolute inset-y-0 left-0 flex w-[280px] max-w-[85vw] flex-col border-r border-[var(--pos-border)] bg-[var(--pos-surface)] shadow-2xl"
           >
-            <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 pl-4 pr-2">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--pos-border)] pl-4 pr-2">
               <span className="flex items-center gap-2 font-semibold">
                 <ScanLine className="h-5 w-5" strokeWidth={2} />
                 Register
@@ -254,7 +262,7 @@ export function PosNav({
                 type="button"
                 onClick={() => setOpen(false)}
                 aria-label="Close the menu"
-                className="flex h-10 w-10 items-center justify-center rounded-xl text-white/60 hover:bg-white/10 hover:text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
               >
                 <X className="h-5 w-5" strokeWidth={2} />
               </button>
@@ -272,8 +280,8 @@ export function PosNav({
                     aria-current={isActive ? "page" : undefined}
                     className={`mb-1 flex items-center gap-3 rounded-xl px-3 py-3 transition-colors ${
                       isActive
-                        ? "bg-white/15 text-white"
-                        : "text-white/70 hover:bg-white/10 hover:text-white"
+                        ? "bg-[var(--pos-surface-2)] text-[var(--pos-ink)]"
+                        : "text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
                     }`}
                   >
                     <Icon className="h-5 w-5 shrink-0" strokeWidth={2} />
@@ -283,7 +291,7 @@ export function PosNav({
                       </span>
                       {/* Room for it here, unlike the rail — and "Orders" alone
                           does not say that it covers collections AND returns. */}
-                      <span className="block truncate text-xs text-white/45">
+                      <span className="block truncate text-xs text-[var(--pos-ink-3)]">
                         {item.hint}
                       </span>
                     </span>
@@ -297,10 +305,10 @@ export function PosNav({
               })}
             </div>
 
-            <div className="shrink-0 border-t border-white/10 p-3">
+            <div className="shrink-0 border-t border-[var(--pos-border)] p-3">
               <div className="mb-3 px-1">
                 <div className="text-sm font-medium">{operatorName}</div>
-                <div className="text-xs text-white/45">
+                <div className="text-xs text-[var(--pos-ink-3)]">
                   {ROLE_LABEL[role] ?? role} · {locationName}
                 </div>
               </div>
@@ -309,7 +317,7 @@ export function PosNav({
                   type="button"
                   onClick={lock}
                   disabled={pending}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 py-3 text-sm font-semibold transition-colors hover:bg-white/20 disabled:opacity-50"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--pos-surface-2)] py-3 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-50"
                 >
                   <LogOut className="h-4 w-4" strokeWidth={2} />
                   Lock the register
@@ -317,7 +325,7 @@ export function PosNav({
               ) : (
                 <Link
                   href="/dashboard"
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/10 py-3 text-sm font-semibold transition-colors hover:bg-white/20"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--pos-surface-2)] py-3 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)]"
                 >
                   <LayoutDashboard className="h-4 w-4" strokeWidth={2} />
                   Back to dashboard

@@ -101,28 +101,28 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
     // entry of its own for the same reason (Returns stays lit — see
     // activePosNavKey).
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/10 px-4">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--pos-border)] px-4">
         <Link
           href="/pos/returns"
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 hover:bg-white/20"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
           aria-label="Back to returns"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <div className="min-w-0">
           <h1 className="text-lg font-semibold leading-tight">Return</h1>
-          <p className="truncate font-mono text-xs text-white/50">
+          <p className="truncate font-mono text-xs text-[var(--pos-ink-2)]">
             {sale.receiptNo}
           </p>
         </div>
-        <span className="ml-auto shrink-0 text-sm text-white/50">
+        <span className="ml-auto shrink-0 text-sm text-[var(--pos-ink-2)]">
           {money(sale.total)}
         </span>
       </header>
 
       <div className="mx-auto w-full max-w-3xl min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {!anythingLeft && (
-          <p className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-center text-sm text-white/60">
+          <p className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-6 text-center text-sm text-[var(--pos-ink-2)]">
             Everything on this sale has already been returned.
           </p>
         )}
@@ -133,28 +133,30 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
           return (
             <div
               key={l.id}
-              className={`rounded-xl border border-white/10 bg-white/5 p-4 ${done ? "opacity-50" : ""}`}
+              className={`rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4 ${done ? "opacity-50" : ""}`}
             >
               <div className="flex items-baseline justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-medium">{l.name}</div>
                   {l.variantName && (
-                    <div className="text-xs text-white/50">{l.variantName}</div>
+                    <div className="text-xs text-[var(--pos-ink-2)]">
+                      {l.variantName}
+                    </div>
                   )}
-                  <div className="mt-0.5 text-xs text-white/50">
+                  <div className="mt-0.5 text-xs text-[var(--pos-ink-2)]">
                     {l.quantity} sold
                     {l.returned > 0 ? ` · ${l.returned} returned` : ""}
                     {done ? "" : ` · ${l.remaining} can come back`}
                   </div>
                 </div>
-                <div className="shrink-0 text-sm text-white/70">
+                <div className="shrink-0 text-sm text-[var(--pos-ink-2)]">
                   {money(l.unitPrice)}
                 </div>
               </div>
 
               {!done && (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <div className="flex items-center gap-1 rounded-lg bg-white/10 p-1">
+                  <div className="flex items-center gap-1 rounded-lg bg-[var(--pos-surface-2)] p-1">
                     <button
                       type="button"
                       aria-label="One fewer"
@@ -164,7 +166,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                           [l.id]: Math.max(0, (q[l.id] ?? 0) - 1),
                         }))
                       }
-                      className="h-9 w-9 rounded-md text-lg hover:bg-white/10"
+                      className="h-9 w-9 rounded-md text-lg hover:bg-[var(--pos-surface-2)]"
                     >
                       −
                     </button>
@@ -180,7 +182,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                           [l.id]: Math.min(l.remaining, (q[l.id] ?? 0) + 1),
                         }))
                       }
-                      className="h-9 w-9 rounded-md text-lg hover:bg-white/10"
+                      className="h-9 w-9 rounded-md text-lg hover:bg-[var(--pos-surface-2)]"
                     >
                       +
                     </button>
@@ -191,13 +193,13 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                     onClick={() =>
                       setQty((q) => ({ ...q, [l.id]: l.remaining }))
                     }
-                    className="rounded-lg bg-white/10 px-3 py-2 text-xs font-medium hover:bg-white/20"
+                    className="rounded-lg bg-[var(--pos-surface-2)] px-3 py-2 text-xs font-medium hover:bg-[var(--pos-surface-3)]"
                   >
                     All {l.remaining}
                   </button>
 
                   {chosen > 0 && (
-                    <label className="ml-auto flex items-center gap-2 text-xs text-white/70">
+                    <label className="ml-auto flex items-center gap-2 text-xs text-[var(--pos-ink-2)]">
                       <input
                         type="checkbox"
                         checked={!!damaged[l.id]}
@@ -220,8 +222,8 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
 
         {anythingLeft && (
           <>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <div className="text-xs font-medium tracking-wide text-white/50 uppercase">
+            <div className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
+              <div className="text-xs font-medium tracking-wide text-[var(--pos-ink-2)] uppercase">
                 Money goes back as
               </div>
               {route.counterChoice ? (
@@ -233,8 +235,8 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                       onClick={() => setMethod(m.id)}
                       className={`rounded-lg py-2.5 text-sm font-semibold ${
                         method === m.id
-                          ? "bg-white text-neutral-900"
-                          : "bg-white/10 hover:bg-white/20"
+                          ? "bg-[var(--pos-accent)] text-neutral-900"
+                          : "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"
                       }`}
                     >
                       {m.label}
@@ -245,7 +247,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                 // No buttons. The tender decided this, and there is nothing
                 // for the cashier to pick — so say what will happen instead,
                 // in words they can read out to the customer.
-                <p className="mt-2 rounded-lg bg-white/10 px-3 py-2.5 text-sm text-white/80">
+                <p className="mt-2 rounded-lg bg-[var(--pos-surface-2)] px-3 py-2.5 text-sm text-[var(--pos-ink)]">
                   {route.copy}
                 </p>
               )}
@@ -253,7 +255,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder="Reason (optional)"
-                className="mt-3 w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm outline-none focus:border-white/30"
+                className="mt-3 w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none focus:border-[var(--pos-border-strong)]"
               />
             </div>
 
@@ -262,10 +264,10 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                 sticking it to the bottom of its own scroll container keeps it
                 inside the content column, and drops the `pb-32` spacer that
                 only existed to stop the fixed bar covering the last card. */}
-            <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-white/10 bg-[#0b0f14]/95 p-4 backdrop-blur">
+            <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-[var(--pos-border)] bg-[var(--pos-bg)]/95 p-4 backdrop-blur">
               <div className="flex items-center gap-4">
                 <div className="min-w-0">
-                  <div className="text-xs text-white/50">Refund</div>
+                  <div className="text-xs text-[var(--pos-ink-2)]">Refund</div>
                   <div className="text-2xl font-bold tabular-nums">
                     {money(preview.total)}
                   </div>
