@@ -213,7 +213,7 @@ const preset: ThemePreset = {
             heading: "Structure that holds its shape",
             body: "Bags cut from firm-grain leather with a base that stays flat when you set it down. Built around a laptop, a paperback and the things you actually carry.",
             cta_label: "Shop handbags",
-            cta_href: "/shop",
+            cta_href: "/shop?category=handbags",
             image_url: img("tote"),
             image_alt: "Structured tan leather tote bag standing upright",
             media_position: "left",
@@ -273,26 +273,26 @@ const preset: ThemePreset = {
                 image_url: img("loafer"),
                 image_alt: "Brown leather penny loafer worn with cropped denim",
                 caption: "Marlowe Loafer",
-                href: "/shop",
+                href: "/shop/marlowe-leather-loafer",
               },
               {
                 image_url: img("crossbody"),
                 image_alt: "Quilted black crossbody bag worn over the shoulder",
                 caption: "Nyla Crossbody",
-                href: "/shop",
+                href: "/shop/nyla-quilted-crossbody",
               },
               {
                 image_url: img("boot"),
                 image_alt: "Black leather ankle boot with a stacked heel",
                 caption: "Rowan Boot",
-                href: "/shop",
+                href: "/shop/rowan-ankle-boot",
               },
               {
                 image_url: img("sunglasses"),
                 image_alt:
                   "Angular tortoiseshell sunglasses on a stone surface",
                 caption: "Halden Sunglasses",
-                href: "/shop",
+                href: "/shop/halden-angular-sunglasses",
               },
             ],
           },
@@ -580,21 +580,24 @@ const preset: ThemePreset = {
   ],
 
   menus: {
+    // ⚠ A nav item that NAMES a category must carry `?category=<slug>`, or it
+    // lands on /shop with the "All" tab selected and silently ignores the word
+    // the shopper clicked. The slugs here must match sampleData.categories.
     header: [
-      { label: "Women", href: "/shop" },
-      { label: "Men", href: "/shop" },
-      { label: "Handbags", href: "/shop" },
-      { label: "Accessories", href: "/shop" },
+      { label: "Women", href: "/shop?category=womens-shoes" },
+      { label: "Men", href: "/shop?category=mens-shoes" },
+      { label: "Handbags", href: "/shop?category=handbags" },
+      { label: "Accessories", href: "/shop?category=accessories" },
       { label: "Size Guide", href: "/size-guide" },
     ],
     footerGroups: [
       {
         title: "Shop",
         links: [
-          { label: "Women's Shoes", href: "/shop" },
-          { label: "Men's Shoes", href: "/shop" },
-          { label: "Handbags", href: "/shop" },
-          { label: "Accessories", href: "/shop" },
+          { label: "Women's Shoes", href: "/shop?category=womens-shoes" },
+          { label: "Men's Shoes", href: "/shop?category=mens-shoes" },
+          { label: "Handbags", href: "/shop?category=handbags" },
+          { label: "Accessories", href: "/shop?category=accessories" },
         ],
       },
       {

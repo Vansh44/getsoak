@@ -304,6 +304,66 @@ describe("theme registry", () => {
         expect(sample.products.some((p) => p.featured)).toBe(true);
       });
 
+      it("category and product links resolve to seeded slugs", () => {
+        // A nav item that NAMES a category but links to bare /shop lands on the
+        // "All" tab and silently ignores the word the shopper clicked — the
+        // shop page reads ?category=<slug>. Same for a tile captioned with a
+        // product: /shop/<slug> must be a product this theme actually seeds.
+        const sample = theme.preset.sampleData;
+        const categorySlugs = new Set(
+          (sample?.categories ?? []).map((c) => c.slug),
+        );
+        const productSlugs = new Set(
+          (sample?.products ?? []).map((p) => p.slug),
+        );
+
+        const hrefs: string[] = [];
+        const { header, footerGroups, footerLegal } = theme.preset.menus;
+        for (const l of header) hrefs.push(l.href);
+        for (const g of footerGroups)
+          for (const l of g.links) hrefs.push(l.href);
+        for (const l of footerLegal) hrefs.push(l.href);
+        const visit = (value: unknown): void => {
+          if (Array.isArray(value)) {
+            for (const item of value) visit(item);
+            return;
+          }
+          if (!value || typeof value !== "object") return;
+          for (const [key, nested] of Object.entries(value)) {
+            if (
+              (key === "href" || key === "cta_href") &&
+              typeof nested === "string" &&
+              nested
+            ) {
+              hrefs.push(nested);
+            } else {
+              visit(nested);
+            }
+          }
+        };
+        for (const page of theme.preset.pages) {
+          for (const section of page.sections) visit(section.config);
+        }
+
+        for (const href of hrefs) {
+          const category = href.match(/^\/shop\?category=([^&]+)$/);
+          if (category) {
+            expect(
+              categorySlugs.has(category[1]),
+              `${href} -> no seeded category "${category[1]}"`,
+            ).toBe(true);
+            continue;
+          }
+          const product = href.match(/^\/shop\/([^/?#]+)$/);
+          if (product) {
+            expect(
+              productSlugs.has(product[1]),
+              `${href} -> no seeded product "${product[1]}"`,
+            ).toBe(true);
+          }
+        }
+      });
+
       it("every referenced image exists under public/", () => {
         const urls = collectThemeImageUrls(theme);
         for (const url of urls) {
