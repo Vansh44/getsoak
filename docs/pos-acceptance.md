@@ -1120,8 +1120,14 @@ cash, then close and count ₹2,340.
 `order_payments` row and no `orders.shift_id`, so the notes were physically in
 the till and contributed **0** to expected cash — every shift reported OVER by
 the full value of every collection it took, and those sales were missing from
-the Z-report's count and gross as well. Check the Z-report: the order is counted
-and its total is in gross.
+the Z-report's count and gross as well. Each tender now records its own
+`order_payments.shift_id`; check the Z-report sees the cash in the shift that
+actually took it, while the completed order is counted in gross.
+
+**PS-8.28a ★★ — A failed tender row cannot complete the hand-over**
+Force the `order_payments` insert to fail while collecting an unpaid order.
+**Expect:** the action fails and the order remains waiting; the collected claim,
+store-credit spend and tender rows roll back together.
 
 **PS-8.29 ★★ — `pay_at_store` is NOT assumed to be cash**
 Collect a pay-at-store order and pay by **card** at the counter.
@@ -1148,6 +1154,8 @@ and the payment is recorded **unattributed**, exactly where a counter sale's
 money goes under the same setting. A **prepaid** collection is unaffected either
 way — no money changes hands, so blocking it would refuse a customer their own
 paid-for goods.
+Repeat with a short deposit. **Expect:** the same refusal when shifts are
+required; a deposit is still money entering the drawer.
 
 **PS-8.33 ★★ — Handing over an unpacked order is possible, not silent**
 As a cashier, find a collection still in "To prepare" and tap **Hand over**.
@@ -1325,10 +1333,9 @@ As a cashier.
 In one shift: ring a cash sale, collect a pay-at-store order for cash (§8), take
 a cash refund, and bank a drop. Close and count.
 **Expect:** expected cash = float + both takings − the refund − the drop, and the
-drawer balances. The collection is the one that was missing: cash is read as
-`order_payments` INNER JOIN orders ON `shift_id`, so a payment written without
-the stamp — or never written at all — is invisible no matter how much of it is
-in the till. A collection that was **paid online** must NOT appear in gross: it
+drawer balances. Cash is read directly from `order_payments.shift_id`, so a
+deposit belongs to the shift that took it even when the final balance is paid
+on a later shift. A collection that was **paid online** must NOT appear in gross: it
 never touched this drawer, and stamping it would report takings the till never
 took.
 
@@ -2782,7 +2789,7 @@ exactly-once guarantee comes from the claim, and a deposit has no claim.
 **PS-DP.6 ★★ — A deposit cannot exceed what is owed (race)**
 Take a deposit while a colleague records another payment on the same order.
 **Expect:** one of them is refused with "more than this order still owes". The
-cap is re-read inside the writing transaction.
+order row is locked and the cap is re-read inside the writing transaction.
 
 **PS-DP.7 ★ — No change on a deposit**
 Hand over ₹100 for a ₹100 deposit on a ₹340 order.
@@ -2794,6 +2801,11 @@ Have 3 ready collections within 48h of expiry.
 **Expect:** an amber banner above "Ready to collect" naming the count. It is
 hidden at zero — a banner that is always there is one nobody reads — and it
 counts READY only, since a parcel still to pack is the shop's own work.
+
+**PS-DP.9 ★★ — Deposits stay with the drawer that took them**
+Take one deposit in shift A, close it, then settle the balance in shift B.
+**Expect:** each shift reports only its own tender. The final payment must not
+move the earlier deposit into shift B by overwriting the order's shift.
 
 ---
 
@@ -2817,9 +2829,9 @@ which fires the same trigger.
 
 **PS-CS.4 ★★ — An UNPUBLISHED product disappears**
 Unpublish a product, wait for the next sync.
-**Expect:** gone from the grid. Without the removals half it would linger: the
-catalogue query filters on published, so a withdrawn product simply stops
-matching and is never mentioned again.
+**Expect:** gone from the grid. The changed-row page includes unpublished rows
+as removal ids; without that half a published-items-only delta would never name
+the withdrawn product.
 
 **PS-CS.5 ★★ — A HARD-DELETED product disappears within 30 minutes**
 Delete a product outright.
@@ -2831,6 +2843,18 @@ rather than retired.
 Remove one variant from a multi-variant product.
 **Expect:** gone. The product is replaced wholesale by what the delta sends;
 upserting per SKU would leave it behind forever.
+
+**PS-CS.7 ★★ — The first full pull activates delta mode**
+Start with an empty IndexedDB catalog, complete one full sync, then wait five
+minutes without editing products. **Expect:** the next request carries the
+server-issued `since` watermark and returns a quiet delta, not another full
+catalog.
+
+**PS-CS.8 ★★ — Long syncs and mass withdrawals do not skip rows**
+Throttle a multi-page sync past 10 seconds and change a product that page 1 has
+already passed. Also unpublish more than 300 products in one delta window.
+**Expect:** the next delta includes the concurrent edit, and removal pages drain
+through `nextCursor` until every withdrawn product is gone.
 
 ---
 
@@ -2844,7 +2868,7 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**The success page says nothing about collection**~~              | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                                                                                                                                                                                   |
 | ~~**The dashboard is blind to pickups**~~                           | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                                                                                                                                                                                  |
 | ~~**The invoice shows a shipping address for a collected order**~~  | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                                                                                                                                                                          |
-| ~~**Counter payments were invisible to the drawer**~~               | **FIXED** (PS-8.28–8.31, PS-9.8). The hand-over captures the tender, writes `order_payments` and stamps `orders.shift_id`, so every shift no longer reports OVER by the value of its collections                                                                                                                                                                                                               |
+| ~~**Counter payments were invisible to the drawer**~~               | **FIXED** (PS-8.28–8.31, PS-9.8, PS-DP.9). Claim, credit and tenders commit atomically; every `order_payments` row carries the shift that actually captured it, including deposits across shifts                                                                                                                                                                                                               |
 | ~~**The idle lock covered only 2 of the 7 POS screens**~~           | **FIXED** (PS-6.13–6.14). It was per-page opt-in and five screens never opted in — including returns, inventory and shift. Mounted once in `app/pos/layout.tsx`; `app/pos/idle-lock-coverage.test.ts` fails if it leaves, or if a page adds a second                                                                                                                                                           |
 | ~~**A 0% discount cap silently became 10%**~~                       | **FIXED** (PS-7.24). `Number(…) \|\| 10` ate a deliberate 0, so the strictest setting granted cashiers the 10% default                                                                                                                                                                                                                                                                                         |
 | ~~**Collections were unreachable with an empty queue**~~            | **FIXED** (PS-19.3). The only link was a `/pos` tile conditional on `pickupWaiting > 0`; Orders is now a permanent rail destination                                                                                                                                                                                                                                                                            |

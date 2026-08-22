@@ -124,6 +124,7 @@ export interface DbMock {
     limit: any[];
     offset: any[];
     forUpdate: any[];
+    innerJoin: any[];
   };
 }
 
@@ -168,6 +169,7 @@ export function makeDbMock(
     limit: [],
     offset: [],
     forUpdate: [],
+    innerJoin: [],
   };
 
   // A thenable step that also exposes .where()/.returning() terminals, so both
@@ -199,7 +201,10 @@ export function makeDbMock(
         return s;
       }),
       leftJoin: vi.fn(() => s),
-      innerJoin: vi.fn(() => s),
+      innerJoin: vi.fn((...args: any[]) => {
+        calls.innerJoin.push(args);
+        return s;
+      }),
       groupBy: vi.fn(() => s),
       orderBy: vi.fn(() => s),
       limit: vi.fn((n: any) => {

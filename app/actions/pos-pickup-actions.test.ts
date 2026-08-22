@@ -57,6 +57,7 @@ import {
 } from "./pos-pickup-actions";
 import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
+import { orderPayments } from "@/drizzle/schema";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -108,11 +109,19 @@ const seed = (order: any, holds: any[] = [], paid = 0) =>
     returning: CLAIMED,
     // ⚠ `order_id` is load-bearing — paidSoFarFor builds a Map keyed by it, so
     // a row without one lands under `undefined` and reads back as nothing paid.
-    selectQueue: [
-      order ? [order] : [],
-      [{ order_id: "ord-1", paid: String(paid) }],
-      holds,
-    ],
+    selectQueue: order
+      ? [
+          [order],
+          [{ order_id: "ord-1", paid: String(paid) }],
+          // A pay-at-store collection takes the order lock, then re-reads the
+          // balance in the same transaction as the claim/deposit write.
+          ...(order.payment_method === "pay_at_store" &&
+          order.payment_status === "pending"
+            ? [[order], [{ paid: String(paid) }]]
+            : []),
+          holds,
+        ]
+      : [[], [{ order_id: "ord-1", paid: String(paid) }], holds],
   });
 
 const cash = (amount: number, tendered = amount) => [
@@ -217,12 +226,32 @@ describe("markCollected — the money", () => {
     ]);
   });
 
-  it("★ stamps the drawer, or the payment row joins to nothing", async () => {
-    // loadReport reads cash as order_payments INNER JOIN orders ON shift_id.
-    // Without the stamp the row exists and still contributes 0 to expectedCash.
+  it("★ attributes the tender itself to the drawer that took it", async () => {
     dbHolder.current = seed(UNPAID);
     await markCollected("ord-1", cash(340));
+    expect(dbHolder.current.calls.values[0][0]).toMatchObject({
+      shiftId: "sh1",
+    });
+    // The completion shift remains on the order for gross-sale attribution.
     expect(dbHolder.current.calls.set[0]).toMatchObject({ shiftId: "sh1" });
+  });
+
+  it("rolls the claim back when the tender ledger insert fails", async () => {
+    dbHolder.current = makeDbMock({
+      returning: CLAIMED,
+      selectQueue: [
+        [UNPAID],
+        [{ order_id: "ord-1", paid: "0" }],
+        [UNPAID],
+        [{ paid: "0" }],
+      ],
+      failInsertFor: [orderPayments],
+    });
+    const res = await markCollected("ord-1", cash(340));
+    expect(res.success).toBeUndefined();
+    expect(res.error).toBeTruthy();
+    expect(dbHolder.current.calls.update).toHaveLength(1);
+    expect(dbHolder.current.calls.insert).toHaveLength(1);
   });
 
   it("★ does NOT stamp a prepaid collection — it never touched this drawer", async () => {
@@ -352,6 +381,17 @@ describe("markCollected — no open shift", () => {
     const res = await markCollected("ord-1", cash(340));
     expect(res.error).toMatch(/open a shift/i);
     expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("also refuses a deposit when the store requires an open drawer", async () => {
+    vi.mocked(currentShiftIdFor).mockResolvedValue(null);
+    vi.mocked(getStoreSettings).mockResolvedValue({
+      "pos.requireOpenShift": true,
+    } as any);
+    dbHolder.current = seed(UNPAID);
+    const res = await markCollected("ord-1", cash(100));
+    expect(res.error).toMatch(/open a shift/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("★ takes the money unattributed when it doesn't — the same home a counter sale gets", async () => {
@@ -761,7 +801,8 @@ describe("markCollected — deposits", () => {
       selectQueue: [
         [UNPAID],
         [{ order_id: "ord-1", paid: "0" }], // outer: nothing paid yet
-        [{ order_id: "ord-1", paid: "200" }], // inner: someone got there first
+        [UNPAID], // the locked, still-waiting order
+        [{ paid: "200" }], // inner: someone got there first
       ],
     });
     const res = await markCollected("ord-1", cash(300));
@@ -806,6 +847,8 @@ describe("markCollected — deposits", () => {
     await markCollected("ord-1", cash(100, 100));
     expect(dbHolder.current.calls.values[0][0]).toMatchObject({
       changeDue: null,
+      shiftId: "sh1",
     });
+    expect(dbHolder.current.calls.forUpdate).toContain("update");
   });
 });

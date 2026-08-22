@@ -28,7 +28,6 @@ import {
   lt,
   or,
   sql,
-  ne,
 } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -623,17 +622,25 @@ export async function getCatalogSnapshot(
     typeof since === "string" && since && !Number.isNaN(Date.parse(since))
       ? new Date(since)
       : null;
+  // Capture once, before page 1 reads. The client keeps this first/earliest
+  // watermark across the whole paged run, so writes during a long sync are
+  // guaranteed to appear in the next delta.
+  const syncWatermark = new Date(
+    Date.now() - DELTA_OVERLAP_SECONDS * 1000,
+  ).toISOString();
 
   try {
-    const rows = await withService(async (db) => {
-      // 1. The page of product ids...
+    const result = await withService(async (db) => {
+      // A delta pages over ALL changed product rows, not just published ones.
+      // That makes withdrawals first-class page members rather than a second,
+      // unpaginated query that could silently cap at 300 removals.
       const page = await db
-        .select({ id: products.id })
+        .select({ id: products.id, status: products.status })
         .from(products)
         .where(
           and(
             eq(products.storeId, op.storeId),
-            eq(products.status, "published"),
+            sinceAt ? undefined : eq(products.status, "published"),
             after ? gt(products.id, after) : undefined,
             // ★ `products.updated_at` is bumped by a BEFORE UPDATE trigger
             // (`update_catalog_updated_at`) on EVERY write to the row, so it
@@ -651,75 +658,47 @@ export async function getCatalogSnapshot(
         )
         .orderBy(products.id)
         .limit(CATALOG_PAGE_PRODUCTS);
-      if (page.length === 0) return [];
+      if (page.length === 0) return { page, rows: [] };
 
-      // 2. ...then every sellable SKU within it.
-      return db
+      const publishedIds = page
+        .filter((product) => product.status === "published")
+        .map((product) => product.id);
+      if (publishedIds.length === 0) return { page, rows: [] };
+
+      // Then every sellable SKU for the published members of this page.
+      const rows = await db
         .select(CATALOG_COLS)
         .from(products)
         .leftJoin(productVariants, eq(productVariants.productId, products.id))
         .leftJoin(inventoryLevels, locationStockJoin(op.locationId))
-        .where(
-          inArray(
-            products.id,
-            page.map((p) => p.id),
-          ),
-        )
+        .where(inArray(products.id, publishedIds))
         .orderBy(products.id);
+      return { page, rows };
     });
 
-    const items = rows.map(mapCatalogRow);
+    const items = result.rows.map(mapCatalogRow);
     // A short page means the catalog is drained. Cursor is the last product id
     // of the page, which the ORDER BY guarantees is its maximum.
-    const productIds = new Set(items.map((i) => i.productId));
     const nextCursor =
-      productIds.size < CATALOG_PAGE_PRODUCTS
+      result.page.length < CATALOG_PAGE_PRODUCTS
         ? null
-        : (items[items.length - 1]?.productId ?? null);
+        : (result.page[result.page.length - 1]?.id ?? null);
 
-    if (!sinceAt) return { items, nextCursor };
+    const removedProductIds = sinceAt
+      ? result.page
+          .filter((product) => product.status !== "published")
+          .map((product) => product.id)
+      : undefined;
 
-    // ── The removals half of a delta ──────────────────────────────────────
-    // ★★ WITHOUT THIS THE DELTA IS ACTIVELY WRONG. The query above filters on
-    // `status = 'published'`, so an unpublished product stops matching and the
-    // register would go on selling something the merchant withdrew. Asking the
-    // opposite question is the only way a delta can say "drop this".
-    //
-    // ⚠ A HARD-DELETED product still cannot appear — the row is gone. That is
-    // what the periodic full reconcile on the client is for, and it is why the
-    // full pull remains the source of truth rather than an optimisation.
-    let removedProductIds: string[] = [];
-    try {
-      const withdrawn = await withService((db) =>
-        db
-          .select({ id: products.id })
-          .from(products)
-          .where(
-            and(
-              eq(products.storeId, op.storeId),
-              ne(products.status, "published"),
-              gt(products.updatedAt, sinceAt.toISOString()),
-            ),
-          )
-          .limit(CATALOG_PAGE_PRODUCTS),
-      );
-      removedProductIds = withdrawn.map((r) => r.id);
-    } catch (err) {
-      // ★ A FAILED REMOVALS READ MUST NOT SILENTLY SHIP A HALF-DELTA. Returning
-      // the additions alone would leave a withdrawn product on the till with
-      // nothing to say so; returning no watermark makes the client keep its old
-      // one and simply try again.
-      console.error("getCatalogSnapshot (removals):", errMsg(err));
-      return { items, nextCursor };
-    }
-
-    // Server-issued, and deliberately backdated: a row written DURING this sync
-    // would otherwise fall between the watermark and the next `since` and never
-    // be sent again. Re-sending a few seconds is free — the merge is an upsert.
-    const watermark = new Date(
-      Date.now() - DELTA_OVERLAP_SECONDS * 1000,
-    ).toISOString();
-    return { items, nextCursor, removedProductIds, watermark };
+    // Full pulls issue a watermark too; without it the client can never enter
+    // delta mode. A hard-deleted product still requires the periodic full
+    // reconcile because no remaining row can name it.
+    return {
+      items,
+      nextCursor,
+      ...(removedProductIds ? { removedProductIds } : {}),
+      watermark: syncWatermark,
+    };
   } catch (err) {
     return {
       items: [],
@@ -1694,6 +1673,7 @@ export async function placePosSale(
         tenders.map((t) => ({
           orderId,
           storeId: op.storeId,
+          shiftId,
           method: t.method,
           amount: t.amount,
           tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,

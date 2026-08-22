@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray, isNull, like, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, ne, sql } from "drizzle-orm";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
 import { readFile } from "fs/promises";
@@ -11,7 +11,12 @@ import {
   pgErrorCode,
   dbErrorMessage,
 } from "@/lib/db/errors";
-import { orderItems, productVariants, products } from "@/drizzle/schema";
+import {
+  orderItems,
+  orders,
+  productVariants,
+  products,
+} from "@/drizzle/schema";
 import {
   getManagerIdentity,
   getActingStoreId,
@@ -173,8 +178,9 @@ function positiveOrNull(value: unknown, max = 1_000_000): number | null {
 }
 
 function costOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!Number.isFinite(n) || n < 0) return null;
   return Math.min(99_999_999, Math.round(n * 100) / 100);
 }
 
@@ -331,10 +337,19 @@ async function replaceVariants(
  * future sales. Variant cost overrides the parent; null inherits it.
  */
 async function backfillMissingOrderCosts(
+  storeId: string,
   productId: string,
   productCost: number | null,
   variants: VariantFormData[],
 ) {
+  // This write uses the service role because order_items are immutable to the
+  // dashboard user. Re-prove tenancy through the parent order on every UPDATE;
+  // a product UUID alone is not an authorization boundary.
+  const belongsToStore = sql`exists (
+    select 1 from ${orders}
+     where ${orders.id} = ${orderItems.orderId}
+       and ${orders.storeId} = ${storeId}
+  )`;
   if (productCost !== null) {
     await withService((db) =>
       db
@@ -343,6 +358,7 @@ async function backfillMissingOrderCosts(
         .where(
           and(
             eq(orderItems.productId, productId),
+            belongsToStore,
             isNull(orderItems.variantId),
             isNull(orderItems.unitCost),
           ),
@@ -361,6 +377,7 @@ async function backfillMissingOrderCosts(
         .where(
           and(
             eq(orderItems.productId, productId),
+            belongsToStore,
             eq(orderItems.variantId, variant.id!),
             isNull(orderItems.unitCost),
           ),
@@ -612,10 +629,11 @@ export async function updateProduct(
     db
       .select({ published_at: products.publishedAt })
       .from(products)
-      .where(eq(products.id, id))
+      .where(and(eq(products.id, id), eq(products.storeId, storeId)))
       .limit(1),
   );
   const current = currentRows[0];
+  if (!current) return { error: "Product not found." };
 
   const publishedAt =
     formData.status === "published"
@@ -669,9 +687,14 @@ export async function updateProduct(
     try {
       // Own transaction per attempt; RLS confines the update to the caller's
       // own store.
-      await withUser(admin, (db) =>
-        db.update(products).set(row(slug)).where(eq(products.id, id)),
+      const updated = await withUser(admin, (db) =>
+        db
+          .update(products)
+          .set(row(slug))
+          .where(and(eq(products.id, id), eq(products.storeId, storeId)))
+          .returning({ id: products.id }),
       );
+      if (updated.length === 0) return { error: "Product not found." };
     } catch (err) {
       if (!isUniqueViolation(err)) {
         console.error("updateProduct error:", err);
@@ -696,6 +719,7 @@ export async function updateProduct(
     }
     if (costsEnabled) {
       await backfillMissingOrderCosts(
+        storeId,
         id,
         costOrNull(formData.cost_price),
         formData.variants,

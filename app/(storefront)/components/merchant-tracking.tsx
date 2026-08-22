@@ -126,12 +126,37 @@ export function MerchantTracking({
     null,
   );
   const consent = sessionConsent ?? parseConsent(savedConsent);
+  const hasConsent = consent !== null;
+  const analyticsConsent = consent?.analytics ?? false;
+  const marketingConsent = consent?.marketing ?? false;
   const [managing, setManaging] = useState(false);
   const [analyticsChoice, setAnalyticsChoice] = useState(false);
   const [marketingChoice, setMarketingChoice] = useState(false);
   const [gaReady, setGaReady] = useState(false);
   const [metaReady, setMetaReady] = useState(false);
   const lastFirstPartyPath = useRef<string | null>(null);
+
+  // A consent decision made in another tab is authoritative. Provider scripts
+  // may already have populated globals even after React removes their tags, so
+  // actively send the matching revoke/grant command on every consent change.
+  useEffect(() => {
+    if (!hasConsent) return;
+    window.gtag?.("consent", "update", {
+      analytics_storage: analyticsConsent ? "granted" : "denied",
+    });
+    window.fbq?.("consent", marketingConsent ? "grant" : "revoke");
+  }, [analyticsConsent, hasConsent, marketingConsent]);
+
+  // sessionConsent exists only for browsers that reject localStorage writes.
+  // If a real cross-tab storage event later arrives, stop shadowing that
+  // persisted choice with the page-local fallback.
+  useEffect(() => {
+    const clearFallback = (event: StorageEvent) => {
+      if (event.key === CONSENT_KEY) setSessionConsent(null);
+    };
+    window.addEventListener("storage", clearFallback);
+    return () => window.removeEventListener("storage", clearFallback);
+  }, []);
 
   const track = useCallback<TrackStorefrontEvent>(
     (type, details) => {
@@ -196,17 +221,15 @@ export function MerchantTracking({
     };
     try {
       localStorage.setItem(CONSENT_KEY, JSON.stringify(next));
+      // A successful persisted choice must remain governed by the external
+      // store so a later storage event can revoke it.
+      setSessionConsent(null);
       window.dispatchEvent(new Event(CONSENT_EVENT));
     } catch {
       // Privacy-safe failure: the state applies for this page, but a browser
       // that blocks storage is asked again next time rather than assumed opted in.
+      setSessionConsent(next);
     }
-
-    window.gtag?.("consent", "update", {
-      analytics_storage: next.analytics ? "granted" : "denied",
-    });
-    window.fbq?.("consent", next.marketing ? "grant" : "revoke");
-    setSessionConsent(next);
     setAnalyticsChoice(next.analytics);
     setMarketingChoice(next.marketing);
     setManaging(false);

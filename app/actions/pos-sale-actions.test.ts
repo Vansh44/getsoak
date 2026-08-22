@@ -57,7 +57,6 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { withService } from "@/lib/db/client";
-import { currentShiftIdFor } from "./pos-shift-actions";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { emitEvent } from "@/lib/notifications/record";
@@ -784,7 +783,7 @@ describe("placePosSale — stock", () => {
 describe("getCatalogSnapshot", () => {
   // Two reads per page: the page of product ids, then their sellable SKUs.
   const page = (ids: string[], rows: any[]) => [
-    ids.map((id) => ({ id })),
+    ids.map((id) => ({ id, status: "published" })),
     rows,
   ];
   const row = (over: any = {}) => ({
@@ -839,6 +838,7 @@ describe("getCatalogSnapshot", () => {
       image: "https://img/x.webp",
       stock: 4,
     });
+    expect(r.watermark).toBeTruthy();
   });
 
   it("prefers a variant's special price and falls back to the product image", () => {
@@ -894,6 +894,22 @@ describe("getCatalogSnapshot", () => {
     const r = await getCatalogSnapshot();
     expect(r.error).toBeTruthy();
     expect(r.items).toEqual([]);
+  });
+
+  it("pages withdrawn products through the same delta cursor", async () => {
+    const withdrawn = Array.from({ length: 300 }, (_, index) => ({
+      id: `p-${String(index).padStart(3, "0")}`,
+      status: "draft",
+    }));
+    dbHolder.current = makeDbMock({ selectQueue: [withdrawn] });
+
+    const r = await getCatalogSnapshot(null, "2026-08-22T09:00:00.000Z");
+    expect(r.items).toEqual([]);
+    expect(r.removedProductIds).toHaveLength(300);
+    expect(r.nextCursor).toBe("p-299");
+    // No second, capped removals query: the changed-row page is the removal
+    // page, and a cursor can drain the next 300.
+    expect(dbHolder.current.calls.select).toHaveLength(1);
   });
 });
 
@@ -1435,6 +1451,10 @@ describe("placePosSale — shift attribution", () => {
     const r = await placePosSale([line], cash);
     expect(r.success).toBe(true);
     expect(dbHolder.current.calls.values[0].shiftId).toBe("shift-1");
+    const paymentRows = dbHolder.current.calls.values.find(
+      (value: any) => Array.isArray(value) && value[0]?.method === "cash",
+    );
+    expect(paymentRows[0].shiftId).toBe("shift-1");
   });
 
   // Reconciliation surfaces an unattributed sale; a missing drawer must never

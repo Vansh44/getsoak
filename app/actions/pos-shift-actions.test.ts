@@ -179,6 +179,9 @@ describe("getCurrentShift", () => {
     });
     // Card takings appear in the breakdown but never in expected CASH.
     expect(r.shift?.byMethod).toEqual({ cash: 400, card: 300 });
+    // Tender attribution is direct; joining through mutable orders.shift_id
+    // would move an earlier deposit into the final collection's shift.
+    expect(dbHolder.current.calls.innerJoin).toHaveLength(0);
   });
 
   it("tells a cashier they cannot manage it", async () => {

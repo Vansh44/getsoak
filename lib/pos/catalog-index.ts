@@ -41,6 +41,16 @@ export const itemKey = (i: {
   variantId: string | null;
 }): string => `${i.productId}:${i.variantId ?? ""}`;
 
+/** Keep the sync-start boundary across a paged catalog run. ISO timestamps
+ * sort chronologically, so the earliest server-issued value is the safe one. */
+export function earliestCatalogWatermark(
+  current: string | null,
+  candidate: string | null | undefined,
+): string | null {
+  if (!candidate) return current;
+  return !current || candidate < current ? candidate : current;
+}
+
 /** Codes are matched case-insensitively and space-insensitively: scanners and
  *  humans disagree about both, and a failed scan is a stalled queue. */
 const normCode = (v: string): string =>

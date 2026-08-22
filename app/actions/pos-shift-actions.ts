@@ -142,8 +142,7 @@ async function loadReport(
           change_due: orderPayments.changeDue,
         })
         .from(orderPayments)
-        .innerJoin(orders, eq(orders.id, orderPayments.orderId))
-        .where(eq(orders.shiftId, shiftId)),
+        .where(eq(orderPayments.shiftId, shiftId)),
       db
         .select({
           id: posCashMovements.id,

@@ -161,37 +161,78 @@ export async function shortLinesAt(
     (l) => Number.isInteger(l.quantity) && l.quantity > 0 && l.productId,
   );
   if (wanted.length === 0) return [];
+  // Same product twice in one cart is one demand on one shelf.
+  const demand = new Map<string, AvailabilityLine & { quantity: number }>();
+  for (const line of wanted) {
+    const key = `${line.productId}:${line.variantId ?? ""}`;
+    const seen = demand.get(key);
+    if (seen) seen.quantity += line.quantity;
+    else demand.set(key, { ...line });
+  }
+
   try {
+    const requested = [...demand.values()].map(
+      (line) =>
+        sql`(${line.productId}::uuid, ${line.variantId}::uuid, ${line.quantity}::integer)`,
+    );
     const rows = await withService((db) =>
       db.execute(
-        sql`select product_id, variant_id, (on_hand - reserved) as available
-              from inventory_levels
-             where store_id = ${storeId} and location_id = ${locationId}`,
+        sql`with wanted(product_id, variant_id, quantity) as (
+              values ${sql.join(requested, sql`, `)}
+            )
+            select wanted.product_id,
+                   wanted.variant_id,
+                   coalesce(level.on_hand - level.reserved, 0) as available,
+                   case when wanted.variant_id is null
+                        then product.track_inventory
+                        else variant.track_inventory end as track_inventory,
+                   case when wanted.variant_id is null
+                        then product.allow_backorder
+                        else variant.allow_backorder end as allow_backorder
+              from wanted
+              left join products as product
+                on product.id = wanted.product_id
+               and product.store_id = ${storeId}
+              left join product_variants as variant
+                on variant.id = wanted.variant_id
+               and variant.product_id = wanted.product_id
+               and variant.store_id = ${storeId}
+              left join inventory_levels as level
+                on level.store_id = ${storeId}
+               and level.location_id = ${locationId}
+               and level.product_id = wanted.product_id
+               and level.variant_id is not distinct from wanted.variant_id`,
       ),
     );
-    const have = new Map<string, number>();
+    const have = new Map<
+      string,
+      { available: number; tracked: boolean; backorder: boolean }
+    >();
     for (const r of rows.rows as {
       product_id: string;
       variant_id: string | null;
       available: number | string;
+      track_inventory?: boolean | null;
+      allow_backorder?: boolean | null;
     }[]) {
-      have.set(
-        `${r.product_id}:${r.variant_id ?? ""}`,
-        Number(r.available) || 0,
-      );
-    }
-    // Same product twice in one cart is one demand on one shelf.
-    const demand = new Map<string, AvailabilityLine & { quantity: number }>();
-    for (const l of wanted) {
-      const key = `${l.productId}:${l.variantId ?? ""}`;
-      const seen = demand.get(key);
-      if (seen) seen.quantity += l.quantity;
-      else demand.set(key, { ...l });
+      have.set(`${r.product_id}:${r.variant_id ?? ""}`, {
+        available: Number(r.available) || 0,
+        // Undefined keeps older test doubles compatible; the real query
+        // always returns boolean/null.
+        tracked:
+          r.track_inventory === undefined ? true : r.track_inventory === true,
+        backorder: r.allow_backorder === true,
+      });
     }
     const short: ShortLine[] = [];
     for (const [key, l] of demand) {
-      const available = have.get(key) ?? 0;
-      if (available < l.quantity) short.push({ ...l, available });
+      const stock = have.get(key);
+      // Mirror reserve_stock_at exactly: untracked and backorderable lines do
+      // not block gateway capture even when their level is absent or negative.
+      if (!stock || !stock.tracked || stock.backorder) continue;
+      if (stock.available < l.quantity) {
+        short.push({ ...l, available: stock.available });
+      }
     }
     return short;
   } catch (err) {

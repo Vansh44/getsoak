@@ -4,6 +4,7 @@ import {
   applyLayout,
   applyStockDeltas,
   buildIndex,
+  earliestCatalogWatermark,
   isOutOfStock,
   layoutCoverage,
   pruneLayout,
@@ -40,6 +41,15 @@ const BREAD = item({ name: "Brown Bread", barcode: "  8901234567892 " });
 
 const CATALOG = [COKE, COKE_ZERO, MILK, BREAD];
 const IDX = buildIndex(CATALOG);
+
+describe("earliestCatalogWatermark", () => {
+  it("keeps the first boundary across a long paged sync", () => {
+    const first = "2026-08-22T10:00:00.000Z";
+    const later = "2026-08-22T10:00:15.000Z";
+    expect(earliestCatalogWatermark(first, later)).toBe(first);
+    expect(earliestCatalogWatermark(null, first)).toBe(first);
+  });
+});
 
 describe("buildIndex", () => {
   it("indexes barcodes and SKUs", () => {

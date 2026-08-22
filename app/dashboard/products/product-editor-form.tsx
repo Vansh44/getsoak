@@ -906,7 +906,9 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                     <NumberField
                       className={fieldClass}
                       value={form.cost_price ?? 0}
-                      onValueChange={(n) => set("cost_price", n > 0 ? n : null)}
+                      onValueChange={(n, raw) =>
+                        set("cost_price", raw === "" ? null : n)
+                      }
                     />
                     <p className={hintClass}>
                       What this item costs you. The first value safely fills
@@ -1261,8 +1263,12 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                             <NumberField
                               className={`${fieldClass} w-24`}
                               value={v.cost_price ?? 0}
-                              onValueChange={(n) =>
-                                updateVariant(i, "cost_price", n > 0 ? n : null)
+                              onValueChange={(n, raw) =>
+                                updateVariant(
+                                  i,
+                                  "cost_price",
+                                  raw === "" ? null : n,
+                                )
                               }
                             />
                             <span className="text-[11px] text-[#9ca3af]">

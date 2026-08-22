@@ -17,6 +17,8 @@ describe("MerchantTracking consent gate", () => {
       value: sendBeacon,
     });
     sendBeacon.mockClear();
+    delete window.gtag;
+    delete window.fbq;
   });
 
   it("does not render either provider before consent", async () => {
@@ -113,6 +115,55 @@ describe("MerchantTracking consent gate", () => {
     expect(await screen.findByTestId(/sm-meta-pixel/)).toBeInTheDocument();
     expect(screen.queryByTestId(/sm-ga4/)).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("applies a revocation received from another tab", async () => {
+    localStorage.setItem(
+      "sm.storefront-tracking-consent.v1",
+      JSON.stringify({
+        version: 1,
+        analytics: true,
+        marketing: true,
+        decidedAt: "2026-08-20T12:00:00.000Z",
+      }),
+    );
+    window.gtag = vi.fn();
+    window.fbq = vi.fn() as Window["fbq"];
+
+    render(
+      <MerchantTracking
+        storeName="Echoes"
+        ga4MeasurementId="G-ABC12345"
+        metaPixelId="1234567890"
+        firstPartyEnabled={false}
+      >
+        <div>Store</div>
+      </MerchantTracking>,
+    );
+    expect(await screen.findByTestId(/sm-ga4-init/)).toBeInTheDocument();
+
+    const revoked = JSON.stringify({
+      version: 1,
+      analytics: false,
+      marketing: false,
+      decidedAt: "2026-08-20T12:05:00.000Z",
+    });
+    localStorage.setItem("sm.storefront-tracking-consent.v1", revoked);
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "sm.storefront-tracking-consent.v1",
+        newValue: revoked,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(/sm-ga4/)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(/sm-meta/)).not.toBeInTheDocument();
+      expect(window.gtag).toHaveBeenCalledWith("consent", "update", {
+        analytics_storage: "denied",
+      });
+      expect(window.fbq).toHaveBeenCalledWith("consent", "revoke");
+    });
   });
 
   it("sends first-party events only after analytics consent", async () => {

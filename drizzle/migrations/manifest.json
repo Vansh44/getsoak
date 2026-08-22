@@ -314,6 +314,24 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260822_0013_payment_shift_attribution",
+      "description": "Attribute each POS tender to the drawer shift that captured it",
+      "file": "sql/20260822_0013_payment_shift_attribution.sql",
+      "transaction": true,
+      "requires": ["20260820_0012_gross_margin"],
+      "verify": {
+        "columns": ["order_payments.shift_id"],
+        "constraints": ["order_payments_shift_id_fkey"],
+        "queries": [
+          {
+            "name": "legacy shifted payments are backfilled",
+            "sql": "select count(*)::text from public.order_payments p join public.orders o on o.id = p.order_id where o.shift_id is not null and p.shift_id is null",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

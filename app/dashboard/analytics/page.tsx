@@ -481,7 +481,10 @@ export default async function AnalyticsPage({
       ? getSalesByLocation(storeId, location, range)
       : Promise.resolve([]);
   const recentOrders = getRecentOrders(storeId, location, range);
-  const activity = getActivity(storeId, location, range);
+  const activity = getActivity(storeId, location, range, {
+    includeEnquiries: showEnquiries,
+    includeBlogs: showBlogApprovals,
+  });
   const customerMix = getCustomerMix(storeId, location, range);
   const discounts = getDiscountImpact(storeId, location, range);
   const returns = getReturnsAndRefunds(storeId, location, range);

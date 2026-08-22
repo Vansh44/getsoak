@@ -13,12 +13,14 @@
 // ★ A `pay_at_store` collection is also where MONEY changes hands, and until
 // 2026-08-06 none of it was recorded: the hand-over flipped payment_status to
 // 'paid' and wrote no `order_payments` row and no `orders.shift_id`. Shift
-// reconciliation reads cash as `order_payments` joined to orders ON shift_id,
+// reconciliation then read cash by joining payments through orders.shift_id,
 // so the notes were physically in the drawer and contributed 0 to expectedCash
 // — every drawer reported OVER by the full value of every collection it took,
 // every shift, and those sales were missing from the Z-report's count and gross
 // as well. That is the mirror of the two bugs lib/pos/shifts.ts already guards
-// (double-counted change, cash refunds), which both reported SHORT.
+// (double-counted change, cash refunds), which both reported SHORT. Takings now
+// use the tender's own order_payments.shift_id; orders.shift_id remains the
+// completed-sale attribution.
 
 import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -147,20 +149,42 @@ async function takeDeposit(input: {
   orderId: string;
   tenders: PosTender[];
   paid: number;
-  due: number;
-  alreadyPaid: number;
   shiftId: string | null;
 }): Promise<{
   success?: boolean;
   error?: string;
   partial?: { paid: number; remaining: number };
 }> {
-  const { op, orderId, tenders, paid, due, alreadyPaid, shiftId } = input;
+  const { op, orderId, tenders, paid, shiftId } = input;
   try {
     const remaining = await withService(async (db) => {
-      // Re-read INSIDE the transaction: the figure the cashier saw may be
-      // seconds old, and this is the only thing standing between a double-tap
-      // and an inflated drawer.
+      // Lock the ORDER before reading the tender total. Every deposit and the
+      // final claim take this same lock, so two counters cannot both approve
+      // against the same stale balance.
+      const lockedRows = await db
+        .select({
+          total: orders.total,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+        })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, op.storeId),
+            eq(orders.fulfilmentType, "pickup"),
+            eq(orders.pickupLocationId, op.locationId),
+            or(
+              eq(orders.pickupStatus, "awaiting"),
+              eq(orders.pickupStatus, "ready"),
+            ),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      const locked = lockedRows[0];
+      if (!locked) throw new Error(NOT_WAITING_CODE);
+
       const nowRows = await db
         .select({
           paid: sql<string>`coalesce(sum(${orderPayments.amount}), 0)`,
@@ -168,15 +192,25 @@ async function takeDeposit(input: {
         .from(orderPayments)
         .where(eq(orderPayments.orderId, orderId));
       const settledNow = Number(nowRows[0]?.paid) || 0;
-      const owedNow = Math.max(0, due + alreadyPaid - settledNow);
+      const owedNow = amountDueAtCollection({
+        paymentMethod: locked.payment_method,
+        paymentStatus: locked.payment_status,
+        total: locked.total,
+        paidSoFar: settledNow,
+      });
       if (paid > owedNow + 0.0001) {
         throw new Error(OVERPAID);
       }
+      // This request entered as a deposit. If another tender has meanwhile
+      // made it a full settlement, make the cashier reload and use the claim
+      // path; silently leaving a fully paid parcel on the shelf is misleading.
+      if (paid + 0.0001 >= owedNow) throw new Error(PAYMENT_MOVED);
 
       await db.insert(orderPayments).values(
         tenders.map((t) => ({
           orderId,
           storeId: op.storeId,
+          shiftId,
           method: t.method,
           amount: t.amount,
           tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
@@ -190,18 +224,6 @@ async function takeDeposit(input: {
       return Math.max(0, owedNow - paid);
     });
 
-    // ★ The drawer is stamped on the ORDER, and a deposit belongs to the shift
-    // that took it exactly as a full payment does — otherwise the notes are in
-    // the till and contribute 0 to expectedCash, which is the bug §23 fixed.
-    if (shiftId) {
-      await withService((db) =>
-        db
-          .update(orders)
-          .set({ shiftId })
-          .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId))),
-      ).catch((err) => console.error("takeDeposit (shift stamp):", err));
-    }
-
     revalidatePath("/pos/pickups");
     return { success: true, partial: { paid, remaining } };
   } catch (err) {
@@ -210,6 +232,15 @@ async function takeDeposit(input: {
         error:
           "That is more than this order still owes — someone may have just taken a payment. Reload and check.",
       };
+    }
+    if (err instanceof Error && err.message === PAYMENT_MOVED) {
+      return {
+        error:
+          "This order's payment changed while you were taking it. Reload and check the remaining balance.",
+      };
+    }
+    if (err instanceof Error && err.message === NOT_WAITING_CODE) {
+      return { error: NOT_WAITING };
     }
     return { error: dbErrorMessage(err, "Couldn't record that payment.") };
   }
@@ -315,6 +346,8 @@ export async function getPickupQueue(
 
 const OVERPAID = "sm:overpaid";
 const CREDIT_MOVED = "sm:credit-moved";
+const PAYMENT_MOVED = "sm:payment-moved";
+const NOT_WAITING_CODE = "sm:not-waiting";
 const NOT_WAITING =
   "That order isn't waiting for collection here. It may already have been collected.";
 
@@ -474,6 +507,27 @@ export async function markCollected(
       }
     }
 
+    // Resolve drawer policy for EVERY payment path, including a deposit. A
+    // short tender still puts physical money in the till and must obey the same
+    // open-shift requirement as a sale that settles in full.
+    shiftId = await currentShiftIdFor(op.locationId);
+    if (!shiftId) {
+      let requireShift = false;
+      try {
+        requireShift =
+          (await getStoreSettings())["pos.requireOpenShift"] === true;
+      } catch {
+        // A settings read failure must not refuse a customer standing at the
+        // counter — the same posture getCurrentShift takes.
+        requireShift = false;
+      }
+      if (requireShift) {
+        return {
+          error: "Open a shift before taking payment at the counter.",
+        };
+      }
+    }
+
     // ── Part payment (roadmap Step 18) ─────────────────────────────────────
     // ★★ A DEPOSIT DOES NOT HAND THE PARCEL OVER. `markCollected` claims
     // awaiting|ready → collected in ONE statement, and a part-paid collection
@@ -502,9 +556,7 @@ export async function markCollected(
         orderId,
         tenders,
         paid,
-        due,
-        alreadyPaid,
-        shiftId: await currentShiftIdFor(op.locationId),
+        shiftId,
       });
     }
 
@@ -515,33 +567,6 @@ export async function markCollected(
     const settled = settleTenders(tenders, due);
     if ("error" in settled) return { error: settled.error };
     change = settled.change;
-
-    // Which drawer this money belongs to. Stamped on the order in the SAME
-    // statement as the claim, so a collection cannot be recorded without its
-    // cash landing somewhere — the gap this whole change exists to close.
-    shiftId = await currentShiftIdFor(op.locationId);
-    if (!shiftId) {
-      // The SAME rule the sell path applies, deliberately: taking payment at a
-      // counter IS selling, so the money gets exactly the home a counter sale's
-      // money gets. With the setting on, the hand-over waits for a drawer —
-      // nothing is lost, the goods stay held. With it off it goes unattributed,
-      // which reconciliation surfaces rather than hides (currentShiftIdFor).
-      // Inventing a third policy here is how the two counters drift apart.
-      let requireShift = false;
-      try {
-        requireShift =
-          (await getStoreSettings())["pos.requireOpenShift"] === true;
-      } catch {
-        // A settings read failure must not refuse a customer standing at the
-        // counter — the same posture getCurrentShift takes.
-        requireShift = false;
-      }
-      if (requireShift) {
-        return {
-          error: "Open a shift before taking payment at the counter.",
-        };
-      }
-    }
   } else if (Array.isArray(tenders) && tenders.length > 0) {
     // Refused, not ignored. Recording tenders against an order that owes
     // nothing would inflate the drawer's expected cash with money that was
@@ -560,13 +585,54 @@ export async function markCollected(
       }
     | undefined;
   try {
-    // ★★ THE CLAIM AND THE SPEND ARE ONE TRANSACTION, and that is the whole
-    // design. `try_spend_customer_credit` is atomic per CALL but is NOT
-    // deduplicated by its ref, so exactly-once has to come from the claim.
-    // Spending BEFORE it would take money for a hand-over that then loses the
-    // race to a second tap; spending AFTER it would give the goods away for
-    // free when the balance moved. Inside it, either both happen or neither.
+    // ★★ THE CLAIM, CREDIT SPEND, AND TENDER INSERT ARE ONE TRANSACTION.
+    // Nothing may report success unless the money audit row committed too.
     const rows = await withService(async (db) => {
+      if (due > 0) {
+        // Deposits take this same row lock. Re-check the balance after gateway
+        // verification so a concurrent counter payment cannot make this claim
+        // over-collect against the stale amount shown in the UI.
+        const lockedRows = await db
+          .select({
+            total: orders.total,
+            payment_method: orders.paymentMethod,
+            payment_status: orders.paymentStatus,
+          })
+          .from(orders)
+          .where(
+            and(
+              eq(orders.id, orderId),
+              eq(orders.storeId, op.storeId),
+              eq(orders.fulfilmentType, "pickup"),
+              eq(orders.pickupLocationId, op.locationId),
+              or(
+                eq(orders.pickupStatus, "awaiting"),
+                eq(orders.pickupStatus, "ready"),
+              ),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        const locked = lockedRows[0];
+        if (!locked) throw new Error(NOT_WAITING_CODE);
+
+        const paidRows = await db
+          .select({
+            paid: sql<string>`coalesce(sum(${orderPayments.amount}), 0)`,
+          })
+          .from(orderPayments)
+          .where(eq(orderPayments.orderId, orderId));
+        const dueNow = amountDueAtCollection({
+          paymentMethod: locked.payment_method,
+          paymentStatus: locked.payment_status,
+          total: locked.total,
+          paidSoFar: Number(paidRows[0]?.paid) || 0,
+        });
+        if (Math.abs(dueNow - due) > 0.0001) {
+          throw new Error(PAYMENT_MOVED);
+        }
+      }
+
       const claimedRows = await db
         .update(orders)
         .set({
@@ -626,23 +692,40 @@ export async function markCollected(
         });
 
       // Nothing was claimed — a second tap, or someone else got there first.
-      // Returning empty leaves the balance untouched, which is the point.
-      if (!claimedRows.length || creditAsked <= 0) return claimedRows;
+      // Returning empty leaves both the balance and tender ledger untouched.
+      if (!claimedRows.length) return claimedRows;
 
-      const spent = await spendCredit(
-        {
-          storeId: op.storeId,
-          customerId: claimedRows[0].customer_id ?? "",
-          amount: creditAsked,
-          orderId,
-          note: "Collection",
-        },
-        db,
-      );
-      // ★ THROW TO ROLL THE CLAIM BACK. The pre-check said the balance covered
-      // this, so a false here means it moved underneath us — rare, and the one
-      // outcome that must NOT leave the parcel handed over unpaid.
-      if (!spent) throw new Error(CREDIT_MOVED);
+      if (creditAsked > 0) {
+        const spent = await spendCredit(
+          {
+            storeId: op.storeId,
+            customerId: claimedRows[0].customer_id ?? "",
+            amount: creditAsked,
+            orderId,
+            note: "Collection",
+          },
+          db,
+        );
+        // Throwing rolls the claim back with the failed balance movement.
+        if (!spent) throw new Error(CREDIT_MOVED);
+      }
+
+      if (due > 0) {
+        await db.insert(orderPayments).values(
+          tenders.map((t) => ({
+            orderId,
+            storeId: op.storeId,
+            shiftId,
+            method: t.method,
+            amount: t.amount,
+            tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
+            // netCashFromSales groups by order and takes max(change), so this
+            // remains replicated only on cash rows and is subtracted once.
+            changeDue: t.method === "cash" ? change : null,
+            reference: t.reference?.slice(0, 120) ?? null,
+          })),
+        );
+      }
       return claimedRows;
     });
     claimed = rows[0];
@@ -653,50 +736,27 @@ export async function markCollected(
           "That customer's store credit changed while you were paying. Check the balance and take it again.",
       };
     }
+    if (err instanceof Error && err.message === PAYMENT_MOVED) {
+      return {
+        error:
+          "This order's payment changed while you were taking it. Reload and check the remaining balance.",
+      };
+    }
+    if (err instanceof Error && err.message === NOT_WAITING_CODE) {
+      return { error: NOT_WAITING };
+    }
+    if (
+      isUniqueViolation(err) &&
+      tenders.some((t) => t.method === "razorpay")
+    ) {
+      return {
+        error: "That online payment has already been used on another sale.",
+      };
+    }
     return { error: dbErrorMessage(err, "Couldn't complete the collection.") };
   }
 
   if (!claimed) return { error: NOT_WAITING };
-
-  // Record the tender. AFTER the claim, so a second tap — which matches zero
-  // rows — cannot write a second payment for money handed over once.
-  if (due > 0) {
-    try {
-      await withService((db) =>
-        db.insert(orderPayments).values(
-          tenders.map((t) => ({
-            orderId,
-            storeId: op.storeId,
-            method: t.method,
-            amount: t.amount,
-            tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
-            // Change is a property of the COLLECTION, replicated onto each cash
-            // row exactly as placePosSale does — netCashFromSales groups by
-            // order and takes the max, so it is subtracted once.
-            changeDue: t.method === "cash" ? change : null,
-            reference: t.reference?.slice(0, 120) ?? null,
-          })),
-        ),
-      );
-    } catch (err) {
-      // The customer has paid and is holding the goods; the collection is NOT
-      // undone. Log loudly — this is the one path that can still leave cash
-      // unrecorded, and it is now an error rather than the design.
-      //
-      // ⚠ A UNIQUE VIOLATION HERE MEANS SOMETHING SHARPER than a lost
-      // breakdown: `order_payments_gateway_ref_key` fired, so that gateway
-      // payment already settled a different order and the verify above lost a
-      // race. Unlike the sell counter this CANNOT unwind — the claim committed
-      // and the parcel is gone — so it is logged distinctly for a human to
-      // reconcile rather than dressed up as the ordinary case.
-      console.error(
-        isUniqueViolation(err)
-          ? "markCollected (payments): gateway reference already settled another order"
-          : "markCollected (payments):",
-        err,
-      );
-    }
-  }
 
   // Turn every hold for this order into a real sale. commitHold is idempotent,
   // so a retry after a partial failure cannot double-decrement.

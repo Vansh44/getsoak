@@ -919,11 +919,24 @@ drawer reporting OVER by the deposit. It now takes `paidSoFar`, read by one
 shared `paidSoFarFor` so the queue, a scanned code and the charge cannot
 disagree.
 
-**★ THE CAP IS THE INVARIANT.** Recorded payments can never exceed what the
-order owes — re-read INSIDE the writing transaction, because the figure the
-cashier saw is seconds old. ⚠ It fires on a RACE, not on a big number: a payment
+**★ THE CAP IS THE INVARIANT.** Every deposit and the final collection claim
+locks the same order row, then re-reads payments INSIDE the writing transaction.
+Two counters therefore serialize before deciding what is still owed; a stale
+outer read can neither over-collect nor leave a newly settled parcel silently
+in the deposit state. ⚠ The cap fires on a RACE, not on a big number: a payment
 larger than what is owed is an over-payment on the full path, where cash
 legitimately gives change.
+
+**★★ CLAIM + CREDIT + TENDERS COMMIT TOGETHER.** The collected transition,
+store-credit spend and every `order_payments` insert are one service-role
+transaction. A failed tender insert rolls the claim and credit back rather than
+returning success with money missing from reconciliation.
+
+**★ DRAWER ATTRIBUTION BELONGS TO THE TENDER.** Migration
+`20260822_0013_payment_shift_attribution` adds `order_payments.shift_id` and
+backfills legacy rows. Deposits can span shifts, so stamping mutable
+`orders.shift_id` could never identify which drawer took each payment. The open
+shift requirement now applies to deposits as well as the final payment.
 
 **★ NO STORE CREDIT ON A DEPOSIT.** Its exactly-once guarantee comes from
 running inside the claim's transaction (§29); with no claim there is nothing to
@@ -970,9 +983,9 @@ products a page — O(catalogue) per till, forever. A 20,000-SKU shop with four
 tills does that 48 times an hour.
 
 **✅ Shipped.** `getCatalogSnapshot(cursor, since)` returns changes, REMOVALS and
-a server-issued watermark; `mergeCatalogDelta` (pure, 8 tests) folds them into
-the cache; `use-catalog` keeps the watermark and falls back to a full pull every
-30 minutes.
+a server-issued watermark; `mergeCatalogDelta` folds them into the cache;
+`use-catalog` keeps the watermark and falls back to a full pull every 30 minutes.
+The full pull also returns a watermark—otherwise delta mode never starts.
 
 **★★ THE WATERMARK QUESTION WAS SETTLED AGAINST THE LIVE SCHEMA, NOT ASSUMED.**
 `products.updated_at` is maintained by `update_catalog_updated_at()` — a BEFORE
@@ -995,10 +1008,10 @@ as the recovery path.
 
 **⚠ DELETES ARE THE TRAP — and they split in two.**
 
-- **UNPUBLISHED** is handled: the catalogue query filters on
-  `status = 'published'`, so a withdrawn product stops matching and would simply
-  linger. The delta asks the OPPOSITE question as well and returns
-  `removedProductIds`. Without that half a delta is actively wrong.
+- **UNPUBLISHED** is handled: a delta pages one keyset-ordered stream of ALL
+  changed product rows. Published members expand into catalog items and every
+  withdrawn member becomes a `removedProductId`. Removals therefore share the
+  cursor and cannot disappear behind a separate 300-row cap.
 - **HARD-DELETED cannot be**: the row is gone, so no query can name it. The
   30-minute full reconcile is the only thing that ever notices, which makes it
   a CORRECTNESS interval rather than a tuning knob — lengthen it and the window
@@ -1013,14 +1026,12 @@ every sellable SKU under a product, so upserting by product+variant would leave
 a DELETED variant behind forever: the delta stops mentioning it, which is
 indistinguishable from "unchanged". Mutation-checked.
 
-**★ THE WATERMARK IS SERVER-ISSUED AND BACKDATED 10s.** A browser clock would
-let a fast till skip everything changed in between, permanently; the overlap
-stops a row written DURING the sync falling into the gap. Re-sending a few
-seconds is free — the merge is an upsert.
-
-**★ A FAILED REMOVALS READ SHIPS NO WATERMARK.** The client then keeps its old
-one and repeats the window, rather than advancing past a withdrawal it never
-heard about.
+**★ THE WATERMARK IS SERVER-ISSUED, BACKDATED 10s, AND CAPTURED AT SYNC START.**
+A browser clock would let a fast till skip everything changed in between,
+permanently. Every page returns a boundary, but the client keeps the earliest
+one from the run: if a large sync lasts more than 10 seconds, advancing to the
+last page's newer clock could skip a row changed after page 1 had passed it.
+Re-sending is free—the merge is an upsert—while missing is not.
 
 **★ THE CACHE VERSION WAS BUMPED (v2 → v3).** A v2 entry has no watermark, and
 serving one would make the first sync a delta with no `since` — which the server

@@ -65,6 +65,7 @@ import {
   classifyCustomerMix,
   comparisonTrend,
   getRecentOrders,
+  getActivity,
   getSalesAnalytics,
   grossMarginFromTotals,
   getSalesByChannel,
@@ -182,6 +183,24 @@ describe("analytics data — location scope", () => {
     // The store filter is always present; what must NOT happen is the query
     // running with no location predicate at all.
     expect(captured.wheres.length).toBeGreaterThan(0);
+  });
+});
+
+describe("analytics data — activity permissions", () => {
+  it("does not query enquiry or blog activity without those permissions", async () => {
+    await getActivity("store-1", allLocations, range, {
+      includeEnquiries: false,
+      includeBlogs: false,
+    });
+    expect(captured.wheres).toHaveLength(1);
+  });
+
+  it("includes each optional source only when allowed", async () => {
+    await getActivity("store-1", allLocations, range, {
+      includeEnquiries: true,
+      includeBlogs: true,
+    });
+    expect(captured.wheres).toHaveLength(3);
   });
 });
 

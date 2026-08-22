@@ -177,11 +177,54 @@ describe("shortLinesAt", () => {
   });
 
   it("treats a SKU the location has never carried as zero", async () => {
-    levels([]);
+    // The query returns one wanted row even when its level is absent.
+    levels([
+      {
+        product_id: "p9",
+        variant_id: null,
+        available: 0,
+        track_inventory: true,
+        allow_backorder: false,
+      },
+    ]);
     const short = await shortLinesAt("s1", "l1", [
       { productId: "p9", variantId: null, quantity: 1 },
     ]);
     expect(short[0]).toMatchObject({ available: 0 });
+  });
+
+  it("does not block an untracked SKU with no stock row", async () => {
+    levels([
+      {
+        product_id: "p1",
+        variant_id: null,
+        available: 0,
+        track_inventory: false,
+        allow_backorder: false,
+      },
+    ]);
+    expect(
+      await shortLinesAt("s1", "l1", [
+        { productId: "p1", variantId: null, quantity: 3 },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("does not block a tracked backorderable SKU below zero", async () => {
+    levels([
+      {
+        product_id: "p1",
+        variant_id: "v1",
+        available: -4,
+        track_inventory: true,
+        allow_backorder: true,
+      },
+    ]);
+    expect(
+      await shortLinesAt("s1", "l1", [
+        { productId: "p1", variantId: "v1", quantity: 3 },
+      ]),
+    ).toEqual([]);
   });
 
   it("keeps variants apart", async () => {

@@ -16,6 +16,7 @@ import {
   EMPTY_INDEX,
   applyStockDeltas,
   buildIndex,
+  earliestCatalogWatermark,
   scanLocal,
   searchLocal,
   type CatalogIndex,
@@ -43,8 +44,8 @@ import { fetchCatalogPage } from "./live";
  */
 const RESYNC_MS = 5 * 60 * 1000;
 
-/** Bounds memory and sync time on a pathological catalog. Past this the
- *  register still works — it just falls back to the server more often. */
+/** Bounds the persisted/searchable catalog on a pathological store. The sync
+ * still drains later pages so withdrawals beyond this cap are not skipped. */
 /**
  * How often a DELTA gives way to a full reconcile (roadmap Step 19).
  *
@@ -168,12 +169,17 @@ export function useCatalog(
           items.push(...res.items);
           if (res.removedProductIds?.length)
             removed.push(...res.removedProductIds);
-          // ★ Kept from the LAST page only. Each page issues its own, and the
-          // last is the newest — taking an earlier one would re-send the pages
-          // between forever.
-          if (res.watermark) nextWatermark = res.watermark;
+          // Keep the FIRST/EARLIEST page watermark. A later page may arrive
+          // minutes later; advancing to its newer clock could skip a product
+          // changed after page 1 had already passed it.
+          nextWatermark = earliestCatalogWatermark(
+            nextWatermark,
+            res.watermark,
+          );
           cursor = res.nextCursor;
-          if (!cursor || items.length >= MAX_ITEMS) break;
+          // Drain every changed-row page even after the local item cap. Later
+          // pages may consist only of withdrawals that must still be applied.
+          if (!cursor) break;
         }
 
         if (!aliveRef.current || (run && !run.isCurrent())) return;

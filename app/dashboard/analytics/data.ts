@@ -1224,6 +1224,7 @@ export async function getActivity(
   storeId: string,
   location: AnalyticsLocationSelection,
   range: AnalyticsRange,
+  visibility: { includeEnquiries: boolean; includeBlogs: boolean },
 ): Promise<ActivityItem[]> {
   const scoped = locationCondition(location);
   return withService(async (db) => {
@@ -1244,39 +1245,43 @@ export async function getActivity(
       )
       .orderBy(desc(orders.createdAt))
       .limit(5);
-    const enquiryRows = await db
-      .select({
-        name: enquiries.name,
-        subject: enquiries.subject,
-        createdAt: enquiries.createdAt,
-      })
-      .from(enquiries)
-      .where(
-        and(
-          eq(enquiries.storeId, storeId),
-          gte(enquiries.createdAt, range.current.from.toISOString()),
-          lt(enquiries.createdAt, range.current.to.toISOString()),
-        ),
-      )
-      .orderBy(desc(enquiries.createdAt))
-      .limit(5);
-    const blogRows = await db
-      .select({
-        title: blogs.title,
-        author: blogs.author,
-        status: blogs.status,
-        createdAt: blogs.createdAt,
-      })
-      .from(blogs)
-      .where(
-        and(
-          eq(blogs.storeId, storeId),
-          gte(blogs.createdAt, range.current.from.toISOString()),
-          lt(blogs.createdAt, range.current.to.toISOString()),
-        ),
-      )
-      .orderBy(desc(blogs.createdAt))
-      .limit(5);
+    const enquiryRows = visibility.includeEnquiries
+      ? await db
+          .select({
+            name: enquiries.name,
+            subject: enquiries.subject,
+            createdAt: enquiries.createdAt,
+          })
+          .from(enquiries)
+          .where(
+            and(
+              eq(enquiries.storeId, storeId),
+              gte(enquiries.createdAt, range.current.from.toISOString()),
+              lt(enquiries.createdAt, range.current.to.toISOString()),
+            ),
+          )
+          .orderBy(desc(enquiries.createdAt))
+          .limit(5)
+      : [];
+    const blogRows = visibility.includeBlogs
+      ? await db
+          .select({
+            title: blogs.title,
+            author: blogs.author,
+            status: blogs.status,
+            createdAt: blogs.createdAt,
+          })
+          .from(blogs)
+          .where(
+            and(
+              eq(blogs.storeId, storeId),
+              gte(blogs.createdAt, range.current.from.toISOString()),
+              lt(blogs.createdAt, range.current.to.toISOString()),
+            ),
+          )
+          .orderBy(desc(blogs.createdAt))
+          .limit(5)
+      : [];
     return [
       ...orderRows.map((row) => ({
         kind: "order" as const,

@@ -1789,6 +1789,10 @@ export const orderPayments = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     orderId: uuid("order_id").notNull(),
     storeId: uuid("store_id").notNull(),
+    // The drawer that physically took THIS tender. Kept on the payment rather
+    // than inferred through orders.shift_id because deposits and final payment
+    // may happen on different shifts.
+    shiftId: uuid("shift_id"),
     method: text().notNull(),
     amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
     tendered: numeric({ precision: 12, scale: 2, mode: "number" }),
@@ -1809,6 +1813,11 @@ export const orderPayments = pgTable(
     index("order_payments_order_idx").using(
       "btree",
       table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("order_payments_shift_captured_idx").using(
+      "btree",
+      table.shiftId.asc().nullsLast().op("uuid_ops"),
+      table.capturedAt.asc().nullsLast().op("timestamptz_ops"),
     ),
     foreignKey({
       columns: [table.orderId],

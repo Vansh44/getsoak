@@ -1223,7 +1223,9 @@ wholesip/
 │                              # packing is distinct from the checkout promise;
 │                              # 0004 repairs paid AI-credit invoices left open
 │                              # and therefore falsely presented as plan debt; 0010
-│                              # enables merchant pixels and publishes their setup guides.
+│                              # enables merchant pixels and publishes their setup guides;
+│                              # 0013 adds per-tender order_payments.shift_id, backfills
+│                              # legacy rows and makes drawer attribution deposit-safe.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
@@ -2154,7 +2156,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     reserve**, so a refused payment unwinds nothing. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
     runs `shortLinesAt`, refusing before the Razorpay order exists, which
-    catches the commoner stale-IndexedDB-cache case for free. ⚠ It does NOT
+    catches the commoner stale-IndexedDB-cache case for free. That courtesy read
+    mirrors `reserve_stock_at`: untracked or backorderable product/variant rows
+    never block capture merely because their level is absent, zero or negative;
+    tracked non-backorderable demand uses `on_hand − reserved`. ⚠ It does NOT
     hold stock: an abandoned hold strands units for up to an hour, the same
     reason a parked sale holds none (§22), so the two-till race on a last unit
     still fails at completion and is refunded from the dashboard (owner's
@@ -2457,6 +2462,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `merchant-tracking.tsx` loads neither provider until the shopper explicitly
       permits its separate Analytics or Marketing category, stores the choice in
       that browser, supports later withdrawal, and sends route-aware page views.
+      The persisted choice remains authoritative after an in-page save: a
+      cross-tab `storage` event immediately removes provider scripts and issues
+      GA consent-denied / Meta revoke calls to globals already loaded in the page.
       Lower plans, disabled operator switches, invalid legacy settings, and
       builder previews render no provider script. Migration
       `20260820_0010_merchant_pixels` enables the two platform modules and
@@ -2495,7 +2503,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       POS, and exchange lines without rewriting history. Analytics reports
       costed merchandise sales, COGS, gross profit, margin, and explicit cost
       coverage before returns/refunds. Unknown costs are excluded—not treated
-      as zero—so an incomplete catalog cannot inflate profit silently.
+      as zero—so an incomplete catalog cannot inflate profit silently; explicit
+      ₹0 is valid and distinct from blank. Updates first prove `(id, store_id)`
+      ownership, and the service-role history backfill is correlated through
+      `orders.store_id`, so a foreign product UUID cannot rewrite another
+      tenant's order lines.
     - **Visual language**: the page root `.dash-analytics` re-skins the shared
       `.dash-card` chrome into the quieter Shopify look (hairline borders,
       dotted-underline titles, monochrome bars/icons, colour reserved for trend
@@ -3088,9 +3100,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         - **★ THE WATERMARK IS SERVER-ISSUED, NEVER A BROWSER CLOCK.** A till
           whose clock runs fast would skip everything changed in between —
           permanently, since the next window starts after the one it skipped.
-          The server issues it backdated by `DELTA_OVERLAP_SECONDS` (10), so a
-          write committing in the same second as a sync is re-sent rather than
-          missed. Re-sending is free (the merge is idempotent); missing is not.
+          The full pull issues one too—otherwise delta mode never activates.
+          It is captured before page 1 and backdated by
+          `DELTA_OVERLAP_SECONDS` (10); the client keeps the earliest boundary
+          across the run, so a sync lasting over 10 seconds cannot skip a row
+          changed after an earlier page passed it. Re-sending is free (the
+          merge is idempotent); missing is not.
         - **★★ `products.updated_at` COVERS STOCK, NOT JUST CONTENT** — verified
           against the live schema 2026-08-21, not assumed. `update_catalog_updated_at()`
           is a BEFORE UPDATE FOR EACH ROW trigger whose whole body is
@@ -3100,11 +3115,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           ⚠ `product_variants` has NO `updated_at`, so variants are covered
           INDIRECTLY — a variant-only write path that never touches the product
           row would go unnoticed. Pinned by a test.
-        - **★★ A DELTA MUST CARRY REMOVALS OR IT IS ACTIVELY WRONG.** The
-          catalogue query filters on `status = 'published'`, so an unpublished
-          product simply stops matching and would linger on the till forever —
-          the register going on selling something the merchant withdrew. The
-          action asks the opposite question too and returns `removedProductIds`.
+        - **★★ A DELTA MUST CARRY REMOVALS OR IT IS ACTIVELY WRONG.** One
+          keyset page contains ALL changed product rows: published members
+          expand into items and unpublished members become
+          `removedProductIds`. Withdrawals therefore share `nextCursor` with
+          changes and cannot be silently truncated by a separate 300-row query.
           A removal WINS over a contradictory change in the same window.
         - **★★ A HARD-DELETED PRODUCT CANNOT APPEAR IN ANY DELTA**, because the
           row is gone. So `FULL_RESYNC_EVERY_MS` (30 min) is a **CORRECTNESS
@@ -3114,9 +3129,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         - **★ A PRODUCT IS REPLACED WHOLESALE, not upserted per SKU.** Merging
           variant by variant leaves a DELETED variant in the cache forever,
           since nothing in the delta mentions the SKU that no longer exists.
-          A failed removals read ships NO watermark, so the client repeats the
-          window rather than advancing past a withdrawal it never heard about —
-          the `use-poll` rule that an error is never a quiet answer. `catalog-store.ts`
+          Changed and withdrawn rows now come from the same transaction and
+          page, so a failed page ships neither half nor a watermark—the
+          `use-poll` rule that an error is never a quiet answer. `catalog-store.ts`
           is at `SCHEMA_VERSION` 3 (the cache gained `watermark`), so an older
           shape is re-synced rather than served.
       - **★★ THE READ PHASE IS FOUR CONCURRENT BATCHES, NOT EIGHT SERIAL READS
@@ -3303,10 +3318,13 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         friendly "already open" rather than a raw constraint error. Closing
         claims the open→closed transition CONDITIONALLY (the order-cancellation
         pattern), so a second tap can't overwrite the first count.
-      - **`orders.shift_id` is stamped at sale time**, not inferred from a time
-        window — a sale rung a second before midnight must not land in
-        tomorrow's drawer. If the drawer lookup fails the sale still completes
-        and goes unattributed, which reconciliation surfaces rather than hides.
+      - **Drawer takings use `order_payments.shift_id`**, added and legacy-
+        backfilled by migration `20260822_0013_payment_shift_attribution`.
+        Every sale, collection payment and deposit stamps the tender at capture
+        time, so deposits taken across shifts cannot be moved by a later order
+        update. `orders.shift_id` remains the sale/completion attribution for
+        count and gross. If the drawer lookup fails the payment stays explicitly
+        unattributed, which reconciliation surfaces rather than hides.
       - **★ Change is subtracted ONCE per order.** `placePosSale` writes the
         SALE's `change_due` onto EVERY cash tender row, so a sale settled with
         two cash tenders carries it twice. Summing would deduct it twice and
@@ -3711,6 +3729,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         them a single order from it. ORDER-shaped figures only — product and
         customer counts stay whole, because both are store-wide by decision, so
         what a branch manager reads is "my sales, the store's catalogue".
+        The mixed Recent activity feed additionally takes explicit source
+        visibility: it never queries or returns enquiry/blog rows unless the
+        viewer also has the corresponding section permission.
       - **★ THE LOCATIONS LIST SHOWS ONLY THEIR OWN SHOPS**, or it would put
         back exactly what scoping orders and inventory took away. And
         `saveLocationCapabilities` is now SUPERADMIN-ONLY: a capability decides
@@ -3829,6 +3850,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         count and gross. It is the mirror of the two bugs `lib/pos/shifts.ts`
         already guards — double-counted change and cash refunds — which both
         reported SHORT.
+        The repair is atomic: the order claim, optional store-credit spend and
+        tender rows commit in one `withService` transaction. Deposits and final
+        claims lock the same order row before recomputing paid-so-far, and
+        `pos.requireOpenShift` applies to both payment paths.
       - **★ WHO PAYS WHEN IS THE MERCHANT'S CHOICE** — `fulfilment.pickupPayment`
         (`customer_choice` | `prepaid` | `at_store`, defaulting to the first
         because that is today's behaviour, invariant 1). The rule lives in
@@ -3878,8 +3903,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         ever taken — so `markCollected` reads what is owed first, settles the
         tenders against it, and only then claims. The claim still decides
         exactly-once: a second tap matches zero rows, so it cannot write a
-        second payment for money handed over once. Tenders on an order that
-        owes nothing are REFUSED, not ignored — recording them would inflate
+        second payment for money handed over once. The claim, credit spend and
+        tender insert then commit together; an insert error rolls all three
+        back rather than handing goods over with no payment audit. Tenders on
+        an order that owes nothing are REFUSED, not ignored — recording them would inflate
         expected cash with money nobody handed over.
       - **★ THE SHIFT STAMP IS ONLY FOR MONEY TAKEN HERE.** An order paid
         online weeks ago that happens to be collected during this shift never
@@ -3888,8 +3915,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         open, the SAME `pos.requireOpenShift` rule the sell path applies —
         taking payment at a counter IS selling, so the money gets exactly the
         home a counter sale's money gets (refused, or unattributed, per the
-        merchant's own setting). Inventing a third policy here is how the two
-        counters drift apart. A prepaid collection never consults it: no money
+        merchant's own setting). The stamp is on each payment row, not inferred
+        through mutable `orders.shift_id`; deposits obey the same shift rule.
+        Inventing a third policy here is how the two counters drift apart. A prepaid collection never consults it: no money
         changes hands, and blocking it would refuse a customer their own
         paid-for goods.
       - `lib/pos/tenders.ts` holds the tender vocabulary, the
