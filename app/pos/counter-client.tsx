@@ -853,7 +853,7 @@ export function CounterClient({
               if (ok) setDetailFor({ ...o, status: "ready" });
             });
           }}
-          onHandOver={() => handOver(detailFor)}
+          onHandOver={(current) => handOver(current)}
         />
       )}
 

@@ -2758,6 +2758,19 @@ the merchant refunds from the dashboard. Holding stock at payment was considered
 and rejected (owner, 2026-08-18) — see roadmap Step 16. This story documents
 accepted behaviour, not a bug.
 
+**PS-GW.20 ★★ — Manager approval keeps the one-tap tender**
+As a cashier, apply a discount or price override that needs approval, pay the
+full balance by Card/UPI in one tap, then enter a valid manager PIN.
+**Expect:** the approved retry submits the same full tender plus the manager
+token. It must not retry with an empty tender list just because the payment and
+first completion happened in one tap.
+
+**PS-GW.21 ★★ — A captured gateway payment is retried, never charged again**
+Capture a full Online payment, then force sale completion to return an error.
+**Expect:** the captured tender and its gateway reference remain visibly staged.
+Retrying Complete sale reuses that reference and does not open or charge a
+second Razorpay payment.
+
 ---
 
 ## 11f. Deposits and expiry at the counter _(roadmap Step 18)_
@@ -2948,6 +2961,28 @@ the OPERATOR's location; the id from the client selects, it never scopes.
 **PS-CD.14 — Escape and the backdrop close it**
 Press Escape, or tap outside the panel.
 **Expect:** it closes without acting on the order.
+
+**PS-CD.15 ★★ — A fully refunded collection cannot leave the shop**
+Open an awaiting/ready pickup whose `payment_status` is `refunded` and try both
+the visible UI and a direct `markCollected` post.
+**Expect:** the panel says "Refunded in full" and offers neither Mark ready nor
+Hand over. The action refuses too and commits no hold, event, or collected
+claim. If a refund races an already-open panel, the final conditional UPDATE
+matches nothing after the refund's row lock releases.
+
+**PS-CD.16 ★ — Prepared means actually packed**
+Open a pickup with a promised `pickup_ready_at` and a later
+`pickup_prepared_at`.
+**Expect:** the panel labels the actual preparation time from
+`pickup_prepared_at`; the checkout promise is never presented as proof that
+staff packed the parcel.
+
+**PS-CD.17 ★★ — The newest detail read owns the next action**
+Open a stale queue row, then change the order from another till before the
+detail read lands: first cancel/collect it, then repeat by taking a deposit.
+**Expect:** the first panel removes all controls; the second displays and opens
+the tender pad for the newly reduced balance. Status and money never come from
+different snapshots on the same panel.
 
 ## 12. Known gaps
 

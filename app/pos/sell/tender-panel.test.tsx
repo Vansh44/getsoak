@@ -96,6 +96,57 @@ describe("tender pad — paying in one method", () => {
     expect(tile(/charge ₹500/i)).toBeVisible();
   });
 
+  it("keeps a one-tap tender through manager approval", async () => {
+    const onComplete = vi
+      .fn()
+      .mockResolvedValueOnce({
+        needsApproval: true,
+        error: "Manager approval needed.",
+      })
+      .mockResolvedValueOnce({});
+    const onVerifyManager = vi.fn(async () => ({
+      approved: true,
+      token: "manager-token",
+    }));
+    setup({ onComplete, onVerifyManager });
+
+    fireEvent.click(tile(/card machine/i));
+    fireEvent.click(tile(/complete sale · ₹500/i));
+    const pin = await screen.findByPlaceholderText(/manager's 8-digit pin/i);
+    fireEvent.change(pin, { target: { value: "12345678" } });
+    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    expect(onComplete.mock.calls[1]).toEqual([
+      [{ method: "card", amount: 500 }],
+      "manager-token",
+    ]);
+  });
+
+  it("keeps a captured gateway tender when completion must be retried", async () => {
+    const onComplete = vi
+      .fn()
+      .mockResolvedValueOnce({ error: "Couldn't complete the sale." })
+      .mockResolvedValueOnce({});
+    const onTakeOnline = vi.fn(async () => ({ reference: "pay_captured" }));
+    setup({ onComplete, onTakeOnline });
+
+    fireEvent.click(tile(/charge online/i));
+    fireEvent.click(tile(/charge ₹500/i));
+
+    expect(
+      await screen.findByText(/couldn't complete the sale/i),
+    ).toBeVisible();
+    expect(screen.getByText("Charged online")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /^complete sale$/i }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    expect(onComplete.mock.calls[1][0]).toEqual([
+      { method: "razorpay", amount: 500, reference: "pay_captured" },
+    ]);
+    expect(onTakeOnline).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the amount editable for CASH, which can be over-handed", () => {
     setup();
     fireEvent.click(tile(/^cash/i));

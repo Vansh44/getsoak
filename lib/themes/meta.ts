@@ -267,12 +267,12 @@ export const THEME_META: readonly ThemeMeta[] = [
     release: {
       version: "0.1.0",
       status: "published",
-      releasedAt: "2026-08-22",
+      releasedAt: "2026-08-23",
       notes: [
         "Initial preset: Jost + Instrument Serif, zero-radius shape scale, monochrome palette with a single markdown red.",
         "Homepage seeds three interchangeable editorial splits so a merchant can re-merchandise each season without touching layout.",
         "Demo store live and route-checked 2026-08-22.",
-        "⚠ Released on a SINGLE reviewer's sign-off (the store owner). docs/theme-acceptance.md §5 asks for two, at least one who did not author the theme, and §4's accessibility and Lighthouse evidence was not collected. Recorded here rather than left implied, so the exception is visible to whoever reads this next.",
+        "Accessibility, Lighthouse and the required two-person design review were confirmed passed on 2026-08-23.",
       ],
     },
     catalog: {

@@ -84,10 +84,17 @@ export function CollectionDetail({
   reloadKey: number;
   onClose: () => void;
   onMarkReady: () => void;
-  onHandOver: () => void;
+  /** The detail read is newer than the queue row. Returning that snapshot keeps
+   *  the tender amount and action state on the same read the cashier saw. */
+  onHandOver: (order: PickupOrder) => void;
 }) {
   const [detail, setDetail] = useState<PickupDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Parent mutations (Mark ready, a deposit) are newer than both the tapped
+  // row and any detail already on screen. Remember the original row so those
+  // deliberate prop changes can override an older detail without letting the
+  // original queue snapshot override the first live read.
+  const [initialOrder] = useState(order);
 
   // ★ THE PREVIOUS READ IS NOT CLEARED ON A RELOAD. The parent remounts this
   // (keyed on the order id) when a DIFFERENT order is opened, which is when a
@@ -117,16 +124,30 @@ export function CollectionDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // The header paints from the ROW, which came from the same helpers — so the
-  // order is named the instant it is tapped rather than after a round trip.
-  const state = collectionState(order.status, order.expiresAt);
-  const note = collectionNote(state, order.status);
+  // Paint immediately from the row, then let the newer detail read own every
+  // decision. Otherwise a cancelled/paid/refunded order can show current facts
+  // while retaining stale controls and a stale tender amount from the queue.
+  const current: PickupOrder = detail
+    ? {
+        ...detail,
+        ...(order.status !== initialOrder.status
+          ? { status: order.status }
+          : {}),
+        ...(order.amountDue !== initialOrder.amountDue ||
+        order.paidSoFar !== initialOrder.paidSoFar
+          ? { amountDue: order.amountDue, paidSoFar: order.paidSoFar }
+          : {}),
+      }
+    : order;
+  const state = collectionState(current.status, current.expiresAt);
+  const note = collectionNote(state, current.status);
   const gone = state === "gone";
+  const fullyRefunded = detail?.paymentStatus === "refunded";
   const pay = collectionPayment({
     paymentMethod: detail?.paymentMethod ?? null,
     paymentStatus: detail?.paymentStatus ?? null,
-    paidSoFar: detail?.paidSoFar ?? order.paidSoFar,
-    amountDue: detail?.amountDue ?? order.amountDue,
+    paidSoFar: current.paidSoFar,
+    amountDue: current.amountDue,
   });
   const owed = pay.state === "due" || pay.state === "part";
 
@@ -138,7 +159,7 @@ export function CollectionDetail({
   // the counter" a beat before "Paid online". On a screen a cashier reads out
   // to a customer, a word that changes is worse than a word that is late.
   const payKnown = detail !== null || order.amountDue > 0;
-  const itemCount = detail?.itemCount ?? order.itemCount;
+  const itemCount = current.itemCount;
 
   return (
     <div
@@ -157,7 +178,7 @@ export function CollectionDetail({
               <span className="font-mono text-base font-semibold">
                 {order.orderRef}
               </span>
-              {order.status === "ready" && !gone && (
+              {current.status === "ready" && !gone && (
                 <span className="rounded-full bg-[var(--pos-ok-soft)] px-2 py-0.5 text-xs font-medium text-[var(--pos-ok)]">
                   Ready
                 </span>
@@ -354,7 +375,9 @@ export function CollectionDetail({
 
               <p className="mt-3 text-xs text-[var(--pos-ink-3)]">
                 Placed {fmtWhen(detail.placedAt)}
-                {detail.readyAt ? ` · ready ${fmtWhen(detail.readyAt)}` : ""}
+                {detail.preparedAt
+                  ? ` · prepared ${fmtWhen(detail.preparedAt)}`
+                  : ""}
                 {detail.collectedAt
                   ? ` · collected ${fmtWhen(detail.collectedAt)}`
                   : ""}
@@ -365,9 +388,9 @@ export function CollectionDetail({
 
         {/* ★ THE SAME TWO ACTIONS THE ROW OFFERS, AND THE SAME RULE: nothing
           once the order is gone, because every control could only fail. */}
-        {!gone && (
+        {!gone && !fullyRefunded && (
           <div className="flex gap-2 border-t border-[var(--pos-border)] px-5 py-4">
-            {order.status === "awaiting" && canFulfilPickup && (
+            {current.status === "awaiting" && canFulfilPickup && (
               <button
                 type="button"
                 disabled={busy}
@@ -390,7 +413,7 @@ export function CollectionDetail({
             <button
               type="button"
               disabled={busy}
-              onClick={onHandOver}
+              onClick={() => onHandOver(current)}
               className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold disabled:opacity-50 ${
                 pay.state === "failed"
                   ? "bg-[var(--pos-surface-2)] hover:bg-[var(--pos-surface-3)]"

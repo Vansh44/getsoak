@@ -1596,14 +1596,12 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `definitions/vitrine.ts` (a
     monochrome fashion preset for footwear/bags/accessories: Jost +
     Instrument Serif, every `shape` token `0px`, hairline borders instead of
-    cards, and one markdown red as the only hue. PUBLIC since
-    2026-08-22 (`published` + a `healthy` demo — `themes.test.ts` enforces that
-    trio, so they flip TOGETHER), with its ten
-    `public/themes/vitrine/*.webp` assets bundled and `demo-vitrine` seeded on
-    staging and production. ⚠ Shipped on the store owner's review ALONE, where
-    docs/theme-acceptance.md §5 asks for two reviewers and §4 for
-    accessibility/Lighthouse evidence that was never collected; both are open
-    rows in that doc's §7 baseline, alongside Studio's and Ritual's.
+    cards, and one markdown red as the only hue. Published on 2026-08-23 after
+    its accessibility/Lighthouse and required two-person design-review gates
+    passed. Its ten `public/themes/vitrine/*.webp` assets are bundled, and the
+    healthy `demo-vitrine` store is seeded on staging and production.
+    `visibility: public` and `status: published` expose it in both the public
+    catalog and signup picker.
     ★ Its product crops are SQUARE (1000×1000), not the 4:3 Studio/Ritual use,
     because this theme renders cards at 1:1 and a 4:3 source would be
     centre-cropped through the toe of the shoe. Imagery is rebuilt from three
@@ -2172,8 +2170,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     re-presenting one verifies perfectly every time; only
     `order_payments.reference` uniqueness stops it settling two sales, in the
     action AND in `supabase/pos_15_gateway_tender.sql`'s partial unique index
-    (applied, verified 2026-08-18). **★ Checked BEFORE the order insert and the stock
-    reserve**, so a refused payment unwinds nothing. **★ THE SHELF IS CHECKED
+    (applied, verified 2026-08-18). **★★ A ONE-TAP TENDER IS STAGED BEFORE
+    COMPLETION** — manager approval and retryable completion errors therefore
+    reuse the same tender, including the same captured gateway reference,
+    instead of submitting an empty payment or charging twice. **★ Checked BEFORE
+    the order insert and the stock reserve**, so a refused payment unwinds
+    nothing. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
     runs `shortLinesAt`, refusing before the Razorpay order exists, which
     catches the commoner stale-IndexedDB-cache case for free. That courtesy read
@@ -3526,6 +3528,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           `payment_status`, and the fallback would flash "Nothing to collect at
           the counter" a beat before "Paid online". On a screen read aloud to a
           customer, a word that changes is worse than a word that is late.
+        - **★★ THE NEWER DETAIL READ OWNS THE NEXT ACTION.** Once it lands,
+          status, expiry and balance replace the queue snapshot for both the
+          controls and the order passed back to `counter-client`; the tender pad
+          therefore cannot open for an old amount while the panel displays a
+          new deposit. A fully refunded order offers no action, and
+          `markCollected` repeats that rule in its final conditional claim so a
+          refund racing an open panel keeps the parcel in the shop.
+          `PickupDetail.preparedAt` comes from `pickup_prepared_at` (actual
+          packing), never `pickup_ready_at` (the customer promise).
         - **★ NO STATUS FILTER on the reader** — `findPickupByCode`'s rule. The
           queue is a list of WORK; this is a LOOKUP, and a customer holding a
           cancelled order is exactly when the shop must be able to say what

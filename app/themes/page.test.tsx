@@ -29,6 +29,7 @@ describe("public theme catalog", () => {
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Studio" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Ritual" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Vitrine" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Home & Decor" })).toBeVisible();
     expect(screen.getByRole("link", { name: "Beauty" })).toBeVisible();
     expect(screen.getByText("Live preview being restored")).toBeVisible();

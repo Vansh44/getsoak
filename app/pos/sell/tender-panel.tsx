@@ -299,8 +299,14 @@ export function TenderPanel({
         ...(reference ? { reference } : {}),
       };
     }
+    // Persist the tender BEFORE completion. Completion may pause for manager
+    // approval or return a retryable error after a gateway charge has already
+    // been captured; either way the next attempt must submit the same money,
+    // not fall back to the state from before this one-tap payment existed.
+    const nextTenders = [...taken, tender];
+    setTaken(nextTenders);
     setBusy(false);
-    await finish(undefined, [...taken, tender]);
+    await finish(undefined, nextTenders);
   };
 
   const addTender = (value: number) => {

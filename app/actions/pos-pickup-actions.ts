@@ -22,7 +22,7 @@
 // use the tender's own order_payments.shift_id; orders.shift_id remains the
 // completed-sale attribution.
 
-import { and, asc, count, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, ilike, inArray, ne, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
@@ -364,7 +364,9 @@ export interface PickupDetailPayment {
 export interface PickupDetail extends PickupOrder {
   collectionCode: string | null;
   customerPhone: string | null;
-  readyAt: string | null;
+  /** When staff actually finished packing the order. The promised ready-by
+   *  date remains `pickup_ready_at` and is not an operational event. */
+  preparedAt: string | null;
   collectedAt: string | null;
   lines: PickupDetailLine[];
   subtotal: number;
@@ -432,7 +434,7 @@ export async function getPickupOrderDetail(
           payment_status: orders.paymentStatus,
           created_at: orders.createdAt,
           expires_at: orders.pickupExpiresAt,
-          ready_at: orders.pickupReadyAt,
+          prepared_at: orders.pickupPreparedAt,
           collected_at: orders.collectedAt,
           status: orders.pickupStatus,
         })
@@ -518,7 +520,7 @@ export async function getPickupOrderDetail(
         paymentStatus: row.payment_status,
         placedAt: row.created_at,
         expiresAt: row.expires_at,
-        readyAt: row.ready_at,
+        preparedAt: row.prepared_at,
         collectedAt: row.collected_at,
         status: row.status ?? "awaiting",
         lines: lines.map((l) => ({
@@ -546,6 +548,7 @@ const OVERPAID = "sm:overpaid";
 const CREDIT_MOVED = "sm:credit-moved";
 const PAYMENT_MOVED = "sm:payment-moved";
 const NOT_WAITING_CODE = "sm:not-waiting";
+const REFUNDED = "This order was fully refunded and can't be handed over.";
 const NOT_WAITING =
   "That order isn't waiting for collection here. It may already have been collected.";
 
@@ -627,6 +630,11 @@ export async function markCollected(
     return { error: dbErrorMessage(err, "Couldn't read the order.") };
   }
   if (!owed) return { error: NOT_WAITING };
+  // A full refund unwinds the sale. Its goods must stay with the shop even if
+  // the pickup row is still awaiting/ready due to an older or concurrent
+  // workflow. This is repeated in the conditional claim below so a refund
+  // racing this read wins safely too.
+  if (owed.payment_status === "refunded") return { error: REFUNDED };
 
   // ── Was this order ever prepared? ────────────────────────────────────────
   // BEFORE the tenders, for the reason the money read is before the claim: a
@@ -876,6 +884,7 @@ export async function markCollected(
             eq(orders.storeId, op.storeId),
             // The operator's own shop — never a location from the client.
             eq(orders.pickupLocationId, op.locationId),
+            ne(orders.paymentStatus, "refunded"),
             or(
               eq(orders.pickupStatus, "awaiting"),
               eq(orders.pickupStatus, "ready"),

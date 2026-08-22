@@ -197,6 +197,12 @@ describe("theme registry", () => {
     expect(ritualMeta.catalog.visibility).toBe("public");
     expect(isThemeSelectable(ritualMeta)).toBe(true);
     expect(canPreviewTheme(ritualMeta)).toBe(true);
+    const vitrineMeta = THEME_META.find((theme) => theme.id === "vitrine")!;
+    expect(vitrineMeta.release.status).toBe("published");
+    expect(vitrineMeta.release.releasedAt).toBe("2026-08-23");
+    expect(vitrineMeta.catalog.visibility).toBe("public");
+    expect(isThemeSelectable(vitrineMeta)).toBe(true);
+    expect(canPreviewTheme(vitrineMeta)).toBe(true);
   });
 
   it("reads pinned installations and legacy template ids", () => {

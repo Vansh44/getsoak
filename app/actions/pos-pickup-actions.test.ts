@@ -192,6 +192,31 @@ describe("markCollected — the claim", () => {
     expect(dbHolder.current.calls.update).toHaveLength(0);
   });
 
+  it("refuses to hand over an order that was fully refunded", async () => {
+    dbHolder.current = seed({ ...PREPAID, payment_status: "refunded" });
+    const res = await markCollected("ord-1");
+    expect(res.error).toMatch(/fully refunded/i);
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(commitHold).not.toHaveBeenCalled();
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the final claim conditional on the order not being refunded", () => {
+    // The initial read gives the ordinary error. This source guard is the race
+    // boundary: if a refund commits after that read, PostgreSQL rechecks the
+    // UPDATE predicate after the competing row lock is released and the claim
+    // matches nothing.
+    const src = readFileSync(
+      join(process.cwd(), "app", "actions", "pos-pickup-actions.ts"),
+      "utf8",
+    );
+    const from = src.indexOf("export async function markCollected");
+    const to = src.indexOf("export async function markReadyForPickup", from);
+    expect(src.slice(from, to)).toMatch(
+      /ne\(orders\.paymentStatus, "refunded"\)/,
+    );
+  });
+
   it("commits the holds and announces the collection once claimed", async () => {
     dbHolder.current = seed(PREPAID, [{ id: "hold-1" }, { id: "hold-2" }]);
     await markCollected("ord-1");
@@ -455,7 +480,7 @@ describe("getPickupOrderDetail", () => {
     payment_status: "pending",
     created_at: "2026-08-20T09:00:00Z",
     expires_at: null,
-    ready_at: null,
+    prepared_at: "2026-08-21T08:45:00Z",
     collected_at: null,
     status: "ready",
   };
@@ -507,6 +532,7 @@ describe("getPickupOrderDetail", () => {
       discount: 4,
       storeCreditUsed: 15,
       paidSoFar: 200,
+      preparedAt: "2026-08-21T08:45:00Z",
     });
     expect(res.detail!.lines).toHaveLength(2);
     expect(res.detail!.lines[0]).toMatchObject({
@@ -520,6 +546,14 @@ describe("getPickupOrderDetail", () => {
       method: "cash",
       amount: 200,
     });
+  });
+
+  it("returns the actual preparation time, not the promised ready-by date", async () => {
+    dbHolder.current = seedDetail();
+    const res = await getPickupOrderDetail("ord-1");
+    expect(res.detail!.preparedAt).toBe("2026-08-21T08:45:00Z");
+    expect(dbHolder.current.calls.select[0]).toHaveProperty("prepared_at");
+    expect(dbHolder.current.calls.select[0]).not.toHaveProperty("ready_at");
   });
 
   it("★ counts items from the LINES, so the heading cannot contradict them", async () => {

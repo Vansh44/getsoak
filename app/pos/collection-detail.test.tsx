@@ -29,7 +29,7 @@ const DETAIL = {
   ...ROW,
   collectionCode: "K4M2-8PQR",
   customerPhone: "9876543210",
-  readyAt: null,
+  preparedAt: null,
   collectedAt: null,
   subtotal: 45,
   discount: 0,
@@ -70,7 +70,7 @@ function setup(
   getPickupOrderDetail.mockResolvedValue(
     detail ? { detail } : { error: "Couldn't load that order." },
   );
-  render(
+  const view = render(
     <CollectionDetail
       order={{ ...ROW, ...(over.order ?? {}) }}
       canFulfilPickup={over.canFulfilPickup !== false}
@@ -81,7 +81,23 @@ function setup(
       onHandOver={onHandOver}
     />,
   );
-  return { onMarkReady, onHandOver, onClose };
+  return {
+    onMarkReady,
+    onHandOver,
+    onClose,
+    rerenderOrder: (order: typeof ROW) =>
+      view.rerender(
+        <CollectionDetail
+          order={order}
+          canFulfilPickup={over.canFulfilPickup !== false}
+          busy={false}
+          reloadKey={0}
+          onClose={onClose}
+          onMarkReady={onMarkReady}
+          onHandOver={onHandOver}
+        />,
+      ),
+  };
 }
 
 beforeEach(() => {
@@ -188,7 +204,9 @@ describe("collection detail — what it lets you do", () => {
     fireEvent.click(take);
     // It owns no actions of its own — every button calls back to the queue,
     // which is where the tender pad and the refresh already live.
-    expect(onHandOver).toHaveBeenCalled();
+    expect(onHandOver).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "o1", amountDue: 45 }),
+    );
   });
 
   it("offers a plain hand-over when nothing is owed", async () => {
@@ -207,6 +225,14 @@ describe("collection detail — what it lets you do", () => {
 
   it("hides Mark ready once the box is on the shelf", () => {
     setup(DETAIL, { order: { ...ROW, status: "ready" } });
+    expect(screen.queryByRole("button", { name: /mark ready/i })).toBeNull();
+  });
+
+  it("keeps a successful parent mutation newer than the open detail", async () => {
+    const { rerenderOrder } = setup();
+    await screen.findByText(/still to collect/i);
+    rerenderOrder({ ...ROW, status: "ready" });
+    expect(screen.getByText("Ready")).toBeVisible();
     expect(screen.queryByRole("button", { name: /mark ready/i })).toBeNull();
   });
 
@@ -234,6 +260,54 @@ describe("collection detail — what it lets you do", () => {
     // Demoted, never hidden — the customer may well be entitled to the goods,
     // and that is the shop's call, not this panel's.
     expect(btn).toBeVisible();
+  });
+
+  it("offers no hand-over for a fully refunded order", async () => {
+    setup({
+      ...DETAIL,
+      amountDue: 0,
+      paymentStatus: "refunded",
+    });
+    expect(await screen.findByText(/refunded in full/i)).toBeVisible();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /hand over|take ₹/i }),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /mark ready/i })).toBeNull();
+    });
+  });
+
+  it("lets the newer detail status remove stale queue controls", async () => {
+    setup({ ...DETAIL, status: "cancelled" });
+    await screen.findByText(/still to collect/i);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: /hand over|take ₹/i }),
+      ).toBeNull();
+      expect(screen.queryByRole("button", { name: /mark ready/i })).toBeNull();
+    });
+  });
+
+  it("hands the parent the newer balance that the panel displays", async () => {
+    const { onHandOver } = setup({
+      ...DETAIL,
+      total: 45,
+      paidSoFar: 25,
+      amountDue: 20,
+    });
+    const take = await screen.findByRole("button", { name: /take ₹20\.00/i });
+    fireEvent.click(take);
+    expect(onHandOver).toHaveBeenCalledWith(
+      expect.objectContaining({ amountDue: 20, paidSoFar: 25 }),
+    );
+  });
+
+  it("labels the actual preparation time, not the promised ready-by date", async () => {
+    setup({
+      ...DETAIL,
+      preparedAt: "2026-08-21T08:45:00.000Z",
+    });
+    expect(await screen.findByText(/prepared 21 aug/i)).toBeVisible();
   });
 
   it("★ offers NOTHING once the collection is gone", () => {

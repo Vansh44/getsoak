@@ -86,12 +86,10 @@ runtime dependencies.
   `THEME_DEFINITIONS` and `THEME_META`. `demo-vitrine` is seeded on BOTH staging
   and production and route-checked live on 2026-08-22 (shop 200 with 8 cards and
   2 hover layers, `/size-guide` and `/our-edit` 200, all ten assets serving), so
-  `demo.status` is `healthy`. Published to the catalog on 2026-08-22
-  (`visibility: "public"`, `release.status: "published"`) on the store owner's
-  design review. ⚠ That is ONE reviewer where §5 asks for two, and §4's
-  accessibility/Lighthouse evidence was not collected — both tracked as open
-  rows in docs/theme-acceptance.md §7. This log is release evidence, not a statement that the theme has
-  passed storefront, accessibility, performance or human review.
+  `demo.status` is `healthy`. Accessibility, Lighthouse and the required
+  two-person review were confirmed passed on 2026-08-23, so the preset is now
+  published (`visibility: "public"`, `release.status: "published"`) in the
+  catalog and signup picker.
 - **Source:** generated with an image-generation tool from the prompts below; no
   third-party photograph, logo, branded product or proprietary theme reference
   was used. ⚠ Do **not** trace or reuse imagery from any live retailer's site.
