@@ -17,7 +17,10 @@ export default async function PosDevicesPage() {
     // Fetch one more than we show, so the client can say "showing the 5 most
     // recent" honestly rather than guessing whether there are more. 30 rows of
     // sign-in history buried the two lists above it that need acting on.
-    listPosActivity(RECENT_LIMIT + 1),
+    // ★ SECURITY only. Money events have their own page (/dashboard/pos/money)
+    // — mixing them would bury device pairings under a busy shop's discounts,
+    // and this list already calls itself "Security activity".
+    listPosActivity(RECENT_LIMIT + 1, "security"),
     getStoreLocations(store.id),
   ]);
 

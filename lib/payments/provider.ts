@@ -2,8 +2,9 @@ import "server-only";
 
 import { and, eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import { storePaymentProviders } from "@/drizzle/schema";
+import { storePaymentProviders, stores } from "@/drizzle/schema";
 import { decryptSecret } from "./crypto";
+import { effectivePlan, limitsFor } from "@/lib/plans";
 import { logError } from "@/lib/observability/logger";
 import type { RazorpayCreds } from "./razorpay";
 
@@ -70,6 +71,45 @@ export async function getStoreGateway(
     logError("payments.gateway_decrypt", err, { storeId });
     return null;
   }
+}
+
+/**
+ * The store's USABLE online gateway, or null.
+ *
+ * Three server-side conditions, re-checked on EVERY call and never trusted from
+ * the client: credentials are connected, the merchant has the channel enabled,
+ * and the store's EFFECTIVE plan includes online payments — a lapsed plan
+ * silently reverts to offline-only without touching the stored credentials.
+ *
+ * ★ ONE IMPLEMENTATION, TWO COUNTERS. This was private to checkout-actions.ts
+ * until the till started taking gateway payments too (§18 Step 12). A second
+ * hand-written copy is how one counter keeps charging cards for a store whose
+ * plan lapsed — the same reasoning that put the tender allowlist in
+ * lib/pos/tenders.ts and the refund mechanism in lib/payments/issue-refund.ts.
+ */
+export async function getLiveStoreGateway(
+  storeId: string,
+): Promise<RazorpayCreds | null> {
+  const [gateway, storeRows] = await Promise.all([
+    getStoreGateway(storeId),
+    withService((db) =>
+      db
+        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1),
+    ).catch((err) => {
+      // Fails CLOSED, unlike getViewerLocations. An unreadable plan must not
+      // be treated as an entitlement to charge cards.
+      logError("payments.gateway_plan_load", err, { storeId });
+      return [] as { plan: unknown; plan_expires_at: string | null }[];
+    }),
+  ]);
+  const store = storeRows[0];
+  if (!store) return null;
+  if (!gateway?.enabled) return null;
+  if (!limitsFor(effectivePlan(store)).onlinePayments) return null;
+  return gateway.creds;
 }
 
 /** The platform's own Razorpay account (AI-credit purchases). Null until the

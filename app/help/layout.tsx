@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { HELP_URL } from "@/lib/site";
 import { platformOrganizationSchema } from "@/lib/seo/brand-identity";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
+import { HelpSearchBox } from "./components/search-box";
 import "./help.css";
 
 const helpFont = Inter({
@@ -63,6 +64,7 @@ export default function HelpLayout({
           <Link href="/help" className="hc-logo">
             Store<span>Mink</span> Help
           </Link>
+          <HelpSearchBox compact />
           <a
             href="https://storemink.com/signup"
             className="hc-topbar-cta"

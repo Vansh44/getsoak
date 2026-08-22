@@ -148,10 +148,70 @@ export const WEBMASTERS_SCOPE = "https://www.googleapis.com/auth/webmasters";
 export const SITE_VERIFICATION_SCOPE =
   "https://www.googleapis.com/auth/siteverification";
 
+export interface GoogleSearchAnalyticsRequest {
+  startDate: string;
+  endDate: string;
+  dimensions: string[];
+  dimensionFilterGroups?: Array<{
+    filters: Array<{
+      dimension: "page";
+      operator: "includingRegex";
+      expression: string;
+    }>;
+  }>;
+  aggregationType: "auto" | "byPage";
+  rowLimit: number;
+  dataState: "final";
+}
+
+export interface GoogleSearchAnalyticsResponse {
+  rows?: Array<{
+    keys?: string[];
+    clicks?: number;
+    impressions?: number;
+    ctr?: number;
+    position?: number;
+  }>;
+  responseAggregationType?: string;
+}
+
 const googleTokenCache = new Map<
   string,
   { token: string; expiresAt: number }
 >();
+
+const GOOGLE_TOKEN_MAX_REFRESH_SKEW_MS = 5 * 60 * 1000;
+
+/** Convert Google's real token lifetime into the point where our cache should
+ * stop serving it. The small proportional skew avoids using a token on the
+ * expiry boundary without making unusually short-lived tokens immediately
+ * stale. Unknown expiries are deliberately not cached. */
+export function googleTokenCacheExpiry(
+  nowMs: number,
+  lifetime: { expiresInSeconds?: unknown; expiryDateMs?: unknown },
+): number | null {
+  const absolute = Number(lifetime.expiryDateMs);
+  const seconds = Number(lifetime.expiresInSeconds);
+  const rawExpiry =
+    Number.isFinite(absolute) && absolute > nowMs
+      ? absolute
+      : Number.isFinite(seconds) && seconds > 0
+        ? nowMs + seconds * 1000
+        : null;
+  if (rawExpiry === null) return null;
+
+  const remaining = rawExpiry - nowMs;
+  const skew = Math.min(GOOGLE_TOKEN_MAX_REFRESH_SKEW_MS, remaining * 0.1);
+  return rawExpiry - skew;
+}
+
+function cacheGoogleToken(
+  scope: string,
+  token: string,
+  expiresAt: number | null,
+): void {
+  if (expiresAt !== null) googleTokenCache.set(scope, { token, expiresAt });
+}
 
 // Mint a Search Console access token. Two paths:
 //   • creds present → JWT-bearer grant (RS256) from that service-account key
@@ -175,12 +235,14 @@ export async function googleAccessToken(
       const client = await auth.getClient();
       const { token } = await client.getAccessToken();
       if (token) {
-        // Access tokens normally live for an hour. Refresh five minutes early;
-        // the exact expiry is not exposed consistently by all ADC clients.
-        googleTokenCache.set(scope, {
+        const nowMs = Date.now();
+        cacheGoogleToken(
+          scope,
           token,
-          expiresAt: Date.now() + 55 * 60 * 1000,
-        });
+          googleTokenCacheExpiry(nowMs, {
+            expiryDateMs: client.credentials.expiry_date,
+          }),
+        );
       }
       return token ?? null;
     } catch (err) {
@@ -215,14 +277,53 @@ export async function googleAccessToken(
     }),
   });
   if (!res.ok) return null;
-  const data = (await res.json()) as { access_token?: string };
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+  };
   if (data.access_token) {
-    googleTokenCache.set(scope, {
-      token: data.access_token,
-      expiresAt: Date.now() + 55 * 60 * 1000,
-    });
+    const nowMs = Date.now();
+    cacheGoogleToken(
+      scope,
+      data.access_token,
+      googleTokenCacheExpiry(nowMs, {
+        expiresInSeconds: data.expires_in,
+      }),
+    );
   }
   return data.access_token ?? null;
+}
+
+/** Query Search Analytics with the same service-account credential path used
+ * by sitemap and ownership calls. Unlike notification helpers this throws:
+ * ingestion owns a durable retry row and must distinguish no data from a failed
+ * Google request. */
+export async function queryGoogleSearchAnalytics(
+  property: string,
+  request: GoogleSearchAnalyticsRequest,
+): Promise<GoogleSearchAnalyticsResponse> {
+  const token = await googleAccessToken();
+  if (!token) throw new Error("No Google Search Console access token");
+
+  const response = await fetchWithTimeout(
+    `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(property)}/searchAnalytics/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    },
+    15_000,
+  );
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Search Console analytics query rejected (${response.status})${body ? `: ${body.slice(0, 300)}` : ""}`,
+    );
+  }
+  return (await response.json()) as GoogleSearchAnalyticsResponse;
 }
 
 // Submit a store's sitemap to Google Search Console. Dormant (no-op) until
@@ -324,6 +425,115 @@ export async function addGoogleSearchConsoleSite(
       error: err instanceof Error ? err.message : "Google property add failed",
     };
   }
+}
+
+export function googleSearchConsoleSiteEndpoint(siteUrl: string): string {
+  return `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}`;
+}
+
+export function googleSiteVerificationResourceEndpoint(
+  siteUrl: string,
+): string {
+  return `https://www.googleapis.com/siteVerification/v1/webResource/${encodeURIComponent(siteUrl)}`;
+}
+
+/** Remove a URL-prefix property from the authenticated Search Console account.
+ * A missing property is already clean, so DELETE remains idempotent. */
+export async function deleteGoogleSearchConsoleSite(
+  siteUrl: string,
+): Promise<SearchEngineResult> {
+  if (!SEARCH_INDEXABLE) {
+    return { ok: false, error: "search indexing disabled", skipped: true };
+  }
+  try {
+    const token = await googleAccessToken();
+    if (!token) return { ok: false, error: "no Google access token" };
+    const res = await fetchWithTimeout(
+      googleSearchConsoleSiteEndpoint(siteUrl),
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!res.ok && res.status !== 404) {
+      const body = await res.text().catch(() => "");
+      logError("deleteGoogleSearchConsoleSite rejected", undefined, {
+        siteUrl,
+        status: res.status,
+        body,
+      });
+      return {
+        ok: false,
+        status: res.status,
+        error: `Search Console rejected property deletion (${res.status})`,
+      };
+    }
+    return { ok: true, status: res.status };
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error ? err.message : "Google property deletion failed",
+    };
+  }
+}
+
+/** Remove this service account's Site Verification ownership record. This must
+ * run only after StoreMink has stopped serving the META token on the old host. */
+export async function deleteGoogleSiteVerification(
+  siteUrl: string,
+): Promise<SearchEngineResult> {
+  if (!SEARCH_INDEXABLE) {
+    return { ok: false, error: "search indexing disabled", skipped: true };
+  }
+  try {
+    const token = await googleAccessToken([SITE_VERIFICATION_SCOPE]);
+    if (!token) return { ok: false, error: "no Google access token" };
+    const res = await fetchWithTimeout(
+      googleSiteVerificationResourceEndpoint(siteUrl),
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!res.ok && res.status !== 404) {
+      const body = await res.text().catch(() => "");
+      logError("deleteGoogleSiteVerification rejected", undefined, {
+        siteUrl,
+        status: res.status,
+        body,
+      });
+      return {
+        ok: false,
+        status: res.status,
+        error: `Site Verification rejected ownership deletion (${res.status})`,
+      };
+    }
+    return { ok: true, status: res.status };
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof Error ? err.message : "Google ownership deletion failed",
+    };
+  }
+}
+
+export interface GoogleCustomDomainCleanupResult {
+  searchConsole: SearchEngineResult;
+  siteVerification: SearchEngineResult;
+}
+
+/** Release every Google resource StoreMink created for a detached custom
+ * domain. Property removal precedes ownership removal so the authenticated
+ * account can still operate on the property throughout cleanup. */
+export async function removeGoogleCustomDomain(
+  domain: string,
+): Promise<GoogleCustomDomainCleanupResult> {
+  const siteUrl = `https://${domain}/`;
+  const searchConsole = await deleteGoogleSearchConsoleSite(siteUrl);
+  const siteVerification = await deleteGoogleSiteVerification(siteUrl);
+  return { searchConsole, siteVerification };
 }
 
 export async function requestGoogleSiteVerificationToken(

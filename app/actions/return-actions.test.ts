@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { makeDbMock } from "./_test-helpers";
+import { makeDbMock, sqlParamValues, sqlText } from "./_test-helpers";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -30,6 +30,12 @@ vi.mock("@/lib/inventory/reservations", () => ({
 }));
 vi.mock("@/lib/fulfilment/resolve", () => ({
   resolveFulfilmentLocation: vi.fn(async () => "loc-1"),
+}));
+vi.mock("@/lib/returns/restock-location", () => ({
+  listRestockLocations: vi.fn(async () => [
+    { id: "mumbai", name: "Mumbai shop", acceptsReturns: true },
+    { id: "delhi", name: "Delhi warehouse", acceptsReturns: false },
+  ]),
 }));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -457,6 +463,73 @@ describe("receiveReturn", () => {
     dbHolder.current = makeDbMock({ selectQueue: [[]], returning: [] });
     const res = await receiveReturn("ret-1", []);
     expect(res.error).toContain("isn't waiting to be received");
+  });
+
+  // ── Where the goods land (roadmap Step 13) ───────────────────────────────
+  // The defect: order_returns.location_id was never written from this path, so
+  // every desk-received return credited the store's DEFAULT location. A parcel
+  // that arrived in Mumbai restocked Delhi, silently.
+
+  it("★★ restocks AT the location the merchant named", async () => {
+    seedReceive();
+    // The claim returns the row with the location now recorded on it.
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "rri-1",
+            order_item_id: "li-a",
+            quantity: 2,
+            product_id: "p1",
+            variant_id: null,
+          },
+        ],
+      ],
+      returning: [{ id: "ret-1", order_id: "o1", location_id: "mumbai" }],
+    });
+
+    const res = await receiveReturn("ret-1", [], "mumbai");
+    expect(res.ok).toBe(true);
+
+    const q = sqlText(dbHolder.current.calls.execute[0]);
+    expect(q).toContain("adjust_stock_at(");
+    expect(sqlParamValues(dbHolder.current.calls.execute[0])).toContain(
+      "mumbai",
+    );
+    // The location is WRITTEN in the same statement that claims the return.
+    expect(dbHolder.current.calls.set[0]).toHaveProperty("locationId");
+  });
+
+  it("★ falls back to the default location when none is named", async () => {
+    // A single-location store has nothing to choose between, and must keep
+    // working exactly as it did before Step 13 (invariant 1).
+    seedReceive();
+    const res = await receiveReturn("ret-1", []);
+    expect(res.ok).toBe(true);
+    const q = sqlText(dbHolder.current.calls.execute[0]);
+    expect(q).toContain("adjust_stock(");
+    expect(q).not.toContain("adjust_stock_at(");
+    // Nothing to record, so nothing is written.
+    expect(dbHolder.current.calls.set[0]).not.toHaveProperty("locationId");
+  });
+
+  it("★★ refuses a location that isn't on the viewer's list", async () => {
+    // A dropdown is an affordance, not a permission. This is what stops a
+    // location-bound admin naming another branch's shelf — or any caller
+    // naming a location belonging to another store entirely.
+    seedReceive();
+    const res = await receiveReturn("ret-1", [], "someone-elses-shop");
+    expect(res.error).toContain("book stock in");
+  });
+
+  it("★★ refuses BEFORE claiming, so a bad location leaves the return open", async () => {
+    // Claiming first and validating second would flip the return to `received`
+    // with the goods booked in nowhere — unrecoverable from the queue, because
+    // only an `approved` return can be received.
+    seedReceive();
+    await receiveReturn("ret-1", [], "someone-elses-shop");
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+    expect(dbHolder.current.calls.execute).toHaveLength(0);
   });
 });
 

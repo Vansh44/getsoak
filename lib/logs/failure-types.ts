@@ -13,6 +13,7 @@ export type FailureSourceKey =
   | "notification"
   | "refund"
   | "import"
+  | "indexing"
   | "payment"
   | "subscription";
 
@@ -79,6 +80,11 @@ export const FAILURE_SOURCE_META: FailureSourceMeta[] = [
     key: "import",
     label: "Import / export",
     blurb: "Jobs that errored, and ones that only partly landed.",
+  },
+  {
+    key: "indexing",
+    label: "Google Search",
+    blurb: "Store verification or sitemap updates that Google rejected.",
   },
   {
     key: "payment",

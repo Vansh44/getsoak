@@ -20,7 +20,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(4);
+    expect(loaded.migrations).toHaveLength(13);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -40,6 +40,50 @@ describe("database migration controls", () => {
       transaction: true,
     });
     expect(loaded.migrations[3].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[4]).toMatchObject({
+      id: "20260818_0005_analytics_dashboard_layouts",
+      transaction: true,
+    });
+    expect(loaded.migrations[4].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[5]).toMatchObject({
+      id: "20260819_0006_search_metrics",
+      transaction: true,
+    });
+    expect(loaded.migrations[5].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[6]).toMatchObject({
+      id: "20260820_0007_platform_analytics_controls",
+      transaction: true,
+    });
+    expect(loaded.migrations[6].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[7]).toMatchObject({
+      id: "20260820_0008_analytics_help_documents",
+      transaction: true,
+    });
+    expect(loaded.migrations[7].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[8]).toMatchObject({
+      id: "20260820_0009_help_article_indexability",
+      transaction: true,
+    });
+    expect(loaded.migrations[8].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[9]).toMatchObject({
+      id: "20260820_0010_merchant_pixels",
+      transaction: true,
+    });
+    expect(loaded.migrations[9].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[10]).toMatchObject({
+      id: "20260820_0011_storefront_conversion",
+      transaction: true,
+    });
+    expect(loaded.migrations[10].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[11]).toMatchObject({
+      id: "20260820_0012_gross_margin",
+      transaction: true,
+    });
+    expect(loaded.migrations[12]).toMatchObject({
+      id: "20260822_0013_payment_shift_attribution",
+      transaction: true,
+    });
+    expect(loaded.migrations[12].checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("canonicalizes objects before hashing", () => {

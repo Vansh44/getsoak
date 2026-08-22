@@ -55,6 +55,7 @@ import {
   type ReturnEligibility,
 } from "@/lib/returns/eligibility";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { listRestockLocations } from "@/lib/returns/restock-location";
 import {
   FILTERABLE_RETURN_STATUSES,
   OPEN_RETURN_STATUSES,
@@ -876,8 +877,15 @@ async function createExchangeOrder(
     // which is why that one is frozen.
     const variantRows = await withService((db) =>
       db
-        .select({ id: productVariants.id, name: productVariants.name })
+        .select({
+          id: productVariants.id,
+          name: productVariants.name,
+          cost: sql<
+            number | null
+          >`coalesce(${productVariants.costPrice}, ${products.costPrice})`,
+        })
         .from(productVariants)
+        .innerJoin(products, eq(products.id, productVariants.productId))
         .where(
           inArray(
             productVariants.id,
@@ -886,6 +894,7 @@ async function createExchangeOrder(
         ),
     );
     const variantName = new Map(variantRows.map((v) => [v.id, v.name]));
+    const variantCost = new Map(variantRows.map((v) => [v.id, v.cost]));
 
     const subtotal = swaps.reduce(
       (sum, l) => sum + (Number(l.price) || 0) * l.quantity,
@@ -928,6 +937,7 @@ async function createExchangeOrder(
           variantName: variantName.get(l.variant_id!) ?? null,
           quantity: l.quantity,
           price: Number(l.price) || 0,
+          unitCost: variantCost.get(l.variant_id!) ?? null,
           total: (Number(l.price) || 0) * l.quantity,
         })),
       );
@@ -1388,6 +1398,14 @@ export interface ReceiveLineInput {
 export async function receiveReturn(
   returnId: string,
   lines: ReceiveLineInput[],
+  /**
+   * Which shelf the goods actually landed on (roadmap Step 13).
+   *
+   * Optional, and its absence is not an error: a single-location store has
+   * nothing to choose between, and omitting it keeps the pre-Step-13 behaviour
+   * of booking in at the store's default location (invariant 1).
+   */
+  locationId?: string,
 ): Promise<{
   ok?: boolean;
   restocked?: number;
@@ -1406,13 +1424,41 @@ export async function receiveReturn(
     ]),
   );
 
+  // ★ VALIDATED AGAINST THE SAME LIST THE PICKER IS BUILT FROM, and BEFORE the
+  // claim below — a rejected location must not leave the return already flipped
+  // to `received` with the goods booked in nowhere. A dropdown is an
+  // affordance, not a permission (roadmap invariant 4): this is what stops a
+  // location-bound admin naming another branch's shelf, or any caller naming a
+  // location belonging to another store entirely.
+  let restockAt: string | null = null;
+  if (locationId) {
+    const allowed = await listRestockLocations(storeId);
+    if (!allowed.some((l) => l.id === locationId)) {
+      return { error: "That isn't somewhere you can book stock in." };
+    }
+    restockAt = locationId;
+  }
+
   try {
     // Only an APPROVED return can be received — goods arriving for something
     // nobody agreed to is a conversation, not a stock movement.
     const claimed = await withService((db) =>
       db
         .update(orderReturns)
-        .set({ status: "received", receivedAt: new Date().toISOString() })
+        .set({
+          status: "received",
+          receivedAt: new Date().toISOString(),
+          // ★ COALESCE, so this FILLS IN an unknown and never OVERWRITES a
+          // recorded one. A till return already knows its own shop — it is
+          // written by pos-return-actions.ts from the operator's session, which
+          // is a fact about where someone physically stood, not a preference to
+          // be corrected from a desk later.
+          ...(restockAt
+            ? {
+                locationId: sql`coalesce(${orderReturns.locationId}, ${restockAt})`,
+              }
+            : {}),
+        })
         .where(
           and(
             eq(orderReturns.id, returnId),
@@ -1464,9 +1510,11 @@ export async function receiveReturn(
       if (condition !== "sellable" || !item.product_id) continue;
 
       try {
-        // The location the goods came back TO. Null for an online return the
-        // merchant handled from the desk, in which case the wrapper sends it
-        // to the store's default — the same rule online orders reserve under.
+        // The location the goods came back TO — the till's own shop for a
+        // counter return, or the shelf the merchant named when booking a
+        // posted one in (Step 13). Still null when the store has nowhere to
+        // choose between, and the wrapper then sends it to the default, which
+        // is the same rule online orders reserve under.
         await withService((db) =>
           db.execute(
             ret.location_id

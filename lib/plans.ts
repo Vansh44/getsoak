@@ -4,7 +4,7 @@
 // Three plans, gated by business maturity:
 //   free  → try it         (COD only, subdomain, small catalog)
 //   basic → run a business (custom domain, online payments, AI copy)
-//   pro   → scale it        (no product limits, staff roles, campaigns)
+//   pro   → scale it        (advanced analytics, POS, campaigns)
 //
 // `stores.plan` holds one of PLAN_IDS (DB CHECK constraint, plans_02_*.sql).
 // Plans can be TIMED: `stores.plan_expires_at` (timestamptz, NULL = indefinite)
@@ -109,7 +109,7 @@ export const PLAN_META: Record<Plan, PlanMeta> = {
   pro: {
     id: "pro",
     name: "Pro",
-    tagline: "Scale with your team — campaigns, no product limits",
+    tagline: "Scale with your team — advanced analytics, POS, campaigns",
     monthlyInr: 5000,
     yearlyInr: 50000,
   },
@@ -172,6 +172,9 @@ export interface PlanLimits {
   onlinePayments: boolean;
   /** May send coupon email campaigns. */
   emailCampaigns: boolean;
+  /** May connect merchant analytics pixels and use advanced conversion/margin
+   *  reporting. Platform availability is a separate operator-controlled gate. */
+  advancedAnalytics: boolean;
   /** "Powered by StoreMink" badge is removed from the storefront footer. */
   removeBadge: boolean;
   /** May use the Point of Sale (in-store register at /pos). Pro only. */
@@ -194,6 +197,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     customDomain: false,
     onlinePayments: false,
     emailCampaigns: false,
+    advancedAnalytics: false,
     removeBadge: false,
     posEnabled: false,
     posLocationsIncluded: 0,
@@ -211,6 +215,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     customDomain: false,
     onlinePayments: true,
     emailCampaigns: false,
+    advancedAnalytics: false,
     removeBadge: true,
     posEnabled: false,
     posLocationsIncluded: 0,
@@ -224,6 +229,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     customDomain: true,
     onlinePayments: true,
     emailCampaigns: true,
+    advancedAnalytics: true,
     removeBadge: true,
     posEnabled: true,
     posLocationsIncluded: 2,

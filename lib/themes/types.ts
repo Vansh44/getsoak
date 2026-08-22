@@ -130,6 +130,12 @@ export interface ThemeLayout {
   /** "quick_add": product cards get an inline "+ Add" to-cart button.
    *  "classic" (default): the whole card is a click-through link only. */
   card?: "classic" | "quick_add" | "overlay" | "framed" | "grocery";
+  /** Cross-fade the product card to the product's SECOND photograph on hover.
+   *  Opt-in per theme because, unlike the quick-add button (which is rendered
+   *  always and hidden by CSS), a second image costs a network request — see
+   *  the note on `.sm-card-hoverimg` in storefront-theme.css. Absent = off, so
+   *  storefront changes. */
+  cardHoverImage?: boolean;
   /** Product-detail composition. `storefront:grocery` remains the legacy
    *  shorthand and is used when this field is absent. */
   productDetail?: "classic" | "grocery" | "editorial";

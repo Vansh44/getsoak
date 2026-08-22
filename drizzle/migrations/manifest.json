@@ -131,6 +131,207 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260818_0005_analytics_dashboard_layouts",
+      "description": "Persist bounded personal Analytics dashboard layouts per store admin",
+      "file": "../../supabase/analytics_01_dashboard_layouts.sql",
+      "transaction": true,
+      "requires": ["20260816_0004_ai_credit_invoice_paid_repair"],
+      "verify": {
+        "tables": ["analytics_dashboard_layouts"],
+        "constraints": [
+          "analytics_dashboard_layouts_layout_is_object",
+          "analytics_dashboard_layouts_pkey",
+          "analytics_dashboard_layouts_schema_version_check"
+        ],
+        "rlsTables": ["analytics_dashboard_layouts"]
+      }
+    },
+    {
+      "id": "20260819_0006_search_metrics",
+      "description": "Persist tenant-safe Search Console source epochs, metric buckets, leased work, and fleet rate limits",
+      "file": "../../supabase/search_metrics_01_schema.sql",
+      "transaction": true,
+      "requires": ["20260818_0005_analytics_dashboard_layouts"],
+      "verify": {
+        "tables": [
+          "store_search_metrics",
+          "store_search_rate_limits",
+          "store_search_sources",
+          "store_search_sync_jobs"
+        ],
+        "constraints": [
+          "store_search_metrics_pkey",
+          "store_search_metrics_source_store_fkey",
+          "store_search_sources_id_store_key",
+          "store_search_sync_jobs_pkey"
+        ],
+        "functions": ["claim_store_search_rate_slot(text,integer)"],
+        "rlsTables": [
+          "store_search_metrics",
+          "store_search_rate_limits",
+          "store_search_sources",
+          "store_search_sync_jobs"
+        ]
+      }
+    },
+    {
+      "id": "20260820_0007_platform_analytics_controls",
+      "description": "Add operator-controlled Analytics availability and seed the first Analytics help documents",
+      "file": "sql/20260820_0007_platform_analytics_controls.sql",
+      "transaction": true,
+      "requires": ["20260819_0006_search_metrics"],
+      "verify": {
+        "tables": ["platform_analytics_settings"],
+        "constraints": [
+          "platform_analytics_settings_id_check",
+          "platform_analytics_settings_pkey"
+        ],
+        "rlsTables": ["platform_analytics_settings"],
+        "queries": [
+          {
+            "name": "the Analytics help overview is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'understand-analytics-dashboard' and status = 'published'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0008_analytics_help_documents",
+      "description": "Publish the complete Analytics Help Centre guide set and prepare detailed GA4 and Meta Pixel setup drafts",
+      "file": "sql/20260820_0008_analytics_help_documents.sql",
+      "transaction": true,
+      "requires": ["20260820_0007_platform_analytics_controls"],
+      "verify": {
+        "queries": [
+          {
+            "name": "eight shipped Analytics guides are published",
+            "sql": "select count(*)::text from public.help_articles where slug in ('understand-analytics-dashboard', 'analytics-terms-and-data-sources', 'analytics-sales-and-orders', 'analytics-customers-inventory-and-activity', 'understand-google-search-analytics', 'analytics-reports-and-csv', 'customize-analytics-dashboard', 'analytics-troubleshooting') and status = 'published'",
+            "equals": "8"
+          },
+          {
+            "name": "merchant pixel setup guides remain drafts",
+            "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'draft'",
+            "equals": "2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0009_help_article_indexability",
+      "description": "Require every published Help article to have the category needed by its canonical URL",
+      "file": "sql/20260820_0009_help_article_indexability.sql",
+      "transaction": true,
+      "requires": ["20260820_0008_analytics_help_documents"],
+      "verify": {
+        "constraints": ["help_articles_published_has_category"],
+        "queries": [
+          {
+            "name": "no published Help article is missing its canonical category",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and category_id is null",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0010_merchant_pixels",
+      "description": "Enable Pro merchant GA4 and Meta Pixel modules and publish their consent-aware setup guides",
+      "file": "sql/20260820_0010_merchant_pixels.sql",
+      "transaction": true,
+      "requires": ["20260820_0009_help_article_indexability"],
+      "verify": {
+        "queries": [
+          {
+            "name": "merchant pixel modules are globally available",
+            "sql": "select count(*)::text from public.platform_analytics_settings where id = true and google_analytics_4 = true and meta_pixel = true",
+            "equals": "1"
+          },
+          {
+            "name": "merchant pixel setup guides are published",
+            "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'published'",
+            "equals": "2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0011_storefront_conversion",
+      "description": "Add consented first-party storefront events, temporary order attribution, durable daily funnel aggregates, and its Help guide",
+      "file": "sql/20260820_0011_storefront_conversion.sql",
+      "transaction": true,
+      "requires": ["20260820_0010_merchant_pixels"],
+      "verify": {
+        "tables": [
+          "storefront_daily",
+          "storefront_events",
+          "storefront_order_attribution"
+        ],
+        "constraints": [
+          "storefront_daily_pkey",
+          "storefront_events_store_event_key",
+          "storefront_events_type_check",
+          "storefront_order_attribution_pkey"
+        ],
+        "rlsTables": [
+          "storefront_daily",
+          "storefront_events",
+          "storefront_order_attribution"
+        ],
+        "queries": [
+          {
+            "name": "storefront conversion is available and documented",
+            "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.storefront_conversion = true and exists (select 1 from public.help_articles a where a.slug = 'understand-storefront-conversion-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260820_0012_gross_margin",
+      "description": "Add nullable product and variant costs, immutable order-line cost snapshots, enable Pro gross-margin analytics, and publish its Help guide",
+      "file": "sql/20260820_0012_gross_margin.sql",
+      "transaction": true,
+      "requires": ["20260820_0011_storefront_conversion"],
+      "verify": {
+        "columns": [
+          "order_items.unit_cost",
+          "product_variants.cost_price",
+          "products.cost_price"
+        ],
+        "constraints": [
+          "order_items_unit_cost_nonnegative",
+          "product_variants_cost_price_nonnegative",
+          "products_cost_price_nonnegative"
+        ],
+        "queries": [
+          {
+            "name": "gross margin is available and documented",
+            "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.gross_margin = true and exists (select 1 from public.help_articles a where a.slug = 'understand-gross-margin-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260822_0013_payment_shift_attribution",
+      "description": "Attribute each POS tender to the drawer shift that captured it",
+      "file": "sql/20260822_0013_payment_shift_attribution.sql",
+      "transaction": true,
+      "requires": ["20260820_0012_gross_margin"],
+      "verify": {
+        "columns": ["order_payments.shift_id"],
+        "constraints": ["order_payments_shift_id_fkey"],
+        "queries": [
+          {
+            "name": "legacy shifted payments are backfilled",
+            "sql": "select count(*)::text from public.order_payments p join public.orders o on o.id = p.order_id where o.shift_id is not null and p.shift_id is null",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

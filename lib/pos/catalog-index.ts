@@ -41,6 +41,16 @@ export const itemKey = (i: {
   variantId: string | null;
 }): string => `${i.productId}:${i.variantId ?? ""}`;
 
+/** Keep the sync-start boundary across a paged catalog run. ISO timestamps
+ * sort chronologically, so the earliest server-issued value is the safe one. */
+export function earliestCatalogWatermark(
+  current: string | null,
+  candidate: string | null | undefined,
+): string | null {
+  if (!candidate) return current;
+  return !current || candidate < current ? candidate : current;
+}
+
 /** Codes are matched case-insensitively and space-insensitively: scanners and
  *  humans disagree about both, and a failed scan is a stalled queue. */
 const normCode = (v: string): string =>
@@ -256,6 +266,46 @@ export function pruneLayout(
     if (!present.has(k) || seen.has(k)) continue;
     seen.add(k);
     out.push(e);
+  }
+  return out;
+}
+
+/**
+ * Fold a DELTA into a cached catalogue (roadmap Step 19).
+ *
+ * ★ PURE, and separate from the index build, so the merge rule is testable
+ * without IndexedDB, a network, or a register. Returns a new array; the caller
+ * rebuilds the index from it.
+ *
+ * ★★ ITEMS ARE KEYED BY PRODUCT+VARIANT, NOT BY PRODUCT. A delta for one
+ * product carries every sellable SKU under it, so replacing by product id alone
+ * would drop variants the delta did not mention — which is exactly the case a
+ * variant-level edit produces.
+ *
+ * ★ REMOVALS ARE BY PRODUCT ID, because that is what an unpublish acts on: the
+ * whole product leaves the catalogue with all its variants.
+ */
+export function mergeCatalogDelta(
+  cached: CatalogItem[],
+  changed: CatalogItem[],
+  removedProductIds: string[] = [],
+): CatalogItem[] {
+  const gone = new Set(removedProductIds);
+  // Every product the delta MENTIONS is replaced wholesale by what it sent, so
+  // a variant deleted from a product still in the catalogue disappears too.
+  const rewritten = new Set(changed.map((i) => i.productId));
+
+  const out: CatalogItem[] = [];
+  for (const item of cached) {
+    if (gone.has(item.productId)) continue;
+    if (rewritten.has(item.productId)) continue;
+    out.push(item);
+  }
+  for (const item of changed) {
+    // A product can be in both lists only if the server contradicted itself;
+    // removal wins, because "no longer sellable" is the safer reading.
+    if (gone.has(item.productId)) continue;
+    out.push(item);
   }
   return out;
 }

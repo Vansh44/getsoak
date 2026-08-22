@@ -60,6 +60,7 @@ type Props = {
   // seeds the initial checkbox when creating; ignored when editing an existing
   // product (its own value wins).
   defaultTrackInventory?: boolean;
+  canUseGrossMargin?: boolean;
   // When the parent renders the Save/Cancel controls itself (the full-page
   // editor puts them in a sticky header), it hides the form's own action bar
   // and drives saving through the imperative ref below.
@@ -81,6 +82,7 @@ const EMPTY: ProductFormData = {
   category_id: null,
   base_price: 0,
   selling_price: 0,
+  cost_price: null,
   image_url: "",
   images: [],
   status: "draft",
@@ -114,6 +116,7 @@ function toForm(product: Product): ProductFormData {
     category_id: product.category_id,
     base_price: product.base_price,
     selling_price: product.selling_price,
+    cost_price: product.cost_price,
     image_url: product.image_url ?? "",
     images: product.images ?? [],
     status: product.status,
@@ -141,6 +144,7 @@ function toForm(product: Product): ProductFormData {
       name: v.name,
       base_price: v.base_price,
       selling_price: v.selling_price,
+      cost_price: v.cost_price,
       special_price: v.special_price ?? null,
       stock: v.stock,
       sku: v.sku ?? "",
@@ -347,6 +351,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
       onClose,
       onSaved,
       defaultTrackInventory = false,
+      canUseGrossMargin = false,
       hideActions = false,
       onPendingChange,
     }: Props,
@@ -420,6 +425,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
             name: "",
             base_price: 0,
             selling_price: 0,
+            cost_price: null,
             special_price: null,
             stock: 0,
             sku: "",
@@ -885,7 +891,7 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
               icon={Tag}
               tint="emerald"
             >
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
                   <label className={labelClass}>Base price ₹ (MRP)</label>
                   <NumberField
@@ -894,6 +900,22 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                     onValueChange={(n) => set("base_price", n)}
                   />
                 </div>
+                {canUseGrossMargin ? (
+                  <div>
+                    <label className={labelClass}>Cost per unit ₹</label>
+                    <NumberField
+                      className={fieldClass}
+                      value={form.cost_price ?? 0}
+                      onValueChange={(n, raw) =>
+                        set("cost_price", raw === "" ? null : n)
+                      }
+                    />
+                    <p className={hintClass}>
+                      What this item costs you. The first value safely fills
+                      older sales with no cost; later edits affect new sales.
+                    </p>
+                  </div>
+                ) : null}
                 <div>
                   <label className={labelClass}>Selling price ₹</label>
                   <NumberField
@@ -1233,6 +1255,27 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                             }
                           />
                         </div>
+                        {canUseGrossMargin ? (
+                          <div className="flex items-center gap-2">
+                            <span className="w-10 shrink-0 text-[10px] uppercase tracking-wide text-[#9ca3af]">
+                              Cost
+                            </span>
+                            <NumberField
+                              className={`${fieldClass} w-24`}
+                              value={v.cost_price ?? 0}
+                              onValueChange={(n, raw) =>
+                                updateVariant(
+                                  i,
+                                  "cost_price",
+                                  raw === "" ? null : n,
+                                )
+                              }
+                            />
+                            <span className="text-[11px] text-[#9ca3af]">
+                              ₹ — leave blank to inherit the product cost.
+                            </span>
+                          </div>
+                        ) : null}
                         <div className="flex items-center gap-2">
                           <span
                             className="w-10 shrink-0 text-[10px] uppercase tracking-wide text-[#9ca3af]"

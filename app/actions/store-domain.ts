@@ -27,11 +27,17 @@ import {
 } from "@/lib/domains/reconcile";
 import { logError } from "@/lib/observability/logger";
 import { removeAuthorizedDomain } from "@/lib/auth/authorized-domains";
-import { ROOT_DOMAIN } from "@/lib/store/host";
+import { ROOT_DOMAIN, SEARCH_INDEXABLE } from "@/lib/store/host";
 import {
   ensureGoogleCoverageForStore,
   GOOGLE_INDEXING_SETTINGS_KEYS,
 } from "@/lib/seo/store-indexing";
+import { reconcileStoreSearchSource } from "@/lib/seo/search-metrics";
+import {
+  deriveGoogleIndexingHealth,
+  type GoogleIndexingHealth,
+} from "@/lib/seo/indexing-health";
+import { removeGoogleCustomDomain } from "@/lib/seo/search-engines";
 
 // Domain config is a Settings surface: reads require `view`, mutations `manage`.
 // Every write here uses the service scope (RLS-bypassing), so the gate is
@@ -67,6 +73,38 @@ function getResend(): Resend | null {
 function clean(v: string | null | undefined): string | null {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s ? s : null;
+}
+
+async function cleanupDetachedDomain(
+  domain: string,
+  operation: "updateCustomDomain" | "disconnectDomain",
+): Promise<void> {
+  const gone = await deprovision(domain);
+  if (gone.error)
+    logError(`${operation} (deprovision)`, gone.error, { domain });
+
+  // Stop trusting a hostname we no longer serve for Google sign-in.
+  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
+  if (deauth.error)
+    logError(`${operation} (deauthorize)`, deauth.error, { domain });
+
+  // The database write above removed the public META token first. Google can
+  // now safely release both the URL-prefix property and our ownership record.
+  const google = await removeGoogleCustomDomain(domain);
+  if (!google.searchConsole.ok && !google.searchConsole.skipped) {
+    logError(
+      `${operation} (remove Search Console property)`,
+      google.searchConsole.error,
+      { domain, status: google.searchConsole.status },
+    );
+  }
+  if (!google.siteVerification.ok && !google.siteVerification.skipped) {
+    logError(
+      `${operation} (remove Site Verification ownership)`,
+      google.siteVerification.error,
+      { domain, status: google.siteVerification.status },
+    );
+  }
 }
 
 /**
@@ -157,6 +195,7 @@ export async function updateCustomDomain(
   }
 
   revalidateTag(STORE_TAG, "max");
+  after(() => reconcileStoreSearchSource(storeId));
 
   // ★ RELEASE THE DOMAIN THEY JUST REPLACED. `deprovision` was wired only to
   // disconnectDomain, so CHANGING a domain silently orphaned the old one's
@@ -170,24 +209,7 @@ export async function updateCustomDomain(
   // and a cleanup failure must not fail the change they asked for.
   const previous = store?.custom_domain ?? null;
   if (previous && previous !== cleanDomain) {
-    after(async () => {
-      const gone = await deprovision(previous);
-      if (gone.error) {
-        logError("updateCustomDomain (deprovision old)", gone.error, {
-          previous,
-        });
-      }
-      // Stop trusting it for Google sign-in too. Leaving it listed means a
-      // domain we no longer serve can still host a popup sign-in against our
-      // Identity Platform project — which is precisely what the authorized-domain
-      // check exists to prevent, and matters most if someone else later buys it.
-      const deauth = await removeAuthorizedDomain(previous, ROOT_DOMAIN);
-      if (deauth.error) {
-        logError("updateCustomDomain (deauthorize old)", deauth.error, {
-          previous,
-        });
-      }
-    });
+    after(() => cleanupDetachedDomain(previous, "updateCustomDomain"));
   }
   return { success: true };
 }
@@ -311,6 +333,8 @@ export interface DomainConnectionState {
   certificateState: string | null;
   /** Companion hosts also serving (the www/apex counterpart). */
   extraHosts: string[];
+  /** Google ownership, sitemap, freshness, and last actionable error. */
+  indexing: GoogleIndexingHealth;
   message?: string;
 }
 
@@ -331,6 +355,7 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     records: [],
     certificateState: null,
     extraHosts: [],
+    indexing: deriveGoogleIndexingHealth({}, null, false),
   };
   if (!access?.can(DOMAIN_SECTION, "view")) return empty;
 
@@ -340,8 +365,20 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
   const domain = row?.custom_domain ?? null;
   const settings = (row?.settings as Record<string, unknown>) ?? {};
   const verified = settings.custom_domain_verified === true;
+  const origin = row?.slug
+    ? verified && allowed && domain
+      ? `https://${domain}`
+      : `https://${row.slug}.${ROOT_DOMAIN}`
+    : null;
+  const indexing = deriveGoogleIndexingHealth(
+    settings,
+    origin,
+    SEARCH_INDEXABLE,
+  );
 
-  if (!domain || !cfg) return { ...empty, domain, verified, allowed };
+  if (!domain || !cfg) {
+    return { ...empty, domain, verified, allowed, indexing };
+  }
 
   // Routing record is known without any network call; the challenge record
   // needs the authorization, which verifyDomain() refreshes.
@@ -382,7 +419,25 @@ export async function getDomainConnectionState(): Promise<DomainConnectionState>
     extraHosts: Array.isArray(settings.domain_extra_hosts)
       ? (settings.domain_extra_hosts as string[])
       : [],
+    indexing,
   };
+}
+
+/** Merchant-triggered retry for the status card. The daily seo-refresh job is
+ * still the backstop; this only avoids making someone wait a day after fixing
+ * a permission or DNS issue. */
+export async function retryGoogleIndexing(): Promise<DomainResult> {
+  if (!(await getManagerUserId(DOMAIN_SECTION))) {
+    return { error: "You don't have permission to manage domain settings." };
+  }
+  if (!SEARCH_INDEXABLE) {
+    return { error: "Google Search coverage only runs in production." };
+  }
+  const storeId = await getActingStoreId();
+  const result = await ensureGoogleCoverageForStore(storeId);
+  return result.ok
+    ? { success: true }
+    : { error: result.error ?? "Google Search coverage could not be updated." };
 }
 
 /**
@@ -428,7 +483,12 @@ export async function verifyDomain(): Promise<DomainResult> {
     // Ownership verification and sitemap registration are slower, independent
     // Google API calls. Start them now without holding the merchant's DNS check
     // open; the daily seo-refresh job retries every incomplete attempt.
-    after(() => ensureGoogleCoverageForStore(storeId));
+    after(() =>
+      Promise.all([
+        ensureGoogleCoverageForStore(storeId),
+        reconcileStoreSearchSource(storeId),
+      ]),
+    );
   }
   return { success: true };
 }
@@ -475,16 +535,8 @@ export async function disconnectDomain(): Promise<DomainResult> {
     return { error: "Couldn't disconnect the domain. Please try again." };
   }
   revalidateTag(STORE_TAG, "max");
+  after(() => reconcileStoreSearchSource(storeId));
 
-  const gone = await deprovision(domain);
-  if (gone.error)
-    logError("disconnectDomain (deprovision)", gone.error, { domain });
-
-  // Same reasoning as a domain change: an entry for a host we no longer serve is
-  // standing permission we do not need. Guarded so it can never strip the
-  // platform's own entry (see planRemove).
-  const deauth = await removeAuthorizedDomain(domain, ROOT_DOMAIN);
-  if (deauth.error)
-    logError("disconnectDomain (deauthorize)", deauth.error, { domain });
+  await cleanupDetachedDomain(domain, "disconnectDomain");
   return { success: true };
 }

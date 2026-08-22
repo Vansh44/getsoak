@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 
 type Props = {
   value: number;
-  onValueChange: (n: number) => void;
+  /** `raw` distinguishes an explicit zero from an empty optional field. */
+  onValueChange: (n: number, raw: string) => void;
   allowDecimal?: boolean;
   className?: string;
   placeholder?: string;
@@ -51,7 +52,7 @@ export function NumberField({
     const n = raw === "" || raw === "." ? 0 : Number(raw);
     if (!Number.isNaN(n)) {
       lastEmitted.current = n;
-      onValueChange(n);
+      onValueChange(n, raw);
     }
   };
 

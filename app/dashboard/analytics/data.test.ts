@@ -4,7 +4,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Every query is captured rather than executed: what matters here is WHICH
 // rows a viewer's figures are computed from, which lives entirely in the WHERE.
-const captured = vi.hoisted(() => ({ wheres: [] as unknown[] }));
+const captured = vi.hoisted(() => ({
+  wheres: [] as unknown[],
+  groups: [] as unknown[][],
+  activeQueries: 0,
+  maxActiveQueries: 0,
+}));
 
 function chain(): any {
   const c: any = {};
@@ -14,25 +19,40 @@ function chain(): any {
     "from",
     "leftJoin",
     "innerJoin",
-    "groupBy",
     "orderBy",
     "limit",
   ]) {
     c[m] = vi.fn(self);
   }
+  c.groupBy = vi.fn((...groups: unknown[]) => {
+    captured.groups.push(groups);
+    return c;
+  });
   c.where = vi.fn((w: unknown) => {
     captured.wheres.push(w);
     return c;
   });
-  // ★ ONE permissive row, not []. The data layer destructures scalar results
-  // (`const [[{ c }]] = await Promise.all(...)`), so an empty array throws
-  // before any WHERE is captured — and the test would then be asserting on a
-  // crash rather than on the query.
+  // ★ ONE permissive row, not []. The data layer destructures scalar results,
+  // so an empty array throws before any WHERE is captured — and the test would
+  // then be asserting on a crash rather than on the query.
   const row = new Proxy(
     {},
-    { get: (_t, k) => (k === "then" ? undefined : (0 as never)) },
+    {
+      get: (_t, k) =>
+        k === "then" ? undefined : k === "key" ? "online" : (0 as never),
+    },
   );
-  c.then = (res: (v: unknown[]) => unknown) => res([row]);
+  c.then = (res: (v: unknown[]) => unknown) => {
+    captured.activeQueries += 1;
+    captured.maxActiveQueries = Math.max(
+      captured.maxActiveQueries,
+      captured.activeQueries,
+    );
+    queueMicrotask(() => {
+      captured.activeQueries -= 1;
+      res([row]);
+    });
+  };
   return c;
 }
 
@@ -40,7 +60,36 @@ vi.mock("@/lib/db/client", () => ({
   withService: vi.fn(async (fn: any) => fn(chain())),
 }));
 
-import { getAnalyticsData } from "./data";
+import {
+  buildPaymentBreakdown,
+  classifyCustomerMix,
+  comparisonTrend,
+  getRecentOrders,
+  getActivity,
+  getSalesAnalytics,
+  grossMarginFromTotals,
+  getSalesByChannel,
+  RECOGNIZED_PAYMENT_STATUSES,
+  RECOGNIZED_POS_STATUSES,
+} from "./data";
+import { parseAnalyticsRange } from "@/lib/analytics/range";
+
+const range = parseAnalyticsRange(
+  { range: "7d", compare: "none" },
+  "Asia/Kolkata",
+  new Date("2026-08-18T10:30:00.000Z"),
+);
+
+const allLocations = {
+  locationIds: null,
+  includeUnassigned: true,
+  selectedId: null,
+} as const;
+const scopedLocations = (locationIds: string[]) => ({
+  locationIds,
+  includeUnassigned: true,
+  selectedId: null,
+});
 
 /**
  * The PARAMETER values across every captured WHERE.
@@ -52,6 +101,10 @@ import { getAnalyticsData } from "./data";
  * a scoped query from an unscoped one, so they are what this walks for.
  */
 function params(): unknown[] {
+  return boundValues(captured.wheres);
+}
+
+function boundValues(nodes: unknown[]): unknown[] {
   const out: unknown[] = [];
   const walk = (node: any, depth = 0) => {
     if (depth > 12 || node === null || node === undefined) return;
@@ -62,29 +115,44 @@ function params(): unknown[] {
     if (Array.isArray(node)) return node.forEach((n) => walk(n, depth + 1));
     if (node.queryChunks) return walk(node.queryChunks, depth + 1);
     // A bound value; anything else is table/column machinery.
-    if ("value" in node && !Array.isArray(node.value))
-      walk(node.value, depth + 1);
+    if ("value" in node) walk(node.value, depth + 1);
   };
-  captured.wheres.forEach((w) => walk(w));
+  nodes.forEach((node) => walk(node));
   return out;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   captured.wheres = [];
+  captured.groups = [];
+  captured.activeQueries = 0;
+  captured.maxActiveQueries = 0;
 });
 
-describe("getAnalyticsData — location scope", () => {
+describe("analytics data — gross margin", () => {
+  it("excludes unknown costs instead of treating them as zero", () => {
+    expect(
+      grossMarginFromTotals({
+        merchandiseSales: 1_000,
+        costedSales: 600,
+        costOfGoods: 360,
+        totalUnits: 10,
+        costedUnits: 6,
+      }),
+    ).toMatchObject({
+      grossProfit: 240,
+      marginPercent: 40,
+      coveragePercent: 60,
+    });
+  });
+});
+
+describe("analytics data — location scope", () => {
   // ★★ THE OWNER'S VIEW IS UNCHANGED. Running several shops is the reason to
   // want whole-business figures, so an unrestricted viewer must not suddenly be
   // narrowed by a feature aimed at their staff.
   it("adds no location predicate for an unrestricted viewer", async () => {
-    await getAnalyticsData("store-1", null);
-    expect(params()).not.toContain("loc-1");
-  });
-
-  it("defaults to unrestricted when no scope is passed at all", async () => {
-    await getAnalyticsData("store-1");
+    await getRecentOrders("store-1", allLocations, range);
     expect(params()).not.toContain("loc-1");
   });
 
@@ -92,19 +160,139 @@ describe("getAnalyticsData — location scope", () => {
   // other branch's revenue, while the orders list refuses them a single order
   // from it.
   it("bounds a restricted viewer's figures to their shops", async () => {
-    await getAnalyticsData("store-1", ["loc-1", "loc-2"]);
+    await getRecentOrders(
+      "store-1",
+      scopedLocations(["loc-1", "loc-2"]),
+      range,
+    );
     const sent = params();
     expect(sent).toContain("loc-1");
     expect(sent).toContain("loc-2");
+  });
+
+  it("applies the same scope to Phase 2 commerce widgets", async () => {
+    await getSalesByChannel("store-1", scopedLocations(["loc-2"]), range);
+    expect(params()).toContain("loc-2");
   });
 
   // ⚠ EMPTY is "assigned to nothing that still exists" — a real state, NOT
   // unrestricted. It must produce a predicate that matches nothing rather than
   // silently widening to the whole store.
   it("still bounds a viewer assigned to nothing that exists", async () => {
-    await getAnalyticsData("store-1", []);
+    await getRecentOrders("store-1", scopedLocations([]), range);
     // The store filter is always present; what must NOT happen is the query
     // running with no location predicate at all.
     expect(captured.wheres.length).toBeGreaterThan(0);
+  });
+});
+
+describe("analytics data — activity permissions", () => {
+  it("does not query enquiry or blog activity without those permissions", async () => {
+    await getActivity("store-1", allLocations, range, {
+      includeEnquiries: false,
+      includeBlogs: false,
+    });
+    expect(captured.wheres).toHaveLength(1);
+  });
+
+  it("includes each optional source only when allowed", async () => {
+    await getActivity("store-1", allLocations, range, {
+      includeEnquiries: true,
+      includeBlogs: true,
+    });
+    expect(captured.wheres).toHaveLength(3);
+  });
+});
+
+describe("recognized sales", () => {
+  it("uses the settled/COD/POS contract and completed refunds", async () => {
+    await getSalesAnalytics("store-1", allLocations, range);
+    const sent = params();
+    expect(sent).toContain("completed");
+    expect(sent).toContain("cancelled");
+    expect(RECOGNIZED_PAYMENT_STATUSES).toEqual([
+      "paid",
+      "partially_refunded",
+      "refunded",
+    ]);
+    expect(RECOGNIZED_POS_STATUSES).toEqual(["completed", "refunded"]);
+  });
+
+  it("keeps bucket queries valid and serial on the scoped PostgreSQL client", async () => {
+    await getSalesAnalytics("store-1", allLocations, range);
+
+    expect(captured.maxActiveQueries).toBe(1);
+    expect(captured.groups).toHaveLength(3);
+    const groupValues = boundValues(captured.groups);
+    expect(groupValues).not.toContain("day");
+    expect(groupValues).not.toContain("Asia/Kolkata");
+  });
+
+  it("omits a misleading percentage when comparison is absent or zero", () => {
+    expect(comparisonTrend(100, null).trendPct).toBeNull();
+    expect(comparisonTrend(100, 0).trendPct).toBeNull();
+    expect(comparisonTrend(75, 100)).toEqual({
+      trendPct: -25,
+      trendUp: false,
+    });
+  });
+});
+
+describe("payment-method allocation", () => {
+  it("combines itemized POS and online tenders, then subtracts recorded refunds", () => {
+    const rows = buildPaymentBreakdown({
+      pos: [
+        { key: "cash", amount: 100, orders: 1 },
+        { key: "card", amount: 50, orders: 1 },
+      ],
+      online: [
+        { key: "cash_on_delivery", amount: 80, orders: 1 },
+        { key: "split", amount: 999, orders: 1 },
+      ],
+      storeCredit: { amount: 20, orders: 1 },
+      refunds: [
+        { key: "cash", refunds: 30 },
+        { key: "store_credit", refunds: 5 },
+      ],
+    });
+    expect(
+      Object.fromEntries(rows.map((row) => [row.key, row.amount])),
+    ).toEqual({
+      cash: 70,
+      card: 50,
+      cash_on_delivery: 80,
+      store_credit: 15,
+    });
+    expect(rows.some((row) => row.key === "split")).toBe(false);
+  });
+
+  it("keeps a refund-only method visible instead of guessing its source", () => {
+    expect(
+      buildPaymentBreakdown({
+        pos: [],
+        online: [],
+        storeCredit: null,
+        refunds: [{ key: "manual", refunds: 25 }],
+      })[0],
+    ).toMatchObject({ key: "manual", name: "Manual refund", amount: -25 });
+  });
+});
+
+describe("customer mix", () => {
+  it("classifies only customers active in the range by their first accessible order", () => {
+    expect(
+      classifyCustomerMix(
+        [
+          { firstOrderAt: "2026-08-01T00:00:00.000Z", currentOrders: 1 },
+          { firstOrderAt: "2026-08-18T00:00:00.000Z", currentOrders: 2 },
+          { firstOrderAt: "2026-07-01T00:00:00.000Z", currentOrders: 0 },
+        ],
+        new Date("2026-08-10T00:00:00.000Z"),
+      ),
+    ).toEqual({
+      newCustomers: 1,
+      returningCustomers: 1,
+      totalCustomers: 2,
+    });
   });
 });

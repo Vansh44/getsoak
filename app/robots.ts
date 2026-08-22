@@ -19,7 +19,7 @@ import {
   isPlatformHost,
   isThemesHost,
 } from "@/lib/store/host";
-import { isStoreLaunched } from "@/lib/store/launch";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 
 export default async function robots(): Promise<MetadataRoute.Robots> {
@@ -75,12 +75,19 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   }
 
   // A store that has never published anything of its own is still the theme's
-  // seed content — the same pages every other store on that theme has. Keep it
-  // out until the merchant makes it theirs (lib/store/launch.ts). Demo stores
-  // are permanent showcases of exactly that shared content, so they stay out
-  // for good.
-  if (store && (!isStoreLaunched(store) || store.settings?.demo === true)) {
-    return { rules: { userAgent: "*", disallow: "/" } };
+  // seed content — the same pages every other store on that theme has. Its
+  // layout emits `noindex, nofollow` and its sitemap is empty. Do NOT disallow
+  // these public pages here: a crawler must fetch them to see the noindex rule,
+  // especially when retiring seed URLs that were indexed before the launch
+  // gate existed. Utility/private routes remain blocked as usual.
+  if (store && !isStoreSearchIndexable(store)) {
+    return {
+      rules: {
+        userAgent: "*",
+        allow: "/",
+        disallow: disallowPaths(STOREFRONT_DISALLOW),
+      },
+    };
   }
 
   const siteUrl = store ? storeOrigin(store) : PLATFORM_URL;

@@ -438,6 +438,78 @@
   padding: 7px 16px;
 }
 
+/* ---- Themed typography reaches UNTOKENISED components -------------------
+   A theme re-points --font-outfit / --font-roboto / --font-stick-no-bills, and
+   ~64 storefront call-sites read those vars. Everything ELSE inherited from
+   <body>, which Tailwind sets to its default sans — so roughly half of a
+   storefront rendered in the theme font and half in Tailwind's.
+
+   ★ NOBODY NOTICED because every theme until Vitrine set `body:
+   var(--font-inter)`, and Inter is ALSO Tailwind's default: the two halves
+   happened to match. Vitrine is the first preset with a different body face,
+   and it rendered half in Jost and half in Inter.
+
+   Setting the family on the themed root makes untokenised descendants inherit
+   the theme font instead of Tailwind's, which is what they always meant to do.
+
+   ★ GATED ON A THEME BEING INSTALLED (`sm-themed-type`, emitted only when
+   `design` resolves) so this cannot change a storefront that has no theme —
+   the WholeSip fallback and legacy stores keep the font they inherit today.
+   For basket/studio/ritual it is a no-op in practice: their body font IS
+   Inter, so the computed face does not change.
+   ------------------------------------------------------------------------ */
+.sm-themed-type.storefront-root {
+  font-family: var(--font-outfit), sans-serif;
+}
+
+/* ---- Hover second-image swap (theme layout.cardHoverImage) -------------
+   The card cross-fades to the product's SECOND photograph on hover — the one
+   piece of motion a fashion grid is expected to have.
+
+   ★ HIDDEN BY DEFAULT, AND THAT IS THE LOADING STRATEGY, NOT JUST STYLING.
+   The hover layer is `display: none` here and the <img> inside it is
+   loading="lazy", so on every storefront that has NOT opted in the element
+   never gets a layout box, never intersects the viewport, and the browser
+   never fetches it. That is why this is `display` rather than `opacity: 0`
+   or `visibility: hidden`, both of which would still lay the image out and
+   download it.
+
+   ★ WHY NOT THE QUICK-ADD PATTERN. QuickAddButton is rendered on every card
+   and hidden unless .sm-card-quickadd — free, because a hidden button costs
+   nothing. A second photograph costs a request per card, so this is opted
+   into per theme (ThemeLayout.cardHoverImage) and the card additionally
+   renders no layer at all unless the product actually HAS a second image
+   (lib/products/gallery.ts).
+
+   ★ POINTER-GATED. `(hover: hover) and (pointer: fine)` keeps it off touch
+   devices entirely: there is no hover there, so the second image would be
+   pure wasted bandwidth on exactly the connections least able to spare it.
+   A touchscreen laptop has a fine pointer and keeps the effect.
+   ------------------------------------------------------------------------ */
+.shop-card-img-hover {
+  display: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sm-card-hoverimg.storefront-root .shop-card-img-hover {
+    display: block;
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.45s ease;
+  }
+  .sm-card-hoverimg.storefront-root .shop-card:hover .shop-card-img-hover,
+  .sm-card-hoverimg.storefront-root
+    .shop-card:focus-visible
+    .shop-card-img-hover {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sm-card-hoverimg.storefront-root .shop-card-img-hover {
+    transition: none;
+  }
+}
+
 /* ---- Phase 3 product-card variants ------------------------------------- */
 .sm-card-framed.storefront-root .shop-card {
   padding: 10px;

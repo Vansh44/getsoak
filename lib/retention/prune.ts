@@ -31,7 +31,7 @@
 // resumable, so the next night simply carries on.
 // ---------------------------------------------------------------------------
 
-import { inArray, lt } from "drizzle-orm";
+import { inArray, lt, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   activityEvents,
@@ -40,6 +40,10 @@ import {
   dataJobs,
   emailLogs,
   notifications,
+  posParkedSales,
+  storefrontEvents,
+  storefrontOrderAttribution,
+  storeSearchMetrics,
 } from "@/drizzle/schema";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
@@ -184,7 +188,10 @@ function batchDeleter(
     | typeof emailLogs
     | typeof dataJobs
     | typeof dataJobIssues
-    | typeof billingWebhookEvents,
+    | typeof billingWebhookEvents
+    | typeof storefrontEvents
+    | typeof storefrontOrderAttribution
+    | typeof posParkedSales,
   key: AnyPgColumn,
   ts: AnyPgColumn,
 ): (floorIso: string, limit: number) => Promise<number> {
@@ -206,6 +213,27 @@ function batchDeleter(
     });
 }
 
+/** Search metrics use the meaningful composite bucket key rather than a
+ * surrogate id. `ctid` is confined to this one statement, where it safely
+ * identifies the bounded page selected and cannot survive a transaction. */
+function searchMetricBatchDeleter(
+  floorIso: string,
+  limit: number,
+): Promise<number> {
+  return withService(async (db) => {
+    const result = await db.execute(sql`
+      DELETE FROM ${storeSearchMetrics}
+       WHERE ctid IN (
+         SELECT ctid
+           FROM ${storeSearchMetrics}
+          WHERE ${storeSearchMetrics.date} < ${floorIso.slice(0, 10)}::date
+          LIMIT ${limit}
+       )
+    `);
+    return result.rowCount ?? 0;
+  });
+}
+
 /**
  * ── ORDER IS LOAD-BEARING ─────────────────────────────────────────────────
  * `notifications.event_id` references `activity_events` ON DELETE CASCADE, so
@@ -220,6 +248,28 @@ function batchDeleter(
  * another. See docs/cron-jobs.md.
  */
 export const RETENTION_POLICIES: RetentionPolicy[] = [
+  {
+    table: "storefront_order_attribution",
+    days: 14,
+    reason:
+      "A temporary anonymous bridge exists only to attach a delayed online payment to its original consented session.",
+    deleteBatch: batchDeleter(
+      storefrontOrderAttribution,
+      storefrontOrderAttribution.orderId,
+      storefrontOrderAttribution.createdAt,
+    ),
+  },
+  {
+    table: "storefront_events",
+    days: 14,
+    reason:
+      "Raw storefront analytics is needed only for corrections and session rollups; durable reports use non-identifying daily counts.",
+    deleteBatch: batchDeleter(
+      storefrontEvents,
+      storefrontEvents.id,
+      storefrontEvents.createdAt,
+    ),
+  },
   {
     table: "notifications",
     days: 90,
@@ -279,6 +329,34 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
       "when a job finishes, so what is left is a history line.",
     deleteBatch: batchDeleter(dataJobs, dataJobs.id, dataJobs.createdAt),
   },
+  // ── Held (parked) sales ────────────────────────────────────────────────
+  // ★★ THE CAP IS WHY THIS MATTERS, not the disk. `pos_parked_sales` allows 20
+  // per LOCATION (MAX_PARKED_SALES), so abandoned carts do not merely
+  // accumulate — they fill the list and eventually stop a counter parking a
+  // real one. A ceiling with nothing ageing out of it becomes a wall.
+  //
+  // ★ DISCARDING IS SAFE, which is what makes this a retention entry rather
+  // than a feature. A park holds NO stock and stores NO prices (pos_14), so
+  // expiring one costs a re-scan and nothing else. Contrast a pickup hold,
+  // where expiry has to release reserved units — that is a sweep of its own,
+  // in expire-pending-payments, and deliberately not here.
+  //
+  // `created_at` is the only clock there is: parking inserts and resuming
+  // DELETES, so a row is never touched between the two. pos_14 already ships
+  // the created_at-only index this needs, anticipating exactly this entry.
+  {
+    table: "pos_parked_sales",
+    days: 7,
+    reason:
+      "A park is a note to self for the shift, not a promise — it holds no stock and " +
+      "no prices, so a resumed cart re-prices anyway. 7 days covers 'the customer is " +
+      "coming back Saturday' and still keeps the 20-per-counter cap usable.",
+    deleteBatch: batchDeleter(
+      posParkedSales,
+      posParkedSales.id,
+      posParkedSales.createdAt,
+    ),
+  },
   // ── Gateway webhook receipts ───────────────────────────────────────────
   {
     table: "billing_webhook_events",
@@ -294,6 +372,14 @@ export const RETENTION_POLICIES: RetentionPolicy[] = [
       billingWebhookEvents.eventId,
       billingWebhookEvents.receivedAt,
     ),
+  },
+  {
+    table: "store_search_metrics",
+    days: 488,
+    reason:
+      "Search Console exposes roughly 16 months. Keeping the same window means " +
+      "StoreMink does not silently show less history than the source product.",
+    deleteBatch: searchMetricBatchDeleter,
   },
 ];
 

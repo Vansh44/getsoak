@@ -28,12 +28,14 @@ export function ProductEditorPanel({
   colors,
   taxClasses,
   defaultTrackInventory = false,
+  canUseGrossMargin = false,
 }: {
   product: Product | null;
   categories: CategoryOption[];
   colors: CardColorOption[];
   taxClasses: TaxClassOption[];
   defaultTrackInventory?: boolean;
+  canUseGrossMargin?: boolean;
 }) {
   const router = useRouter();
   const formRef = useRef<ProductEditorFormHandle>(null);
@@ -148,6 +150,7 @@ export function ProductEditorPanel({
           colors={colors}
           taxClasses={taxClasses}
           defaultTrackInventory={defaultTrackInventory}
+          canUseGrossMargin={canUseGrossMargin}
           onClose={() => router.push("/dashboard/products")}
           // Edit stays on the page (refresh to show saved values); create
           // returns to the list, where the new product now appears.

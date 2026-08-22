@@ -7,6 +7,7 @@ import {
   Truck,
   Megaphone,
   CreditCard,
+  ChartNoAxesCombined,
   BookOpen,
   type LucideIcon,
 } from "lucide-react";
@@ -23,6 +24,7 @@ const ICONS: Record<string, LucideIcon> = {
   Truck,
   Megaphone,
   CreditCard,
+  ChartNoAxesCombined,
   BookOpen,
 };
 

@@ -33,6 +33,7 @@ single scroll, under a metric row. Three consequences, all of them real:
 | **ADMINISTRATION** | Help Centre    | `/dashboard/help`          | Platform docs                         |
 |                    | Themes         | `/dashboard/themes`        | The catalog + demo stores             |
 |                    | Pricing        | `/dashboard/pricing`       | What StoreMink charges                |
+|                    | Analytics      | `/dashboard/analytics`     | Platform Analytics availability       |
 |                    | Operators      | `/dashboard/operators`     | Who runs the platform                 |
 |                    | Billing & tax  | `/dashboard/billing`       | StoreMink's own GST identity          |
 

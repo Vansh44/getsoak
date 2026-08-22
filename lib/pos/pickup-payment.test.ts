@@ -71,3 +71,61 @@ describe("amountDueAtCollection", () => {
     ).toBe(0);
   });
 });
+
+// ── Part payment (roadmap Step 18) ─────────────────────────────────────────
+// A deposit at the counter. Without `paidSoFar` the customer would be asked for
+// the full amount again on their next visit — ₹540 taken for a ₹340 order, and
+// a drawer reporting OVER by the deposit.
+
+describe("amountDueAtCollection — net of what is already paid", () => {
+  const owing = (over: Record<string, unknown> = {}) => ({
+    paymentMethod: "pay_at_store",
+    paymentStatus: "pending",
+    total: 340,
+    ...over,
+  });
+
+  it("★★ subtracts a deposit already taken", () => {
+    expect(amountDueAtCollection(owing({ paidSoFar: 200 }))).toBe(140);
+  });
+
+  it("a fully-paid collection owes nothing more", () => {
+    expect(amountDueAtCollection(owing({ paidSoFar: 340 }))).toBe(0);
+  });
+
+  it("★ over-payment floors at zero, it does not go negative", () => {
+    // A negative would make the tender pad ask for a negative amount. Money
+    // back is a refund, which is its own path (§26).
+    expect(amountDueAtCollection(owing({ paidSoFar: 400 }))).toBe(0);
+  });
+
+  it("★★ a malformed figure means NOTHING paid, never paid-in-full", () => {
+    // Reading a bad value as settled would hand the goods over free.
+    for (const bad of [null, undefined, "abc", NaN, -50]) {
+      expect(amountDueAtCollection(owing({ paidSoFar: bad }))).toBe(340);
+    }
+  });
+
+  it("numeric strings from the wire are handled", () => {
+    expect(amountDueAtCollection(owing({ paidSoFar: "200.00" }))).toBe(140);
+  });
+
+  it("★ an already-PAID order is still 0, whatever paidSoFar says", () => {
+    // The status gate comes first: an order paid online must never be charged
+    // a second time, and a stray payments row must not resurrect a debt.
+    expect(
+      amountDueAtCollection({
+        paymentMethod: "razorpay",
+        paymentStatus: "paid",
+        total: 340,
+        paidSoFar: 0,
+      }),
+    ).toBe(0);
+  });
+
+  it("rounds to paise like every other money figure here", () => {
+    expect(
+      amountDueAtCollection(owing({ total: 100, paidSoFar: 33.333 })),
+    ).toBe(66.67);
+  });
+});

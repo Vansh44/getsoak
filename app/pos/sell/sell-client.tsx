@@ -24,14 +24,17 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import {
+  confirmPosGatewayPayment,
   lookupProducts,
   placePosSale,
+  startPosGatewayPayment,
   verifyManagerPin,
   type PosCatalogItem,
   type PosCustomer,
   type PosTender,
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import { CustomerPanel } from "./customer-panel";
 // posLock/endSession moved to the rail (app/pos/pos-nav.tsx) — locking is the
 // same act on every screen, and it was hand-rolled identically in two places.
@@ -465,6 +468,70 @@ export function SellClient({
     setParkLabel("");
     setError(null);
     void refreshParked();
+  };
+
+  /**
+   * Take one leg of the sale through the store's own gateway (Step 12).
+   *
+   * Three server round trips, and the middle one is the customer's: open an
+   * order for the amount, let them pay, then ask the SERVER whether the money
+   * landed. The modal's success callback is an input to that question, never
+   * the answer — §34 states the same rule for every on-session payment.
+   *
+   * ★ THE PAYMENT ID COMES BACK FROM THE SERVER, not from the callback we were
+   * handed. Identical today, but it means the tender the panel stages is the
+   * one the server verified, and a future change to how confirmation resolves
+   * cannot silently leave the client staging something else.
+   */
+  const takeOnlinePayment = async (
+    amount: number,
+  ): Promise<{ reference?: string; error?: string }> => {
+    if (!config.onlinePayments || !config.gatewayKeyId) {
+      return { error: "Online payments aren't switched on for this store." };
+    }
+    const amountPaise = Math.round(amount * 100);
+    // The cart goes with it so the server can check the shelf BEFORE the
+    // customer pays — see startPosGatewayPayment. Refusing here is free;
+    // refusing after capture needs a dashboard refund.
+    const started = await startPosGatewayPayment(amountPaise, saleLines());
+    if ("error" in started) return { error: started.error };
+
+    const outcome = await new Promise<{ reference?: string; error?: string }>(
+      (resolve) => {
+        void openRazorpayModal({
+          keyId: started.keyId,
+          rzpOrderId: started.rzpOrderId,
+          amountPaise: started.amountPaise,
+          name: config.storeName,
+          description: `${config.locationName} · counter`,
+          onSuccess: (r) => {
+            void confirmPosGatewayPayment({
+              rzpOrderId: r.razorpay_order_id,
+              paymentId: r.razorpay_payment_id,
+              signature: r.razorpay_signature,
+              amountPaise: started.amountPaise,
+            }).then((res) =>
+              resolve(
+                "error" in res
+                  ? { error: res.error }
+                  : { reference: res.paymentId },
+              ),
+            );
+          },
+          // Cancelling is ordinary at a counter — the customer changes their
+          // mind, or the card is declined. Nothing has been staged, so the rest
+          // of the sale is untouched and they can pay another way.
+          onDismiss: () => resolve({ error: "Payment cancelled." }),
+        }).then((opened) => {
+          if (!opened) {
+            resolve({
+              error: "Couldn't open the payment window. Check the connection.",
+            });
+          }
+        });
+      },
+    );
+    return outcome;
   };
 
   const completeSale = async (
@@ -1020,6 +1087,9 @@ export function SellClient({
           // Rides along with the attached customer — null for a walk-in, which
           // is what hides the option entirely.
           storeCredit={customer?.storeCredit ?? null}
+          // Passed only when the store has a live gateway, so the method never
+          // renders as a control that would fail in front of a customer.
+          onTakeOnline={config.onlinePayments ? takeOnlinePayment : undefined}
           onVerifyManager={(pin) =>
             verifyManagerPin(pin, {
               lines: saleLines(),

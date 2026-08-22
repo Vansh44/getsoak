@@ -9,6 +9,11 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/app/dashboard/lib/access", () => ({
+  getManagerIdentity: vi.fn(),
+  getActingStoreId: vi.fn(async () => "store-1"),
+}));
+vi.mock("@/lib/locations/scope", () => ({ getViewerLocations: vi.fn() }));
 vi.mock("@/lib/settings/resolve", () => ({
   getStoreSettings: vi.fn(async () => ({ "pos.requireOpenShift": false })),
 }));
@@ -31,6 +36,9 @@ import {
   openShift,
   recordCashMovement,
 } from "./pos-shift-actions";
+import { getShiftHistory, getShiftReport } from "./pos-shift-actions";
+import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 
 const actor = (role: "cashier" | "manager" | "owner") => ({
   role,
@@ -171,6 +179,9 @@ describe("getCurrentShift", () => {
     });
     // Card takings appear in the breakdown but never in expected CASH.
     expect(r.shift?.byMethod).toEqual({ cash: 400, card: 300 });
+    // Tender attribution is direct; joining through mutable orders.shift_id
+    // would move an earlier deposit into the final collection's shift.
+    expect(dbHolder.current.calls.innerJoin).toHaveLength(0);
   });
 
   it("tells a cashier they cannot manage it", async () => {
@@ -298,5 +309,72 @@ describe("currentShiftIdFor", () => {
   it("returns null rather than throwing when the read fails", async () => {
     vi.mocked(withService).mockRejectedValueOnce(new Error("connection reset"));
     await expect(currentShiftIdFor("loc-1")).resolves.toBeNull();
+  });
+});
+
+// ── Dashboard shift reporting (roadmap Step 17) ─────────────────────────────
+// These take DASHBOARD gates, not POS ones: listShifts above is bound to a POS
+// operator's own location, which is right for a till and useless for an owner.
+// The scoping is the security-critical half — loadReport reads a shift BY ID
+// with no store predicate.
+
+describe("getShiftHistory / getShiftReport — the gates", () => {
+  const ADMIN = { uid: "admin-1", email: "owner@shop.test" };
+
+  beforeEach(() => {
+    vi.mocked(getManagerIdentity).mockResolvedValue(ADMIN as any);
+    vi.mocked(getViewerLocations).mockResolvedValue(null);
+    dbHolder.current = makeDbMock({ selectQueue: [[]] });
+  });
+
+  it("★ refuses a viewer without the pos section", async () => {
+    vi.mocked(getManagerIdentity).mockResolvedValue(null);
+    expect((await getShiftHistory()).error).toMatch(/not authorized/i);
+    expect((await getShiftReport("sh-1")).error).toMatch(/not authorized/i);
+  });
+
+  it("★★ an EMPTY location scope shows NOTHING, never everything", async () => {
+    // "Assigned to nothing that still exists" is a real state — their shop was
+    // deleted. Widening it to unrestricted would promote a bound admin to
+    // seeing the whole business (lib/locations/scope.ts).
+    vi.mocked(getViewerLocations).mockResolvedValue([]);
+    const res = await getShiftHistory();
+    expect(res.shifts).toEqual([]);
+    expect(res.error).toBeUndefined();
+    // Nothing was even asked of the database.
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
+  it("★★ a shift from another store is NOT readable by id", async () => {
+    // loadReport takes a shift id and applies no store predicate of its own —
+    // safe at a till, where the operator's location bounds it. Here the id
+    // comes from the client, so ownership is proved BEFORE the report is built.
+    //
+    // ⚠ THE SEED IS THE WHOLE TEST. The ownership query returns EMPTY while a
+    // perfectly good shift sits behind it, so dropping the guard produces a
+    // REPORT rather than "not found". Seeding only `[[]]` made this pass either
+    // way — mutation testing caught that, which is exactly what it is for.
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [], // ownership: this shift is NOT the viewer's
+        ...reportSeed(), // ...but loadReport would happily build it
+      ],
+    });
+    const res = await getShiftReport("someone-elses-shift");
+    expect(res.error).toMatch(/not found/i);
+    expect(res.report).toBeUndefined();
+  });
+
+  it("★ an unrestricted viewer is scoped to their STORE at minimum", async () => {
+    vi.mocked(getViewerLocations).mockResolvedValue(null);
+    await getShiftHistory();
+    // One query ran, and it was not unbounded.
+    expect(dbHolder.current.calls.select.length).toBeGreaterThan(0);
+    expect(dbHolder.current.calls.where.length).toBeGreaterThan(0);
+  });
+
+  it("refuses an empty shift id before touching the database", async () => {
+    expect((await getShiftReport("")).error).toMatch(/invalid shift/i);
+    expect(dbHolder.current.calls.select).toHaveLength(0);
   });
 });

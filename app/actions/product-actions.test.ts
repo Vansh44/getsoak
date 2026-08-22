@@ -37,6 +37,9 @@ vi.mock("@/lib/ai/gemini", () => ({
   callGemini: vi.fn(async () => ({ text: "A lovely description." })),
   brandSystemText: vi.fn((b: string) => b),
 }));
+vi.mock("@/lib/analytics/store-entitlement", () => ({
+  storeHasAnalyticsFeature: vi.fn(async () => true),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -211,6 +214,11 @@ describe("product-actions", () => {
       expect(dbHolder.current.calls.values[0].publishedAt).toBeNull();
     });
 
+    it("preserves an explicit zero unit cost", async () => {
+      await createProduct({ ...validForm, cost_price: 0 });
+      expect(dbHolder.current.calls.values[0].costPrice).toBe(0);
+    });
+
     // Pricing normalisation: when selling > base, selling is clamped to base.
     it("clamps selling_price so it never exceeds base_price", async () => {
       await createProduct({
@@ -320,6 +328,27 @@ describe("product-actions", () => {
       });
       await updateProduct("p1", { ...validForm, status: "published" });
       expect(dbHolder.current.calls.set[0].publishedAt).toBe(original);
+    });
+
+    it("refuses a product outside the acting store before any write", async () => {
+      dbHolder.current = makeDbMock({ selectQueue: [[], []] });
+      const result = await updateProduct("foreign-product", validForm);
+      expect(result.error).toMatch(/product not found/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
+    });
+
+    it("backfills an explicit zero cost without converting it to unknown", async () => {
+      dbHolder.current = makeDbMock({
+        returning: [{ id: "p1" }],
+        selectQueue: [[], [{ published_at: null }], [], [], [], [], []],
+      });
+      const result = await updateProduct("p1", {
+        ...validForm,
+        cost_price: 0,
+      });
+      expect(result.success).toBe(true);
+      expect(dbHolder.current.calls.set[0].costPrice).toBe(0);
+      expect(dbHolder.current.calls.set).toContainEqual({ unitCost: 0 });
     });
   });
 

@@ -207,6 +207,14 @@ describe("runRetentionSweep", () => {
 });
 
 describe("RETENTION_POLICIES", () => {
+  it("keeps raw storefront events and attribution for only 14 days", () => {
+    const byTable = new Map(
+      RETENTION_POLICIES.map((policy) => [policy.table, policy.days]),
+    );
+    expect(byTable.get("storefront_events")).toBe(14);
+    expect(byTable.get("storefront_order_attribution")).toBe(14);
+  });
+
   it("prunes notifications before activity_events", () => {
     // notifications.event_id → activity_events ON DELETE CASCADE, so doing it
     // the other way round leaves the event sweep cascading through rows the
@@ -224,6 +232,31 @@ describe("RETENTION_POLICIES", () => {
     expect(days.activity_events).toBe(365);
     expect(days.notifications).toBe(90);
     expect(days.email_logs).toBe(90);
+    expect(days.store_search_metrics).toBe(488);
+  });
+
+  it("★★ expires held sales, because the CAP is what runs out", () => {
+    // pos_parked_sales allows 20 per LOCATION. Abandoned carts do not merely
+    // accumulate — they fill the list and eventually stop a counter parking a
+    // real one. A ceiling with nothing ageing out of it becomes a wall.
+    const byTable = new Map(
+      RETENTION_POLICIES.map((policy) => [policy.table, policy.days]),
+    );
+    expect(byTable.get("pos_parked_sales")).toBe(7);
+  });
+
+  it("★ a held sale is the shortest-lived thing here", () => {
+    // Deliberate: it holds no stock and no prices, so discarding one costs a
+    // re-scan. Everything else in this registry is history somebody may need.
+    const days = Object.fromEntries(
+      RETENTION_POLICIES.map((p) => [p.table, p.days]),
+    );
+    const others = Object.entries(days)
+      .filter(([t]) => t !== "pos_parked_sales")
+      .map(([, d]) => d as number);
+    expect(Math.min(...others)).toBeGreaterThan(
+      days.pos_parked_sales as number,
+    );
   });
 
   it("documents why every window is what it is", () => {

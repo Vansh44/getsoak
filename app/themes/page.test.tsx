@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import ThemesPage from "./page";
 
 describe("public theme catalog", () => {
@@ -8,7 +8,7 @@ describe("public theme catalog", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: /make your store feel like your brand/i,
+        name: /make your store impossible to scroll past/i,
       }),
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
@@ -41,5 +41,43 @@ describe("public theme catalog", () => {
       screen.getByRole("link", { name: "Food & Beverages" }),
     ).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
+  });
+
+  it("automatically rotates catalog-driven showcases and keeps manual controls", async () => {
+    vi.useFakeTimers();
+
+    try {
+      render(await ThemesPage({ searchParams: Promise.resolve({}) }));
+
+      expect(
+        screen.getByRole("button", { name: "Show Studio theme" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      act(() => vi.advanceTimersByTime(5_200));
+
+      expect(
+        screen.getByRole("button", { name: "Show Ritual theme" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show Basket theme" }),
+      );
+      expect(
+        screen.getByRole("button", { name: "Show Basket theme" }),
+      ).toHaveAttribute("aria-pressed", "true");
+
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Showing Ritual. Show next theme",
+        }),
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Showing Basket. Show next theme",
+        }),
+      ).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

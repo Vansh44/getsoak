@@ -57,10 +57,11 @@
   z-index: 20;
 }
 .hc-topbar-inner {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(260px, 560px) max-content;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: center;
+  gap: 24px;
   height: 64px;
 }
 .hc-logo {
@@ -88,6 +89,21 @@
 }
 .hc-topbar .hc-topbar-cta:hover {
   opacity: 0.88;
+}
+
+/* The Help home already has the large, primary search in its hero. Keep the
+   compact header search for categories, articles, and results, but avoid
+   showing two search boxes on the home page. `:has()` is inside the project's
+   declared browser floor (see CODEBASE.md). */
+.hc:has(.hc-hero) .hc-topbar-inner {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  justify-content: stretch;
+}
+.hc:has(.hc-hero) .hc-topbar .hc-search-compact {
+  display: none;
+}
+.hc:has(.hc-hero) .hc-topbar-cta {
+  grid-column: 3;
 }
 
 /* ---- Hero ---- */
@@ -123,11 +139,51 @@
   border: 1px solid var(--hc-line);
   border-radius: 999px;
   background: var(--hc-bg);
-  padding: 0 20px 0 50px;
+  padding: 0 104px 0 50px;
   font-size: 16px;
   color: var(--hc-ink);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   outline: none;
+}
+.hc-search-submit {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--hc-accent);
+  color: var(--hc-accent-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.hc-search-submit:hover {
+  opacity: 0.88;
+}
+.hc-search-compact {
+  width: min(100%, 560px);
+  margin: 0;
+}
+.hc-search-compact input {
+  height: 42px;
+  padding-left: 42px;
+  font-size: 14px;
+  background: var(--hc-surface);
+}
+.hc-search-compact .icon {
+  left: 15px;
+  width: 17px;
+  height: 17px;
+}
+.hc-search-compact .hc-search-submit {
+  top: 5px;
+  right: 5px;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
 }
 .hc-search input:focus {
   border-color: var(--hc-link);
@@ -177,6 +233,28 @@
   padding: 14px 18px;
   color: var(--hc-ink-faint);
   font-size: 14px;
+}
+
+.hc-ai-grounding,
+.hc-search-loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #ddd6fe;
+  border-radius: var(--hc-radius-sm);
+  background: #f7f5ff;
+  color: #5843b7;
+  padding: 11px 14px;
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.hc-search-loading {
+  justify-content: center;
+  min-height: 140px;
+  color: var(--hc-ink-soft);
+  border-color: var(--hc-line);
+  background: var(--hc-surface);
 }
 
 /* ---- Sections ---- */
@@ -638,6 +716,20 @@
 }
 /* Below 900px, drop the left Topics rail too (single-column docs). */
 @media (max-width: 900px) {
+  .hc-topbar-inner {
+    grid-template-columns: max-content minmax(200px, 1fr);
+    gap: 14px;
+  }
+  .hc:has(.hc-hero) .hc-topbar-inner {
+    grid-template-columns: 1fr;
+  }
+  .hc:has(.hc-hero) .hc-logo {
+    grid-column: 1;
+    justify-self: center;
+  }
+  .hc-topbar-cta {
+    display: none !important;
+  }
   .hc-docs,
   .hc-docs.no-toc {
     grid-template-columns: 1fr;
@@ -645,5 +737,25 @@
   }
   .hc-docs-left {
     display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .hc-topbar-inner {
+    height: auto;
+    min-height: 64px;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .hc-logo {
+    text-align: center;
+  }
+  .hc-search-compact {
+    width: 100%;
+  }
+  .hc-hero {
+    padding: 40px 0 44px;
   }
 }

@@ -24,7 +24,7 @@
 // cannot be produced by omission.
 // ---------------------------------------------------------------------------
 
-import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   dataJobs,
@@ -37,6 +37,7 @@ import {
   smsLogs,
 } from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
+import { ROOT_DOMAIN } from "@/lib/store/host";
 import {
   FAILURE_SOURCE_META,
   type FailureRow,
@@ -251,6 +252,56 @@ export const FAILURE_SOURCES: FailureSource[] = [
           storeId: r.storeId,
           href: `/dashboard/logs/import-export/${r.id}`,
         }));
+      }),
+  },
+  {
+    ...meta("indexing"),
+    fetch: (scope, limit) =>
+      withService(async (db) => {
+        const rows = await db
+          .select({
+            storeId: stores.id,
+            slug: stores.slug,
+            error: sql<
+              string | null
+            >`${stores.settings}->>'google_indexing_error'`,
+            attemptedAt: sql<
+              string | null
+            >`${stores.settings}->>'google_indexing_attempted_at'`,
+            updatedAt: stores.updatedAt,
+          })
+          .from(stores)
+          .where(
+            and(
+              sql`nullif(btrim(${stores.settings}->>'google_indexing_error'), '') is not null`,
+              storeFilter(scope, stores.id),
+            ),
+          )
+          .orderBy(
+            desc(
+              sql`coalesce(${stores.settings}->>'google_indexing_attempted_at', ${stores.updatedAt}::text)`,
+            ),
+          )
+          .limit(limit);
+        return rows.map((row) => {
+          const attemptedAt =
+            row.attemptedAt &&
+            Number.isFinite(new Date(row.attemptedAt).getTime())
+              ? row.attemptedAt
+              : row.updatedAt;
+          return {
+            id: `indexing:${row.storeId}:${attemptedAt}`,
+            source: "indexing" as const,
+            title: "Google Search coverage update failed",
+            detail: row.error,
+            occurredAt: attemptedAt,
+            storeId: row.storeId,
+            href:
+              scope.kind === "store"
+                ? "/dashboard/settings/domain"
+                : `https://${row.slug}.${ROOT_DOMAIN}/dashboard/settings/domain`,
+          };
+        });
       }),
   },
   {

@@ -124,13 +124,17 @@ export interface DbMock {
     limit: any[];
     offset: any[];
     forUpdate: any[];
+    innerJoin: any[];
   };
 }
 
 export function makeDbMock(
   opts: {
     returning?: any[];
-    selectQueue?: any[][];
+    // An `Error` entry makes THAT select reject — for testing how an action
+    // reports a failed read. Needed once reads run concurrently: which batch
+    // failed decides which message the user sees.
+    selectQueue?: (any[] | Error)[];
     executeQueue?: any[][];
     // Tables whose insert().values(...) / update().set(...).where(...) should
     // REJECT when awaited — for rollback-path tests. Compare by table identity.
@@ -165,6 +169,7 @@ export function makeDbMock(
     limit: [],
     offset: [],
     forUpdate: [],
+    innerJoin: [],
   };
 
   // A thenable step that also exposes .where()/.returning() terminals, so both
@@ -188,7 +193,7 @@ export function makeDbMock(
   });
 
   // A fully-chainable select step; awaiting it resolves to `rows`.
-  const selectStep = (rows: any[]): any => {
+  const selectStep = (rows: any[] | Error): any => {
     const s: any = {
       from: vi.fn(() => s),
       where: vi.fn((c: any) => {
@@ -196,7 +201,10 @@ export function makeDbMock(
         return s;
       }),
       leftJoin: vi.fn(() => s),
-      innerJoin: vi.fn(() => s),
+      innerJoin: vi.fn((...args: any[]) => {
+        calls.innerJoin.push(args);
+        return s;
+      }),
       groupBy: vi.fn(() => s),
       orderBy: vi.fn(() => s),
       limit: vi.fn((n: any) => {
@@ -214,7 +222,10 @@ export function makeDbMock(
         calls.forUpdate.push(mode);
         return s;
       }),
-      then: (resolve: any) => Promise.resolve(rows).then(resolve),
+      then: (resolve: any, reject: any) =>
+        rows instanceof Error
+          ? Promise.reject(rows).then(resolve, reject)
+          : Promise.resolve(rows).then(resolve),
     };
     return s;
   };

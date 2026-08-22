@@ -12,7 +12,7 @@
 // The arithmetic lives in lib/pos/shifts.ts and is tested there; this file is
 // only the gate, the queries and the writes.
 
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
@@ -26,7 +26,13 @@ import {
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { getStoreSettings } from "@/lib/settings/resolve";
+import {
+  getActingStoreId,
+  getManagerIdentity,
+} from "@/app/dashboard/lib/access";
+import { getViewerLocations } from "@/lib/locations/scope";
 import {
   shiftTotals,
   totalsByMethod,
@@ -136,8 +142,7 @@ async function loadReport(
           change_due: orderPayments.changeDue,
         })
         .from(orderPayments)
-        .innerJoin(orders, eq(orders.id, orderPayments.orderId))
-        .where(eq(orders.shiftId, shiftId)),
+        .where(eq(orderPayments.shiftId, shiftId)),
       db
         .select({
           id: posCashMovements.id,
@@ -449,6 +454,25 @@ export async function recordCashMovement(
         createdByName: op.name,
       }),
     );
+    // ── The money audit (Step 14) ───────────────────────────────────────────
+    // ★ `pos_cash_movements` already records this, and the audit row is NOT a
+    // duplicate: it puts cash leaving the drawer in the SAME feed as discounts,
+    // overrides and refunds, which is how a shop owner reads "what happened to
+    // the money today" without joining three tables. A drop is also the one
+    // money event with no order behind it.
+    //
+    // ★ A PAYOUT AND A DROP LEAVE; A PAID-IN ARRIVES. The sign says which, so
+    // the feed can be summed without knowing the vocabulary.
+    posAudit({
+      storeId: op.storeId,
+      event: "cash_movement",
+      locationId: op.locationId,
+      staffId: op.staffId,
+      actor: op.name,
+      amount: type === "paid_in" ? -amt : amt,
+      detail: `${type.replace("_", " ")}${reason?.trim() ? ` · ${reason.trim().slice(0, 120)}` : ""}`,
+    });
+
     revalidatePath("/pos");
     return { success: true };
   } catch (err) {
@@ -518,5 +542,173 @@ export async function currentShiftIdFor(
     // A sale must never fail because the drawer lookup did — it just goes
     // unattributed, which reconciliation surfaces rather than hides.
     return null;
+  }
+}
+
+// ── Dashboard shift reporting (roadmap Step 17) ─────────────────────────────
+// Until this existed, a shift's figures lived ONLY at the till: /pos/shift shows
+// the live X-report and the Z-report of the shift being closed, and nothing
+// else could read either. An owner could not see yesterday's drawer, compare
+// two shops, or look at a variance without standing at the counter.
+//
+// ★★ THESE ARE DASHBOARD GATES, NOT POS ONES. `listShifts` above resolves a POS
+// OPERATOR and is bound to that operator's own location — correct for a till,
+// useless for an owner, and unreachable for a delegated admin who has never
+// signed in at a counter. So these take the `pos` section gate and the
+// `admin_locations` scope every other dashboard read uses.
+
+export interface ShiftListRow {
+  id: string;
+  locationId: string;
+  locationName: string;
+  status: "open" | "closed";
+  openedAt: string;
+  openedByName: string | null;
+  closedAt: string | null;
+  closedByName: string | null;
+  expectedCash: number;
+  countedCash: number | null;
+  variance: number | null;
+  varianceState: VarianceState | null;
+  saleCount: number;
+  grossSales: number;
+}
+
+/** Which locations this viewer may read shifts for, or null for all of them.
+ *  Takes no store — `getViewerLocations` derives the viewer AND their store
+ *  itself, and passing one in would imply a choice the caller does not have. */
+async function shiftLocationScope(): Promise<string[] | null> {
+  const scope = await getViewerLocations();
+  if (scope === null) return null;
+  // ⚠ An EMPTY array is "assigned to nothing that still exists" and must show
+  // NOTHING — never be widened to "everything" (lib/locations/scope.ts).
+  return scope;
+}
+
+/**
+ * Recent shifts across the locations this viewer may see.
+ *
+ * ★ Scoped in the QUERY, not filtered afterwards. A location-bound admin must
+ * not be able to page through another shop's drawers by asking for more rows.
+ */
+export async function getShiftHistory(
+  limit = 50,
+): Promise<{ shifts: ShiftListRow[]; error?: string }> {
+  const admin = await getManagerIdentity("pos");
+  if (!admin) return { shifts: [], error: "Not authorized" };
+  const storeId = await getActingStoreId();
+  const take = Math.min(Math.max(Math.trunc(limit) || 50, 1), 200);
+
+  let tolerance = 0;
+  try {
+    tolerance =
+      Number((await getStoreSettings())["pos.cashVarianceTolerance"]) || 0;
+  } catch {
+    tolerance = 0;
+  }
+
+  try {
+    const scope = await shiftLocationScope();
+    if (scope !== null && scope.length === 0) return { shifts: [] };
+
+    const rows = await withService((db) =>
+      db
+        .select({ id: posShifts.id, location_id: posShifts.locationId })
+        .from(posShifts)
+        .where(
+          scope === null
+            ? eq(posShifts.storeId, storeId)
+            : and(
+                eq(posShifts.storeId, storeId),
+                inArray(posShifts.locationId, scope),
+              ),
+        )
+        .orderBy(desc(posShifts.openedAt))
+        .limit(take),
+    );
+
+    const reports = await Promise.all(
+      rows.map(async (r) => {
+        const rep = await loadReport(r.id, tolerance);
+        return rep ? { rep, locationId: r.location_id } : null;
+      }),
+    );
+
+    return {
+      shifts: reports
+        .filter((x): x is { rep: ShiftReport; locationId: string } => !!x)
+        .map(({ rep, locationId }) => ({
+          id: rep.id,
+          locationId,
+          locationName: rep.locationName,
+          status: rep.status,
+          openedAt: rep.openedAt,
+          openedByName: rep.openedByName,
+          closedAt: rep.closedAt,
+          closedByName: rep.closedByName,
+          expectedCash: rep.expectedCash,
+          countedCash: rep.countedCash,
+          variance: rep.variance,
+          varianceState: rep.varianceState,
+          saleCount: rep.saleCount,
+          grossSales: rep.grossSales,
+        })),
+    };
+  } catch (err) {
+    return { shifts: [], error: dbErrorMessage(err, "Couldn't load shifts.") };
+  }
+}
+
+/**
+ * One shift's full Z-report, for the dashboard.
+ *
+ * ★★ THE OWNERSHIP CHECK IS NOT OPTIONAL. `loadReport` reads a shift BY ID with
+ * no store predicate — safe where it was written, because the till path bounds
+ * it to the operator's own location. Reached from the dashboard the id comes
+ * from the client, so store and location scope are proved HERE, before the
+ * report is built. Without it, any admin could read any store's drawer by
+ * guessing a uuid.
+ */
+export async function getShiftReport(
+  shiftId: string,
+): Promise<{ report?: ShiftReport; error?: string }> {
+  const admin = await getManagerIdentity("pos");
+  if (!admin) return { error: "Not authorized" };
+  if (typeof shiftId !== "string" || !shiftId)
+    return { error: "Invalid shift" };
+  const storeId = await getActingStoreId();
+
+  try {
+    const scope = await shiftLocationScope();
+    if (scope !== null && scope.length === 0) return { error: "Not found" };
+
+    const owned = await withService((db) =>
+      db
+        .select({ id: posShifts.id })
+        .from(posShifts)
+        .where(
+          scope === null
+            ? and(eq(posShifts.id, shiftId), eq(posShifts.storeId, storeId))
+            : and(
+                eq(posShifts.id, shiftId),
+                eq(posShifts.storeId, storeId),
+                inArray(posShifts.locationId, scope),
+              ),
+        )
+        .limit(1),
+    );
+    if (owned.length === 0) return { error: "Not found" };
+
+    let tolerance = 0;
+    try {
+      tolerance =
+        Number((await getStoreSettings())["pos.cashVarianceTolerance"]) || 0;
+    } catch {
+      tolerance = 0;
+    }
+    const report = await loadReport(shiftId, tolerance);
+    return report ? { report } : { error: "Not found" };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't load that shift.") };
   }
 }

@@ -4,6 +4,9 @@ import {
   googleSitemapEndpoint,
   INDEXNOW_KEY,
   pingIndexNow,
+  googleSearchConsoleSiteEndpoint,
+  googleSiteVerificationResourceEndpoint,
+  googleTokenCacheExpiry,
 } from "./search-engines";
 
 afterEach(() => {
@@ -79,5 +82,36 @@ describe("googleSitemapEndpoint", () => {
     expect(endpoint).toContain(
       "https%3A%2F%2Facme.storemink.com%2Fsitemap.xml",
     );
+  });
+});
+
+describe("Google custom-domain cleanup endpoints", () => {
+  it("encodes the complete URL-prefix property as one path segment", () => {
+    const siteUrl = "https://shop.acme.com/";
+    const encoded = encodeURIComponent(siteUrl);
+    expect(googleSearchConsoleSiteEndpoint(siteUrl)).toBe(
+      `https://www.googleapis.com/webmasters/v3/sites/${encoded}`,
+    );
+    expect(googleSiteVerificationResourceEndpoint(siteUrl)).toBe(
+      `https://www.googleapis.com/siteVerification/v1/webResource/${encoded}`,
+    );
+  });
+});
+
+describe("googleTokenCacheExpiry", () => {
+  it("uses expires_in and refreshes five minutes before a one-hour token", () => {
+    expect(googleTokenCacheExpiry(1_000_000, { expiresInSeconds: 3600 })).toBe(
+      1_000_000 + 55 * 60 * 1000,
+    );
+  });
+
+  it("uses the ADC credential expiry and a proportional skew for short tokens", () => {
+    expect(googleTokenCacheExpiry(1_000_000, { expiryDateMs: 1_100_000 })).toBe(
+      1_090_000,
+    );
+  });
+
+  it("does not cache when Google provides no real expiry", () => {
+    expect(googleTokenCacheExpiry(1_000_000, {})).toBeNull();
   });
 });

@@ -33,8 +33,16 @@ vi.mock("@/lib/notifications/record", () => ({
 // HTTP calls are mocked at the module boundary; the pure helpers
 // (capturedPayment) keep their real implementations — they're unit-tested in
 // lib/payments/payments.test.ts.
+// ⚠ `getLiveStoreGateway` is mocked as a WHOLE, not composed from a mocked
+// `getStoreGateway`. A partial mock cannot work here: the real function calls
+// `getStoreGateway` module-internally, so the spy never intercepts it and the
+// real provider read eats this file's seeded plan row.
+//
+// The three conditions it folds together (connected · enabled · plan) are
+// covered directly in lib/payments/provider.test.ts.
 vi.mock("@/lib/payments/provider", () => ({
   getStoreGateway: vi.fn(),
+  getLiveStoreGateway: vi.fn(),
   getPlatformRazorpayCreds: vi.fn(),
 }));
 vi.mock("@/lib/payments/razorpay", async (importOriginal) => {
@@ -81,7 +89,7 @@ import {
 import { getServerUser } from "@/lib/auth/server-user";
 import { rateLimit } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
-import { getStoreGateway } from "@/lib/payments/provider";
+import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   rzpCreateOrder,
   rzpFetchOrderPayments,
@@ -626,14 +634,10 @@ const GATEWAY = {
 describe("placeOrder — razorpay", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // onlineGateway reads the stores row first, then the COD flow's selects.
+    // getLiveStoreGateway is mocked, so it consumes no select — the queue is
+    // the COD flow's reads alone.
     dbHolder.current = makeDbMock({
-      selectQueue: [
-        [{ plan: "basic", plan_expires_at: null }],
-        [productRow()],
-        [],
-        [],
-      ],
+      selectQueue: [[productRow()], [], []],
       executeQueue: [[{ reserved: true }]],
       returning: [{ id: "order-1", order_ref: "ORD100110006" }],
     });
@@ -647,7 +651,7 @@ describe("placeOrder — razorpay", () => {
     // server-computed amount. Reset explicitly so the razorpay tests describe a
     // customer with no credit.
     vi.mocked(getCreditBalance).mockResolvedValue(0);
-    vi.mocked(getStoreGateway).mockResolvedValue(GATEWAY as any);
+    vi.mocked(getLiveStoreGateway).mockResolvedValue(GATEWAY.creds as any);
     vi.mocked(rzpCreateOrder).mockResolvedValue({
       ok: true,
       data: {
@@ -710,16 +714,9 @@ describe("placeOrder — razorpay", () => {
   });
 
   it("refuses online payment when no gateway is connected/enabled", async () => {
-    vi.mocked(getStoreGateway).mockResolvedValue(null);
-    const res = await placeOrder(validForm, [oneItem()], null, "razorpay");
-    expect("error" in res && res.error).toMatch(/cash on delivery/i);
-    expect(dbHolder.current.calls.insert).not.toContain(orders);
-  });
-
-  it("refuses online payment when the plan doesn't include it (free)", async () => {
-    dbHolder.current = makeDbMock({
-      selectQueue: [[{ plan: "free", plan_expires_at: null }]],
-    });
+    // null folds together all three refusals: not connected, paused, or a
+    // lapsed plan — see lib/payments/provider.test.ts for each on its own.
+    vi.mocked(getLiveStoreGateway).mockResolvedValue(null);
     const res = await placeOrder(validForm, [oneItem()], null, "razorpay");
     expect("error" in res && res.error).toMatch(/cash on delivery/i);
     expect(dbHolder.current.calls.insert).not.toContain(orders);
@@ -735,12 +732,7 @@ describe("placeOrder — razorpay", () => {
       },
     } as any);
     dbHolder.current = makeDbMock({
-      selectQueue: [
-        [{ plan: "basic", plan_expires_at: null }],
-        [productRow()],
-        [],
-        [],
-      ],
+      selectQueue: [[productRow()], [], []],
       executeQueue: [[{ reserved: true }], [{ reserved: true }]],
       returning: [{ id: "order-1", order_ref: "ORD100110006" }],
     });
@@ -763,12 +755,7 @@ describe("placeOrder — razorpay", () => {
 
   it("rolls back when the rzp order id can't be pinned to our order", async () => {
     dbHolder.current = makeDbMock({
-      selectQueue: [
-        [{ plan: "basic", plan_expires_at: null }],
-        [productRow()],
-        [],
-        [],
-      ],
+      selectQueue: [[productRow()], [], []],
       executeQueue: [[{ reserved: true }]],
       returning: [{ id: "order-1", order_ref: "ORD100110006" }],
       failUpdateFor: [orders], // the razorpay-order-id pin update fails

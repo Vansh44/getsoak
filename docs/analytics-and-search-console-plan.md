@@ -1,6 +1,8 @@
 # Analytics dashboard & Google Search Console — product and technical spec
 
-> **Status:** proposed v2 (2026-08-14) · **Owner:** Vansh · **Surface:**
+> **Status:** implementation underway — dashboard, Search Console, drill-down,
+> platform controls, and consent-aware merchant pixels shipped through
+> 2026-08-20 · **Owner:** Vansh · **Surface:**
 > `/dashboard/analytics` · **Purpose:** give every seller a useful default
 > dashboard, a Shopify-like dashboard editor, and tenant-safe Google Search
 > Console insights on both StoreMink subdomains and merchant-owned domains.
@@ -12,9 +14,29 @@ data it barely queries, has no first-party session data, and has the platform
 credentials needed to read Search Console without asking each merchant for a
 Google login.
 
-This document supersedes the v1 draft from 2026-08-10. It preserves its useful
-implementation findings, but adds the missing product contract, current Shopify
-comparison, persistent dashboard model, and a source-aware custom-domain design.
+This document supersedes the v1 draft from 2026-08-10 and the v2 specification from
+2026-08-14. It preserves their useful implementation findings, but adds the
+missing product contract, current Shopify comparison, persistent dashboard
+model, source-aware custom-domain design, PT handoff quarantine, range-correct
+Search storage, explicit business time zones, and session/purchase semantics.
+
+**Implementation checkpoint:** B1/B2 foundation is now live in code: URL-owned
+IANA-zone ranges and comparisons, store time-zone settings, recognized Total
+sales less completed refunds, raw-rupee adaptive charts, staff location scope,
+restricted customer-card omission, and independent Suspense widget reads. The
+Phase 2 dashboard foundation is also implemented: a bounded per-admin server record,
+optimistic stale-tab protection, dormant permission entries, row-deleting Reset,
+one-time import/removal of the legacy localStorage order, versioned named
+sections, visibility/reorder/delete controls, cross-section card movement, and
+semantic `compact`/`half`/`full` sizes. Existing version 1 rows upgrade at the
+read boundary and write version 2 on their next save; no second database
+migration is required. Phase 2c adds a scope-safe URL location filter plus AOV,
+units sold, top products, sales by channel, and sales by location. Phase 2d adds
+itemized payment-method allocation, new-vs-returning customers, discount impact,
+returns/refunds, and tracked-stock velocity. Search Console is shipped;
+consent-aware Pro GA4 and Meta Pixel connections are shipped; first-party
+StoreMink traffic remains planned below. Ledger migration
+`20260820_0010_merchant_pixels` is the latest required migration.
 
 ---
 
@@ -27,8 +49,11 @@ comparison, persistent dashboard model, and a source-aware custom-domain design.
 2. **Useful default before customization:** a new merchant gets an opinionated
    dashboard immediately. Editing is optional and reversible.
 3. **One metric contract:** every card on screen uses the same selected range,
-   comparison, store time zone, currency, location scope, and sales definition.
-   A card may opt out only when its label says so (for example, "Current stock").
+   comparison, configured business time zone, currency, location scope, and
+   sales definition. A card may opt out only when its label says so (for
+   example, "Current stock"). `settings.business.timeZone` is an IANA zone,
+   defaults to `Asia/Kolkata`, and ships with the range parser rather than being
+   assumed to exist already.
 4. **Search Console is managed by StoreMink:** merchants do not paste a token or
    connect a Google account. StoreMink reads its verified Domain property for
    `{slug}.storemink.com`; a verified custom domain gets an automatically
@@ -46,6 +71,10 @@ comparison, persistent dashboard model, and a source-aware custom-domain design.
 8. **No forced upgrade of saved layouts:** when a new widget ships, existing
    customized layouts remain unchanged and the widget receives a "New" badge in
    the library. Only untouched/default layouts receive revised defaults.
+9. **Advanced analytics is Pro-only:** GA4, Meta Pixel, first-party storefront
+   conversion, and gross-margin analytics require both an effective Pro plan
+   and an enabled platform feature switch. Operator availability never replaces
+   plan entitlement.
 
 ### 0.1 Shopify baseline checked on 2026-08-14
 
@@ -61,26 +90,25 @@ Shopify's current overview dashboard supports:
 - later-layer capabilities such as custom reports, targets, and generated
   insights.
 
-StoreMink already has add/remove/reorder, a searchable library, Save/Cancel/Reset,
-and a default card registry. It does **not** yet have resize, real sections,
-server persistence, a global date/comparison contract, report drill-downs, or
-enough commerce/traffic metrics. Calling the current page "Shopify parity" would
-therefore be inaccurate.
+StoreMink now has add/remove/reorder, named sections, semantic card sizes, a
+searchable library, Save/Cancel/Reset, server persistence, a global
+date/comparison contract, and the first four card-linked detailed reports with
+CSV export. First-party traffic metrics remain a separate later release.
 
-| Capability                          | Shopify now                 | StoreMink now                       | This spec                               |
-| ----------------------------------- | --------------------------- | ----------------------------------- | --------------------------------------- |
-| Default dashboard                   | Yes                         | Yes, 10 mixed cards                 | Replace with seller-performance default |
-| Global date + comparison            | Yes                         | No                                  | Release 1                               |
-| Add/remove/reorder                  | Yes                         | Yes                                 | Keep and harden                         |
-| Resize cards                        | Yes                         | No; span is fixed in registry       | Release 1                               |
-| Named/reorderable/hideable sections | Yes                         | No; library groups are not sections | Release 1                               |
-| Searchable widget library           | Yes                         | Yes                                 | Keep; add categories and "New" state    |
-| Cross-device persistence            | Yes in product behavior     | No; browser `localStorage` only     | Release 1, per admin                    |
-| Card -> detailed report             | Yes                         | No                                  | Release 2                               |
-| Custom report -> dashboard card     | Yes                         | No report builder                   | Later, not dashboard-parity blocker     |
-| Targets and generated insights      | Yes                         | No                                  | Later                                   |
-| Google Search Console cards         | Not native to Shopify admin | No                                  | Release 2 differentiator                |
-| First-party sessions/conversion     | Yes                         | No event pipeline                   | Release 3                               |
+| Capability                          | Shopify now                 | StoreMink now                      | This spec                            |
+| ----------------------------------- | --------------------------- | ---------------------------------- | ------------------------------------ |
+| Default dashboard                   | Yes                         | Yes; seller-performance default    | Shipped                              |
+| Global date + comparison            | Yes                         | Yes                                | Shipped                              |
+| Add/remove/reorder                  | Yes                         | Yes, including cross-section moves | Shipped                              |
+| Resize cards                        | Yes                         | Yes; semantic bounded sizes        | Shipped                              |
+| Named/reorderable/hideable sections | Yes                         | Yes                                | Shipped                              |
+| Searchable widget library           | Yes                         | Yes                                | Keep; add categories and "New" state |
+| Cross-device persistence            | Yes in product behavior     | Yes; server-side per admin         | Shipped                              |
+| Card -> detailed report             | Yes                         | First four reports + CSV shipped   | Expand incrementally                 |
+| Custom report -> dashboard card     | Yes                         | No report builder                  | Later, not dashboard-parity blocker  |
+| Targets and generated insights      | Yes                         | No                                 | Later                                |
+| Google Search Console cards         | Not native to Shopify admin | Yes; seven delayed-data cards      | Shipped differentiator               |
+| First-party sessions/conversion     | Yes                         | No event pipeline                  | Release 3                            |
 
 ### 0.2 Definition of done for dashboard parity
 
@@ -102,18 +130,30 @@ The overview-dashboard parity milestone is done when a seller can:
 
 ## 1. Where we actually are
 
-### Search Console — submission only
+### Search Console — Phase 3d lifecycle cleanup built
 
-`lib/seo/search-engines.ts` is entirely **write-side**: `sitemaps.submit`,
-`sites.add`, and the two `siteVerification` calls. `searchanalytics` appears
-**nowhere in the repo**. There is no clicks/impressions/position/query storage
-and no merchant surface.
+As of 2026-08-19, migration `20260819_0006_search_metrics` is applied.
+`lib/seo/search-engines.ts` exposes the authenticated Search Analytics query,
+while `lib/seo/search-performance.ts` and `lib/seo/search-metrics.ts` implement
+the anchored tenant filter, source epochs, bounded row normalization,
+transactional bucket replacement, durable leases and fleet-wide property rate
+limit. `/api/cron/search-metrics` reconciles work on its Scheduler GET and
+self-chains through POST. The analytics dashboard ships the seven delayed
+Google Search cards, source/freshness disclosure, and all five product states
+from A6. Domain settings now shows the persisted Google ownership, sitemap,
+attempt and error state with a permission-gated retry, and the shared Failures
+feed includes the same errors for merchants and operators. Phase 3d closes the
+remaining A8 lifecycle gaps: replacing or disconnecting a custom domain now
+deletes its URL-prefix Search Console property and this service account's Site
+Verification ownership after the DB stops serving the META token. Google access
+tokens are cached from the returned `expires_in` or ADC `expiry_date`, with an
+early-refresh skew; tokens without a real expiry are not cached.
 
 What already exists and is reusable as-is:
 
 | Piece                                                                        | Where                               |
 | ---------------------------------------------------------------------------- | ----------------------------------- |
-| `googleAccessToken(scope)` — ADC + JWT, cached 55 min                        | `lib/seo/search-engines.ts:163`     |
+| `googleAccessToken(scope)` — ADC + JWT, cached to Google's real expiry       | `lib/seo/search-engines.ts`         |
 | `WEBMASTERS_SCOPE` = `.../auth/webmasters` (full — **already covers reads**) | `:147`                              |
 | `https://www.googleapis.com/webmasters/v3/sites/{prop}/…` endpoint shape     | `:138`                              |
 | `searchconsole.googleapis.com` enabled in `storemink-prod`                   | `docs/cron-jobs.md:63-77`           |
@@ -125,9 +165,10 @@ So: **no new dependency, no new OAuth scope, no new API to enable, no new auth
 code.** `searchAnalytics.query` sits on the identical host and version prefix as
 the sitemap call we already make.
 
-### Analytics — order data, all-time, no date range
+### Analytics — original baseline (now replaced)
 
-`app/dashboard/analytics/` is 4 files / 1,075 lines. One exported function,
+Before this plan shipped, `app/dashboard/analytics/` was 4 files / 1,075 lines.
+It had one exported function,
 `getAnalyticsData(storeId)` (`data.ts:125`) — a single `withService` transaction
 running 10 queries, none of which takes a date range. 10 widgets, a dnd-kit
 canvas, layout in `localStorage`.
@@ -168,8 +209,10 @@ Consequences worth being explicit about, because they decide the whole shape:
 - **Custom-domain provisioning already exists, but domain history does not.**
   `store-indexing.ts:161-245` creates a URL-prefix property
   (`https://domain/`) and verifies it via META. Query that property directly,
-  with no page filter. The new work is recording it as a dated source so moving
-  from subdomain -> custom A -> custom B does not overwrite history.
+  with no page filter, but request `aggregationType: "byPage"` so its history
+  has the same counting semantics as the page-filtered Domain-property source.
+  The new work is recording it as a dated source so moving from subdomain ->
+  custom A -> custom B does not overwrite history.
 - **A merchant's own Google account is optional and can coexist.** StoreMink's
   service account is an additional verified owner/user for the managed property;
   it does not replace access the merchant already has. Disconnect removes only
@@ -208,8 +251,11 @@ subdomain cards are deliberately **page-aggregated** and might differ slightly
 from an unfiltered property-level total if multiple pages from that store appear
 in one result set. The tooltip must say "Google Search performance for this
 store's pages"; it must not claim to reproduce the root Domain property's total.
+Use `aggregationType: "auto"` for the filtered Domain property and require a
+`byPage` response; use explicit `byPage` for custom URL-prefix properties. Never
+sum page-aggregated subdomain history with property-aggregated custom history.
 
-### A3 Ingest: source-aware, trailing-window upserts
+### A3 Ingest: source-aware, trailing-window replacement
 
 GSC data is **revised for ~3 days** after the fact and lags ~2 days. An
 append-only ingest therefore stores figures Google has since corrected.
@@ -231,6 +277,9 @@ create table store_search_sources (
   page_filter    text,          -- anchored regex for platform source; null for custom
   active_from    timestamptz not null,
   inactive_at    timestamptz,
+  first_data_date date not null, -- first PT day this source may contribute
+  final_data_date date,          -- inclusive; null while current
+  correction_until date,         -- closed sources stop being queried after this PT day
   last_synced_at timestamptz,
   last_data_date date,
   last_error     text,
@@ -242,7 +291,7 @@ create unique index store_search_sources_one_active_idx
 create table store_search_metrics (
   source_id      uuid not null references store_search_sources(id) on delete cascade,
   store_id       uuid not null references stores(id) on delete cascade,
-  date           date not null, -- Google Search Console date: Pacific Time
+  date           date not null, -- PT day; Monday bucket start for weekly dimensions
   dimension      text not null, -- 'total' | 'query' | 'page' | 'country' | 'device'
   key            text not null default '',
   clicks         integer not null default 0,
@@ -259,9 +308,13 @@ read index simple. A trigger or composite foreign key must guarantee that the
 metric's `store_id` equals its source's `store_id`; application code alone is not
 an integrity boundary.
 
-Each run re-fetches the last **5 days** and `ON CONFLICT … DO UPDATE`, which
-makes the sweep idempotent and self-correcting — the `increment_coupon_usage`
-posture applied to a read pipeline.
+Each run re-fetches the last **5 days**. Daily totals can use `ON CONFLICT … DO
+UPDATE`. Capped dimensions cannot: a query that was previously in the top 25
+can fall out after Google revises the window, and an upsert would leave that
+stale row behind. For every `(source_id, date, dimension)` refreshed, replace
+the complete stored key set transactionally (delete then insert, or stage and
+swap). That makes the sweep idempotent and self-correcting rather than merely
+duplicate-resistant.
 
 Two derivation rules:
 
@@ -272,9 +325,11 @@ Two derivation rules:
   10,000 impressions and position 40 on 5 impressions do not average to 21.5.
   Store the weighted sum, divide by impressions at read time.
 
-RLS: service-role writes; `is_store_admin(store_id)` reads. Sellers never read
-the source's Google property or filter directly; dashboard queries return typed
-aggregates. This follows the `email_logs` service-write pattern.
+RLS: the source table is service-role only; it contains reconciliation state
+that no merchant client needs. Metric rows may be read only through the typed,
+store- and location-gated dashboard aggregate path. Do not grant a direct table
+read and then rely on the UI not to request it. This follows the `email_logs`
+service-write pattern.
 
 #### ★ Domain lifecycle: keep history, stop ownership leaks
 
@@ -301,11 +356,24 @@ Transition rules:
 | Custom-domain entitlement lapses          | Same as disconnect for new collection; do not delete stored metrics                                                                 | No history deletion as a billing side effect                         |
 | Domain is later attached to another store | It receives a new source owned by that store                                                                                        | Old store never queries dates after its cutoff                       |
 
-An inactive custom source must never be queried beyond its cutoff. Because GSC
-dates are Pacific Time and day-grained, set the source's final eligible date to
-the last completed PT day before detachment. A bounded correction job may
-re-query only dates on or before that cutoff for the next three days; this picks
-up Google's revisions without ingesting traffic that belongs to a later owner.
+An inactive custom source must never be queried beyond `final_data_date`.
+Because GSC dates are Pacific Time, inclusive, and day-grained, a timestamp
+alone cannot express a safe handoff. On a **cross-store reassignment**, set the
+old source's final date to the completed PT day before detachment and the new
+source's first date to the first full PT day after attachment. The handoff PT
+date belongs to neither store: accepting one undercounted day is preferable to
+showing Store A's search terms or traffic in Store B. A same-store origin change
+may collect both disjoint origins on the boundary date because both rows still
+belong to the same tenant.
+
+A bounded correction job may re-query a closed source only through its final
+date and only until `correction_until` (three days after closure). The ingest
+always intersects its requested range with `[first_data_date, final_data_date]`.
+This picks up Google's revisions without ingesting traffic from a later owner.
+Backfill follows the same bounds: migrated platform sources start at the later
+of store launch and Google's retention boundary; an existing custom source
+starts at its recorded verification date. If that date cannot be established,
+do not guess across an ownership boundary—start at the first safe full PT day.
 
 `google_site_verified_at` is not enough to model this history—it is overwritten
 when domains change. The source table is the durable record. Domain transitions
@@ -328,16 +396,27 @@ rows/store/day → **64M rows/year at 1,000 stores**. Not worth it.
 
 - `dimension = 'total'`: **daily per source**. Usually one or two rows per
   store/day. This is what the headline cards and trend chart read.
-- `query` / `page`: **top 25, weekly grain**. A small merchant does not have 100
-  meaningful queries, and the API explicitly "does not guarantee to return all
-  data rows but rather top ones" anyway.
+- `query` / `page`: **top 25 per source per day**. Exact custom-range boundaries
+  matter more than saving these rows: a weekly bucket cannot answer a range
+  starting on Wednesday, and summing weekly top-25 lists cannot reconstruct the
+  true top 25 for the selected range. Read-time ranking unions the retained
+  daily candidates, sums them, then takes 25. The table copy says that Google
+  suppresses rare rows and returns top data only, so it is not presented as an
+  exhaustive query ledger and never needs to reconcile to the total.
 - `country` / `device`: top 10 / all 3, weekly.
 
+Weekly rows use the Monday PT date as `date` and are replaced by complete
+Monday–Sunday buckets. They are not eligible for a card that claims exact custom
+date boundaries; a future country/device card must either ingest daily rows or
+label and constrain itself to complete weeks. At 1,000 stores, the chosen daily
+query/page caps are about 18.25M rows/year before totals and the much smaller
+weekly dimensions—material, but less than one third of the rejected 175-row/day
+shape. Measure table/index bytes in the pilot before raising caps.
+
 **★ These are the INITIAL storage policies, not architectural limits.** The
-`(source_id, date, dimension, key)` primary key accommodates daily query-level
-rows and any number of keys per day — raising `query` to top 50 or 100, or moving
-it to a daily grain, is a constant change plus a backfill, **not a schema
-redesign**. Keep the row caps and per-dimension granularity in one
+`(source_id, date, dimension, key)` primary key accommodates any number of keys
+per day — raising `query` to top 50 or 100 is a constant change plus a backfill,
+**not a schema redesign**. Keep the row caps and per-dimension granularity in one
 constants module (the `lib/import-export/limits.ts` posture) rather than inlined
 at the call sites, so the ceiling can be raised — globally or per plan — without
 touching the ingest or the read path. The API's own "top rows only" behaviour is
@@ -349,12 +428,15 @@ matching Google's own window so a merchant never sees less than GSC shows.
 
 ### A5 The cron must be resumable
 
-Per active source this is ~3 API calls (totals-by-date, top queries, top pages).
-At 1,000 stores with one source each that is ~3,000 calls; custom-domain stores
-temporarily add another source. Rate is fine — Search Analytics allows
-**1,200 QPM per site** and 40,000 QPM per project — but `seo-refresh` has
-`maxDuration = 300` and `CONCURRENCY = 4`, so 3,000 calls at ~300ms each is
-~225s. That is inside the budget today and outside it next year.
+Per active source a normal correction run is ~11 API calls: one totals-by-date
+request plus one query and one page request for each of five PT days. Querying
+each day separately is intentional: `rowLimit: 25` on a multi-day
+`date,query` request caps the whole response, not each day. At 1,000 stores that
+is ~11,000 calls, and every platform-subdomain call targets the same Domain
+property, so the **1,200 QPM per-site** quota—not only the 40,000 QPM project
+quota—is a shared fleet limit. A worker must rate-limit that property globally;
+process concurrency alone is not the contract. Weekly country/device calls add
+two requests only on their scheduled recomputation day.
 
 **★ A separate cron, not an extension of `seo-refresh`.** Two reasons: that
 route's 503 contract means a failed metrics read would make sitemap submission
@@ -368,11 +450,22 @@ remains, so it resumes rather than silently truncating the fleet. Register it in
 Cloud Scheduler — `docs/cron-jobs.md` records that deploying a route does not
 schedule it, and that three jobs sat undeployed for months.
 
+The durable work key is `(source_id, PT date, dimension)`, not an in-memory
+store offset. Claim it with a lease, replace that bucket, then mark it complete;
+a dead instance therefore retries one idempotent bucket. Platform-subdomain
+claims additionally pass through one shared Domain-property rate limiter so
+several Cloud Run instances cannot each remain under 1,200 QPM while exceeding
+it together.
+
 **★ Skip the same stores `seo-refresh` skips**: not `active`, not launched
 (`isStoreLaunched`), or `settings.demo === true`. An unindexed store has no data
 and burns a call to find that out.
 
 ### A6 What the merchant sees
+
+**Built 2026-08-19.** The seven cards below are registered under Search and are
+included in the default Google Search section. Existing customized dashboards
+remain unchanged and can add them from the widget library.
 
 No new page. The widget registry already does this — add entries to `WIDGETS`
 (`analytics/widgets.ts:32`) and nodes to the `slots` map (`analytics/page.tsx:34`)
@@ -408,35 +501,37 @@ temporary Google outage must not blank the dashboard.
 
 ### A7 Also surface indexing health — near-zero work, real hole
 
-`google_indexing_error` is persisted by `store-indexing.ts` and **shown to
-nobody** — not the merchant, not an operator. Today the only way to learn a
-store's sitemap submission has been failing for a month is a direct DB query.
+**Built 2026-08-20.** Domain settings reads the existing seven keys through the
+origin-aware `indexing-health.ts` model and offers **Check now** through the
+same idempotent reconciliation used by cron. `FAILURE_SOURCES` now includes a
+tenant-scoped Google Search entry; the explicit platform scope provides the
+operator view. No failure table or migration was added.
 
-One card (on `/dashboard/settings/domain`, or a small `/dashboard/seo`) reading
-the seven keys already written: verified state, sitemap submitted at, last
-attempt, last error. Pair it with the operator-side view in
-`/dashboard/failures` (§33) — this is exactly the "everything that didn't work"
-feed, and `FAILURE_SOURCES` is a registry of reads, so it is one entry.
+`google_indexing_error` is persisted by `store-indexing.ts`; before this phase,
+the only way to learn a store's sitemap submission had been failing was a
+direct DB query.
+
+The card lives on `/dashboard/settings/domain` and reads the seven keys already
+written: verified state, sitemap submitted at, last attempt, and last error. It
+is paired with the operator-side `/dashboard/failures` view (§33), where the
+existing `FAILURE_SOURCES` registry supplies the same current errors.
 
 ### A8 Pre-existing gaps this work should close
 
 Found while mapping; each one degrades the feature above.
 
-1. **`lib/domains/reconcile.ts:366` flips `custom_domain_verified` without
-   calling `ensureGoogleCoverageForStore`.** Only the interactive
-   `verifyDomain()` action triggers coverage (`store-domain.ts:431`). Since §30
-   moved domain completion to the cron precisely because merchants close the tab,
-   the common path is now the one that never registers the property — so a
-   custom-domain store gets no Search Console property, and therefore no search
-   data, until the next `seo-refresh`. One `after()` call.
-2. **Nothing calls `sites.delete` / `webResource.delete` on disconnect.**
-   `store-domain.ts:461` drops the DB keys and leaves Google's ownership record
-   and URL-prefix property behind. `docs/seo-indexing.md:79-82` documents a
-   1,000-property account limit; without deletion that limit is a one-way
-   ratchet.
-3. **`googleAccessToken` caches on a fixed 55-minute TTL**, not the token's own
-   `expires_in` (`:178-179` admits it). Fine today; it is the kind of thing that
-   fails at 3am once a scope changes.
+1. **Closed in Phase 3a:** the unattended `domain-reconcile` route now defers
+   both `ensureGoogleCoverageForStore` and the source-epoch reconciliation for
+   every domain it makes live. Interactive save/verify/disconnect workflows
+   record the same source transition, while the daily search-metrics preparation
+   remains an idempotent backstop.
+2. **Closed in Phase 3d:** domain replacement and disconnect run idempotent
+   `sites.delete` and `webResource.delete` cleanup after the routing/settings
+   write removes the old META token. Google failures are logged but cannot roll
+   back the successful domain mutation.
+3. **Closed in Phase 3d:** `googleAccessToken` uses the JWT response's
+   `expires_in` or the ADC client's `expiry_date`, refreshes slightly early,
+   and declines to cache tokens whose real expiry is unavailable.
 
 ### A9 What to promise, and what not to
 
@@ -463,12 +558,12 @@ Read `docs/seo-action-plan.md:277-282` before writing merchant-facing copy.
 The out-of-box dashboard is opinionated. It should answer, in order: "How did I
 do?", "What sold?", "Who bought?", and "How did Google find me?"
 
-| Section       | Default cards                                                                    | Notes                                                                                           |
-| ------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Overview      | Total sales, Orders, Average order value, Units sold                             | Four compact cards; selected range vs selected comparison                                       |
-| Sales         | Sales over time, Top products, Sales by channel, Sales by location               | Location card appears only when locations exist and viewer scope permits it                     |
-| Customers     | New vs returning customers, Total customers                                      | Total customers is explicitly a current/lifetime snapshot and does not fake a period comparison |
-| Google Search | Clicks, Impressions, CTR, Average position, Search trend, Top queries, Top pages | Delayed source with its own freshness/empty-state copy                                          |
+| Section       | Default cards                                                                    | Notes                                                                                            |
+| ------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Overview      | Total sales, Orders, Average order value, Units sold                             | Four compact cards; selected range vs selected comparison                                        |
+| Sales         | Sales over time, Top products, Sales by channel, Sales by location               | Location card appears only when locations exist and viewer scope permits it                      |
+| Customers     | New vs returning customers, Total customers                                      | Total customers is a current/lifetime business snapshot; omit it for location-restricted viewers |
+| Google Search | Clicks, Impressions, CTR, Average position, Search trend, Top queries, Top pages | Delayed source with its own freshness/empty-state copy                                           |
 
 Returns/refunds, discounts, payment method, inventory velocity, recent orders,
 enquiries, blog approvals, and recent activity remain available in the library
@@ -479,25 +574,44 @@ When first-party traffic ships, add a recommended "Storefront conversion"
 section (Sessions, Conversion rate, Add-to-cart rate, Reached-checkout rate,
 Converted sessions). Do not silently insert it into a customized layout.
 
+Location scope applies to every order-shaped customer metric. For a restricted
+viewer, "new vs returning" considers only recognized orders in accessible
+locations: new means the customer's first accessible recognized order falls in
+the selected range; returning means an earlier accessible recognized order
+exists. The store-wide registered-customer snapshot has no defensible location
+join, so it is unavailable to restricted viewers rather than silently leaking a
+whole-business count. Its saved layout entry remains dormant and reappears if
+the viewer later becomes unrestricted.
+
 #### Editing interaction
 
 - The page header contains **Edit dashboard** as requested. It is visible to any
   role that can view Analytics because changing a personal layout does not change
   store data.
-- Editing is desktop-only for v1. Mobile renders the saved responsive order and
-  says to use desktop when customization is requested.
+- Editing is responsive. Mobile renders the saved single-column order and keeps
+  non-drag controls available for section/card movement and sizing.
 - Entering edit mode creates a draft. **Save** commits, **Cancel** discards, and
   **Reset to default** removes the personal override after confirmation.
+- Edit mode uses a persistent searchable card rail beside the canvas rather
+  than a per-section popup. A card can be clicked into the first visible section
+  or dragged directly to a dotted landing area; added cards stay visible but
+  disabled in the rail so the complete catalogue does not jump while editing.
+  Add/remove feedback includes an Undo action. The normal StoreMink dashboard
+  navigation is hidden while this workspace is open, so two unrelated left
+  rails are never shown together.
 - Cards drag within or across sections. Sections can be added, renamed, hidden,
   reordered, and deleted. A section title is 1–60 trimmed characters.
-- Cards support `compact`, `half`, and `full` sizes. The renderer maps these
-  semantic sizes to the current four-column grid; raw column counts are not
-  persisted. Tables and multi-series charts have a minimum `half` size.
-- A widget can appear once. Adding it removes it from library results; removing
-  it returns it to the library.
-- The library is searchable and grouped by Overview, Sales, Customers,
-  Acquisition, Inventory, Operations, and Content. Groups are catalog metadata,
-  not dashboard sections.
+- Cards support `compact`, `half`, and `full` sizes. The editor maps these to
+  3/6/12 columns on a fixed 12-column grid, and each widget has a defined row
+  span. Empty landing pills therefore remain equal-sized even beside tall
+  widgets, and the card footprint makes its occupied area unambiguous. Raw grid
+  counts are not persisted; the saved semantic sizes still render through the
+  normal responsive viewing grid. Tables and multi-series charts have a minimum
+  `half` size.
+- A widget can appear once. Adding it marks it as already added in the library;
+  removing it makes it available again.
+- The library is searchable and grouped by Metrics, Sales, Customers, Inventory,
+  Content, and Search. Groups are catalog metadata, not dashboard sections.
 - Keyboard drag/reorder, move-up/down controls, visible focus, and non-drag
   add/remove paths are acceptance requirements, not polish.
 - The edit surface may render lightweight previews, but Save validates every
@@ -539,6 +653,19 @@ Example value:
 }
 ```
 
+Phase 2a initially persisted the ordered-card editor as:
+
+```json
+{
+  "defaultRevision": 1,
+  "widgetIds": ["metric_revenue", "metric_orders"]
+}
+```
+
+Phase 2b now reads that version 1 value into one `Overview` section while
+preserving card order. Every subsequent save emits the section/size shape above
+with `schema_version = 2`. The column-level schema does not change.
+
 Rules:
 
 - no row means "follow the current product default"; Reset deletes the row;
@@ -552,8 +679,8 @@ Rules:
   definitions are accepted;
 - writes derive `store_id` and `admin_user_id` from the authenticated request;
   neither is trusted from the browser;
-- last-write-wins is acceptable for the same admin editing on two devices, but
-  return `updated_at` so the UI can warn before overwriting a newer draft.
+- return `updated_at` and compare it on Save/Reset; the shipped implementation
+  rejects a stale tab rather than silently overwriting a newer device.
 
 #### Global filters and metric semantics
 
@@ -565,14 +692,21 @@ rendering agree. Layout preferences do not contain filter values.
 - default: **Last 90 days**, matching Shopify's current overview default;
 - comparison: Previous period (default), Previous year, Custom, None;
 - location: All accessible locations or one accessible location, once location
-  analytics ships; the server intersects the request with staff scope;
+  analytics ships; the server intersects the request with staff scope. This is
+  now shipped: an exact physical-location selection excludes online/unassigned
+  orders, while the aggregate accessible view includes them;
 - currency: store currency only in the first release. Multi-currency display is
   not parity-critical while orders are effectively INR; do not show a dead
   currency selector.
 
-The store's configured time zone defines commerce ranges. Search Console dates
-are published in Pacific Time, so Search cards disclose that daily boundary in
-their tooltip and may not line up exactly with commerce day buckets.
+The store's configured business time zone defines commerce ranges. Phase 1 adds
+`settings.business.timeZone` plus a Store details control, validates it as an
+IANA zone on the server, and defaults/backfills it to `Asia/Kolkata`. Range
+parsing converts each local half-open interval `[start, end)` to instants before
+building SQL predicates; it must not add fixed 24-hour durations across DST.
+Search Console dates are published in Pacific Time, so Search cards disclose
+that daily boundary in their tooltip and may not line up exactly with commerce
+day buckets.
 
 Metric cards show value, comparison delta when meaningful, sparkline, source,
 freshness, and a plain-language definition. A current snapshot such as inventory
@@ -638,18 +772,40 @@ separate library card later; it must not be silently mixed into Total sales.
 No schema change, no tracking. This is the best value-to-effort ratio in the
 document, and it is most of what a merchant means by "Shopify-like".
 
-| Widget                   | Source                                                        |
-| ------------------------ | ------------------------------------------------------------- |
-| AOV                      | Total sales / recognized orders                               |
-| Units sold               | `order_items.quantity` — exists, never summed                 |
-| Top products (units + ₹) | `order_items` grouped by `product_id` — replaces the fake one |
-| Sales by channel         | `orders.sales_channel` — online vs POS, already written       |
-| **Sales by location**    | `orders.location_id` — the roadmap's outstanding item (§510)  |
-| Sales by payment method  | `orders.payment_method`                                       |
-| New vs returning         | first `orders.created_at` per `customer_id`                   |
-| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`  |
-| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value  |
-| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times   |
+| Widget                   | Source                                                                                                                                | Status  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| AOV                      | Total sales / recognized orders                                                                                                       | Shipped |
+| Units sold               | `order_items.quantity` — exists, never summed                                                                                         | Shipped |
+| Top products (units + ₹) | `order_items` grouped by `product_id` — replaces the fake one                                                                         | Shipped |
+| Sales by channel         | `orders.sales_channel` — online vs POS, already written                                                                               | Shipped |
+| **Sales by location**    | `orders.location_id` — the roadmap's outstanding item (§510)                                                                          | Shipped |
+| Sales by payment method  | Tender-value allocation: POS `order_payments`; online `store_credit_used` plus the remaining order value under its gateway/COD method | Shipped |
+| New vs returning         | first `orders.created_at` per `customer_id`                                                                                           | Shipped |
+| Discount impact          | `orders.discount`, line discounts, and `applied_coupon_code`                                                                          | Shipped |
+| Returns & refunds        | `order_returns`, `order_refunds` — return rate, refund value                                                                          | Shipped |
+| Inventory velocity       | `stock_movements` — a clean per-SKU ledger, read zero times                                                                           | Shipped |
+
+Phase 2c uses the shared recognized-order contract for all five shipped cards.
+Channel and location values subtract completed refunds by settlement date. Top
+products and units sold remain merchandise/unit measures and do not pretend that
+returned quantities are known before the dedicated returns widget ships.
+
+Phase 2d completes this table. New-vs-returning is based on each customer's
+first accessible recognized order and excludes guest orders. Discount impact
+keeps order-level and line-level markdowns separate. Completed returns and
+settled refunds are shown as separate facts so a return-linked refund is never
+double-counted. Inventory velocity reads only `reason = 'sale'`, negative,
+recognized-order ledger movements; untracked products honestly remain absent.
+
+"Sales by payment method" means currency value by tender, not order count.
+`orders.payment_method = 'split'` is only a summary and must never become a
+chart slice. POS uses the itemized `order_payments` rows. Online orders emit a
+virtual store-credit tender for `store_credit_used` and allocate the recognized
+remainder to Razorpay, COD, or pay-at-store. Tender values are reduced only by
+settled refunds to that method; a split refund follows its `order_refunds.method`
+rows rather than being guessed from the order summary.
+The shipped allocator also leaves a refund-only method visible as a negative
+row rather than guessing which original tender a manually recorded refund meant.
 
 **★ Profit/margin is NOT computable and should not be promised.**
 `products.base_price` is labelled **"Base price ₹ (MRP)"**
@@ -670,9 +826,10 @@ fake it. **Conversion rate = orders / sessions**, and sessions do not exist.
   `proxy.ts` deliberately keeps the storefront path free of per-request DB work,
   so counting there is out. `POST /api/t` via `navigator.sendBeacon` — API routes
   are excluded from the proxy matcher (`proxy.ts:316`), so ingest is cheap.
-- **★ Cookieless, but privacy-aware — not privacy-settled.** Visitor id =
-  `sha256(ip + user-agent + store_id + daily_salt)`, truncated, salt rotating at
-  midnight IST. Nothing is stored on the user's device, which minimises tracking
+- **★ Cookieless, but privacy-aware — not privacy-settled.** Visitor key =
+  `sha256(ip + user-agent + store_id + analytics_day_salt)`, truncated, with the
+  salt rotating at midnight in the store's configured business time zone.
+  Nothing is stored on the user's device, which minimises tracking
   and avoids client-side identifiers entirely. **But the resulting identifier is
   still pseudonymous data derived from an IP address, and should be treated as
   potentially personal.** Being cookieless or hashed does not by itself settle the
@@ -683,41 +840,61 @@ fake it. **Conversion rate = orders / sessions**, and sessions do not exist.
   merchant-facing store policy), not in a code comment. Get counsel on it before
   this ships, the same posture §25 and §28 already take. Technically it is
   Plausible's model, so the trade is well-trodden: no cross-day visitor identity,
-  no cohort-by-first-visit.
+  no cohort-by-first-visit. NAT + identical user agents can merge people; this is
+  an explicitly documented approximation, not a durable customer identity.
 - **Two tables.** `storefront_events` (raw, pruned at 7–14 days via §32) and
   `storefront_daily` (rollup, long retention). Roll up nightly; every read hits
   the rollup. The raw table is the only high-write object this feature adds, and
   aggressive pruning is what keeps it affordable.
+- **★ A visitor key is not a session.** The rollup sessionizes each store +
+  visitor key by event time, opening a new session after 30 minutes of
+  inactivity. Rotation at local midnight deliberately closes the old session.
+  `storefront_daily` stores sessions and distinct sessions containing each
+  funnel stage; an ordered funnel counts a later stage only when its preceding
+  stage occurred earlier in the same session. This definition is shared by the
+  Sessions, conversion, checkout-rate, and abandonment cards.
 - **Funnel events:** `page_view`, `product_view`, `add_to_cart`,
   `checkout_start`, `purchase`. `add_to_cart` hooks
   `CartProvider.addItem`; `checkout_start` on `/checkout` mount.
-  **★ `purchase` is emitted server-side from `placeOrder`**, never from the
-  client — the conversion numerator must not be forgeable, and a client that
-  navigates away mid-redirect would silently under-count.
+  **★ `purchase` is emitted from the server-side recognized-sale transition,
+  never unconditionally from `placeOrder` and never from the client.** COD emits
+  after the order is accepted; fully covered store-credit emits after it is
+  stamped paid; POS emits after finalization; Razorpay emits only from the
+  atomic `pending -> paid` claimant shared by callback and reconciliation. A
+  pending Razorpay attempt that expires is not a purchase.
+- **★ Preserve attribution across asynchronous payment.** At order creation,
+  upsert an internal raw attribution row keyed by order id with the request's
+  server-derived visitor key and originating session time. The later recognized
+  transition promotes that row to `purchase`; cancellation/expiry marks it
+  discarded. This keeps the two-table design, lets a background payment
+  reconciliation attribute the purchase without an IP/UA request, and keeps the
+  pseudonymous key inside the short raw retention window. The conversion is
+  assigned to the originating session/day; commerce sales remain assigned by
+  their own metric date contract.
 - **★★ Event idempotency is REQUIRED, and the database enforces it.** Every event
   that can be retried or replayed needs a deterministic idempotency key. For
   `purchase` that key is the **order id** (one order is one purchase, forever), on
   a **UNIQUE constraint** — not an application-level check-then-insert, which is
   invariant 3 and is bypassed by the exact concurrency it is meant to guard. This
-  is not hypothetical: server-side emission runs inside a request that Cloud Run
-  can retry, `placeOrder` already carries a manual rollback chain, and
-  reconcile-on-read (§18) plus the `expire-pending-payments` sweep can both touch
-  a paid order again later. Without the constraint, **a single retry inflates
+  is not hypothetical: the callback and reconcile-on-read (§18) can race to
+  claim the same Razorpay transition, and Cloud Run can retry the request.
+  Without the constraint, **a single retry inflates
   purchases and therefore the conversion rate** — silently, in the direction that
   flatters the merchant, which is the direction nobody questions. `page_view` and
   the funnel steps get the same treatment via a client-generated event id, so a
   `sendBeacon` the browser retries on flaky mobile data cannot double-count a
   session. The insert is `ON CONFLICT DO NOTHING`: a duplicate is a no-op, never
   an error, so a retry must never fail the request that carried it.
-- **Cart abandonment falls out of this** without persisting carts server-side.
+- **Cart abandonment follows from sessionized events** without persisting carts server-side.
   Carts are `localStorage`-only today (`CartProvider.tsx`) and a cart that never
   reaches a server cannot be measured; but `add_to_cart` → `checkout_start` →
   `purchase` gives the abandonment rates merchants actually ask for.
 - **★ Bot filtering is not optional.** Without a UA denylist and a per-hash rate
   limit, every number is inflated and the conversion rate is quietly wrong —
   worse than absent, because people act on it.
-- **Plan-gate this one** (basic+ or pro, `lib/plans.ts`). Unlike Part A it is a
-  genuine per-request cost centre.
+- **Plan-gate this one to Pro** (`PLAN_LIMITS.advancedAnalytics`). Unlike Part A
+  it is a genuine per-request cost centre. This product decision was closed on
+  2026-08-20.
 - **Skip Live View.** Shopify's real-time globe is mostly theatre and needs a
   streaming path nothing else here would use.
 
@@ -728,7 +905,9 @@ A `marketing.ga4MeasurementId` / `marketing.metaPixelId` setting
 of work. It does not put numbers in our dashboard and it hands the merchant
 relationship to Google — so it is **not** a substitute for Phase 3 — but many
 merchants already want GA4, and it is a real answer to "where are my analytics?"
-for the whole time Phase 3 is unbuilt.
+for the whole time Phase 3 is unbuilt. Both settings are **Pro-only**, require
+the corresponding operator feature to be enabled, and must not load before the
+applicable visitor consent.
 
 ---
 
@@ -736,17 +915,18 @@ for the whole time Phase 3 is unbuilt.
 
 Ordered by value per unit of work, and each step is shippable alone.
 
-| #   | Release               | Step                                                                                                        | Rough size |
-| --- | --------------------- | ----------------------------------------------------------------------------------------------------------- | ---------- |
-| 1   | Dashboard foundation  | Metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes | M          |
-| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import  | L          |
-| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                    | M          |
-| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets       | L          |
-| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                   | S          |
-| 6   | Drill-down            | Card-linked detailed reports and CSV export for the highest-value metrics                                   | M/L        |
-| 7   | Merchant pixels       | GA4 and Meta Pixel settings with consent-policy integration                                                 | S          |
-| 8   | Storefront conversion | Beacon, raw-event retention, daily rollup, funnel, bot controls, conversion cards                           | L          |
-| 9   | Margin                | `cost_price`, backfill UX, gross margin reporting                                                           | M          |
+| #   | Release               | Step                                                                                                                                                                                     | Rough size |
+| --- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| 1   | Dashboard foundation  | Business-time-zone setting, metric definitions, global range/comparison parser, range-aware per-widget queries, revenue/chart bug fixes                                                  | M          |
+| 2   | Dashboard parity      | Server-persisted per-admin layout, real sections, resize, responsive rendering, legacy localStorage import                                                                               | L          |
+| 3   | Useful default        | Commerce widgets from existing columns and the default composition in B0                                                                                                                 | M          |
+| 4   | Google Search         | Source-aware schema, safe subdomain filter, custom-domain lifecycle, resumable ingest, search widgets                                                                                    | L          |
+| 5   | Search operations     | Indexing-health merchant/operator surfaces and A8 cleanup                                                                                                                                | S          |
+| 6   | Drill-down            | **Shipped 2026-08-20:** Total sales, sales over time, top products, and Google Search queries with scoped CSV export                                                                     | M/L        |
+| 7   | Platform controls     | **Shipped 2026-08-20:** operator Analytics module switches, separate Pro entitlement, plan copy, and complete Help Centre guide set                                                      | S          |
+| 8   | Merchant pixels       | **Shipped 2026-08-20:** Pro-only GA4 and Meta Pixel settings with explicit, withdrawable visitor consent                                                                                 | S          |
+| 9   | Storefront conversion | **Built 2026-08-20; migration/Scheduler pending:** Pro-only consented beacon, 14-day retention, 30-minute sessions, purchase attribution, hourly rollup, funnel, bot controls, and cards | L          |
+| 10  | Margin                | **Built 2026-08-20; migration pending:** Pro-only product/variant `cost_price`, immutable order-line snapshots, safe first-cost backfill, explicit coverage, and gross-margin cards      | M          |
 
 Steps 1–3 form overview-dashboard parity. Step 4 is independent once the global
 range contract exists and is StoreMink's differentiator. Do not start the
@@ -759,13 +939,25 @@ first-party traffic pipeline before its privacy/consent decision is recorded.
 The headline sales definition, layout scope, default range, custom-domain
 history, and unlaunched-store state are decided above. These remain:
 
-- **First-party traffic plan gate:** Basic and Pro, or Pro only? Cost data from a
-  small production pilot should decide; do not guess from positioning.
-- **Consent model for StoreMink traffic and merchant pixels:** jurisdiction and
-  storefront policy work must precede event collection.
-- **Detailed-report scope:** which first four cards get drill-down pages after
-  dashboard parity. Recommended: Total sales, Sales over time, Top products, and
-  Google Search queries.
+- **Closed 2026-08-20 — advanced Analytics plan gate:** Pro only. GA4, Meta
+  Pixel, first-party conversion, and margin require
+  `PLAN_LIMITS.advancedAnalytics` plus their platform switch.
+- **Closed 2026-08-20 — merchant-pixel consent:** optional providers are global
+  opt-in only. Analytics and Marketing are separate choices, rejection leaves
+  shopping usable, the choice is stored per browser, and a persistent control
+  supports withdrawal. No provider script loads in builder previews. Phase 9
+  must separately document the policy for StoreMink's own first-party events
+  before collection starts.
+- **Closed 2026-08-20 — first-party conversion consent and retention:** use the
+  same explicit Analytics opt-in as GA4, create no persistent device/browser
+  identifier, rotate the server-side pseudonymous key each business-local day,
+  retain raw events and temporary order attribution for 14 days, and keep only
+  non-identifying daily totals long term. The published Help guide states these
+  rules and the merchant's obligation to obtain market-appropriate legal advice.
+- **Closed 2026-08-20 — detailed-report scope:** the first four are Total
+  sales, Sales over time, Top products, and Google Search queries. Each keeps
+  the global range contract; commerce reports additionally keep the resolved
+  location scope, while Search queries correctly ignore physical location.
 - **Search types:** start with `type: "web"`. Images/News/Discover can be added as
   explicit sources later; mixing them into one unexplained total is not useful.
 - **Saved layouts and staff offboarding:** rows should normally cascade/delete
@@ -800,16 +992,26 @@ From `docs/roadmap.md`:
 ### Dashboard
 
 - Default, saved, empty, corrupt, legacy, and reset layouts all render safely.
+- A valid legacy localStorage order imports only when no server row exists and
+  is removed only after the server write succeeds.
+- Two tabs editing the same admin layout cannot silently overwrite each other;
+  the stale Save/Reset receives a reload warning.
 - Add/remove/reorder/resize/section operations work with pointer and keyboard.
 - Save persists across browser/device; Cancel performs no write.
 - Mobile order matches desktop reading order and never relies on a four-column
   viewport.
 - URL range/comparison survives reload and invalid params fall back safely.
+- Today/month/custom bounds use the configured IANA zone, including a DST
+  transition fixture; a missing/invalid legacy value falls back to
+  `Asia/Kolkata` without changing existing store behaviour.
 - Every metric is tested at zero, previous-period zero, refunds, cancellation,
   pending Razorpay, COD, POS, and mixed-channel cases.
 - A restricted role cannot reveal a hidden card by editing JSON or URL params.
 - Location-bound staff never see all-location totals in cards, deltas, exports,
   or report links.
+- A location-bound viewer cannot render Total customers and classifies new vs
+  returning using accessible recognized orders only; changing permissions does
+  not delete the dormant saved-layout entry.
 
 ### Search Console and domains
 
@@ -820,9 +1022,16 @@ From `docs/roadmap.md`:
 - Subdomain -> custom A -> custom B -> subdomain preserves prior chart history,
   inserts visible annotations, and collects new data from only active sources.
 - A detached custom source never queries dates after its final eligible PT date.
+- A domain reassigned between stores quarantines the PT handoff date: neither
+  tenant ingests it, and the new tenant starts on its first full eligible day.
 - Re-running a window updates rows rather than duplicates them; CTR and weighted
   position recompute correctly after revisions.
+- When a formerly top query/page falls out of a refreshed daily bucket, its old
+  row is removed. A custom range reads only retained daily candidates inside its
+  exact boundaries and carries the top-data disclosure.
 - Query rows need not sum to totals; empty/suppressed-query copy remains honest.
+- Platform and custom sources both verify `responseAggregationType = byPage`;
+  a property-aggregated response is rejected rather than mixed into the chart.
 - Google timeout/403/429 leaves the last good snapshot visible, records an
   operator-visible failure, and resumes from the lease/cursor.
 - Domain reconciliation (not only the interactive button) creates and deactivates
@@ -836,6 +1045,21 @@ From `docs/roadmap.md`:
   API latency, quota errors, source lag, and terminal failures.
 - Alert on fleet cursor not advancing, GSC data age beyond four days, and repeated
   401/403, rather than alerting on a legitimate zero-impression store.
+- Assert the shared Domain-property limiter across concurrent worker instances;
+  per-process concurrency must not be the only quota control.
+
+### Storefront conversion
+
+- Events 30 minutes apart remain one session; a gap over 30 minutes and the
+  store-local midnight boundary start new sessions.
+- Pending/expired Razorpay orders never produce `purchase`; callback and
+  reconciliation racing on one paid order produce exactly one purchase.
+- COD, fully paid store-credit, finalized POS, and Razorpay paid transitions all
+  produce one purchase through the same recognized-sale contract.
+- A reconciled payment with no shopper request still uses the short-lived
+  order-attribution row and lands in its originating session/day.
+- Split-tender payment-method totals use itemized tenders, never a `split` slice,
+  and settled refunds reduce the method that actually returned the money.
 
 ---
 

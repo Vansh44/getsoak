@@ -15,11 +15,17 @@ import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreChrome, getDraftChromeForPreview } from "@/lib/chrome/queries";
 import { resolveStorefrontAppearance } from "@/lib/chrome/types";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 import { getStoreUrl } from "@/lib/site";
 import { getThemeDefinition } from "@/lib/themes";
 import { readThemeSelection } from "@/lib/themes/meta";
 import { designToCssVars } from "@/lib/themes/types";
 import { Toaster } from "@/components/ui/sonner";
+import { MerchantTracking } from "@/app/(storefront)/components/merchant-tracking";
+import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { analyticsFeatureAllowed } from "@/lib/analytics/features";
+import { resolveMerchantPixelSettings } from "@/lib/analytics/merchant-pixels";
+import { effectivePlan } from "@/lib/plans";
 import {
   GOOGLE_VERIFICATION_TOKEN_KEY,
   normalizeGoogleVerificationToken,
@@ -52,6 +58,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const googleVerification = normalizeGoogleVerificationToken(
     store.settings?.[GOOGLE_VERIFICATION_TOKEN_KEY],
   );
+  const searchIndexable = isStoreSearchIndexable(store);
   return {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
@@ -62,6 +69,13 @@ export async function generateMetadata(): Promise<Metadata> {
     ...(googleVerification
       ? { verification: { google: googleVerification } }
       : {}),
+    // New stores contain shared theme seed until the owner publishes something
+    // real, and demo stores are permanent shared showcases. robots.txt allows
+    // crawlers to fetch these public pages specifically so this directive can
+    // remove any stale copies that were indexed before the launch gate existed.
+    ...(searchIndexable
+      ? {}
+      : { robots: { index: false, follow: false, nocache: true } }),
   };
 }
 
@@ -90,12 +104,35 @@ export default async function StorefrontLayout({
   // runs the same getManagerUserId("builder") gate as the page-draft loader and
   // returns null for everyone else, so forging it leaks nothing.
   const previewing = (await headers()).get("x-sm-preview") === "1";
-  const [brand, publishedChrome, draftChrome] = await Promise.all([
-    getStoreBrand(),
-    getStoreChrome(store.id),
-    previewing ? getDraftChromeForPreview(store.id) : Promise.resolve(null),
-  ]);
+  const [brand, publishedChrome, draftChrome, analyticsFeatures] =
+    await Promise.all([
+      getStoreBrand(),
+      getStoreChrome(store.id),
+      previewing ? getDraftChromeForPreview(store.id) : Promise.resolve(null),
+      getPlatformAnalyticsFeatures(),
+    ]);
   const chrome = draftChrome ?? publishedChrome;
+
+  // Merchant pixels are independently gated by platform rollout, the store's
+  // effective plan (including expiry), its saved enable switch, and finally the
+  // visitor's browser-side consent. Builder previews never collect analytics.
+  const pixelSettings = resolveMerchantPixelSettings(store.settings);
+  const plan = effectivePlan(store);
+  const ga4MeasurementId =
+    !previewing &&
+    pixelSettings.ga4Enabled &&
+    analyticsFeatureAllowed(analyticsFeatures, "googleAnalytics4", plan)
+      ? pixelSettings.ga4MeasurementId
+      : null;
+  const metaPixelId =
+    !previewing &&
+    pixelSettings.metaPixelEnabled &&
+    analyticsFeatureAllowed(analyticsFeatures, "metaPixel", plan)
+      ? pixelSettings.metaPixelId
+      : null;
+  const firstPartyEnabled =
+    !previewing &&
+    analyticsFeatureAllowed(analyticsFeatures, "storefrontConversion", plan);
 
   // The visual skin: resolve the store's pinned theme release (falling back to
   // the legacy settings.template id) and flatten
@@ -126,6 +163,10 @@ export default async function StorefrontLayout({
     `sm-header-${appearance.header}`,
     `sm-card-${appearance.card}`,
     appearance.cardQuickAdd ? "sm-card-quickadd" : "",
+    appearance.cardHoverImage ? "sm-card-hoverimg" : "",
+    // Only when a theme is installed — see the `.sm-themed-type` note in
+    // storefront-theme.css. An un-themed store keeps today's inherited font.
+    design ? "sm-themed-type" : "",
     `sm-pdp-${appearance.productDetail}`,
     `sm-cart-${appearance.cart}`,
     `sm-footer-${appearance.footer}`,
@@ -141,24 +182,31 @@ export default async function StorefrontLayout({
   return (
     <AuthProvider initialHasSession={hasCustomerSession}>
       <DeliveryLocationProvider>
-        <CartProvider>
-          <BrandProvider brand={brand}>
-            <ChromeProvider
-              chrome={chrome}
-              themeLayout={design?.layout}
-              live={previewing}
-            >
-              <div className={rootClass} style={themeVars as CSSProperties}>
-                <Header />
-                {children}
-                <Footer />
-              </div>
-            </ChromeProvider>
-          </BrandProvider>
-          <AuthModalLoader />
-          <CartDrawer />
-          <Toaster richColors />
-        </CartProvider>
+        <MerchantTracking
+          storeName={store.name}
+          ga4MeasurementId={ga4MeasurementId}
+          metaPixelId={metaPixelId}
+          firstPartyEnabled={firstPartyEnabled}
+        >
+          <CartProvider>
+            <BrandProvider brand={brand}>
+              <ChromeProvider
+                chrome={chrome}
+                themeLayout={design?.layout}
+                live={previewing}
+              >
+                <div className={rootClass} style={themeVars as CSSProperties}>
+                  <Header />
+                  {children}
+                  <Footer />
+                </div>
+              </ChromeProvider>
+            </BrandProvider>
+            <AuthModalLoader />
+            <CartDrawer />
+            <Toaster richColors />
+          </CartProvider>
+        </MerchantTracking>
       </DeliveryLocationProvider>
     </AuthProvider>
   );

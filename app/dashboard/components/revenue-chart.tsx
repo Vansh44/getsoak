@@ -1,6 +1,5 @@
 "use client";
-
-import { useState } from "react";
+import Link from "next/link";
 import {
   Area,
   AreaChart,
@@ -10,14 +9,26 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { ArrowUpRight } from "lucide-react";
 
-import type { MonthPoint } from "../analytics/data";
+import type { SalesPoint, Stat } from "../analytics/data";
 
 export interface RevenueChartProps {
-  series: { m7: MonthPoint[]; m12: MonthPoint[]; all: MonthPoint[] };
-  totalRevenue: number;
-  trendPct: number;
-  trendUp: boolean;
+  data: SalesPoint[];
+  total: Stat;
+  rangeLabel: string;
+  comparisonLabel: string | null;
+  reportHref?: string;
+}
+
+function compactCurrency(value: number): string {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    currencyDisplay: "narrowSymbol",
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
 }
 
 function CustomTooltip({
@@ -36,80 +47,75 @@ function CustomTooltip({
         {label}
       </div>
       <div className="font-mono-dash text-[15px] font-semibold text-[var(--dash-text)]">
-        ₹{payload[0].value.toLocaleString("en-IN")}K
+        ₹
+        {payload[0].value.toLocaleString("en-IN", {
+          maximumFractionDigits: 2,
+        })}
       </div>
     </div>
   );
 }
 
 export function RevenueChart({
-  series,
-  totalRevenue,
-  trendPct,
-  trendUp,
+  data,
+  total,
+  rangeLabel,
+  comparisonLabel,
+  reportHref,
 }: RevenueChartProps) {
-  const [range, setRange] = useState<"7M" | "1Y" | "All">("7M");
-  const data =
-    range === "7M" ? series.m7 : range === "1Y" ? series.m12 : series.all;
-  const hasData = totalRevenue > 0;
+  const hasData = data.some((point) => point.sales !== 0);
 
   return (
     <div className="dash-card h-full">
       <div className="dash-card-header">
         <div>
-          <div className="dash-card-title">Revenue over time</div>
-          <div className="dash-card-sub">
-            {range === "7M"
-              ? "Last 7 months"
-              : range === "1Y"
-                ? "Last 12 months"
-                : "All time"}
+          <div className="dash-card-title">
+            {reportHref ? (
+              <Link
+                href={reportHref}
+                className="inline-flex items-center gap-1 hover:text-[var(--dash-accent)]"
+              >
+                Total sales over time
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            ) : (
+              "Total sales over time"
+            )}
           </div>
-        </div>
-        <div className="dash-filter-tabs">
-          {(["7M", "1Y", "All"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              className={`dash-filter-tab ${range === tab ? "active" : ""}`}
-              onClick={() => setRange(tab)}
-            >
-              {tab}
-            </button>
-          ))}
+          <div className="dash-card-sub">{rangeLabel}</div>
         </div>
       </div>
       <div className="dash-card-body">
         <div className="mb-4 flex items-end gap-2.5">
           <div className="text-[24px] font-semibold leading-none tracking-[-0.5px] tabular-nums text-[var(--dash-text)]">
-            ₹{Math.round(totalRevenue).toLocaleString("en-IN")}
+            ₹{Math.round(total.value).toLocaleString("en-IN")}
           </div>
-          {hasData && (
+          {total.trendPct !== null && comparisonLabel ? (
             <>
               <span
                 className={`mb-0.5 text-[12.5px] font-medium tabular-nums ${
-                  trendPct === 0
+                  total.trendPct === 0
                     ? "text-[var(--dash-text-3)]"
-                    : trendUp
+                    : total.trendUp
                       ? "text-[var(--dash-green)]"
                       : "text-[var(--dash-red)]"
                 }`}
               >
-                {trendPct === 0
+                {total.trendPct === 0
                   ? "—"
-                  : `${trendUp ? "↑" : "↓"} ${Math.abs(trendPct)}%`}
+                  : `${total.trendUp ? "↑" : "↓"} ${Math.abs(total.trendPct)}%`}
               </span>
               <span className="mb-0.5 text-[12.5px] text-[var(--dash-text-3)]">
-                vs last month
+                vs {comparisonLabel}
               </span>
             </>
-          )}
+          ) : null}
         </div>
         <div className="relative h-[260px] w-full">
           {!hasData && (
             <div className="absolute inset-0 z-[1] flex items-center justify-center">
               <span className="text-[13px] text-[var(--dash-text-3)]">
-                No revenue yet — your sales will appear here.
+                No recognized sales in this range.
               </span>
             </div>
           )}
@@ -134,7 +140,12 @@ export function RevenueChart({
               </defs>
               <CartesianGrid vertical={false} strokeDasharray="0" />
               <XAxis dataKey="label" axisLine={false} tickLine={false} dy={8} />
-              <YAxis axisLine={false} tickLine={false} width={44} />
+              <YAxis
+                axisLine={false}
+                tickLine={false}
+                width={56}
+                tickFormatter={compactCurrency}
+              />
               <Tooltip
                 content={<CustomTooltip />}
                 cursor={{
@@ -144,7 +155,7 @@ export function RevenueChart({
               />
               <Area
                 type="monotone"
-                dataKey="revenue"
+                dataKey="sales"
                 stroke="var(--dash-accent)"
                 strokeWidth={2}
                 fill="url(#revFill)"

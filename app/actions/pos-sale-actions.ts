@@ -24,6 +24,7 @@ import {
   ilike,
   inArray,
   isNotNull,
+  isNull,
   lt,
   or,
   sql,
@@ -41,7 +42,7 @@ import {
   spendCredit,
 } from "@/lib/credit/store-credit";
 import { withService } from "@/lib/db/client";
-import { dbErrorMessage } from "@/lib/db/errors";
+import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   newPosCustomerId,
   splitName,
@@ -53,6 +54,7 @@ import {
   orderItems,
   orderPayments,
   orders,
+  posShifts,
   productVariants,
   products,
   storeBillingSettings,
@@ -64,11 +66,12 @@ import type { OrderInsert } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { likePattern } from "@/lib/pos/search";
 import { personLabel } from "@/lib/pos/person";
-import { currentShiftIdFor } from "./pos-shift-actions";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
+import { shortLinesAt } from "@/lib/inventory/reservations";
 import { summariseItems } from "@/lib/notifications/format";
 import { posCan, type PosActorRole } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { verifyPin } from "@/lib/pos/pin";
 import {
   type ApprovableSale,
@@ -89,6 +92,12 @@ import {
   validateTenderShape,
   type PosTender,
 } from "@/lib/pos/tenders";
+import {
+  counterGatewayKeyId,
+  startCounterPayment,
+  verifyCounterPayment,
+  verifyGatewayTenders,
+} from "@/lib/payments/pos-gateway";
 import { isIntraState, isValidGstinFormat, splitGst } from "@/lib/billing/gst";
 import { rowToBillingSettings, rowToTaxClass } from "@/lib/billing/types";
 import { getStoreSettings } from "@/lib/settings/resolve";
@@ -183,6 +192,14 @@ export interface RegisterConfig {
    *  (No override control exists on the register yet — this is what one would
    *  ask.) */
   canOverridePrice: boolean;
+  /** Whether the till may take a VERIFIED gateway payment (Step 12). The same
+   *  `canDiscount` rule: the client gets the ANSWER, never the policy, and a
+   *  control that would always fail in front of a customer never renders. */
+  onlinePayments: boolean;
+  /** Public Razorpay key id — needed by checkout.js, and safe to ship. */
+  gatewayKeyId: string | null;
+  /** Header for the payment modal, so the customer sees who they are paying. */
+  storeName: string;
 }
 
 export async function getRegisterConfig(): Promise<
@@ -191,34 +208,40 @@ export async function getRegisterConfig(): Promise<
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
 
-  const [billingRows, locRows, settings, classRows] = await Promise.all([
-    withService((db) =>
-      db
-        .select({
-          tax_enabled: storeBillingSettings.taxEnabled,
-          prices_include_tax: storeBillingSettings.pricesIncludeTax,
-          gst_enabled: storeBillingSettings.gstEnabled,
-          default_tax_class_id: storeBillingSettings.defaultTaxClassId,
-        })
-        .from(storeBillingSettings)
-        .where(eq(storeBillingSettings.storeId, op.storeId))
-        .limit(1),
-    ).catch(() => []),
-    withService((db) =>
-      db
-        .select({ name: storeLocations.name })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1),
-    ).catch(() => []),
-    getStoreSettings(),
-    withService((db) =>
-      db
-        .select({ id: taxClasses.id, rate: taxClasses.rate })
-        .from(taxClasses)
-        .where(eq(taxClasses.storeId, op.storeId)),
-    ).catch(() => []),
-  ]);
+  const [billingRows, locRows, settings, classRows, gatewayKeyId, brand] =
+    await Promise.all([
+      withService((db) =>
+        db
+          .select({
+            tax_enabled: storeBillingSettings.taxEnabled,
+            prices_include_tax: storeBillingSettings.pricesIncludeTax,
+            gst_enabled: storeBillingSettings.gstEnabled,
+            default_tax_class_id: storeBillingSettings.defaultTaxClassId,
+          })
+          .from(storeBillingSettings)
+          .where(eq(storeBillingSettings.storeId, op.storeId))
+          .limit(1),
+      ).catch(() => []),
+      withService((db) =>
+        db
+          .select({ name: storeLocations.name })
+          .from(storeLocations)
+          .where(eq(storeLocations.id, op.locationId))
+          .limit(1),
+      ).catch(() => []),
+      getStoreSettings(),
+      withService((db) =>
+        db
+          .select({ id: taxClasses.id, rate: taxClasses.rate })
+          .from(taxClasses)
+          .where(eq(taxClasses.storeId, op.storeId)),
+      ).catch(() => []),
+      // Losing this costs the online tender, never the till: a register that
+      // cannot open because the gateway lookup blipped is far worse than one
+      // that quietly offers cash, card and UPI for a minute.
+      counterGatewayKeyId(op.storeId).catch(() => null),
+      getStoreBrandById(op.storeId).catch(() => null),
+    ]);
 
   const taxRates: Record<string, number> = {};
   for (const c of classRows) {
@@ -244,7 +267,116 @@ export async function getRegisterConfig(): Promise<
       settings["pos.allowPriceOverride"] !== false &&
       (settings["pos.ownerOnlyDiscounts"] === false ||
         posCan(op.role, "price_override")),
+    onlinePayments: !!gatewayKeyId,
+    gatewayKeyId,
+    storeName: brand?.name ?? "Store",
   };
+}
+
+// ---- Gateway payments at the counter (Step 12) -----------------------------
+//
+// TWO actions, because the cashier must know the money landed BEFORE the sale
+// completes. `placePosSale` re-verifies anyway — it is independently reachable
+// and cannot assume either of these ran — but discovering a failed payment at
+// "Complete sale", with the customer already walking away, is not a counter
+// flow anyone should ship.
+
+/**
+ * Open a gateway payment for one leg of a sale.
+ *
+ * The amount is the CASHIER's — see `startCounterPayment` for why it is not
+ * re-priced from the cart. Nothing is recorded here: an abandoned modal must
+ * leave no trace, and a Razorpay order that is never paid simply lapses.
+ */
+export async function startPosGatewayPayment(
+  amountPaise: number,
+  /**
+   * The cart, so the shelf can be checked BEFORE the customer pays.
+   *
+   * ★★ THIS IS THE WHOLE POINT OF PASSING IT. Stock is reserved when the sale
+   * COMPLETES, so without this a cashier takes ₹500 and only then learns the
+   * shelf is empty — captured money against a sale that cannot finish, needing
+   * a dashboard refund. The check costs one read and refuses while refusing is
+   * still free.
+   *
+   * ⚠ IT IS A COURTESY, NOT A GUARANTEE. Nothing is held; `reserve_stock_at`
+   * at completion remains the only thing that can promise stock. Optional, so
+   * a caller that has no cart to offer still works.
+   */
+  lines?: PosCartLine[],
+): Promise<
+  { rzpOrderId: string; keyId: string; amountPaise: number } | { error: string }
+> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "You're signed out. Please sign in again." };
+  if (!posCan(op.role, "sell")) {
+    return { error: "You don't have permission to take payments." };
+  }
+  // Opening gateway orders is cheap for us and noisy on the merchant's
+  // account; a stuck button must not be able to mint hundreds of them.
+  const rl = await rateLimit(`pos-gw:${op.staffId ?? op.storeId}`, {
+    max: 60,
+    windowSeconds: 60,
+  });
+  if (!rl.allowed)
+    return { error: "Too many payment attempts. Wait a moment." };
+
+  // ★ BEFORE the gateway order, so a short shelf costs nothing at all — not
+  // even an abandoned Razorpay order on the merchant's account.
+  if (Array.isArray(lines) && lines.length > 0) {
+    const short = await shortLinesAt(
+      op.storeId,
+      op.locationId,
+      lines.map((l) => ({
+        productId: l.productId,
+        variantId: l.variantId ?? null,
+        quantity: l.quantity,
+      })),
+    );
+    if (short.length > 0) {
+      const first = short[0];
+      return {
+        error:
+          first.available > 0
+            ? `Only ${first.available} left of one item at this location. Adjust the cart before taking payment.`
+            : "One of these items has just sold out at this location. Adjust the cart before taking payment.",
+      };
+    }
+  }
+
+  const res = await startCounterPayment(op.storeId, {
+    amountPaise,
+    locationId: op.locationId,
+  });
+  return res.ok ? res.data : { error: res.error };
+}
+
+/**
+ * Did that payment actually land? Server-verified, never the modal's word.
+ *
+ * ★ THE CLIENT'S CALLBACK IS AN INPUT, NOT AN ANSWER. It supplies the ids and a
+ * signature; what settles the question is Razorpay's own record of a CAPTURED
+ * INR payment for the exact amount. §34 states the same rule for every
+ * on-session StoreMink payment.
+ */
+export async function confirmPosGatewayPayment(input: {
+  rzpOrderId: string;
+  paymentId: string;
+  signature: string;
+  amountPaise: number;
+}): Promise<{ paymentId: string; amountPaise: number } | { error: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "You're signed out. Please sign in again." };
+  if (!posCan(op.role, "sell")) {
+    return { error: "You don't have permission to take payments." };
+  }
+  const res = await verifyCounterPayment(op.storeId, {
+    paymentId: input?.paymentId,
+    rzpOrderId: input?.rzpOrderId,
+    signature: input?.signature,
+    expectedPaise: input?.amountPaise,
+  });
+  return res.ok ? res.data : { error: res.error };
 }
 
 // ---- Catalog lookup (search + barcode) -------------------------------------
@@ -427,8 +559,33 @@ export interface CatalogPage {
   items: PosCatalogItem[];
   /** Pass back to continue; null when the catalog is fully drained. */
   nextCursor: string | null;
+  /**
+   * Products that have LEFT the catalogue since `since` (roadmap Step 19).
+   *
+   * ★★ A DELTA THAT ONLY SENDS CHANGES IS WRONG. The query filters on
+   * `status = 'published'`, so an unpublished product simply stops matching —
+   * the register would keep selling something the merchant withdrew. These are
+   * the ids to drop. Empty on a full sync, where the item list IS the truth.
+   */
+  removedProductIds?: string[];
+  /**
+   * The server clock to pass as `since` next time. Server-issued, never the
+   * browser's: a till whose clock is minutes fast would skip everything
+   * changed in between, permanently.
+   */
+  watermark?: string;
   error?: string;
 }
+
+/**
+ * Overlap re-sent on every delta.
+ *
+ * ★ A row written DURING the sync would otherwise fall in the gap between the
+ * watermark and the next `since`, and never be sent again. Re-sending a few
+ * seconds of changes is free — the merge is an upsert — while missing one is
+ * a stale price at a counter forever.
+ */
+const DELTA_OVERLAP_SECONDS = 10;
 
 /**
  * A page of the FULL sellable catalog for the operator's location, for the
@@ -443,6 +600,15 @@ export interface CatalogPage {
  */
 export async function getCatalogSnapshot(
   cursor?: string | null,
+  /**
+   * Only what changed after this instant (roadmap Step 19). Omit for a full
+   * pull — which stays the recovery path and the only thing that can notice a
+   * HARD-deleted product, since a deleted row cannot appear in any delta.
+   *
+   * ★ MUST BE A WATERMARK THIS SERVER ISSUED. Accepting a browser clock would
+   * let a fast till skip everything changed in between, permanently.
+   */
+  since?: string | null,
 ): Promise<CatalogPage> {
   const op = await resolvePosOperator();
   if (!op) return { items: [], nextCursor: null, error: "Not signed in." };
@@ -450,49 +616,89 @@ export async function getCatalogSnapshot(
     return { items: [], nextCursor: null, error: "Not allowed." };
 
   const after = typeof cursor === "string" && cursor ? cursor : null;
+  // An unparseable `since` degrades to a FULL sync rather than an empty delta.
+  // Sending nothing would look like "no changes" and leave the till stale.
+  const sinceAt =
+    typeof since === "string" && since && !Number.isNaN(Date.parse(since))
+      ? new Date(since)
+      : null;
+  // Capture once, before page 1 reads. The client keeps this first/earliest
+  // watermark across the whole paged run, so writes during a long sync are
+  // guaranteed to appear in the next delta.
+  const syncWatermark = new Date(
+    Date.now() - DELTA_OVERLAP_SECONDS * 1000,
+  ).toISOString();
 
   try {
-    const rows = await withService(async (db) => {
-      // 1. The page of product ids...
+    const result = await withService(async (db) => {
+      // A delta pages over ALL changed product rows, not just published ones.
+      // That makes withdrawals first-class page members rather than a second,
+      // unpaginated query that could silently cap at 300 removals.
       const page = await db
-        .select({ id: products.id })
+        .select({ id: products.id, status: products.status })
         .from(products)
         .where(
           and(
             eq(products.storeId, op.storeId),
-            eq(products.status, "published"),
+            sinceAt ? undefined : eq(products.status, "published"),
             after ? gt(products.id, after) : undefined,
+            // ★ `products.updated_at` is bumped by a BEFORE UPDATE trigger
+            // (`update_catalog_updated_at`) on EVERY write to the row, so it
+            // covers content edits AND stock: the inventory aggregate trigger
+            // updates products.stock, which fires it too. Verified against the
+            // live schema 2026-08-21.
+            //
+            // ⚠ `product_variants` has NO `updated_at` column, so variants are
+            // covered only INDIRECTLY — a variant's stock moves through the
+            // same aggregate, and the product editor writes the product row on
+            // save. A future variant-only write path that skips the product row
+            // would go unnoticed by this delta. Pinned by a test.
+            sinceAt ? gt(products.updatedAt, sinceAt.toISOString()) : undefined,
           ),
         )
         .orderBy(products.id)
         .limit(CATALOG_PAGE_PRODUCTS);
-      if (page.length === 0) return [];
+      if (page.length === 0) return { page, rows: [] };
 
-      // 2. ...then every sellable SKU within it.
-      return db
+      const publishedIds = page
+        .filter((product) => product.status === "published")
+        .map((product) => product.id);
+      if (publishedIds.length === 0) return { page, rows: [] };
+
+      // Then every sellable SKU for the published members of this page.
+      const rows = await db
         .select(CATALOG_COLS)
         .from(products)
         .leftJoin(productVariants, eq(productVariants.productId, products.id))
         .leftJoin(inventoryLevels, locationStockJoin(op.locationId))
-        .where(
-          inArray(
-            products.id,
-            page.map((p) => p.id),
-          ),
-        )
+        .where(inArray(products.id, publishedIds))
         .orderBy(products.id);
+      return { page, rows };
     });
 
-    const items = rows.map(mapCatalogRow);
+    const items = result.rows.map(mapCatalogRow);
     // A short page means the catalog is drained. Cursor is the last product id
     // of the page, which the ORDER BY guarantees is its maximum.
-    const productIds = new Set(items.map((i) => i.productId));
     const nextCursor =
-      productIds.size < CATALOG_PAGE_PRODUCTS
+      result.page.length < CATALOG_PAGE_PRODUCTS
         ? null
-        : (items[items.length - 1]?.productId ?? null);
+        : (result.page[result.page.length - 1]?.id ?? null);
 
-    return { items, nextCursor };
+    const removedProductIds = sinceAt
+      ? result.page
+          .filter((product) => product.status !== "published")
+          .map((product) => product.id)
+      : undefined;
+
+    // Full pulls issue a watermark too; without it the client can never enter
+    // delta mode. A hard-deleted product still requires the periodic full
+    // reconcile because no remaining row can name it.
+    return {
+      items,
+      nextCursor,
+      ...(removedProductIds ? { removedProductIds } : {}),
+      watermark: syncWatermark,
+    };
   } catch (err) {
     return {
       items: [],
@@ -772,6 +978,7 @@ interface PricedLine {
   variant_name: string | null;
   hsn_code: string | null;
   unit_price: number;
+  unit_cost: number | null;
   quantity: number;
   /** unit_price * qty, minus the line discount. */
   amount: number;
@@ -842,36 +1049,190 @@ export async function placePosSale(
     }
   }
 
-  // The attached customer MUST belong to this store. Without this check the
-  // client could name any customer id and file the sale against another
-  // store's customer — who would then see a foreign order in their history
-  // (customers hold RLS SELECT on their own orders).
-  let customerId: string | null = null;
-  // Read in the SAME query as the ownership check, because the receipt decision
-  // below needs it: an attached customer WITH an address already gets an order
-  // confirmation from the fan-out, and sending a second copy directly is the
-  // two-emails-for-one-action pattern (§24).
-  let customerEmail: string | null = null;
-  if (typeof opts.customerId === "string" && opts.customerId.trim()) {
-    const wanted = opts.customerId.trim();
+  // ── 3. THE READ WAVE (roadmap Step 20) ────────────────────────────────────
+  // ★★ STATEMENTS INSIDE ONE `withService` RUN SERIALLY — they share a single
+  // pg client — so grouping independent reads into one transaction, which reads
+  // like an optimisation, is the SLOWEST arrangement available. Separate
+  // `withService` calls each take their own pool client, so these four batches
+  // genuinely overlap and the wall clock is the LONGEST batch, not their sum.
+  //
+  // Serial before: shift · products · variants? · billing · tax · location ·
+  // prefix · customer? = 6–8 round trips. Now: max(1, 2, 2, 2) = 2. Against
+  // Mumbai Cloud SQL at ~46ms that is ~320ms saved on the one path whose whole
+  // design goal is "least checkout time".
+  //
+  // ★ BATCHED, NOT ONE PROMISE PER QUERY, AND BALANCED. The wall clock is the
+  // longest batch, so a batch of four would have made three of them wait on it
+  // — the first cut of this had exactly that shape and bought half as much.
+  // The pool is `DB_POOL_MAX` (10) per container, so four concurrent reads per
+  // sale means three simultaneous tills briefly queue. That is acceptable
+  // because each read is short and the total connection-TIME went down; going
+  // wider trades a real pool ceiling for nothing.
+  //
+  // ★★ EVERY BATCH CATCHES ITS OWN FAILURE AND RETURNS IT. Letting them throw
+  // into Promise.all would lose WHICH read failed — and "Couldn't price the
+  // sale." vs "Couldn't read tax settings." is the difference between a cashier
+  // knowing to re-ring and knowing to call someone. It also avoids an unhandled
+  // rejection when one batch fails while the others are still in flight.
+  const wantedCustomerId =
+    typeof opts.customerId === "string" && opts.customerId.trim()
+      ? opts.customerId.trim()
+      : null;
+
+  const productIds = Array.from(new Set(lines.map((l) => l.productId)));
+  const variantIds = Array.from(
+    new Set(lines.map((l) => l.variantId).filter(Boolean)),
+  ) as string[];
+
+  type Batch<T> = { ok: true; value: T } | { ok: false; error: string };
+  const batch = async <T>(
+    fallback: string,
+    run: () => Promise<T>,
+  ): Promise<Batch<T>> => {
     try {
-      const owned = await withService((db) =>
-        db
-          .select({ id: users.id, email: users.email })
-          .from(users)
-          .where(and(eq(users.id, wanted), eq(users.storeId, op.storeId)))
-          .limit(1),
-      );
-      if (owned.length === 0)
-        return { error: "That customer isn't in this store." };
-      customerId = owned[0].id;
-      customerEmail = owned[0].email ?? null;
+      return { ok: true, value: await run() };
     } catch (err) {
-      return { error: dbErrorMessage(err, "Couldn't verify the customer.") };
+      return { ok: false, error: dbErrorMessage(err, fallback) };
     }
+  };
+
+  const [counterRead, catalogueRead, taxRead, tillRead, settings] =
+    await Promise.all([
+      // The counter: who is being served, and which drawer this belongs to.
+      batch("Couldn't verify the customer.", () =>
+        withService(async (db) => {
+          const owner = wantedCustomerId
+            ? await db
+                .select({ id: users.id, email: users.email })
+                .from(users)
+                .where(
+                  and(
+                    eq(users.id, wantedCustomerId),
+                    eq(users.storeId, op.storeId),
+                  ),
+                )
+                .limit(1)
+            : [];
+          return { owner };
+        }),
+      ),
+      // The catalogue: prices are RE-READ here — the client's are a display hint.
+      batch("Couldn't price the sale.", () =>
+        withService(async (db) => {
+          const p = await db
+            .select({
+              id: products.id,
+              name: products.name,
+              selling_price: products.sellingPrice,
+              cost_price: products.costPrice,
+              tax_class_id: products.taxClassId,
+              hsn_code: products.hsnCode,
+            })
+            .from(products)
+            .where(
+              and(
+                inArray(products.id, productIds),
+                eq(products.storeId, op.storeId),
+              ),
+            );
+          const v = variantIds.length
+            ? await db
+                .select({
+                  id: productVariants.id,
+                  name: productVariants.name,
+                  selling_price: productVariants.sellingPrice,
+                  special_price: productVariants.specialPrice,
+                  cost_price: productVariants.costPrice,
+                })
+                .from(productVariants)
+                .where(
+                  and(
+                    inArray(productVariants.id, variantIds),
+                    eq(productVariants.storeId, op.storeId),
+                  ),
+                )
+            : [];
+          return { p, v };
+        }),
+      ),
+      // Tax config (uncached — a sale must reflect the config at the moment it is
+      // rung, never a stale copy).
+      batch("Couldn't read tax settings.", () =>
+        withService(async (db) => {
+          const b = await db
+            .select({
+              ...BILLING_COLS,
+              gst_enabled: storeBillingSettings.gstEnabled,
+            })
+            .from(storeBillingSettings)
+            .where(eq(storeBillingSettings.storeId, op.storeId))
+            .limit(1);
+          const t = await db
+            .select({
+              id: taxClasses.id,
+              name: taxClasses.name,
+              rate: taxClasses.rate,
+              sort_order: taxClasses.sortOrder,
+            })
+            .from(taxClasses)
+            .where(eq(taxClasses.storeId, op.storeId));
+          return { b: b[0] ?? null, t };
+        }),
+      ),
+      // This till: where it is, and which drawer is open.
+      batch("Couldn't read this till's settings.", () =>
+        withService(async (db) => {
+          // ★ THE RECEIPT PREFIX RIDES ALONG WITH THE STATE CODE — same row. It
+          // was being fetched by its own `withService` further down: a whole
+          // round trip, on the sell path, for a column already in flight.
+          const loc = await db
+            .select({
+              state_code: storeLocations.stateCode,
+              receipt_prefix: storeLocations.receiptPrefix,
+            })
+            .from(storeLocations)
+            .where(eq(storeLocations.id, op.locationId))
+            .limit(1);
+          // Which cash drawer this sale belongs to (Phase 3). Stamped on the
+          // order so reconciliation never infers it from a timestamp.
+          const shift = await db
+            .select({ id: posShifts.id })
+            .from(posShifts)
+            .where(
+              and(
+                eq(posShifts.locationId, op.locationId),
+                eq(posShifts.status, "open"),
+                isNull(posShifts.closedAt),
+              ),
+            )
+            .limit(1);
+          return { loc: loc[0] ?? null, shift };
+        }),
+      ),
+      getStoreSettings(),
+    ]);
+
+  // ★ RESULTS ARE CHECKED IN THE ORDER THEY USED TO RUN IN — customer, shift,
+  // prices, tax — so which error a cashier sees for a sale with two problems
+  // is unchanged. Reading them in the order the BATCHES happen to be declared
+  // would quietly reshuffle that, which is the kind of change nobody notices
+  // until someone at a counter is told the wrong thing is wrong.
+  if (!counterRead.ok) return { error: counterRead.error };
+  let customerId: string | null = null;
+  let customerEmail: string | null = null;
+  if (wantedCustomerId) {
+    const owned = counterRead.value.owner;
+    if (owned.length === 0)
+      return { error: "That customer isn't in this store." };
+    customerId = owned[0].id;
+    customerEmail = owned[0].email ?? null;
   }
 
-  const settings = await getStoreSettings();
+  if (!tillRead.ok) return { error: tillRead.error };
+  const supplierState = tillRead.value.loc?.state_code ?? null;
+  const receiptPrefix = tillRead.value.loc?.receipt_prefix || "POS";
+  const shiftId = tillRead.value.shift[0]?.id ?? null;
+
   const allowOverride = settings["pos.allowPriceOverride"] !== false;
   const requireApproval = settings["pos.requireManagerForDiscount"] === true;
   // ★ A DELIBERATE 0 MUST SURVIVE. `|| 10` read as a NaN guard, but the setting
@@ -889,11 +1250,41 @@ export async function placePosSale(
   const ownerOnlyDiscounts = settings["pos.ownerOnlyDiscounts"] !== false;
   const mayDiscount = posCan(op.role, "discount");
 
+  // ★ THE SHIFT GATE STAYS AFTER THE READS, NOT INSIDE THEM. A store may
+  // require an open shift before selling; that is OFF by default because
+  // turning it on can stop a till, so it stays the merchant's decision.
+  // ⚠ A failed till read already returned above, so — unlike the old
+  // `currentShiftIdFor`, which swallowed its own errors and returned null — a
+  // DB blip can no longer read as "no drawer open" and refuse the sale under
+  // `pos.requireOpenShift`. It reads as the outage it is.
+  if (!shiftId && settings["pos.requireOpenShift"] === true) {
+    return { error: "Open a shift before selling." };
+  }
+
+  if (!catalogueRead.ok) return { error: catalogueRead.error };
+  const pMap = new Map(catalogueRead.value.p.map((p) => [p.id, p]));
+  const vMap = new Map(catalogueRead.value.v.map((v) => [v.id, v]));
+
+  if (!taxRead.ok) return { error: taxRead.error };
+  const billing = rowToBillingSettings(
+    taxRead.value.b as Record<string, unknown> | null,
+  );
+  const gstEnabled = !!(taxRead.value.b as { gst_enabled?: boolean } | null)
+    ?.gst_enabled;
+  const taxClassList = taxRead.value.t.map((r) =>
+    rowToTaxClass(r as Record<string, unknown>),
+  );
+
   // A manager's approval is a SIGNED grant for this exact cart at this exact
   // till, minted by verifyManagerPin. An unverifiable, stale, tampered or
   // absent token all land in the same place — unapproved — so a caller that
   // skips the PIN pad entirely gets nowhere.
-  const managerApproved = !!verifyApprovalToken(opts.approvalToken, {
+  // ★★ THE CLAIMS ARE KEPT, NOT COERCED. This was `!!verifyApprovalToken(...)`,
+  // which threw away `approverId` — the manager who keyed their PIN. Everything
+  // else about a discount is reconstructible from the order; who authorised it
+  // is not, once the sale commits. The module's own comment has said "returns
+  // the claims (so the approver can be recorded)" since it was written.
+  const approval = verifyApprovalToken(opts.approvalToken, {
     storeId: op.storeId,
     locationId: op.locationId,
     operatorId: op.staffId,
@@ -902,125 +1293,16 @@ export async function placePosSale(
       orderDiscount: opts.orderDiscount,
     }),
   });
+  const managerApproved = !!approval;
 
-  // Which cash drawer this sale belongs to (Phase 3). Stamped on the order so
-  // reconciliation never has to infer it from a timestamp. A store may require
-  // an open shift before selling; that is OFF by default because turning it on
-  // can stop a till, so it stays the merchant's decision.
-  const shiftId = await currentShiftIdFor(op.locationId);
-  if (!shiftId && settings["pos.requireOpenShift"] === true) {
-    return { error: "Open a shift before selling." };
-  }
-
-  // 3. Re-read prices from the DB, store-scoped. The client's prices are only
-  //    ever a display hint.
-  const productIds = Array.from(new Set(lines.map((l) => l.productId)));
-  const variantIds = Array.from(
-    new Set(lines.map((l) => l.variantId).filter(Boolean)),
-  ) as string[];
-
-  let dbProducts: Array<{
-    id: string;
-    name: string;
-    selling_price: number;
-    tax_class_id: string | null;
-    hsn_code: string | null;
-  }>;
-  let dbVariants: Array<{
-    id: string;
-    name: string;
-    selling_price: number;
-    special_price: number | null;
-  }>;
-  try {
-    const res = await withService(async (db) => {
-      const p = await db
-        .select({
-          id: products.id,
-          name: products.name,
-          selling_price: products.sellingPrice,
-          tax_class_id: products.taxClassId,
-          hsn_code: products.hsnCode,
-        })
-        .from(products)
-        .where(
-          and(
-            inArray(products.id, productIds),
-            eq(products.storeId, op.storeId),
-          ),
-        );
-      const v = variantIds.length
-        ? await db
-            .select({
-              id: productVariants.id,
-              name: productVariants.name,
-              selling_price: productVariants.sellingPrice,
-              special_price: productVariants.specialPrice,
-            })
-            .from(productVariants)
-            .where(
-              and(
-                inArray(productVariants.id, variantIds),
-                eq(productVariants.storeId, op.storeId),
-              ),
-            )
-        : [];
-      return { p, v };
-    });
-    dbProducts = res.p;
-    dbVariants = res.v;
-  } catch (err) {
-    return { error: dbErrorMessage(err, "Couldn't price the sale.") };
-  }
-
-  const pMap = new Map(dbProducts.map((p) => [p.id, p]));
-  const vMap = new Map(dbVariants.map((v) => [v.id, v]));
-
-  // 4. Tax config + GST place of supply (uncached — a sale must reflect the
-  //    config at the moment it is rung, never a stale copy).
-  let billing: ReturnType<typeof rowToBillingSettings>;
-  let taxClassList: ReturnType<typeof rowToTaxClass>[];
-  let gstEnabled = false;
-  let supplierState: string | null = null;
-  try {
-    const cfg = await withService(async (db) => {
-      const b = await db
-        .select({
-          ...BILLING_COLS,
-          gst_enabled: storeBillingSettings.gstEnabled,
-        })
-        .from(storeBillingSettings)
-        .where(eq(storeBillingSettings.storeId, op.storeId))
-        .limit(1);
-      const t = await db
-        .select({
-          id: taxClasses.id,
-          name: taxClasses.name,
-          rate: taxClasses.rate,
-          sort_order: taxClasses.sortOrder,
-        })
-        .from(taxClasses)
-        .where(eq(taxClasses.storeId, op.storeId));
-      const loc = await db
-        .select({ state_code: storeLocations.stateCode })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1);
-      return { b: b[0] ?? null, t, loc: loc[0] ?? null };
-    });
-    billing = rowToBillingSettings(cfg.b as Record<string, unknown> | null);
-    gstEnabled = !!(cfg.b as { gst_enabled?: boolean } | null)?.gst_enabled;
-    taxClassList = cfg.t.map((r) =>
-      rowToTaxClass(r as Record<string, unknown>),
-    );
-    supplierState = cfg.loc?.state_code ?? null;
-  } catch (err) {
-    return { error: dbErrorMessage(err, "Couldn't read tax settings.") };
-  }
   const classById = new Map(taxClassList.map((c) => [c.id, c]));
 
   // 5. Price each line + validate discounts/overrides.
   const priced: PricedLine[] = [];
+  // Accumulated for the money audit (Step 14): how much repricing gave away,
+  // across how many lines.
+  let overrideLines = 0;
+  let overrideGivenAway = 0;
   let needsApproval = false;
 
   for (const l of lines) {
@@ -1034,6 +1316,10 @@ export async function placePosSale(
     const special = v ? v.special_price : null;
     const listed = v ? v.selling_price : p.selling_price;
     let unit = special && special > 0 ? special : listed;
+    // What the catalogue said, before any override. The audit records the
+    // DELTA rather than the new price: "we charged ₹1" means nothing without
+    // yesterday's price, and that price moves.
+    const catalogueUnit = unit;
 
     // A price override is an authorised deviation, never a client claim.
     if (
@@ -1060,6 +1346,8 @@ export async function placePosSale(
         needsApproval = true;
       }
       unit = l.priceOverride;
+      overrideLines += 1;
+      overrideGivenAway += (catalogueUnit - unit) * l.quantity;
     }
 
     const gross = unit * l.quantity;
@@ -1081,6 +1369,7 @@ export async function placePosSale(
       variant_name: v?.name ?? null,
       hsn_code: p.hsn_code ?? null,
       unit_price: unit,
+      unit_cost: v?.cost_price ?? p.cost_price,
       quantity: l.quantity,
       amount: gross - lineDisc,
       line_discount: lineDisc,
@@ -1178,6 +1467,26 @@ export async function placePosSale(
     }
   }
 
+  // ── Gateway tenders (§18 Step 12) ─────────────────────────────────────────
+  // ★★ VERIFIED HERE, NOT JUST AT confirmPosGatewayPayment. This action is
+  // independently reachable — the register's own JavaScript is not its only
+  // caller, which is exactly how the `managerApproved` boolean was bypassable —
+  // so a `razorpay` tender arriving with any reference at all would otherwise
+  // settle a sale against money nobody took.
+  //
+  // ★ BEFORE the order insert and the stock reserve, deliberately. A refused
+  // payment then costs nothing and unwinds nothing; verifying after would mean
+  // rolling back an order and released stock for what is usually a typo.
+  //
+  // The rule itself lives in lib/payments/pos-gateway.ts because the collection
+  // counter asks the identical question (§23) — one implementation, two
+  // counters.
+  const hasGatewayTender = tenders.some((t) => t.method === "razorpay");
+  if (hasGatewayTender) {
+    const badGateway = await verifyGatewayTenders(op.storeId, tenders);
+    if (badGateway) return { error: badGateway };
+  }
+
   // 8. Allocate a per-location receipt number.
   let receiptNo: string | null = null;
   try {
@@ -1185,15 +1494,10 @@ export async function placePosSale(
       db.execute(sql`select next_pos_receipt_no(${op.locationId}) as seq`),
     );
     const seq = Number((res.rows[0] as { seq?: number } | undefined)?.seq ?? 0);
-    const prefixRows = await withService((db) =>
-      db
-        .select({ prefix: storeLocations.receiptPrefix })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, op.locationId))
-        .limit(1),
-    );
-    const prefix = prefixRows[0]?.prefix || "POS";
-    receiptNo = `${prefix}-${String(seq).padStart(6, "0")}`;
+    // The prefix came back with the read wave — it is a column on the same
+    // location row as the state code, so fetching it here was a whole round
+    // trip on the sell path for something already in hand.
+    receiptNo = `${receiptPrefix}-${String(seq).padStart(6, "0")}`;
   } catch (err) {
     // A receipt number is cosmetic — never lose a sale over it.
     console.error("next_pos_receipt_no:", errMsg(err));
@@ -1341,6 +1645,7 @@ export async function placePosSale(
             name: l.name,
             variantName: l.variant_name,
             price: l.unit_price,
+            unitCost: l.unit_cost,
             quantity: l.quantity,
             total: l.amount,
             lineDiscount: l.line_discount,
@@ -1368,6 +1673,7 @@ export async function placePosSale(
         tenders.map((t) => ({
           orderId,
           storeId: op.storeId,
+          shiftId,
           method: t.method,
           amount: t.amount,
           tendered: t.method === "cash" ? (t.tendered ?? t.amount) : null,
@@ -1377,9 +1683,73 @@ export async function placePosSale(
       ),
     );
   } catch (err) {
-    // The sale IS recorded and stock is taken; losing the tender breakdown must
-    // not void a completed transaction. Log loudly for reconciliation.
     console.error("placePosSale (payments):", errMsg(err));
+    // ★★ ONE FAILURE HERE IS NOT LIKE THE OTHERS. A unique violation on a sale
+    // carrying a gateway tender is `order_payments_gateway_ref_key` firing:
+    // that payment already settled a different sale, so the app-level check
+    // above lost a race. Swallowing it would leave a sale marked `paid` with NO
+    // payment rows at all — invisible to shift reconciliation, and claiming
+    // money that belongs to another order. Unwind instead.
+    if (hasGatewayTender && isUniqueViolation(err)) {
+      await releaseStock();
+      await deleteOrder();
+      return {
+        error: "That online payment has already been used on another sale.",
+      };
+    }
+    // Everything else keeps the original rule: the sale IS recorded and the
+    // stock is taken, so losing the tender BREAKDOWN must not void a completed
+    // transaction. Logged loudly for reconciliation.
+  }
+
+  // ── The money audit (Step 14) ─────────────────────────────────────────────
+  // ★ AFTER THE SALE IS RECORDED, deliberately. A refused sale gave nothing
+  // away, so auditing earlier would log discounts that never happened — and
+  // this action returns early in a dozen places before the order exists.
+  //
+  // ★ ONE ROW PER ACT, not per sale. A discount and a price override on the
+  // same basket are two different decisions by (possibly) two different people.
+  //
+  // Best-effort and deferred, the posAudit rule: a logging failure must never
+  // reach a cashier standing in front of a customer.
+  const givenAway = discount + priced.reduce((n, l) => n + l.line_discount, 0);
+  if (givenAway > 0) {
+    after(() =>
+      posAudit({
+        storeId: op.storeId,
+        event: "sale_discount",
+        locationId: op.locationId,
+        staffId: op.staffId,
+        actor: op.name,
+        approver: approval?.approverId ?? null,
+        amount: givenAway,
+        orderId,
+        detail: `${orderRef || orderId.slice(0, 8)} · ₹${givenAway.toLocaleString("en-IN")} off${
+          discount > 0 && priced.some((l) => l.line_discount > 0)
+            ? " (order + lines)"
+            : discount > 0
+              ? " (order)"
+              : " (lines)"
+        }`,
+      }),
+    );
+  }
+  if (overrideLines > 0 && overrideGivenAway !== 0) {
+    after(() =>
+      posAudit({
+        storeId: op.storeId,
+        event: "price_override",
+        locationId: op.locationId,
+        staffId: op.staffId,
+        actor: op.name,
+        approver: approval?.approverId ?? null,
+        // Negative is possible and is NOT an error: repricing UP happens, and
+        // recording it as a give-away would misstate the shop's exposure.
+        amount: overrideGivenAway,
+        orderId,
+        detail: `${orderRef || orderId.slice(0, 8)} · ${overrideLines} line${overrideLines === 1 ? "" : "s"} repriced`,
+      }),
+    );
   }
 
   // An in-store sale is a sale. Without this it existed only in the orders

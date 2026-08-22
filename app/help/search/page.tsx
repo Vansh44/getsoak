@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
-import { getHelpCategories, searchHelpArticles } from "@/lib/help/queries";
+import { ChevronRight, Sparkles } from "lucide-react";
+import { searchPublishedHelpWithAi } from "@/app/actions/help-actions";
 import { HelpSearchBox } from "../components/search-box";
 
 // Search results are query-dependent and not worth indexing.
@@ -17,11 +17,10 @@ export default async function HelpSearchPage({
 }) {
   const { q = "" } = await searchParams;
   const query = q.trim();
-  const [results, categories] = await Promise.all([
-    query ? searchHelpArticles(query, 30) : Promise.resolve([]),
-    getHelpCategories(),
-  ]);
-  const catById = new Map(categories.map((c) => [c.id, c.slug]));
+  const search = query
+    ? await searchPublishedHelpWithAi(query)
+    : { results: [], mode: "keyword" as const };
+  const { results } = search;
 
   return (
     <>
@@ -48,24 +47,25 @@ export default async function HelpSearchPage({
                 {results.length} {results.length === 1 ? "result" : "results"}{" "}
                 for “{query}”
               </h2>
+              {search.mode === "ai" && (
+                <div className="hc-ai-grounding" role="status">
+                  <Sparkles size={16} aria-hidden />
+                  AI interpreted your question. Every result below is a real,
+                  published StoreMink guide.
+                </div>
+              )}
               <div className="hc-list">
-                {results.map((a) => {
-                  const catSlug = a.categoryId
-                    ? catById.get(a.categoryId)
-                    : undefined;
-                  if (!catSlug) return null;
-                  return (
-                    <Link href={`/help/${catSlug}/${a.slug}`} key={a.id}>
-                      <div>
-                        <div className="a-title">{a.title}</div>
-                        {a.excerpt && (
-                          <div className="a-excerpt">{a.excerpt}</div>
-                        )}
-                      </div>
-                      <ChevronRight className="chev" size={18} />
-                    </Link>
-                  );
-                })}
+                {results.map((result) => (
+                  <Link href={result.url} key={result.url}>
+                    <div>
+                      <div className="a-title">{result.title}</div>
+                      {result.excerpt && (
+                        <div className="a-excerpt">{result.excerpt}</div>
+                      )}
+                    </div>
+                    <ChevronRight className="chev" size={18} />
+                  </Link>
+                ))}
               </div>
             </>
           )}

@@ -69,6 +69,8 @@ type Props = {
   query: string;
   filter: ProductFilter;
   categoryFilter: string;
+  canUseGrossMargin?: boolean;
+  missingCostCount?: number;
 };
 
 export function ProductsManagementView({
@@ -82,6 +84,8 @@ export function ProductsManagementView({
   query,
   filter,
   categoryFilter,
+  canUseGrossMargin = false,
+  missingCostCount = 0,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -234,6 +238,17 @@ export function ProductsManagementView({
           </span>
         </div>
       )}
+
+      {canUseGrossMargin && missingCostCount > 0 ? (
+        <div className="dash-card mb-3.5 flex items-center gap-2 px-4 py-3.5 text-[13px]">
+          <Lightbulb className="h-4 w-4 shrink-0 text-[var(--dash-amber)]" />
+          <span>
+            Add a cost in each product&apos;s <strong>Pricing</strong> tab to
+            complete gross-margin reporting. {missingCostCount} product
+            {missingCostCount === 1 ? "" : "s"} still need a default cost.
+          </span>
+        </div>
+      ) : null}
 
       <div className="dash-card flex flex-col" style={{ flex: "1 1 auto" }}>
         {/* Toolbar: Tabs + Category filter + Search - Now INSIDE the card */}

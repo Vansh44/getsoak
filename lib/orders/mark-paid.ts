@@ -25,6 +25,7 @@ import { summariseItems } from "@/lib/notifications/format";
 import { formatAddressLine } from "@/lib/locations/address";
 import { formatCollectionCode } from "@/lib/fulfilment/collection-code";
 import { logError } from "@/lib/observability/logger";
+import { recordStorefrontPurchase } from "@/lib/analytics/storefront-purchase";
 
 /**
  * The `order.placed` event, typed off `emitEvent` itself so the two builders
@@ -208,6 +209,8 @@ export async function markOrderPaid(
 
   const row = claimed[0];
   if (!row) return;
+
+  await recordStorefrontPurchase(orderId);
 
   // ★★ THE CONFIRMATION LIVES HERE FOR A GATEWAY ORDER, not at checkout — see
   // the long note at the `order.placed` emit in placeOrder. The claim above is

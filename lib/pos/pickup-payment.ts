@@ -27,6 +27,18 @@ export interface CollectionPaymentState {
   paymentStatus: string | null;
   /** The order's total. Numeric columns arrive as strings over the wire. */
   total: number | string | null;
+  /**
+   * What has ALREADY been taken at the counter (roadmap Step 18).
+   *
+   * ★★ WITHOUT THIS, PART PAYMENT IS SIMPLY WRONG. A customer who leaves a
+   * ₹200 deposit on a ₹340 order and comes back tomorrow would be asked for
+   * ₹340 again — the till would have taken ₹540 for a ₹340 order and the
+   * drawer would report OVER by ₹200. The read lives with the callers; the
+   * arithmetic stays here, so the queue and the charge cannot disagree.
+   *
+   * Omitted = nothing paid yet, which is every order before Step 18.
+   */
+  paidSoFar?: number | string | null;
 }
 
 /**
@@ -43,5 +55,12 @@ export function amountDueAtCollection(o: CollectionPaymentState): number {
   if (o.paymentStatus !== "pending") return 0;
   const total = Number(o.total);
   if (!Number.isFinite(total) || total <= 0) return 0;
-  return round2(total);
+  const paid = Number(o.paidSoFar);
+  // ★ A malformed or absent figure means "nothing paid", never "skip the
+  // charge". Reading a bad value as paid-in-full would hand goods over free.
+  const already = Number.isFinite(paid) && paid > 0 ? paid : 0;
+  // ★ FLOORED AT ZERO. Over-payment is not a negative debt to be handed back
+  // here — a refund is its own path (§26), and returning a negative would make
+  // the tender pad ask for a negative amount.
+  return round2(Math.max(0, total - already));
 }

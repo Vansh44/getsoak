@@ -16,16 +16,13 @@ import {
   isPlatformHost,
   isThemesHost,
 } from "@/lib/store/host";
-import { isStoreLaunched } from "@/lib/store/launch";
+import { isStoreSearchIndexable } from "@/lib/store/launch";
 import {
   getPublishedProducts,
   getPublishedBlogCards,
   getPublishedPageSlugs,
 } from "@/lib/storefront/queries";
-import {
-  getHelpCategories,
-  getPublishedHelpArticleParams,
-} from "@/lib/help/queries";
+import { getPublishedHelpArticleParams } from "@/lib/help/queries";
 import { getCurrentStoreOrNull } from "@/lib/store/resolve";
 
 // NOTE: no `export const revalidate` here — it would be dead config. This route
@@ -100,27 +97,17 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const host =
     (await headers()).get("x-forwarded-host") || (await headers()).get("host");
   if (isHelpHost(host)) {
-    // The articles read is tracked as ok/failed rather than `.catch(() => [])`,
-    // because we prune empty categories below and the two cases must not look
-    // alike: "no articles published" should drop the category, a transient DB
-    // error must NOT — that would silently collapse the whole help sitemap to a
-    // single URL and tell Google the docs had been deleted.
-    const [categories, articlesResult] = await Promise.all([
-      getHelpCategories().catch(() => []),
-      getPublishedHelpArticleParams().then(
-        (articles) => ({ ok: true, articles }) as const,
-        () => ({ ok: false, articles: [] }) as const,
-      ),
-    ]);
-    const { articles } = articlesResult;
+    // This read deliberately throws on a database failure. Serving Google a
+    // successful one-URL sitemap during an outage would falsely announce that
+    // every published guide disappeared. A 5xx keeps the previous sitemap in
+    // Google's memory and lets the crawler / Cloud Scheduler retry instead.
+    const articles = await getPublishedHelpArticleParams();
 
-    // An empty category page renders "No articles here yet." — thin content
-    // with nothing to rank, and submitting it spends crawl budget to learn
-    // nothing. It reappears automatically the moment it has an article.
-    const populated = new Set(articles.map((a) => a.categorySlug));
-    const listedCategories = articlesResult.ok
-      ? categories.filter((c) => populated.has(c.slug))
-      : categories;
+    // Derive populated categories from the same joined article rows. This
+    // makes one successful query the complete authority for the Help sitemap:
+    // every reachable published article and its category are included, while
+    // empty categories (thin pages) are omitted.
+    const categorySlugs = [...new Set(articles.map((a) => a.categorySlug))];
 
     // lastmod: the newest article the hub/category actually links to. `now` was
     // the request timestamp — it changed on every crawl, which is exactly the
@@ -141,10 +128,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         changeFrequency: "weekly",
         priority: 1,
       },
-      ...listedCategories.map((c) => {
-        const mod = newest(new Set([c.slug]));
+      ...categorySlugs.map((categorySlug) => {
+        const mod = newest(new Set([categorySlug]));
         return {
-          url: `${HELP_URL}/help/${c.slug}`,
+          url: `${HELP_URL}/help/${categorySlug}`,
           ...(mod ? { lastModified: mod } : {}),
           changeFrequency: "weekly" as const,
           priority: 0.7,
@@ -194,7 +181,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   // its own to offer. Mirrors the same branch in app/robots.ts; see
   // lib/store/launch.ts for why submitting these harms every other store on
   // the domain.
-  if (store && (!isStoreLaunched(store) || store.settings?.demo === true)) {
+  if (store && !isStoreSearchIndexable(store)) {
     return [];
   }
 

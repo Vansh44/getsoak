@@ -86,6 +86,24 @@ describe("GET /api/pos/live", () => {
 
   it("forwards the catalogue cursor", async () => {
     await GET(request("catalog", "&cursor=product-300"));
-    expect(getCatalogSnapshot).toHaveBeenCalledWith("product-300");
+    expect(getCatalogSnapshot).toHaveBeenCalledWith("product-300", null);
+  });
+
+  it("forwards the delta watermark", async () => {
+    await GET(request("catalog", "&since=2026-08-21T10:00:00.000Z"));
+    expect(getCatalogSnapshot).toHaveBeenCalledWith(
+      null,
+      "2026-08-21T10:00:00.000Z",
+    );
+  });
+
+  // ★ A MISSING `since` MUST REACH THE ACTION AS A FALSY VALUE, never as the
+  // string "null". The action parses it with Date.parse, and "null" is NaN —
+  // which it degrades to a full sync anyway, so this would not break. What it
+  // WOULD break is the honest reading of the request: a till that never sent a
+  // watermark would be indistinguishable from one that sent a broken one.
+  it("asks for a full pull when the till has no watermark yet", async () => {
+    await GET(request("catalog"));
+    expect(getCatalogSnapshot).toHaveBeenCalledWith(null, null);
   });
 });

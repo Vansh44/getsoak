@@ -10,7 +10,6 @@ import {
   productVariants,
   products,
   storeBillingSettings,
-  stores,
   taxClasses,
 } from "@/drizzle/schema";
 import type { OrderInsert } from "@/drizzle/schema";
@@ -19,8 +18,7 @@ import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
-import { effectivePlan, limitsFor } from "@/lib/plans";
-import { getStoreGateway } from "@/lib/payments/provider";
+import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   getCreditBalance,
   spendCredit,
@@ -71,6 +69,10 @@ import {
 import { packageForShippingLines } from "@/lib/shipping/rates";
 import { quoteShippingForOrder } from "@/lib/shipping/quote";
 import type { ShippingOptionSnapshot } from "@/lib/shipping/types";
+import {
+  recordStorefrontOrderAttribution,
+  recordStorefrontPurchase,
+} from "@/lib/analytics/storefront-purchase";
 
 // Aliased select for store_billing_settings preserving the snake_case row shape
 // rowToBillingSettings expects (Drizzle would otherwise return camelCase keys).
@@ -442,6 +444,7 @@ export async function getCartTaxRates(
       .select({
         id: products.id,
         selling_price: products.sellingPrice,
+        cost_price: products.costPrice,
         tax_class_id: products.taxClassId,
       })
       .from(products)
@@ -509,29 +512,11 @@ export async function getCartTaxRates(
 
 // ---- Online payments (BYO Razorpay — CODEBASE §18) -------------------------
 
-// The store's usable online gateway, or null. Three server-side conditions,
-// re-checked on EVERY call (never trusted from the client): credentials are
-// connected, the merchant has the channel enabled, and the store's EFFECTIVE
-// plan includes online payments (a lapsed plan silently reverts to COD-only
-// without touching the stored credentials).
-async function onlineGateway(
-  storeId: string,
-): Promise<{ keyId: string; keySecret: string } | null> {
-  const [gateway, storeRows] = await Promise.all([
-    getStoreGateway(storeId),
-    withService((db) =>
-      db
-        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
-        .from(stores)
-        .where(eq(stores.id, storeId))
-        .limit(1),
-    ),
-  ]);
-  const store = storeRows[0];
-  if (!gateway?.enabled) return null;
-  if (!limitsFor(effectivePlan(store ?? {})).onlinePayments) return null;
-  return gateway.creds;
-}
+// The store's usable online gateway, or null — see `getLiveStoreGateway`
+// (lib/payments/provider.ts) for the three conditions. It moved there when the
+// POS till became a second counter taking gateway payments (§18 Step 12); this
+// alias is kept so the call sites below read the same as they always did.
+const onlineGateway = getLiveStoreGateway;
 
 export interface CheckoutConfig {
   /** True when the "Pay online" option should render at checkout. */
@@ -850,6 +835,7 @@ export async function placeOrder(
         id: products.id,
         name: products.name,
         selling_price: products.sellingPrice,
+        cost_price: products.costPrice,
         store_id: products.storeId,
         tax_class_id: products.taxClassId,
         // Routing only: a location cannot be disqualified by a SKU that has no
@@ -900,6 +886,7 @@ export async function placeOrder(
       id: string;
       name: string;
       selling_price: number;
+      cost_price: number | null;
       track_inventory?: boolean | null;
       allow_backorder?: boolean | null;
       sku: string;
@@ -917,6 +904,7 @@ export async function placeOrder(
           id: productVariants.id,
           name: productVariants.name,
           selling_price: productVariants.sellingPrice,
+          cost_price: productVariants.costPrice,
           track_inventory: productVariants.trackInventory,
           allow_backorder: productVariants.allowBackorder,
           sku: productVariants.sku,
@@ -949,6 +937,7 @@ export async function placeOrder(
     price: number;
     quantity: number;
     total: number;
+    unit_cost: number | null;
     // Tax snapshot per line (rate resolved from the product's tax class). Filled
     // in below once the discount is known so tax is computed on the net amount.
     tax_rate: number;
@@ -969,6 +958,7 @@ export async function placeOrder(
       return { error: `Product no longer available: ${item.name}` };
 
     let price = dbProduct.selling_price;
+    let unitCost = dbProduct.cost_price;
     const name = dbProduct.name;
     let variantName: string | null = null;
     let logistics = {
@@ -985,6 +975,7 @@ export async function placeOrder(
       if (!dbVariant)
         return { error: `Variant no longer available: ${item.variantName}` };
       price = dbVariant.selling_price;
+      unitCost = dbVariant.cost_price ?? dbProduct.cost_price;
       variantName = dbVariant.name;
       logistics = {
         sku: dbVariant.sku,
@@ -1007,6 +998,7 @@ export async function placeOrder(
       price,
       quantity: item.quantity,
       total: price * item.quantity,
+      unit_cost: unitCost,
       tax_rate: taxInfo.rate,
       tax_amount: 0,
       tax_class_name: taxInfo.name,
@@ -1582,6 +1574,7 @@ export async function placeOrder(
     name: item.name,
     variantName: item.variant_name,
     price: item.price,
+    unitCost: item.unit_cost,
     quantity: item.quantity,
     total: item.total,
     taxRate: item.tax_rate,
@@ -1611,6 +1604,8 @@ export async function placeOrder(
     await releaseCoupon();
     return { error: "Failed to save order items. Please try again." };
   }
+
+  await recordStorefrontOrderAttribution(order.id, storeId);
 
   // Shopify's durable split: the order records the sale; this work object says
   // which location must prepare it. A migration rolling out moments after the
@@ -1745,7 +1740,10 @@ export async function placeOrder(
 
   // Paid, or payable without a gateway round trip ⇒ this is a real order now.
   // Otherwise it is a checkout attempt, and markOrderPaid will announce it.
-  if (!awaitsGatewayPayment) emitEvent(orderPlacedEvent);
+  if (!awaitsGatewayPayment) {
+    await recordStorefrontPurchase(order.id);
+    emitEvent(orderPlacedEvent);
+  }
 
   // Tell the merchant if this sale just emptied a shelf. Deferred, and keyed on
   // the threshold CROSSING, so a slow-moving SKU alerts once rather than on

@@ -123,3 +123,123 @@ export async function sweepExpiredHolds(limit = 500): Promise<number> {
     return 0;
   }
 }
+
+export interface AvailabilityLine {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
+
+export interface ShortLine extends AvailabilityLine {
+  /** What the location can actually serve right now. */
+  available: number;
+}
+
+/**
+ * Which of these lines the location cannot serve, READ-ONLY.
+ *
+ * ★★ THIS IS NOT A GUARANTEE AND MUST NOT BE USED AS ONE. It is a read, so the
+ * answer is stale the instant it returns; `reserve_stock_at` and `hold_stock_at`
+ * remain the only things that can promise stock, because each is a single
+ * conditional UPDATE.
+ *
+ * What it is FOR is telling somebody BEFORE an irreversible step. The counter
+ * gateway payment is the case: without it a cashier takes ₹500, and only then
+ * discovers the shelf is empty — leaving captured money against a sale that
+ * cannot complete. Refusing beforehand costs nothing.
+ *
+ * ⚠ `available` counts held units as gone (on_hand − reserved), which is the
+ * same arithmetic the RPCs use, so this cannot report a line as servable that
+ * a hold would then refuse.
+ */
+export async function shortLinesAt(
+  storeId: string,
+  locationId: string,
+  lines: AvailabilityLine[],
+): Promise<ShortLine[]> {
+  const wanted = lines.filter(
+    (l) => Number.isInteger(l.quantity) && l.quantity > 0 && l.productId,
+  );
+  if (wanted.length === 0) return [];
+  // Same product twice in one cart is one demand on one shelf.
+  const demand = new Map<string, AvailabilityLine & { quantity: number }>();
+  for (const line of wanted) {
+    const key = `${line.productId}:${line.variantId ?? ""}`;
+    const seen = demand.get(key);
+    if (seen) seen.quantity += line.quantity;
+    else demand.set(key, { ...line });
+  }
+
+  try {
+    const requested = [...demand.values()].map(
+      (line) =>
+        sql`(${line.productId}::uuid, ${line.variantId}::uuid, ${line.quantity}::integer)`,
+    );
+    const rows = await withService((db) =>
+      db.execute(
+        sql`with wanted(product_id, variant_id, quantity) as (
+              values ${sql.join(requested, sql`, `)}
+            )
+            select wanted.product_id,
+                   wanted.variant_id,
+                   coalesce(level.on_hand - level.reserved, 0) as available,
+                   case when wanted.variant_id is null
+                        then product.track_inventory
+                        else variant.track_inventory end as track_inventory,
+                   case when wanted.variant_id is null
+                        then product.allow_backorder
+                        else variant.allow_backorder end as allow_backorder
+              from wanted
+              left join products as product
+                on product.id = wanted.product_id
+               and product.store_id = ${storeId}
+              left join product_variants as variant
+                on variant.id = wanted.variant_id
+               and variant.product_id = wanted.product_id
+               and variant.store_id = ${storeId}
+              left join inventory_levels as level
+                on level.store_id = ${storeId}
+               and level.location_id = ${locationId}
+               and level.product_id = wanted.product_id
+               and level.variant_id is not distinct from wanted.variant_id`,
+      ),
+    );
+    const have = new Map<
+      string,
+      { available: number; tracked: boolean; backorder: boolean }
+    >();
+    for (const r of rows.rows as {
+      product_id: string;
+      variant_id: string | null;
+      available: number | string;
+      track_inventory?: boolean | null;
+      allow_backorder?: boolean | null;
+    }[]) {
+      have.set(`${r.product_id}:${r.variant_id ?? ""}`, {
+        available: Number(r.available) || 0,
+        // Undefined keeps older test doubles compatible; the real query
+        // always returns boolean/null.
+        tracked:
+          r.track_inventory === undefined ? true : r.track_inventory === true,
+        backorder: r.allow_backorder === true,
+      });
+    }
+    const short: ShortLine[] = [];
+    for (const [key, l] of demand) {
+      const stock = have.get(key);
+      // Mirror reserve_stock_at exactly: untracked and backorderable lines do
+      // not block gateway capture even when their level is absent or negative.
+      if (!stock || !stock.tracked || stock.backorder) continue;
+      if (stock.available < l.quantity) {
+        short.push({ ...l, available: stock.available });
+      }
+    }
+    return short;
+  } catch (err) {
+    // ★ FAILS TO "NOTHING IS SHORT". This is a courtesy check in front of a
+    // real guarantee; refusing a sale because a read blipped would be strictly
+    // worse than letting the authoritative reserve decide.
+    console.error("shortLinesAt:", err);
+    return [];
+  }
+}

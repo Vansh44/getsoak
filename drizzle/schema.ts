@@ -17,6 +17,7 @@ import {
   pgView,
   bigint,
   pgSequence,
+  date,
 } from "drizzle-orm/pg-core";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -1677,6 +1678,10 @@ export const orderItems = pgTable(
     price: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
       .notNull(),
+    // Immutable cost basis captured when the order line is created. Nullable
+    // means the merchant had not supplied a cost; reports must never treat it
+    // as zero. Product cost edits do not rewrite this snapshot.
+    unitCost: numeric("unit_cost", { precision: 12, scale: 2, mode: "number" }),
     quantity: integer().default(1).notNull(),
     total: numeric({ precision: 12, scale: 2, mode: "number" })
       .default(0)
@@ -1784,6 +1789,10 @@ export const orderPayments = pgTable(
     id: uuid().defaultRandom().primaryKey().notNull(),
     orderId: uuid("order_id").notNull(),
     storeId: uuid("store_id").notNull(),
+    // The drawer that physically took THIS tender. Kept on the payment rather
+    // than inferred through orders.shift_id because deposits and final payment
+    // may happen on different shifts.
+    shiftId: uuid("shift_id"),
     method: text().notNull(),
     amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
     tendered: numeric({ precision: 12, scale: 2, mode: "number" }),
@@ -1804,6 +1813,11 @@ export const orderPayments = pgTable(
     index("order_payments_order_idx").using(
       "btree",
       table.orderId.asc().nullsLast().op("uuid_ops"),
+    ),
+    index("order_payments_shift_captured_idx").using(
+      "btree",
+      table.shiftId.asc().nullsLast().op("uuid_ops"),
+      table.capturedAt.asc().nullsLast().op("timestamptz_ops"),
     ),
     foreignKey({
       columns: [table.orderId],
@@ -2203,6 +2217,36 @@ export const platformBillingSettings = pgTable(
   ],
 );
 
+/**
+ * Platform-wide Analytics feature controls. This is availability, not plan
+ * entitlement: Pro-only checks still happen through lib/plans.ts.
+ */
+export const platformAnalyticsSettings = pgTable(
+  "platform_analytics_settings",
+  {
+    id: boolean().default(true).primaryKey().notNull(),
+    coreDashboard: boolean("core_dashboard").default(true).notNull(),
+    dashboardCustomization: boolean("dashboard_customization")
+      .default(true)
+      .notNull(),
+    drilldownReports: boolean("drilldown_reports").default(true).notNull(),
+    googleSearchConsole: boolean("google_search_console")
+      .default(true)
+      .notNull(),
+    googleAnalytics4: boolean("google_analytics_4").default(false).notNull(),
+    metaPixel: boolean("meta_pixel").default(false).notNull(),
+    storefrontConversion: boolean("storefront_conversion")
+      .default(false)
+      .notNull(),
+    grossMargin: boolean("gross_margin").default(false).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedBy: text("updated_by"),
+  },
+  () => [check("platform_analytics_settings_id_check", sql`id`)],
+);
+
 export const productReviews = pgTable(
   "product_reviews",
   {
@@ -2311,6 +2355,12 @@ export const productVariants = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost. Null inherits the parent product cost.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     imageUrl: text("image_url"),
     images: text().array().default([""]).notNull(),
     specialPrice: numeric("special_price", {
@@ -2450,6 +2500,12 @@ export const products = pgTable(
     })
       .default(0)
       .notNull(),
+    // Merchant-only unit cost used for future order-line snapshots.
+    costPrice: numeric("cost_price", {
+      precision: 10,
+      scale: 2,
+      mode: "number",
+    }),
     cardColor: text("card_color"),
     storeId: uuid("store_id").notNull(),
     trackInventory: boolean("track_inventory").default(false).notNull(),
@@ -3272,6 +3328,349 @@ export const posLayouts = pgTable(
   ],
 );
 
+// Personal Analytics dashboard preferences (analytics_01_dashboard_layouts.sql).
+// No row means "follow the current product default". The JSON remains bounded
+// and validated in app/actions/analytics-layout.ts; it is never authorization.
+export const analyticsDashboardLayouts = pgTable(
+  "analytics_dashboard_layouts",
+  {
+    storeId: uuid("store_id").notNull(),
+    adminUserId: text("admin_user_id").notNull(),
+    schemaVersion: integer("schema_version").default(1).notNull(),
+    layout: jsonb().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminUserId] }),
+    index("analytics_dashboard_layouts_admin_idx").using(
+      "btree",
+      table.adminUserId.asc().nullsLast().op("text_ops"),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "analytics_dashboard_layouts_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "analytics_dashboard_layouts_schema_version_check",
+      sql`${table.schemaVersion} > 0`,
+    ),
+    check(
+      "analytics_dashboard_layouts_layout_is_object",
+      sql`jsonb_typeof(${table.layout}) = 'object'`,
+    ),
+  ],
+);
+
+// Phase 9 first-party storefront analytics. Raw rows and the attribution
+// bridge are short-lived; storefrontDaily is the durable reporting surface.
+export const storefrontEvents = pgTable(
+  "storefront_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    eventId: uuid("event_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    eventType: text("event_type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    path: text(),
+    productId: uuid("product_id"),
+    orderId: uuid("order_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("storefront_events_store_event_key").on(
+      table.storeId,
+      table.eventId,
+    ),
+    uniqueIndex("storefront_events_purchase_order_key")
+      .on(table.storeId, table.orderId)
+      .where(
+        sql`${table.eventType} = 'purchase' AND ${table.orderId} IS NOT NULL`,
+      ),
+    index("storefront_events_store_date_idx").on(
+      table.storeId,
+      table.eventDate,
+      table.visitorKey,
+      table.occurredAt,
+    ),
+    index("storefront_events_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_events_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_events_order_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "storefront_events_type_check",
+      sql`${table.eventType} IN ('page_view', 'product_view', 'add_to_cart', 'checkout_start', 'purchase')`,
+    ),
+  ],
+);
+
+export const storefrontOrderAttribution = pgTable(
+  "storefront_order_attribution",
+  {
+    orderId: uuid("order_id").primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventDate: date("event_date", { mode: "string" }).notNull(),
+    visitorKey: text("visitor_key").notNull(),
+    occurredAt: timestamp("occurred_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    convertedAt: timestamp("converted_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("storefront_order_attribution_created_idx").on(table.createdAt),
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [orders.id],
+      name: "storefront_order_attribution_order_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_order_attribution_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const storefrontDaily = pgTable(
+  "storefront_daily",
+  {
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    visitors: integer().default(0).notNull(),
+    sessions: integer().default(0).notNull(),
+    pageViews: integer("page_views").default(0).notNull(),
+    productSessions: integer("product_sessions").default(0).notNull(),
+    cartSessions: integer("cart_sessions").default(0).notNull(),
+    checkoutSessions: integer("checkout_sessions").default(0).notNull(),
+    convertedSessions: integer("converted_sessions").default(0).notNull(),
+    purchases: integer().default(0).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.date] }),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "storefront_daily_store_id_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+// Google Search Console Phase 3a (search_metrics_01_schema.sql). Source epochs
+// preserve origin history; metrics are complete replaceable PT-day buckets;
+// jobs are the durable cursor used by the self-chaining cron.
+export const storeSearchSources = pgTable(
+  "store_search_sources",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    kind: text().notNull(),
+    origin: text().notNull(),
+    property: text().notNull(),
+    pageFilter: text("page_filter"),
+    activeFrom: timestamp("active_from", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    inactiveAt: timestamp("inactive_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    firstDataDate: date("first_data_date", { mode: "string" }).notNull(),
+    finalDataDate: date("final_data_date", { mode: "string" }),
+    correctionUntil: date("correction_until", { mode: "string" }),
+    lastSyncedAt: timestamp("last_synced_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastDataDate: date("last_data_date", { mode: "string" }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("store_search_sources_store_origin_epoch_key").on(
+      table.storeId,
+      table.origin,
+      table.activeFrom,
+    ),
+    unique("store_search_sources_id_store_key").on(table.id, table.storeId),
+    uniqueIndex("store_search_sources_one_active_idx")
+      .on(table.storeId)
+      .where(sql`${table.inactiveAt} IS NULL`),
+    index("store_search_sources_correction_idx")
+      .on(table.correctionUntil)
+      .where(sql`${table.inactiveAt} IS NOT NULL`),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "store_search_sources_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_sources_kind_check",
+      sql`${table.kind} = ANY (ARRAY['platform_subdomain'::text, 'custom_domain'::text])`,
+    ),
+    check(
+      "store_search_sources_origin_check",
+      sql`${table.origin} ~ '^https://[^/]+$'`,
+    ),
+    check(
+      "store_search_sources_filter_check",
+      sql`(${table.kind} = 'platform_subdomain' AND ${table.pageFilter} IS NOT NULL) OR (${table.kind} = 'custom_domain' AND ${table.pageFilter} IS NULL)`,
+    ),
+    check(
+      "store_search_sources_dates_check",
+      sql`${table.finalDataDate} IS NULL OR ${table.finalDataDate} >= ${table.firstDataDate}`,
+    ),
+    check(
+      "store_search_sources_inactive_bounds_check",
+      sql`(${table.inactiveAt} IS NULL AND ${table.finalDataDate} IS NULL AND ${table.correctionUntil} IS NULL) OR (${table.inactiveAt} IS NOT NULL AND ${table.finalDataDate} IS NOT NULL AND ${table.correctionUntil} IS NOT NULL AND ${table.correctionUntil} >= ${table.finalDataDate})`,
+    ),
+  ],
+);
+
+export const storeSearchMetrics = pgTable(
+  "store_search_metrics",
+  {
+    sourceId: uuid("source_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    dimension: text().notNull(),
+    key: text().default("").notNull(),
+    clicks: integer().default(0).notNull(),
+    impressions: integer().default(0).notNull(),
+    positionSum: numeric("position_sum", { precision: 18, scale: 4 })
+      .default("0")
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "store_search_metrics_pkey",
+      columns: [table.sourceId, table.date, table.dimension, table.key],
+    }),
+    index("store_search_metrics_store_date_idx").on(
+      table.storeId,
+      table.date.desc(),
+    ),
+    index("store_search_metrics_retention_idx").on(table.date),
+    foreignKey({
+      columns: [table.sourceId, table.storeId],
+      foreignColumns: [storeSearchSources.id, storeSearchSources.storeId],
+      name: "store_search_metrics_source_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_metrics_dimension_check",
+      sql`${table.dimension} = ANY (ARRAY['total'::text, 'query'::text, 'page'::text, 'country'::text, 'device'::text])`,
+    ),
+    check(
+      "store_search_metrics_values_check",
+      sql`${table.clicks} >= 0 AND ${table.impressions} >= 0 AND ${table.positionSum} >= 0`,
+    ),
+    check(
+      "store_search_metrics_total_key_check",
+      sql`${table.dimension} <> 'total' OR ${table.key} = ''`,
+    ),
+  ],
+);
+
+export const storeSearchSyncJobs = pgTable(
+  "store_search_sync_jobs",
+  {
+    sourceId: uuid("source_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    date: date({ mode: "string" }).notNull(),
+    dimension: text().notNull(),
+    status: text().default("queued").notNull(),
+    attempts: integer().default(0).notNull(),
+    leaseUntil: timestamp("lease_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "store_search_sync_jobs_pkey",
+      columns: [table.sourceId, table.date, table.dimension],
+    }),
+    index("store_search_sync_jobs_claim_idx")
+      .on(table.updatedAt, table.sourceId, table.date)
+      .where(
+        sql`${table.status} = ANY (ARRAY['queued'::text, 'running'::text])`,
+      ),
+    foreignKey({
+      columns: [table.sourceId, table.storeId],
+      foreignColumns: [storeSearchSources.id, storeSearchSources.storeId],
+      name: "store_search_sync_jobs_source_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "store_search_sync_jobs_dimension_check",
+      sql`${table.dimension} = ANY (ARRAY['total'::text, 'query'::text, 'page'::text, 'country'::text, 'device'::text])`,
+    ),
+    check(
+      "store_search_sync_jobs_status_check",
+      sql`${table.status} = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text])`,
+    ),
+    check("store_search_sync_jobs_attempts_check", sql`${table.attempts} >= 0`),
+  ],
+);
+
+export const storeSearchRateLimits = pgTable(
+  "store_search_rate_limits",
+  {
+    property: text().primaryKey().notNull(),
+    windowStartedAt: timestamp("window_started_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    requestCount: integer("request_count").default(0).notNull(),
+  },
+  (table) => [
+    check(
+      "store_search_rate_limits_count_check",
+      sql`${table.requestCount} >= 0`,
+    ),
+  ],
+);
+
 // Per-location receipt numbers (supabase/pos_06_sell_path.sql). Allocated
 // ONLY through the next_pos_receipt_no() RPC — a single atomic UPDATE, the
 // same allocator pattern as next_order_no — so nothing reads or writes this
@@ -3408,6 +3807,11 @@ export const posAuditLog = pgTable(
     actor: text(),
     ip: text(),
     detail: text(),
+    // Money events (pos_16_money_audit.sql). Rupees given away or moved; who
+    // authorised it when that differs from the actor; and what it concerns.
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }),
+    approver: text(),
+    orderId: uuid("order_id"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
@@ -4772,6 +5176,10 @@ export const helpArticles = pgTable(
     check(
       "help_articles_status_check",
       sql`status = ANY (ARRAY['draft'::text, 'published'::text])`,
+    ),
+    check(
+      "help_articles_published_has_category",
+      sql`status <> 'published'::text OR category_id IS NOT NULL`,
     ),
     pgPolicy("Read help_articles", {
       for: "select",
