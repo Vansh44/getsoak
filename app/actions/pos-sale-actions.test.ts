@@ -1592,6 +1592,32 @@ describe("listPosSales", () => {
     expect(sales[0].customerName).toBeNull();
     expect(sales[0].refunded).toBe(false);
   });
+
+  it("shows a customer attached through POS lookup/create", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o3",
+            receipt_no: "POS-000009",
+            order_ref: "ORD10011029",
+            total: "118",
+            created_at: "2026-07-30T10:00:00Z",
+            cashier_name: "Priya",
+            shipping_address: null,
+            customer_first_name: "Asha",
+            customer_last_name: "Rao",
+            payment_method: "cash",
+            status: "completed",
+          },
+        ],
+        [{ order_id: "o3", n: 1 }],
+      ],
+    });
+
+    const { sales } = await listPosSales();
+    expect(sales[0].customerName).toBe("Asha Rao");
+  });
 });
 
 // ── Gateway tenders (roadmap Step 12) ───────────────────────────────────────

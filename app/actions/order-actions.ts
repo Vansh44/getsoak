@@ -9,6 +9,7 @@ import {
   ilike,
   inArray,
   isNull,
+  ne,
   or,
   sql,
   type SQL,
@@ -23,6 +24,7 @@ import {
   productVariants,
   shipments,
   storeLocations,
+  users,
 } from "@/drizzle/schema";
 import { releaseCancelledOrder } from "@/lib/orders/cancel";
 import { approveCancellation } from "@/lib/orders/approve-cancellation";
@@ -44,6 +46,8 @@ import {
 } from "@/app/dashboard/lib/list-params";
 import { emitEvent } from "@/lib/notifications/record";
 import { formatIndianMobile } from "@/lib/phone";
+import { getCurrentStore } from "@/lib/store/resolve";
+import { getPosState } from "@/lib/pos/locations";
 
 // Allowlists — order/payment state is a closed set, so never trust an arbitrary
 // string from the client into the DB (keeps the status column clean + prevents
@@ -82,16 +86,19 @@ const SETTABLE_PAYMENT_STATUSES = ["pending", "paid", "failed"] as const;
 // lives in order_payments.
 const PAYMENT_METHODS = [
   "cash_on_delivery",
+  "pay_at_store",
   "razorpay",
   "cash",
   "card",
   "upi",
+  "store_credit",
   "split",
 ] as const;
 
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export type OrderChannel = "all" | "website" | "pos";
 
 // Per-status row counts for the list's filter tabs (store-wide, ignoring the
 // active filters — mirrors the products list). `all` is the store total.
@@ -115,13 +122,25 @@ const ZERO_COUNTS: OrderStatusCounts = {
   cancelled: 0,
 };
 
+export interface OrderChannelCounts {
+  all: number;
+  website: number;
+  pos: number;
+}
+
+const ZERO_CHANNEL_COUNTS: OrderChannelCounts = {
+  all: 0,
+  website: 0,
+  pos: 0,
+};
+
 // Filters accepted by the orders list. All optional; anything not in the
 // allowlists is ignored (treated as "all") so a bad query param can never
 // reach the DB or break the query.
 export interface GetOrdersParams {
   page?: number;
   pageSize?: number;
-  /** Order status tab (one of ORDER_STATUSES); "" / unknown = all. */
+  /** Lifecycle tab (raw status, or All-book attention/open/completed group). */
   status?: string;
   /** Payment status facet (one of PAYMENT_STATUSES); "" / unknown = all. */
   paymentStatus?: string;
@@ -131,6 +150,8 @@ export interface GetOrdersParams {
   q?: string;
   /** Relative date window: "today" | "7d" | "30d" | "90d" | "" (all time). */
   dateRange?: string;
+  /** Primary order book. Unknown / absent values safely open All orders. */
+  channel?: string;
 }
 
 // Map a date-window preset to its lower bound (ISO), or null for "all time".
@@ -169,6 +190,14 @@ const ORDER_LIST_COLUMNS = {
   payment_status: orders.paymentStatus,
   status: orders.status,
   shipping_address: orders.shippingAddress,
+  sales_channel: orders.salesChannel,
+  receipt_no: orders.receiptNo,
+  cashier_name: orders.cashierName,
+  customer_first_name: users.firstName,
+  customer_last_name: users.lastName,
+  customer_phone: users.phone,
+  customer_email: users.email,
+  location_name: storeLocations.name,
   // Office staff could not tell a collection from a delivery here at all —
   // only /pos/pickups knew. Two columns, no join: the badge needs the type and
   // the stage, and the shop's name belongs in the drawer, not a list row.
@@ -180,6 +209,7 @@ export interface OrdersResult {
   orders: Record<string, unknown>[];
   total: number;
   counts: OrderStatusCounts;
+  channelCounts: OrderChannelCounts;
   error?: string;
 }
 
@@ -193,9 +223,14 @@ export async function getOrders(
       orders: [],
       total: 0,
       counts: ZERO_COUNTS,
+      channelCounts: ZERO_CHANNEL_COUNTS,
     };
 
   const storeId = await getActingStoreId();
+  // The channel workspace is an active-POS capability, not merely a query
+  // parameter. A downgraded store, or Pro store that switched POS off, gets
+  // the original Website-only order book even if a stale URL asks for POS.
+  const supportsPos = getPosState(await getCurrentStore()).posEnabled;
 
   const safePage =
     Number.isFinite(params.page) && (params.page ?? 0) > 0
@@ -208,10 +243,29 @@ export async function getOrders(
       : DASHBOARD_PAGE_SIZE;
   const from = (safePage - 1) * safeSize;
 
-  // Validate each filter against its allowlist; anything else = "all" (undefined).
-  const status = ORDER_STATUSES.includes(params.status as OrderStatus)
-    ? (params.status as OrderStatus)
-    : undefined;
+  const requestedChannel: OrderChannel =
+    params.channel === "website" || params.channel === "pos"
+      ? params.channel
+      : "all";
+  const channel: OrderChannel = supportsPos ? requestedChannel : "website";
+
+  // The combined book uses three operational groups from the Orders design.
+  // Channel-specific books continue to accept the underlying lifecycle values.
+  const groupedStatuses: Partial<Record<string, OrderStatus[]>> =
+    channel === "all"
+      ? {
+          attention: ["pending"],
+          open: ["processing", "shipped"],
+          completed: ["delivered", "completed"],
+        }
+      : {};
+  const statusValues =
+    groupedStatuses[params.status ?? ""] ??
+    (ORDER_STATUSES.includes(params.status as OrderStatus)
+      ? [params.status as OrderStatus]
+      : []);
+
+  // Validate each remaining filter against its allowlist; anything else = all.
   const paymentStatus = PAYMENT_STATUSES.includes(
     params.paymentStatus as PaymentStatus,
   )
@@ -223,13 +277,15 @@ export async function getOrders(
     ? (params.paymentMethod as PaymentMethod)
     : undefined;
   const term = sanitizeSearch(params.q ?? "");
+  const salesChannel =
+    channel === "all" ? null : channel === "pos" ? "pos" : "online";
 
   // Base scope shared by the list, its total, AND the status-tab counts: store +
   // the date window (so a date filter narrows the tab counts too). The other
   // facets (status/payment/method/search) narrow only the LIST + its total.
   const dateFrom = dateFloor(params.dateRange ?? "");
-  const baseConds = [eq(orders.storeId, storeId)];
-  if (dateFrom) baseConds.push(gte(orders.createdAt, dateFrom));
+  const rootConds = [eq(orders.storeId, storeId)];
+  if (dateFrom) rootConds.push(gte(orders.createdAt, dateFrom));
 
   // Location scope — the second tenancy dimension (roadmap Phase B2). Derived
   // from the VIEWER, never from a parameter: a filter the client can set is
@@ -243,7 +299,7 @@ export async function getOrders(
   // staff.
   const locationScope = await getViewerLocations();
   if (locationScope !== null) {
-    baseConds.push(
+    rootConds.push(
       or(
         isNull(orders.locationId),
         locationScope.length > 0
@@ -253,8 +309,19 @@ export async function getOrders(
     );
   }
 
+  // Website and POS remain separate operational books, while All is an honest
+  // chronological union. The channel belongs in the base scope whenever one
+  // book is selected so its pagination and lifecycle counts cannot mix.
+  const baseConds = salesChannel
+    ? [...rootConds, eq(orders.salesChannel, salesChannel)]
+    : [...rootConds];
+
   const conds = [...baseConds];
-  if (status) conds.push(eq(orders.status, status));
+  if (statusValues.length === 1) {
+    conds.push(eq(orders.status, statusValues[0]));
+  } else if (statusValues.length > 1) {
+    conds.push(inArray(orders.status, statusValues));
+  }
   if (paymentStatus) conds.push(eq(orders.paymentStatus, paymentStatus));
   if (paymentMethod) conds.push(eq(orders.paymentMethod, paymentMethod));
   if (term) {
@@ -267,11 +334,20 @@ export async function getOrders(
         sql`${orders.shippingAddress}->>'firstName' ilike ${pat}`,
         sql`${orders.shippingAddress}->>'lastName' ilike ${pat}`,
         sql`${orders.shippingAddress}->>'city' ilike ${pat}`,
+        ilike(orders.receiptNo, pat),
+        ilike(orders.cashierName, pat),
+        ilike(users.firstName, pat),
+        ilike(users.lastName, pat),
+        ilike(users.phone, pat),
+        ilike(users.email, pat),
+        ilike(storeLocations.name, pat),
       )!,
     );
   }
   const whereExpr = and(...conds);
-  const countWhere = and(...baseConds);
+  // POS-enabled stores need root counts for the three-way channel switch.
+  // Everyone else must not query or serialize retained POS history at all.
+  const countWhere = and(...(supportsPos ? rootConds : baseConds));
 
   try {
     // User scope (RLS enforced) + the explicit store filter above. The FULL
@@ -290,6 +366,17 @@ export async function getOrders(
       const rows = await db
         .select(ORDER_LIST_COLUMNS)
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, storeId)),
+        )
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
         .where(whereExpr)
         .orderBy(desc(orders.createdAt))
         .limit(safeSize)
@@ -297,26 +384,53 @@ export async function getOrders(
       const countRows = await db
         .select({ n: count() })
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, storeId)),
+        )
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, orders.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
         .where(whereExpr);
-      // Store-wide per-status counts for the filter tabs (ignores the active
-      // facets, so a tab always shows its full store count).
+      // One grouped query feeds the All/Website/POS switch and the selected
+      // book's status tabs. Keeping them together avoids a fourth sequential
+      // query on the same pooled connection.
       const statusRows = await db
-        .select({ status: orders.status, n: count() })
+        .select({
+          sales_channel: orders.salesChannel,
+          status: orders.status,
+          n: count(),
+        })
         .from(orders)
         .where(countWhere)
-        .groupBy(orders.status);
+        .groupBy(orders.salesChannel, orders.status);
       return { rows, total: countRows[0]?.n ?? 0, statusRows };
     });
 
     const counts: OrderStatusCounts = { ...ZERO_COUNTS };
+    const channelCounts: OrderChannelCounts = { ...ZERO_CHANNEL_COUNTS };
     for (const row of statusRows) {
+      if (!supportsPos && row.sales_channel === "pos") continue;
+      const rowChannel = row.sales_channel === "pos" ? "pos" : "website";
+      channelCounts.all += row.n;
+      channelCounts[rowChannel] += row.n;
+      if (salesChannel && row.sales_channel !== salesChannel) continue;
       counts.all += row.n;
       if (row.status && row.status in counts) {
         (counts as unknown as Record<string, number>)[row.status] = row.n;
       }
     }
 
-    return { orders: rows as Record<string, unknown>[], total, counts };
+    return {
+      orders: rows as Record<string, unknown>[],
+      total,
+      counts,
+      channelCounts,
+    };
   } catch (err) {
     console.error("Error fetching orders:", err);
     return {
@@ -324,6 +438,7 @@ export async function getOrders(
       orders: [],
       total: 0,
       counts: ZERO_COUNTS,
+      channelCounts: ZERO_CHANNEL_COUNTS,
     };
   }
 }
@@ -370,6 +485,12 @@ export async function updateOrderStatus(
     paymentStatus?: string;
     deliveredAt?: SQL;
   } = { status };
+  const isFulfillmentStatus = [
+    "pending",
+    "processing",
+    "shipped",
+    "delivered",
+  ].includes(status);
   if (paymentStatus) {
     updateData.paymentStatus = paymentStatus;
   }
@@ -390,7 +511,16 @@ export async function updateOrderStatus(
       db
         .update(orders)
         .set(updateData)
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.storeId, storeId),
+            // A standard register sale is handed over at payment. It may be
+            // cancelled, but it can never enter a courier-fulfillment state —
+            // enforce the channel boundary here as well as in the drawer.
+            isFulfillmentStatus ? ne(orders.salesChannel, "pos") : undefined,
+          ),
+        )
         // Returned so the event below can name the order and reach its owner
         // — the shopper is told about their own order, not just the staff.
         .returning({
@@ -404,6 +534,9 @@ export async function updateOrderStatus(
   }
 
   const row = updated[0];
+  if (!row && isFulfillmentStatus) {
+    return { error: "POS sales do not use fulfillment statuses." };
+  }
   if (row) {
     emitEvent({
       type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
@@ -446,6 +579,7 @@ export async function updateOrderDeliveryPhone(
       const orderRows = await db
         .select({
           status: orders.status,
+          salesChannel: orders.salesChannel,
           fulfilmentType: orders.fulfilmentType,
           shippingAddress: orders.shippingAddress,
         })
@@ -454,6 +588,9 @@ export async function updateOrderDeliveryPhone(
         .limit(1);
       const order = orderRows[0];
       if (!order) return { error: "This order no longer exists." };
+      if (order.salesChannel === "pos") {
+        return { error: "POS sales do not have a delivery phone." };
+      }
       if (order.fulfilmentType !== "delivery") {
         return { error: "Pickup orders do not have a delivery phone." };
       }
@@ -546,6 +683,7 @@ export interface OrderDetailItem {
 
 export interface OrderDetail {
   id: string;
+  customer_id: string | null;
   order_ref: string;
   order_no: number;
   created_at: string;
@@ -566,6 +704,15 @@ export interface OrderDetail {
   billing_address: Record<string, unknown> | null;
   razorpay_payment_id: string | null;
   stock_status: string;
+  sales_channel: string;
+  receipt_no: string | null;
+  cashier_name: string | null;
+  customer_first_name: string | null;
+  customer_last_name: string | null;
+  customer_phone: string | null;
+  customer_email: string | null;
+  sale_location_name: string | null;
+  sale_location_address: Record<string, unknown> | null;
   /** 'delivery' for everything that isn't a collection. */
   fulfilment_type: string;
   pickup_status: string | null;
@@ -580,6 +727,7 @@ export interface OrderDetail {
 
 const ORDER_DETAIL_COLUMNS = {
   id: orders.id,
+  customer_id: orders.customerId,
   order_ref: orders.orderRef,
   order_no: orders.orderNo,
   created_at: orders.createdAt,
@@ -600,6 +748,35 @@ const ORDER_DETAIL_COLUMNS = {
   billing_address: orders.billingAddress,
   razorpay_payment_id: orders.razorpayPaymentId,
   stock_status: orders.stockStatus,
+  sales_channel: orders.salesChannel,
+  receipt_no: orders.receiptNo,
+  cashier_name: orders.cashierName,
+  customer_first_name: sql<string | null>`(
+    select u.first_name from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_last_name: sql<string | null>`(
+    select u.last_name from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_phone: sql<string | null>`(
+    select u.phone from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_email: sql<string | null>`(
+    select u.email from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  sale_location_name: sql<string | null>`(
+    select l.name from ${storeLocations} l where l.id = ${orders.locationId}
+  )`,
+  sale_location_address: sql<Record<string, unknown> | null>`(
+    select l.address from ${storeLocations} l where l.id = ${orders.locationId}
+  )`,
   fulfilment_type: orders.fulfilmentType,
   pickup_status: orders.pickupStatus,
   pickup_ready_at: orders.pickupReadyAt,

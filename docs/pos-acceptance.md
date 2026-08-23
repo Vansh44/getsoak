@@ -947,8 +947,44 @@ have returned for the number they just typed.
 
 **PS-C.30 ★ — The sale is attributed**
 Ring up a sale with the new customer attached. Then Dashboard → Orders.
-**Expect:** the order shows that customer. `orders.customer_id` is the
-`pos_<uuid>` id.
+**Expect:** select POS orders; the receipt row shows that customer rather than
+Walk-in. The POS Sales screen shows the same name.
+`orders.customer_id` is the `pos_<uuid>` id. This must come from the attached
+`users` row — `shipping_address` is correctly NULL on a counter sale.
+
+**PS-C.30a ★ — All, Website and POS are top-level order books**
+Open `/dashboard/orders` with both channels populated.
+**Expect:** equal-width horizontal **All orders** / **Website orders** / **POS
+orders** tabs with honest counts at the top of the Orders workspace — not three
+extra destinations in the app sidebar. All is the default chronological union
+and uses cross-channel Needs attention/Open/Completed views. Switching tabs
+resets lifecycle/payment filters, paginates within that channel, and changes the
+filter vocabulary: delivery lifecycle + COD/pickup payments for Website;
+Completed/Cancelled + counter tenders for POS. Export All to get both channels;
+export Website or POS and inspect the CSV to confirm only that channel appears.
+
+**PS-C.30b ★★ — A standard POS sale has no fulfilment work**
+Open a completed register sale from Dashboard → Orders → POS orders.
+**Expect:** receipt, customer/Walk-in, **Sold at** location, cashier, items and
+payment. There is NO Delivery card, editable delivery phone, shipment panel or
+Fulfillment selector; the footer says the sale was handed over at the register.
+The invoice says **Sold At**, never **Ship To**. Calling the status/shipment
+actions directly is also refused — hiding controls is not the invariant.
+
+**PS-C.30c — A website pickup remains website checkout fulfilment**
+Open Website orders with a collection order, then its detail.
+**Expect:** it remains under Website orders because `sales_channel` is online,
+keeps its Pickup badge/stage and Collection card, and is not mistaken for a
+standard POS sale merely because the customer visits a shop.
+
+**PS-C.30d ★★ — The omnichannel Orders workspace follows the POS entitlement**
+Test a Basic/Free store, a Pro store with POS disabled, and a Pro store with POS
+enabled. **Expect:** only the enabled Pro store sees the horizontal All / Website
+/ POS switch and mixed-channel table. The other two see the original **Orders**
+page with Website lifecycle filters and Website rows only. Load a stale
+`?channel=pos` URL and export Orders on those stores: the server still returns
+Website orders only. Re-enabling POS restores the omnichannel workspace without
+deleting or rewriting historical register sales.
 
 **PS-C.31 ★★ — THE CLAIM. Their signup adopts the row**
 As that same person, sign up on the storefront with the SAME mobile number.

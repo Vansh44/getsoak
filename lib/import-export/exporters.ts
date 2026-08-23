@@ -358,7 +358,32 @@ async function* exportOrders(ctx: ExportContext): AsyncGenerator<ExportRecord> {
   for (;;) {
     const conds = [eq(orders.storeId, ctx.storeId), gt(orders.id, cursor)];
     const status = ctx.filters?.status;
-    if (status && status !== "all") conds.push(eq(orders.status, status));
+    const channel = ctx.filters?.channel;
+    if (status && status !== "all") {
+      if (
+        channel !== "website" &&
+        channel !== "pos" &&
+        status === "attention"
+      ) {
+        conds.push(eq(orders.status, "pending"));
+      } else if (
+        channel !== "website" &&
+        channel !== "pos" &&
+        status === "open"
+      ) {
+        conds.push(inArray(orders.status, ["processing", "shipped"]));
+      } else if (
+        channel !== "website" &&
+        channel !== "pos" &&
+        status === "completed"
+      ) {
+        conds.push(inArray(orders.status, ["delivered", "completed"]));
+      } else {
+        conds.push(eq(orders.status, status));
+      }
+    }
+    if (channel === "website") conds.push(eq(orders.salesChannel, "online"));
+    if (channel === "pos") conds.push(eq(orders.salesChannel, "pos"));
     // ★ Bounds what the merchant picked, rather than replacing it.
     const scoped = scopeCondition(ctx.locationScope, orders.locationId);
     if (scoped) conds.push(scoped);
@@ -444,7 +469,10 @@ async function* exportOrders(ctx: ExportContext): AsyncGenerator<ExportRecord> {
         paymentStatus: o.paymentStatus,
         paymentMethod: o.paymentMethod,
         salesChannel: o.salesChannel,
-        fulfilmentType: o.fulfilmentType,
+        // `fulfilment_type` predates the POS channel and carries its legacy
+        // database default (`delivery`) on register sales. That is not a real
+        // delivery promise, so never export it as one.
+        fulfilmentType: o.salesChannel === "pos" ? null : o.fulfilmentType,
         locationName: o.locationName,
         customerName:
           [o.customerFirst, o.customerLast].filter(Boolean).join(" ") || null,

@@ -282,7 +282,10 @@ wholesip/
 │   │   │                      # returning a false "not authorized". Tested in
 │   │   │                      # access.test.ts.
 │   │   ├── products/          # CRUD; edit = full page [id]/ (Shopify-style, no modal)
-│   │   ├── orders/            # Orders list (server-paginated) — reads order-actions
+│   │   ├── orders/            # ★ Channel-aware Orders workspace: horizontal All / Website /
+│   │   │                      # POS books (never extra app-rail destinations), server-paginated
+│   │   │                      # with channel-specific filters/columns and a shared detail drawer
+│   │   │                      # that never presents a register sale as fulfilment work (§22)
 │   │   ├── categories/ colors/ blogs/ media/   # content management (media/ = the
 │   │   │                      # per-store Media Library: confirm-first upload + grid +
 │   │   │                      # view + copy-URL + delete (media_assets row + GCS object),
@@ -446,8 +449,9 @@ wholesip/
 │   │   ├── refund-actions.ts  # ★ Money OUT (§26): refundOrder (pending-row-FIRST
 │   │   │                      # idempotency, FOR UPDATE cap, unknown ≠ failure) +
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
-│   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
-│   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── order-actions.ts   # ★ getOrders (All/Website/POS channel-paginated) +
+│   │   │                      # updateOrderStatus (allowlisted status/payment_status,
+│   │   │                      # store-scoped; POS excluded from fulfilment states). Tested.
 │   │   ├── import-export-actions.ts # ★ §31 CSV import trust boundary: previewImport
 │   │   │                      # (which match keys exist — all the browser can't know),
 │   │   │                      # startImport → importChunk × N → finishImport, plus the
@@ -3230,6 +3234,28 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
         doesn't add up. Recording it also makes markdowns auditable per
         cashier, which is the point of the cap.
+      - **★ ONE ORDERS WORKSPACE, THREE TOP VIEWS — NEVER THREE RAIL ITEMS.**
+        `/dashboard/orders` resolves `sales_channel` server-side into a default
+        chronological **All orders** union plus focused **Website orders** and
+        **POS orders** views before pagination/counting. The horizontal switch
+        carries honest counts; each view has its own lifecycle tabs, columns and
+        payment methods. **That omnichannel workspace is itself gated by the
+        authoritative `getPosState(store).posEnabled` capability** (effective
+        Pro plan + the store switch): lower plans and Pro stores with POS off
+        retain the original Website-only Orders page, and the list/export server
+        boundaries coerce stale or forged POS channel requests back to Website.
+        Website rows keep
+        delivery/pickup fulfilment; POS rows show receipt, attached customer,
+        register location and cashier. The register customer is joined from
+        `users` — a POS shipping address is deliberately null — so both a
+        searched customer and one created inline remain visible after the sale.
+        The POS drawer/invoice say **Sold at**, render a truthful Walk-in when
+        nobody was attached, and expose neither delivery address/phone,
+        ShipmentPanel nor the fulfilment selector. That is enforced below the
+        UI too: `updateOrderStatus` excludes POS rows from fulfilment states,
+        and shipment actions refuse the POS channel before creating warehouse
+        work. The legacy `fulfilment_type = delivery` database default is not
+        exported for POS sales because it never represented a courier promise.
       - **A register sale is a SALE — it emits like one.** `placePosSale` ends
         with `emitEvent("order.placed")` + `reportStockChanges` (§22
         notifications). Without them an in-store sale wrote an `orders` row and

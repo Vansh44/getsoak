@@ -36,6 +36,7 @@ sequence AND the spec for everything still to build.
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core           | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
+| —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |
@@ -546,6 +547,14 @@ POS detail pages now say **Purchased in store**, show the sale location and do
 not render a courier timeline or an empty delivery address. A pickup stays an
 online checkout source internally but is grouped under In store because it is
 a shop-visit journey for the customer.
+
+The merchant workspace now makes the same distinction operationally:
+`/dashboard/orders` has separate **Website orders** and **POS orders** books,
+each paginated and counted inside its own channel. POS rows show the receipt,
+attached customer, location and cashier; their detail/invoice says **Sold at**
+and removes delivery, shipment and fulfilment controls. The server actions also
+refuse to move a POS sale into a fulfilment state or create shipment work for
+it, so this is a channel invariant rather than presentation alone.
 
 That gap is now closed by the identity work below: the till can record a walk-in,
 and their later signup adopts the row.

@@ -18,6 +18,22 @@ vi.mock("@/app/dashboard/lib/access", () => ({
 vi.mock("@/lib/locations/scope", () => ({
   getViewerLocations: vi.fn(async () => null),
 }));
+vi.mock("@/lib/store/resolve", () => ({
+  getCurrentStore: vi.fn(async () => ({
+    id: "a0000000-0000-4000-8000-000000000001",
+    plan: "pro",
+    plan_expires_at: null,
+    settings: { "pos.enabled": true },
+  })),
+}));
+vi.mock("@/lib/pos/locations", () => ({
+  getPosState: vi.fn(() => ({
+    plan: "pro",
+    posAvailable: true,
+    posEnabled: true,
+    locationsIncluded: 2,
+  })),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -42,6 +58,7 @@ import {
   getManagerUserId,
 } from "@/app/dashboard/lib/access";
 import { getViewerLocations } from "@/lib/locations/scope";
+import { getPosState } from "@/lib/pos/locations";
 
 const STORE = "a0000000-0000-4000-8000-000000000001";
 
@@ -58,6 +75,12 @@ describe("order-actions", () => {
       uid: "user-1",
       email: "admin@example.com",
     });
+    vi.mocked(getPosState).mockReturnValue({
+      plan: "pro",
+      posAvailable: true,
+      posEnabled: true,
+      locationsIncluded: 2,
+    });
   });
 
   describe("getOrders", () => {
@@ -71,15 +94,16 @@ describe("order-actions", () => {
       expect(dbHolder.current.calls.select).toHaveLength(0);
     });
 
-    // Happy path — store-scoped, returns rows + total count.
-    it("returns store-scoped, paginated orders with a total", async () => {
+    // Happy path — All orders is the default, across both sales channels.
+    it("returns a store-scoped, paginated combined order book", async () => {
       dbHolder.current = makeDbMock({
         selectQueue: [
           [{ id: "o1", total: 100 }],
           [{ n: 3 }],
           [
-            { status: "pending", n: 2 },
-            { status: "delivered", n: 1 },
+            { sales_channel: "online", status: "pending", n: 2 },
+            { sales_channel: "online", status: "delivered", n: 1 },
+            { sales_channel: "pos", status: "completed", n: 4 },
           ],
         ],
       });
@@ -88,14 +112,66 @@ describe("order-actions", () => {
       expect(result.orders).toEqual([{ id: "o1", total: 100 }]);
       expect(result.total).toBe(3);
       // Per-status tab counts come from the grouped-count query.
-      expect(result.counts.all).toBe(3);
+      expect(result.counts.all).toBe(7);
       expect(result.counts.pending).toBe(2);
       expect(result.counts.delivered).toBe(1);
+      expect(result.counts.completed).toBe(4);
+      expect(result.channelCounts).toEqual({ all: 7, website: 3, pos: 4 });
       // List + count + grouped-count queries, all store-scoped.
       expect(dbHolder.current.calls.where).toHaveLength(3);
       // Never selects the order_items join for the list.
       expect(Object.keys(dbHolder.current.calls.select[0] ?? {})).not.toContain(
         "order_items",
+      );
+      // The default All book has no sales-channel predicate in its WHERE.
+      expect(sqlParamValues(dbHolder.current.calls.where[0])).not.toContain(
+        "online",
+      );
+    });
+
+    it("filters the Website book without mixing in POS rows", async () => {
+      await getOrders({ channel: "website" });
+      expect(sqlParamValues(dbHolder.current.calls.where[0])).toContain(
+        "online",
+      );
+    });
+
+    it("forces the original Website book when POS is not enabled", async () => {
+      vi.mocked(getPosState).mockReturnValue({
+        plan: "basic",
+        posAvailable: false,
+        posEnabled: false,
+        locationsIncluded: 0,
+      });
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [{ id: "web-1", sales_channel: "online" }],
+          [{ n: 1 }],
+          [
+            { sales_channel: "online", status: "pending", n: 1 },
+            // The mock does not execute WHERE clauses, so keep a POS row here
+            // to pin the aggregation's defense-in-depth exclusion too.
+            { sales_channel: "pos", status: "completed", n: 9 },
+          ],
+        ],
+      });
+
+      const result = await getOrders({ channel: "pos" });
+
+      const params = sqlParamValues(dbHolder.current.calls.where[0]);
+      expect(params).toContain("online");
+      expect(params).not.toContain("pos");
+      expect(result.channelCounts).toEqual({
+        all: 1,
+        website: 1,
+        pos: 0,
+      });
+    });
+
+    it("maps the combined Open view to processing and shipped states", async () => {
+      await getOrders({ status: "open" });
+      expect(sqlParamValues(dbHolder.current.calls.where[0])).toEqual(
+        expect.arrayContaining(["processing", "shipped"]),
       );
     });
 
@@ -151,6 +227,25 @@ describe("order-actions", () => {
         uid: "user-1",
         email: "admin@example.com",
       });
+    });
+
+    it("keeps POS lifecycle counts out of the Website order book", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [{ id: "pos-1", status: "completed", sales_channel: "pos" }],
+          [{ n: 1 }],
+          [
+            { sales_channel: "online", status: "pending", n: 2 },
+            { sales_channel: "pos", status: "completed", n: 1 },
+          ],
+        ],
+      });
+
+      const result = await getOrders({ channel: "pos" });
+      expect(result.counts.all).toBe(1);
+      expect(result.counts.completed).toBe(1);
+      expect(result.counts.pending).toBe(0);
+      expect(result.channelCounts).toEqual({ all: 3, website: 2, pos: 1 });
     });
   });
 
@@ -221,6 +316,12 @@ describe("order-actions", () => {
         paymentStatus: "paid",
       });
       expect(dbHolder.current.calls.where).toHaveLength(1);
+    });
+
+    it("does not put a standard POS sale into a fulfillment state", async () => {
+      dbHolder.current = makeDbMock({ returning: [] });
+      const result = await updateOrderStatus("pos-1", "shipped");
+      expect(result.error).toMatch(/pos sales do not use fulfillment/i);
     });
 
     it("restocks a reserved order exactly once when cancelled", async () => {
@@ -318,6 +419,7 @@ describe("order-actions", () => {
           [
             {
               status: "pending",
+              salesChannel: "online",
               fulfilmentType: "delivery",
               shippingAddress: { firstName: "Ada", phone: "8888888888" },
             },
@@ -347,6 +449,7 @@ describe("order-actions", () => {
           [
             {
               status: "processing",
+              salesChannel: "online",
               fulfilmentType: "delivery",
               shippingAddress: { phone: "8888888888" },
             },
@@ -362,6 +465,24 @@ describe("order-actions", () => {
       });
       const result = await updateOrderDeliveryPhone("o1", "9876543210");
       expect(result.error).toMatch(/already accepted/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
+    });
+
+    it("refuses a delivery-phone edit on a standard POS sale", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [
+            {
+              status: "completed",
+              salesChannel: "pos",
+              fulfilmentType: "delivery",
+              shippingAddress: null,
+            },
+          ],
+        ],
+      });
+      const result = await updateOrderDeliveryPhone("pos-1", "9876543210");
+      expect(result.error).toMatch(/pos sales do not have a delivery phone/i);
       expect(dbHolder.current.calls.update).toHaveLength(0);
     });
   });
