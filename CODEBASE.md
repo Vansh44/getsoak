@@ -3555,12 +3555,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           cancelled order is exactly when the shop must be able to say what
           happened. It renders with NO buttons (`collectionState` decides), the
           same rule the row follows.
-        - **★ MARK READY KEEPS IT OPEN; HANDING OVER CLOSES IT.** `settle` has
-          already dropped the row behind, so closing after Mark ready would mean
-          waiting for the 30s poll before the parcel could be given to the
-          person standing there. A deposit also keeps it open — the order is
-          still work — and re-reads, applying `partial.remaining` optimistically
-          first so no stale balance is on screen for a round trip.
+        - **★★ MARK READY MOVES THE ROW; HANDING OVER REMOVES IT.** Once the
+          server confirms Mark ready, `counter-client.tsx` changes that order to
+          `ready` in the queue, search results and open detail in the same frame.
+          It therefore moves immediately from **To prepare** to **Ready to
+          collect** instead of disappearing until a poll/reload rediscovers it.
+          The detail stays open because the next tap may be Hand over; only a
+          completed hand-over uses `settle` to remove the row. A deposit also
+          keeps the detail open — the order is still work — and re-reads,
+          applying `partial.remaining` optimistically first so no stale balance
+          is on screen for a round trip.
       - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers

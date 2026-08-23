@@ -308,17 +308,15 @@ export function CounterClient({
     return () => clearTimeout(handle);
   }, [trimmed, runSearch]);
 
-  /** After acting on an order, drop it from wherever it was shown. It is no
-   *  longer waiting, and leaving it there invites a second tap on a thing that
-   *  has already happened. */
+  /** A completed hand-over leaves the work queue. Mark-ready is deliberately
+   *  separate below: that order is still work, now waiting on the customer. */
   const settle = (id: string, message: string) => {
     toast.success(message);
     setQueue((cur) => cur.filter((o) => o.id !== id));
     setResults((cur) => (cur ? cur.filter((r) => rowId(r) !== id) : cur));
   };
 
-  /** Returns whether it worked, so the detail panel can stay open on a
-   *  "Mark ready" and close on a hand-over. */
+  /** A successful hand-over is the only generic action that removes a row. */
   const act = async (
     id: string,
     fn: (id: string) => Promise<{ success?: boolean; error?: string }>,
@@ -335,6 +333,44 @@ export function CounterClient({
     }
     settle(id, message);
     return true;
+  };
+
+  /**
+   * Marking a parcel ready moves the SAME row between the two queue sections.
+   *
+   * ★ SERVER-CONFIRMED, THEN LOCAL. Moving before the action returns could tell
+   * a cashier the customer was notified when the write actually failed. Once
+   * it succeeds, though, waiting for the next poll makes the row disappear for
+   * up to two minutes because `settle()` used to remove it like a hand-over.
+   * Update every local view of the row in the confirmation frame; the normal
+   * queue poll remains the eventual reconciliation for changes from elsewhere.
+   */
+  const markReady = async (id: string) => {
+    setBusy(id);
+    const res = await markReadyForPickup(id);
+    setBusy(null);
+    if (res.error) {
+      toast.error(res.error);
+      // Refused means the list is stale — someone else got there first.
+      refreshQueue();
+      return;
+    }
+
+    const ready = (order: PickupOrder): PickupOrder =>
+      order.id === id ? { ...order, status: "ready" } : order;
+
+    toast.success("Marked ready.");
+    setQueue((cur) => cur.map(ready));
+    setResults((cur) =>
+      cur
+        ? cur.map((row) =>
+            row.kind === "pickup" && row.order.id === id
+              ? { ...row, order: ready(row.order) }
+              : row,
+          )
+        : cur,
+    );
+    setDetailFor((cur) => (cur ? ready(cur) : cur));
   };
 
   /**
@@ -584,7 +620,7 @@ export function CounterClient({
               <button
                 type="button"
                 disabled={busy === o.id}
-                onClick={() => act(o.id, markReadyForPickup, "Marked ready.")}
+                onClick={() => void markReady(o.id)}
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold hover:bg-emerald-500 disabled:opacity-50 text-white"
               >
                 <PackageCheck className="h-4 w-4" />
@@ -843,15 +879,10 @@ export function CounterClient({
           busy={busy === detailFor.id}
           onClose={() => setDetailFor(null)}
           onMarkReady={() => {
-            const o = detailFor;
-            void act(o.id, markReadyForPickup, "Marked ready.").then((ok) => {
-              // Stays OPEN on success, unlike a hand-over: the customer is
-              // often standing there, and this is the one flow where the next
-              // tap is immediately "Hand over". `settle` has already dropped
-              // the row behind, so closing would mean waiting for the poll to
-              // bring it back before it could be given to them.
-              if (ok) setDetailFor({ ...o, status: "ready" });
-            });
+            // Stays open on success, unlike a hand-over: the customer is often
+            // standing there, and the next tap is immediately "Hand over".
+            // markReady also moves the row behind into Ready to collect.
+            void markReady(detailFor.id);
           }}
           onHandOver={(current) => handOver(current)}
         />

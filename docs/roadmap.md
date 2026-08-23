@@ -217,8 +217,9 @@ same state (`995f83d`).
 
 **✅ Shipped:** `lib/fulfilment/payment-policy.ts` (pure + tested — the one rule
 the picker and `placeOrder` both ask), the `fulfilment.pickupPayment` setting,
-the derived checkout default, server enforcement in `placeOrder`, and the
-`canRequirePrepaid` guard on save. Acceptance: **PS-C.1–C.8**.
+the gateway-gated, online-first payment list and derived checkout default,
+server enforcement in `placeOrder`, and the `canRequirePrepaid` guard on save.
+Acceptance: **PS-C.1–C.8**.
 
 **★ THE DEFAULT IS DERIVED DURING RENDER, NOT SET IN AN EFFECT.** State holds
 only the shopper's explicit choice (`null` = hasn't chosen); the displayed and
@@ -955,6 +956,13 @@ to be found by reading every row.
 
 **★ READY ONLY.** A parcel still to pack is the SHOP's work and the deadline is
 not yet the customer's problem.
+
+**★★ MARK READY MOVES THE CONFIRMED ROW LOCALLY.** The server write still lands
+first, so a failed notification/update can never look successful. On success,
+the counter changes the order to `ready` in the queue, search results and open
+detail immediately; the row moves from **To prepare** to **Ready to collect**
+without waiting for the next poll or a manual reload. Only a completed hand-over
+removes it from the work queue.
 
 **★ `PICKUP_WARN_HOURS` MOVED to `lib/pos/collection-state.ts`** (pure) and is
 re-exported from the `server-only` `pickup.ts`. The counter and the customer's

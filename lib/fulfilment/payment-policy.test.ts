@@ -4,6 +4,7 @@ import {
   defaultPaymentMethod,
   isPaymentMethodAllowed,
   normalizePickupPayment,
+  paymentMethodsFor,
   paymentOptionsFor,
   type PaymentOptionsInput,
 } from "./payment-policy";
@@ -122,6 +123,22 @@ describe("★ offline availability never depends on the gateway", () => {
         expect(without.offline).toBe(withGateway.offline);
       }
     }
+  });
+});
+
+describe("paymentMethodsFor", () => {
+  it("★ puts online first when the gateway is connected", () => {
+    expect(paymentMethodsFor(delivery())).toEqual(["razorpay", "cod"]);
+    expect(paymentMethodsFor(pickup())).toEqual(["razorpay", "pay_at_store"]);
+  });
+
+  it("★ removes online completely when there is no gateway", () => {
+    expect(paymentMethodsFor(delivery({ onlineAvailable: false }))).toEqual([
+      "cod",
+    ]);
+    expect(paymentMethodsFor(pickup({ onlineAvailable: false }))).toEqual([
+      "pay_at_store",
+    ]);
   });
 });
 
