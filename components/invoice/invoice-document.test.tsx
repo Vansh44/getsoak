@@ -149,3 +149,35 @@ describe("InvoiceDocument — collection", () => {
     expect(screen.getByText("Our shop")).toBeInTheDocument();
   });
 });
+
+describe("InvoiceDocument — POS sale", () => {
+  it("names the register location and never invents a shipping destination", () => {
+    renderInvoice({
+      sales_channel: "pos",
+      shipping_address: null,
+      billing_address: null,
+      sale_location_name: "Patiala Store",
+      sale_location_address: SHOP_ADDRESS,
+      customer_first_name: "Asha",
+      customer_last_name: "Rao",
+      customer_phone: "+919876543210",
+    });
+
+    expect(screen.queryByText("Ship To")).not.toBeInTheDocument();
+    const soldAt = party("Sold At");
+    expect(soldAt.getByText("Patiala Store")).toBeInTheDocument();
+    expect(soldAt.getByText("hostel D, Thapar University")).toBeInTheDocument();
+    expect(party("Bill To").getByText("Asha Rao")).toBeInTheDocument();
+  });
+
+  it("renders an honest walk-in instead of an empty customer", () => {
+    renderInvoice({
+      sales_channel: "pos",
+      shipping_address: null,
+      billing_address: null,
+      sale_location_name: "Main Store",
+    });
+
+    expect(party("Bill To").getByText("Walk-in customer")).toBeInTheDocument();
+  });
+});

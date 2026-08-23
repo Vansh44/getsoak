@@ -36,6 +36,7 @@ sequence AND the spec for everything still to build.
 | —      | Shopify-shaped fulfilment + Shiprocket logistics core           | L    | ✅ done |
 | —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
+| —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |
@@ -217,8 +218,9 @@ same state (`995f83d`).
 
 **✅ Shipped:** `lib/fulfilment/payment-policy.ts` (pure + tested — the one rule
 the picker and `placeOrder` both ask), the `fulfilment.pickupPayment` setting,
-the derived checkout default, server enforcement in `placeOrder`, and the
-`canRequirePrepaid` guard on save. Acceptance: **PS-C.1–C.8**.
+the gateway-gated, online-first payment list and derived checkout default,
+server enforcement in `placeOrder`, and the `canRequirePrepaid` guard on save.
+Acceptance: **PS-C.1–C.8**.
 
 **★ THE DEFAULT IS DERIVED DURING RENDER, NOT SET IN AN EFFECT.** State holds
 only the shopper's explicit choice (`null` = hasn't chosen); the displayed and
@@ -545,6 +547,14 @@ POS detail pages now say **Purchased in store**, show the sale location and do
 not render a courier timeline or an empty delivery address. A pickup stays an
 online checkout source internally but is grouped under In store because it is
 a shop-visit journey for the customer.
+
+The merchant workspace now makes the same distinction operationally:
+`/dashboard/orders` has separate **Website orders** and **POS orders** books,
+each paginated and counted inside its own channel. POS rows show the receipt,
+attached customer, location and cashier; their detail/invoice says **Sold at**
+and removes delivery, shipment and fulfilment controls. The server actions also
+refuse to move a POS sale into a fulfilment state or create shipment work for
+it, so this is a channel invariant rather than presentation alone.
 
 That gap is now closed by the identity work below: the till can record a walk-in,
 and their later signup adopts the row.
@@ -955,6 +965,13 @@ to be found by reading every row.
 
 **★ READY ONLY.** A parcel still to pack is the SHOP's work and the deadline is
 not yet the customer's problem.
+
+**★★ MARK READY MOVES THE CONFIRMED ROW LOCALLY.** The server write still lands
+first, so a failed notification/update can never look successful. On success,
+the counter changes the order to `ready` in the queue, search results and open
+detail immediately; the row moves from **To prepare** to **Ready to collect**
+without waiting for the next poll or a manual reload. Only a completed hand-over
+removes it from the work queue.
 
 **★ `PICKUP_WARN_HOURS` MOVED to `lib/pos/collection-state.ts`** (pure) and is
 re-exported from the `server-only` `pickup.ts`. The counter and the customer's

@@ -721,7 +721,9 @@ against a store whose Razorpay is in **test mode**.
 
 **PS-C.1 ★★ — A gateway-connected store defaults to ONLINE**
 Connect Razorpay in Channels, then open `/checkout` with items in the cart.
-**Expect:** "Pay online" is pre-selected.
+**Expect:** "Pay online" is the first payment method and is pre-selected.
+Disconnect Razorpay and reload checkout: the online option is absent entirely,
+and the appropriate offline method is selected instead.
 **Was:** Cash on Delivery, always — `useState("cod")` was hardcoded and nothing
 reconciled it with the gateway config. Every merchant who connected a gateway
 watched shoppers land on the option that costs them a courier round trip.
@@ -945,8 +947,44 @@ have returned for the number they just typed.
 
 **PS-C.30 ★ — The sale is attributed**
 Ring up a sale with the new customer attached. Then Dashboard → Orders.
-**Expect:** the order shows that customer. `orders.customer_id` is the
-`pos_<uuid>` id.
+**Expect:** select POS orders; the receipt row shows that customer rather than
+Walk-in. The POS Sales screen shows the same name.
+`orders.customer_id` is the `pos_<uuid>` id. This must come from the attached
+`users` row — `shipping_address` is correctly NULL on a counter sale.
+
+**PS-C.30a ★ — All, Website and POS are top-level order books**
+Open `/dashboard/orders` with both channels populated.
+**Expect:** equal-width horizontal **All orders** / **Website orders** / **POS
+orders** tabs with honest counts at the top of the Orders workspace — not three
+extra destinations in the app sidebar. All is the default chronological union
+and uses cross-channel Needs attention/Open/Completed views. Switching tabs
+resets lifecycle/payment filters, paginates within that channel, and changes the
+filter vocabulary: delivery lifecycle + COD/pickup payments for Website;
+Completed/Cancelled + counter tenders for POS. Export All to get both channels;
+export Website or POS and inspect the CSV to confirm only that channel appears.
+
+**PS-C.30b ★★ — A standard POS sale has no fulfilment work**
+Open a completed register sale from Dashboard → Orders → POS orders.
+**Expect:** receipt, customer/Walk-in, **Sold at** location, cashier, items and
+payment. There is NO Delivery card, editable delivery phone, shipment panel or
+Fulfillment selector; the footer says the sale was handed over at the register.
+The invoice says **Sold At**, never **Ship To**. Calling the status/shipment
+actions directly is also refused — hiding controls is not the invariant.
+
+**PS-C.30c — A website pickup remains website checkout fulfilment**
+Open Website orders with a collection order, then its detail.
+**Expect:** it remains under Website orders because `sales_channel` is online,
+keeps its Pickup badge/stage and Collection card, and is not mistaken for a
+standard POS sale merely because the customer visits a shop.
+
+**PS-C.30d ★★ — The omnichannel Orders workspace follows the POS entitlement**
+Test a Basic/Free store, a Pro store with POS disabled, and a Pro store with POS
+enabled. **Expect:** only the enabled Pro store sees the horizontal All / Website
+/ POS switch and mixed-channel table. The other two see the original **Orders**
+page with Website lifecycle filters and Website rows only. Load a stale
+`?channel=pos` URL and export Orders on those stores: the server still returns
+Website orders only. Re-enabling POS restores the omnichannel workspace without
+deleting or rewriting historical register sales.
 
 **PS-C.31 ★★ — THE CLAIM. Their signup adopts the row**
 As that same person, sign up on the storefront with the SAME mobile number.
@@ -2127,6 +2165,17 @@ database and expect another attempt at the base interval — failures must not b
 classified as "unchanged" and backed off to two minutes. Queue and Stock follow
 the same retry rule.
 
+**PS-19.30 ★★ — Mark ready moves the row without a reload**
+On `/pos/pickups`, mark an order in **To prepare** ready.
+**Expect:** after the server confirms, the same order moves immediately into
+**Ready to collect**; both section counts update in the same frame and the
+hamburger count stays unchanged because the collection is still waiting. Open
+the order detail and repeat: the panel stays open, changes to Ready, and the row
+behind it is already in the ready section. No manual reload or poll is required.
+**Was:** Mark ready shared `settle()` with Hand over, so it removed the row from
+all client state and only a later poll/reload rediscovered the server's `ready`
+order.
+
 **PS-19.17 ★ — A cashier has no Returns door**
 Sign in as a cashier.
 **Expect:** no Returns entry in the rail (it is gated on `refund`, the only
@@ -3023,6 +3072,7 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**Navigation was per-screen**~~                                   | **FIXED** (PS-19.1–19.2). The nav is mounted once in `app/pos/layout.tsx`, driven by the `lib/pos/nav.ts` registry, gated by the same `posCan` the pages redirect on                                                                                                                                                                                                                                           |
 | ~~**The rail cost a column of products on an iPad**~~               | **FIXED** (PS-19.21). The 76px `lg` rail is gone — one hamburger drawer at every width. The register is horizontally constrained, so the tap it saved was the wrong thing to optimise                                                                                                                                                                                                                          |
 | ~~**A new collection needed a manual page refresh**~~               | **FIXED** (PS-19.22). A collection is created on the storefront, so nothing at the counter made it appear. The badge and the queue poll every 30s, visible-tab only, suspended mid-action                                                                                                                                                                                                                      |
+| ~~**Mark ready hid the order until a poll/reload**~~                | **FIXED** (PS-19.30). Mark ready incorrectly shared the hand-over `settle()` path and removed the row from client state. A confirmed ready action now moves it between the two queue sections immediately; the pickup count stays unchanged                                                                                                                                                                    |
 | ~~**A cashier could hand over an order nobody packed**~~            | **FIXED** (PS-8.33–8.37). `markCollected` claimed `awaiting` as readily as `ready`, silently. Now an explicit acknowledgement — refusing outright would strand a cashier alone at the counter, and a manager gate is bypassable in two taps                                                                                                                                                                    |
 | ~~**A background poll delayed the cashier's next tap**~~            | **FIXED** (PS-19.24). All background reads, including every paged catalogue sync, use the GET route; none enters Next's client Server Action queue                                                                                                                                                                                                                                                             |
 | ~~**Tab-switching kicked off a full catalogue re-sync each time**~~ | **FIXED** (PS-19.25). `visibilitychange` fires on every switch; the catch-up is now skipped if a run happened inside one interval                                                                                                                                                                                                                                                                              |

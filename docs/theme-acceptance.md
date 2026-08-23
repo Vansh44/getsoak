@@ -201,6 +201,16 @@ catalog/signup links preserve the StoreMink platform host; keyboard focus,
 mobile layout, canonical, robots host, sitemap host, and social preview all
 belong to `themes.storemink.com` rather than a merchant store or the apex.
 
+**TA-3.12 ★ — The catalog stays one compact, newest-first row**
+
+Open `themes.storemink.com` at desktop, tablet and mobile widths.
+
+**Expect:** every filtered theme stays in one horizontal, snap-aligned row;
+touch/trackpad scrolling works natively and the visible previous/next buttons
+move one card at a time, wrapping at either end. The latest `releasedAt` theme
+is first. Cards are compact enough to show the preview, identity, features and
+actions without occupying a full viewport height on desktop or mobile.
+
 ---
 
 ## 4. Accessibility and performance gate

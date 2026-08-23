@@ -21,6 +21,13 @@ export interface InvoiceOrderData {
   notes: string | null;
   shipping_address: Record<string, unknown> | null;
   billing_address: Record<string, unknown> | null;
+  sales_channel?: string | null;
+  sale_location_name?: string | null;
+  sale_location_address?: Record<string, unknown> | null;
+  customer_first_name?: string | null;
+  customer_last_name?: string | null;
+  customer_phone?: string | null;
+  customer_email?: string | null;
   /** 'delivery' for everything that isn't a collection. Optional so an older
    *  caller still type-checks; absent reads as delivery, which is what every
    *  order was before pickup existed. */
@@ -91,6 +98,16 @@ export function InvoiceDocument({
   const billTo = order.billing_address
     ? formatAddress(order.billing_address)
     : shipTo;
+  const isPosSale = order.sales_channel === "pos";
+  const posCustomer = {
+    name: [order.customer_first_name, order.customer_last_name]
+      .filter(Boolean)
+      .join(" "),
+    lines: [] as string[],
+    phone: order.customer_phone ?? "",
+    email: order.customer_email ?? "",
+  };
+  const customerParty = isPosSale ? posCustomer : billTo;
 
   // ★ NOTHING IS SHIPPED TO A COLLECTION ORDER. The second party block named
   // the customer's home address under "Ship To" on an order they walked in and
@@ -99,8 +116,9 @@ export function InvoiceDocument({
   // instead, and the customer party is always rendered so the invoice still
   // says who bought it even when the Bill To flag is off.
   const isPickup = order.fulfilment_type === "pickup";
-  const showCustomerParty = t.showBillingAddress || isPickup;
+  const showCustomerParty = t.showBillingAddress || isPickup || isPosSale;
   const pickupLines = locationAddressLines(order.pickup_location_address);
+  const saleLocationLines = locationAddressLines(order.sale_location_address);
 
   // Whether this ORDER carried tax — from the order's own snapshot, never the
   // store's live settings, so a later settings change can't rewrite history.
@@ -184,16 +202,31 @@ export function InvoiceDocument({
           <div>
             <div className="inv-party-label">Bill To</div>
             <div className="inv-party-body">
-              <div className="name">{billTo.name || "Customer"}</div>
-              {billTo.lines.map((l, i) => (
+              <div className="name">
+                {customerParty.name ||
+                  (isPosSale ? "Walk-in customer" : "Customer")}
+              </div>
+              {customerParty.lines.map((l, i) => (
                 <div key={i}>{l}</div>
               ))}
-              {billTo.phone && <div>{billTo.phone}</div>}
-              {billTo.email && <div>{billTo.email}</div>}
+              {customerParty.phone && <div>{customerParty.phone}</div>}
+              {customerParty.email && <div>{customerParty.email}</div>}
             </div>
           </div>
         )}
-        {isPickup ? (
+        {isPosSale ? (
+          <div>
+            <div className="inv-party-label">Sold At</div>
+            <div className="inv-party-body">
+              <div className="name">
+                {order.sale_location_name || "Store location"}
+              </div>
+              {saleLocationLines.map((l, i) => (
+                <div key={i}>{l}</div>
+              ))}
+            </div>
+          </div>
+        ) : isPickup ? (
           <div>
             <div className="inv-party-label">Collect From</div>
             <div className="inv-party-body">

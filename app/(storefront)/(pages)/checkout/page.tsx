@@ -24,6 +24,7 @@ import {
 import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
 import {
   defaultPaymentMethod,
+  paymentMethodsFor,
   paymentOptionsFor,
 } from "@/lib/fulfilment/payment-policy";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
@@ -230,11 +231,13 @@ export default function CheckoutPage() {
   // What this store may be paid with, for the mode currently selected. Same
   // function placeOrder validates against, so the screen can never offer
   // something the server then refuses in front of a customer.
-  const payOptions = paymentOptionsFor({
+  const paymentOptionsInput = {
     fulfilment,
     onlineAvailable: !!payConfig?.onlinePayments,
     policy: pickup?.paymentPolicy ?? "customer_choice",
-  });
+  } as const;
+  const payOptions = paymentOptionsFor(paymentOptionsInput);
+  const paymentMethods = paymentMethodsFor(paymentOptionsInput);
 
   // ★ DERIVED DURING RENDER, NOT SET IN AN EFFECT. `payMethod` state holds only
   // what the SHOPPER picked; what is displayed and submitted is resolved here.
@@ -244,11 +247,8 @@ export default function CheckoutPage() {
   // disappear: there is no moment at which the value is stale.
   //
   // The shopper's choice is honoured only while it is still ON OFFER. Switching
-  // Delivery→Pickup under a prepaid policy retires COD, and leaving it selected
-  // would fail at placeOrder with the customer's card already out.
-  // The shopper's choice is honoured only while it is still ON OFFER. Switching
-  // Delivery→Pickup under a prepaid policy retires pay-at-store, and leaving it
-  // selected would fail at placeOrder with the customer's card already out.
+  // fulfilment modes or applying a stricter pickup policy can retire the prior
+  // offline method; leaving it selected would then fail at placeOrder.
   const chosenStillOffered =
     chosenPayMethod !== null &&
     (chosenPayMethod === "razorpay"
@@ -259,11 +259,7 @@ export default function CheckoutPage() {
   const resolvedPayMethod: PaymentMethod =
     chosenStillOffered && chosenPayMethod
       ? chosenPayMethod
-      : (defaultPaymentMethod({
-          fulfilment,
-          onlineAvailable: !!payConfig?.onlinePayments,
-          policy: pickup?.paymentPolicy ?? "customer_choice",
-        }) ??
+      : (defaultPaymentMethod(paymentOptionsInput) ??
         // Nothing on offer (prepaid with no gateway) — the panel renders an
         // explanation and placeOrder refuses, so this is only a placeholder.
         "cod");
@@ -1264,54 +1260,46 @@ export default function CheckoutPage() {
 
               {payOptions.online && payOptions.offline ? (
                 <div className={styles.payStack}>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${resolvedPayMethod !== "razorpay" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() =>
-                      setChosenPayMethod(
-                        fulfilment === "pickup" ? "pay_at_store" : "cod",
-                      )
-                    }
-                    aria-pressed={resolvedPayMethod !== "razorpay"}
-                  >
-                    <span className={styles.payIcon}>
-                      <Banknote size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>
-                        {fulfilment === "pickup"
-                          ? "Pay at store"
-                          : "Cash on Delivery"}
-                      </div>
-                      <div className={styles.payDesc}>
-                        {fulfilment === "pickup"
-                          ? "Pay at the counter when you collect your order."
-                          : "Pay with cash when your order arrives at your doorstep."}
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.payOption}${resolvedPayMethod === "razorpay" ? "" : ` ${styles.payOptionMuted}`}`}
-                    onClick={() => setChosenPayMethod("razorpay")}
-                    aria-pressed={resolvedPayMethod === "razorpay"}
-                  >
-                    <span className={styles.payIcon}>
-                      <CreditCard size={22} />
-                    </span>
-                    <div>
-                      <div className={styles.payName}>Pay online</div>
-                      <div className={styles.payDesc}>
-                        UPI, cards or netbanking — secured by Razorpay.
-                      </div>
-                    </div>
-                    <span className={styles.payCheck}>
-                      <Check size={20} />
-                    </span>
-                  </button>
+                  {paymentMethods.map((method) => {
+                    const online = method === "razorpay";
+                    const selectedMethod = resolvedPayMethod === method;
+                    return (
+                      <button
+                        key={method}
+                        type="button"
+                        className={`${styles.payOption}${selectedMethod ? "" : ` ${styles.payOptionMuted}`}`}
+                        onClick={() => setChosenPayMethod(method)}
+                        aria-pressed={selectedMethod}
+                      >
+                        <span className={styles.payIcon}>
+                          {online ? (
+                            <CreditCard size={22} />
+                          ) : (
+                            <Banknote size={22} />
+                          )}
+                        </span>
+                        <div>
+                          <div className={styles.payName}>
+                            {online
+                              ? "Pay online"
+                              : fulfilment === "pickup"
+                                ? "Pay at store"
+                                : "Cash on Delivery"}
+                          </div>
+                          <div className={styles.payDesc}>
+                            {online
+                              ? "UPI, cards or netbanking — secured by Razorpay."
+                              : fulfilment === "pickup"
+                                ? "Pay at the counter when you collect your order."
+                                : "Pay with cash when your order arrives at your doorstep."}
+                          </div>
+                        </div>
+                        <span className={styles.payCheck}>
+                          <Check size={20} />
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : payOptions.online ? (
                 /* The merchant requires collection orders to be paid up front

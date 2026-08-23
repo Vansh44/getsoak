@@ -282,7 +282,10 @@ wholesip/
 │   │   │                      # returning a false "not authorized". Tested in
 │   │   │                      # access.test.ts.
 │   │   ├── products/          # CRUD; edit = full page [id]/ (Shopify-style, no modal)
-│   │   ├── orders/            # Orders list (server-paginated) — reads order-actions
+│   │   ├── orders/            # ★ Channel-aware Orders workspace: horizontal All / Website /
+│   │   │                      # POS books (never extra app-rail destinations), server-paginated
+│   │   │                      # with channel-specific filters/columns and a shared detail drawer
+│   │   │                      # that never presents a register sale as fulfilment work (§22)
 │   │   ├── categories/ colors/ blogs/ media/   # content management (media/ = the
 │   │   │                      # per-store Media Library: confirm-first upload + grid +
 │   │   │                      # view + copy-URL + delete (media_assets row + GCS object),
@@ -376,7 +379,8 @@ wholesip/
 │   ├── help/                  # Help centre (served at help.storemink.com)
 │   ├── themes/                # ★ Public metadata-driven theme catalog served at
 │   │                          # themes.storemink.com; own canonical/OG/CSS, industry
-│   │                          # filters, truthful demo/release/plan state
+│   │                          # filters, truthful demo/release/plan state, and a
+│   │                          # newest-first one-row carousel at every viewport
 │   │
 │   ├── actions/               # ★ ALL SERVER ACTIONS ("use server") — one file per domain:
 │   │   │                      # product/category/color/coupon/coupon-email/blog/blog-social/
@@ -445,8 +449,9 @@ wholesip/
 │   │   ├── refund-actions.ts  # ★ Money OUT (§26): refundOrder (pending-row-FIRST
 │   │   │                      # idempotency, FOR UPDATE cap, unknown ≠ failure) +
 │   │   │                      # getOrderRefundState. Gated getManagerIdentity("orders").
-│   │   ├── order-actions.ts   # ★ getOrders (paginated) + updateOrderStatus (allowlisted
-│   │   │                      # status/payment_status, store-scoped). Tested.
+│   │   ├── order-actions.ts   # ★ getOrders (All/Website/POS channel-paginated) +
+│   │   │                      # updateOrderStatus (allowlisted status/payment_status,
+│   │   │                      # store-scoped; POS excluded from fulfilment states). Tested.
 │   │   ├── import-export-actions.ts # ★ §31 CSV import trust boundary: previewImport
 │   │   │                      # (which match keys exist — all the browser can't know),
 │   │   │                      # startImport → importChunk × N → finishImport, plus the
@@ -1662,7 +1667,11 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `theme-showcases.tsx` client boundary; manual controls pause rotation, and
     reduced-motion visitors keep a stable composition. Publishing another
     selectable theme therefore updates both galleries without page-specific
-    image wiring. The catalog has its own
+    image wiring. The catalog cards are newest-first by `release.releasedAt` and
+    stay in one horizontally scrollable, snap-aligned row at desktop, tablet and
+    mobile widths; `theme-catalog-carousel.tsx` adds one-card previous/next
+    controls (wrapping at the ends) while leaving touch and trackpad scrolling
+    native. The catalog has its own
     canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
     one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
     demos render an honest unavailable state rather than a broken live link.
@@ -3225,6 +3234,28 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         "2 × ₹100 … ₹200 / Less −₹30 = ₹170" instead of arithmetic that
         doesn't add up. Recording it also makes markdowns auditable per
         cashier, which is the point of the cap.
+      - **★ ONE ORDERS WORKSPACE, THREE TOP VIEWS — NEVER THREE RAIL ITEMS.**
+        `/dashboard/orders` resolves `sales_channel` server-side into a default
+        chronological **All orders** union plus focused **Website orders** and
+        **POS orders** views before pagination/counting. The horizontal switch
+        carries honest counts; each view has its own lifecycle tabs, columns and
+        payment methods. **That omnichannel workspace is itself gated by the
+        authoritative `getPosState(store).posEnabled` capability** (effective
+        Pro plan + the store switch): lower plans and Pro stores with POS off
+        retain the original Website-only Orders page, and the list/export server
+        boundaries coerce stale or forged POS channel requests back to Website.
+        Website rows keep
+        delivery/pickup fulfilment; POS rows show receipt, attached customer,
+        register location and cashier. The register customer is joined from
+        `users` — a POS shipping address is deliberately null — so both a
+        searched customer and one created inline remain visible after the sale.
+        The POS drawer/invoice say **Sold at**, render a truthful Walk-in when
+        nobody was attached, and expose neither delivery address/phone,
+        ShipmentPanel nor the fulfilment selector. That is enforced below the
+        UI too: `updateOrderStatus` excludes POS rows from fulfilment states,
+        and shipment actions refuse the POS channel before creating warehouse
+        work. The legacy `fulfilment_type = delivery` database default is not
+        exported for POS sales because it never represented a courier promise.
       - **A register sale is a SALE — it emits like one.** `placePosSale` ends
         with `emitEvent("order.placed")` + `reportStockChanges` (§22
         notifications). Without them an in-store sale wrote an `orders` row and
@@ -3555,12 +3586,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           cancelled order is exactly when the shop must be able to say what
           happened. It renders with NO buttons (`collectionState` decides), the
           same rule the row follows.
-        - **★ MARK READY KEEPS IT OPEN; HANDING OVER CLOSES IT.** `settle` has
-          already dropped the row behind, so closing after Mark ready would mean
-          waiting for the 30s poll before the parcel could be given to the
-          person standing there. A deposit also keeps it open — the order is
-          still work — and re-reads, applying `partial.remaining` optimistically
-          first so no stale balance is on screen for a round trip.
+        - **★★ MARK READY MOVES THE ROW; HANDING OVER REMOVES IT.** Once the
+          server confirms Mark ready, `counter-client.tsx` changes that order to
+          `ready` in the queue, search results and open detail in the same frame.
+          It therefore moves immediately from **To prepare** to **Ready to
+          collect** instead of disappearing until a poll/reload rediscovers it.
+          The detail stays open because the next tap may be Hand over; only a
+          completed hand-over uses `settle` to remove the row. A deposit also
+          keeps the detail open — the order is still work — and re-reads,
+          applying `partial.remaining` optimistically first so no stale balance
+          is on screen for a round trip.
       - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers

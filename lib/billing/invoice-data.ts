@@ -7,6 +7,7 @@ import {
   orders,
   storeBillingSettings,
   storeLocations,
+  users,
 } from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getActingStoreId } from "@/app/dashboard/lib/access";
@@ -42,6 +43,33 @@ const ORDER_COLS = {
   notes: orders.notes,
   shipping_address: orders.shippingAddress,
   billing_address: orders.billingAddress,
+  sales_channel: orders.salesChannel,
+  sale_location_name: sql<string | null>`(
+    select l.name from ${storeLocations} l where l.id = ${orders.locationId}
+  )`,
+  sale_location_address: sql<Record<string, unknown> | null>`(
+    select l.address from ${storeLocations} l where l.id = ${orders.locationId}
+  )`,
+  customer_first_name: sql<string | null>`(
+    select u.first_name from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_last_name: sql<string | null>`(
+    select u.last_name from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_phone: sql<string | null>`(
+    select u.phone from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
+  customer_email: sql<string | null>`(
+    select u.email from ${users} u
+    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
+    limit 1
+  )`,
   // ★ An invoice for a collection must not print a delivery address. Without
   // these the document had no way to tell the two apart, so it billed a
   // walk-in customer against a home address nothing was ever sent to.

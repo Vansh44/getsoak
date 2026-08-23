@@ -8,6 +8,7 @@ import {
   DEFAULT_THEME_ID,
   canPreviewTheme,
   isThemeSelectable,
+  newestThemesFirst,
   readThemeSelection,
   THEME_CATEGORIES,
 } from "./meta";
@@ -174,6 +175,9 @@ describe("theme registry", () => {
       }
       if (theme.catalog.visibility === "public") {
         expect(theme.release.status).toBe("published");
+        expect(theme.release.releasedAt, `${theme.id}: release date`).toMatch(
+          /^\d{4}-\d{2}-\d{2}$/,
+        );
         expect(theme.demo.status).toBe("healthy");
       }
       if (theme.release.status === "blocked") {
@@ -183,6 +187,13 @@ describe("theme registry", () => {
     expect(THEME_CATEGORIES[0]).toEqual({ id: "all", label: "All" });
     expect(new Set(THEME_CATEGORIES.map((filter) => filter.id)).size).toBe(
       THEME_CATEGORIES.length,
+    );
+    const newestFirst = newestThemesFirst(THEME_META.filter(isThemeSelectable));
+    const releaseDates = newestFirst.map(
+      (theme) => theme.release.releasedAt ?? "",
+    );
+    expect(releaseDates).toEqual(
+      [...releaseDates].sort((a, b) => b.localeCompare(a)),
     );
     const basketMeta = THEME_META.find((theme) => theme.id === "basket")!;
     expect(isThemeSelectable(basketMeta)).toBe(true);

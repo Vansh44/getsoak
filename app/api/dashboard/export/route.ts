@@ -16,6 +16,8 @@ import {
 } from "@/lib/import-export/resources";
 import { addProgress, createJob, finishJob } from "@/lib/import-export/jobs";
 import type { ResourceId } from "@/lib/import-export/types";
+import { getCurrentStore } from "@/lib/store/resolve";
+import { getPosState } from "@/lib/pos/locations";
 
 // Node runtime: the exporters open user-scoped Postgres transactions.
 export const runtime = "nodejs";
@@ -86,6 +88,10 @@ export async function GET(request: Request) {
   }
 
   const storeId = await getActingStoreId();
+  const supportsPos =
+    resource.id === "orders"
+      ? getPosState(await getCurrentStore()).posEnabled
+      : true;
   const admin = { uid: ctx.userId, email: ctx.userEmail };
   // ★ RESOLVED HERE, at the gate, not inside each exporter — one place to get
   // it right, and one place to look when asking whether an export is bounded.
@@ -118,6 +124,12 @@ export async function GET(request: Request) {
   const filters: Record<string, string | undefined> = {
     status: url.searchParams.get("status") ?? undefined,
     location: url.searchParams.get("location") ?? undefined,
+    // A disabled/downgraded store has the original Website-only Orders page;
+    // its unfiltered export must match that page rather than include legacy
+    // POS rows retained by the soft-on-downgrade policy.
+    channel: supportsPos
+      ? (url.searchParams.get("channel") ?? undefined)
+      : "website",
   };
 
   const filename = `${resource.id}-${stamp}.csv`;
