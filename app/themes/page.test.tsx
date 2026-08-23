@@ -5,17 +5,15 @@ import {
   THEME_META,
   canPreviewTheme,
   isThemeSelectable,
+  newestThemesFirst,
 } from "@/lib/themes/meta";
 
 // Derived from THEME_META rather than hardcoded: these assertions are about the
-// catalog's RULES (only a healthy demo is linked; the showcase leads with the
-// public themes), not about which themes happen to exist today. Publishing a
-// theme used to break both of these with no rule having changed.
+// catalog's RULES (only a healthy demo is linked; newest releases lead), not
+// about which themes happen to exist today. Publishing a theme used to break
+// these with no rule having changed.
 const selectable = THEME_META.filter(isThemeSelectable);
-const showcaseOrder = [
-  ...selectable.filter((t) => t.catalog.visibility === "public"),
-  ...selectable.filter((t) => t.catalog.visibility !== "public"),
-];
+const showcaseOrder = newestThemesFirst(selectable);
 
 describe("public theme catalog", () => {
   it("renders catalog metadata and never links an unhealthy demo", async () => {
@@ -63,6 +61,54 @@ describe("public theme catalog", () => {
       screen.getByRole("link", { name: "Food & Beverages" }),
     ).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("heading", { name: "Basket" })).toBeVisible();
+  });
+
+  it("keeps one newest-first rail with working previous/next controls", async () => {
+    render(await ThemesPage({ searchParams: Promise.resolve({}) }));
+
+    const rail = screen.getByRole("region", { name: "Theme collection" });
+    const names = Array.from(
+      rail.querySelectorAll(".theme-card h3"),
+      (heading) => heading.textContent,
+    );
+    expect(names).toEqual(showcaseOrder.map((theme) => theme.name));
+
+    const previous = screen.getByRole("button", { name: "Previous theme" });
+    const next = screen.getByRole("button", { name: "Next theme" });
+    expect(previous).toBeVisible();
+    expect(next).toBeVisible();
+
+    Object.defineProperties(rail, {
+      clientWidth: { configurable: true, value: 400 },
+      scrollWidth: { configurable: true, value: 1_200 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+    });
+    const firstCard = rail.querySelector<HTMLElement>(".theme-card")!;
+    vi.spyOn(firstCard, "getBoundingClientRect").mockReturnValue({
+      width: 320,
+      height: 560,
+      top: 0,
+      right: 320,
+      bottom: 560,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const scrollTo = vi.fn();
+    Object.defineProperty(rail, "scrollTo", { value: scrollTo });
+
+    fireEvent.click(next);
+    expect(scrollTo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ left: expect.any(Number) }),
+    );
+    expect(scrollTo.mock.calls.at(-1)?.[0].left).toBeGreaterThan(0);
+
+    rail.scrollLeft = 800;
+    fireEvent.click(next);
+    expect(scrollTo).toHaveBeenLastCalledWith(
+      expect.objectContaining({ left: 0 }),
+    );
   });
 
   it("automatically rotates catalog-driven showcases and keeps manual controls", async () => {

@@ -172,6 +172,7 @@ export const THEME_META: readonly ThemeMeta[] = [
     release: {
       version: "0.1.0",
       status: "published",
+      releasedAt: "2026-08-12",
       notes: [
         "Production route and responsive audit passed after the pristine demo reseed on 2026-08-12.",
         "Published to the catalog and signup; the strict performance target and two-reviewer scorecard remain open release follow-ups.",
@@ -223,6 +224,7 @@ export const THEME_META: readonly ThemeMeta[] = [
     release: {
       version: "0.1.0",
       status: "published",
+      releasedAt: "2026-08-12",
       notes: [
         "Production route and responsive audit passed after the pristine demo reseed on 2026-08-12.",
         "Published to the catalog and signup; the strict performance target and two-reviewer scorecard remain open release follow-ups.",
@@ -398,6 +400,23 @@ export function isThemeId(id: unknown): id is string {
 
 export function isThemeSelectable(theme: ThemeMeta): boolean {
   return theme.catalog.visibility !== "hidden";
+}
+
+/** New catalog releases lead everywhere themes are presented. ISO dates sort
+ * lexically; missing dates stay behind dated releases, with manifest order as
+ * the stable tie-breaker. */
+export function newestThemesFirst<T extends ThemeMeta>(
+  themes: readonly T[],
+): T[] {
+  return themes
+    .map((theme, index) => ({ theme, index }))
+    .sort((a, b) => {
+      const byDate = (b.theme.release.releasedAt ?? "").localeCompare(
+        a.theme.release.releasedAt ?? "",
+      );
+      return byDate || a.index - b.index;
+    })
+    .map(({ theme }) => theme);
 }
 
 export function canPreviewTheme(theme: ThemeMeta): boolean {

@@ -376,7 +376,8 @@ wholesip/
 │   ├── help/                  # Help centre (served at help.storemink.com)
 │   ├── themes/                # ★ Public metadata-driven theme catalog served at
 │   │                          # themes.storemink.com; own canonical/OG/CSS, industry
-│   │                          # filters, truthful demo/release/plan state
+│   │                          # filters, truthful demo/release/plan state, and a
+│   │                          # newest-first one-row carousel at every viewport
 │   │
 │   ├── actions/               # ★ ALL SERVER ACTIONS ("use server") — one file per domain:
 │   │   │                      # product/category/color/coupon/coupon-email/blog/blog-social/
@@ -1662,7 +1663,11 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     `theme-showcases.tsx` client boundary; manual controls pause rotation, and
     reduced-motion visitors keep a stable composition. Publishing another
     selectable theme therefore updates both galleries without page-specific
-    image wiring. The catalog has its own
+    image wiring. The catalog cards are newest-first by `release.releasedAt` and
+    stay in one horizontally scrollable, snap-aligned row at desktop, tablet and
+    mobile widths; `theme-catalog-carousel.tsx` adds one-card previous/next
+    controls (wrapping at the ends) while leaving touch and trackpad scrolling
+    native. The catalog has its own
     canonical/OG metadata (`public/themes/catalog-og.png`), robots host, and
     one-entry sitemap; the platform nav/footer links to it. Blocked or unhealthy
     demos render an honest unavailable state rather than a broken live link.
