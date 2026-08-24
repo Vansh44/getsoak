@@ -1246,8 +1246,20 @@ wholesip/
 │                              # legal-acceptance immutability outside a parent-store purge.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
-│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
-│   │                          # generated .next/dev caches over 3 GB; signal-safe
+│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
+│   │                          # generated .next/dev caches over 3 GB, ALWAYS reclaims
+│   │                          # .next/cache over 256 MB (next build's webpack cache —
+│   │                          # Turbopack dev never reads it, so dropping it is a free
+│   │                          # reclaim, not a speed trade); warns when swap is ≥60%
+│   │                          # full BEFORE starting; drops a `.metadata_never_index`
+│   │                          # marker in .next/node_modules/coverage on every start
+│   │                          # (they are gitignored AND wiped by dev:reset / npm ci,
+│   │                          # so a one-time marker silently disappears); signal-safe.
+│   │                          # ⚠ The heap cap bounds V8's old space ONLY — Turbopack
+│   │                          # is Rust, so its module graph and source maps are native
+│   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
+│   │                          # boot → 1.77 GB after eight routes, cap never binding.
+│   │                          # Restarting the server is what reclaims memory, not the cap
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
 │   │                          # checksum drift/unknown-row refusal, RLS/table/column/
@@ -7006,8 +7018,13 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 > 300–500 ms on network before React starts. Independent dashboard-shell reads
 > run concurrently, but the durable fix for the remaining network floor is a
 > local Postgres (not built; the doc says what it would take). On an 8 GB machine
-> the second cost is memory, so the default dev runner now caps Next at 2 GB and
-> rotates `.next/dev` only after its generated cache exceeds 3 GB.
+> the second cost is memory, so the default dev runner now caps Next at 2 GB,
+> rotates `.next/dev` only after its generated cache exceeds 3 GB, and always
+> reclaims `.next/cache` (dead in dev) once it passes 256 MB. **The cap bounds
+> V8's old space only** — Turbopack's native memory sits outside it, so total RSS
+> still climbs through a session; restart the server rather than trusting the cap.
+> The runner also warns when swap is already ≥60% full at startup, because on an
+> 8 GB machine that, not compilation, is what the slowdown actually is.
 
 ```bash
 npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
