@@ -14,6 +14,15 @@ stories are here.**
 
 ## 0.1 Public POS product site
 
+**PS-0.0 — A lower-plan merchant can understand POS before upgrading**
+Open `/dashboard/pos` for a Free or Basic store at desktop and mobile widths.
+**Expect:** a responsive feature banner explains barcode checkout, payment
+methods, live inventory sync, and staff access without requiring an upgrade.
+The primary action opens Plans & Billing, while **Explore all POS features**
+opens `https://pos.storemink.com` in a new tab so the merchant's dashboard
+session remains in place. The current plan and the two locations included with
+Pro remain explicit.
+
 **PS-0.1 — The POS product site is not a merchant storefront**
 Open `pos.storemink.com` (or `pos.localhost:3000` in local development).
 **Expect:** the public Point of Sale product page renders. It canonicalises to
