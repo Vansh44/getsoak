@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import {
   Bot,
@@ -527,10 +528,25 @@ export function HelpAssistant() {
                 <Send size={18} />
               </button>
             </form>
-            <div className="hc-assistant-privacy">
-              <ShieldCheck size={13} aria-hidden />
-              Don&apos;t share passwords, OTPs, card details, or customer data.
-            </div>
+            <footer className="hc-assistant-footer">
+              <div className="hc-assistant-privacy">
+                <ShieldCheck size={13} aria-hidden />
+                Don&apos;t share passwords, OTPs, card details, or customer
+                data.
+              </div>
+              <div className="hc-assistant-powered">
+                <Image
+                  src="/brand/storemink-mark.webp"
+                  alt=""
+                  width={18}
+                  height={18}
+                  aria-hidden
+                />
+                <span>
+                  Powered by <strong>StoreMink</strong>
+                </span>
+              </div>
+            </footer>
           </section>
         </>
       )}

@@ -38,6 +38,9 @@ describe("HelpAssistant", () => {
     expect(
       screen.getByRole("dialog", { name: "Mink AI Help Assistant" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/Powered by/)).toHaveTextContent(
+      "Powered by StoreMink",
+    );
 
     fireEvent.change(
       screen.getByLabelText("Ask Mink AI a StoreMink question"),
