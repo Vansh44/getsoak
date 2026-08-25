@@ -9,6 +9,7 @@ import {
   CreditCard,
   ChartNoAxesCombined,
   ScanLine,
+  Users,
   BookOpen,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +28,7 @@ const ICONS: Record<string, LucideIcon> = {
   CreditCard,
   ChartNoAxesCombined,
   ScanLine,
+  Users,
   BookOpen,
 };
 

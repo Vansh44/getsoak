@@ -41,6 +41,9 @@ import {
   extractMediaUrlsFromHtml,
 } from "@/lib/storage/cleanup";
 import { callGemini } from "@/lib/ai/gemini";
+import { refreshHelpArticleEmbeddings } from "@/lib/help/embedding-worker";
+import { triggerHelpEmbeddingWorker } from "@/lib/help/embedding-trigger";
+import { logWarn } from "@/lib/observability/logger";
 import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 import { HELP_URL } from "@/lib/site";
@@ -130,6 +133,173 @@ function catalogSuggestion(entry: HelpSearchCatalogEntry): HelpSuggestion {
   };
 }
 
+const HELP_SEARCH_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "can",
+  "do",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "my",
+  "of",
+  "on",
+  "the",
+  "to",
+  "with",
+  "you",
+]);
+
+const HELP_SEARCH_ALIASES: Record<string, string[]> = {
+  address: ["domain", "dns", "website"],
+  alert: ["notification", "email", "sms"],
+  backorder: ["inventory", "stock"],
+  billing: ["plan", "subscription", "invoice", "payment"],
+  blog: ["post", "article", "content"],
+  builder: ["website", "storefront", "page", "section", "theme"],
+  card: ["payment", "tender"],
+  checkout: ["sale", "sell", "counter", "payment"],
+  collect: ["pickup", "collection"],
+  collection: ["pickup", "collect"],
+  coupon: ["discount", "promotion", "offer"],
+  courier: ["shipping", "delivery", "fulfilment"],
+  customer: ["buyer", "shopper", "user"],
+  delivery: ["shipping", "fulfilment", "courier"],
+  discount: ["coupon", "offer", "promotion"],
+  domain: ["address", "dns", "website"],
+  dns: ["domain", "address", "website"],
+  gateway: ["razorpay", "online", "payment"],
+  gst: ["tax", "invoice"],
+  inventory: ["stock"],
+  invoice: ["gst", "tax", "receipt", "billing"],
+  login: ["password", "security", "account"],
+  notification: ["alert", "email", "sms"],
+  offer: ["coupon", "discount", "promotion"],
+  password: ["login", "security", "account"],
+  payment: ["pay", "cash", "card", "tender"],
+  pickup: ["collect", "collection", "fulfilment"],
+  plan: ["subscription", "billing", "upgrade"],
+  pos: ["point", "sale", "register", "till", "checkout", "counter"],
+  promotion: ["coupon", "discount", "offer"],
+  razorpay: ["gateway", "online", "payment"],
+  refund: ["return", "exchange"],
+  register: ["pos", "till", "sale", "sell"],
+  return: ["refund", "exchange"],
+  sale: ["sell", "checkout", "register", "pos", "counter"],
+  shipping: ["delivery", "fulfilment", "courier"],
+  staff: ["team", "role", "user"],
+  stock: ["inventory"],
+  storefront: ["website", "builder", "page", "theme"],
+  subscription: ["plan", "billing", "upgrade"],
+  team: ["staff", "role", "user"],
+  tax: ["gst", "invoice"],
+  theme: ["website", "storefront", "builder"],
+  till: ["pos", "register", "sale", "sell"],
+  upgrade: ["plan", "subscription", "billing"],
+  website: ["storefront", "builder", "page", "domain"],
+};
+
+function searchTokens(value: string): string[] {
+  return [
+    ...new Set(
+      searchText(value)
+        .split(" ")
+        .filter(
+          (token) => token.length >= 2 && !HELP_SEARCH_STOP_WORDS.has(token),
+        ),
+    ),
+  ];
+}
+
+/**
+ * Deterministic recall layer for ordinary product language. It includes the
+ * category name (which the article FTS vector does not) and a small, reviewed
+ * StoreMink vocabulary, so questions such as “process a POS sale” still find
+ * “Process an in-store sale” when the AI interpreter is unavailable.
+ */
+interface RankedCatalogSuggestion {
+  suggestion: HelpSuggestion;
+  score: number;
+  originalMatches: number;
+  index: number;
+}
+
+function rankCatalogSuggestions(
+  query: string,
+  catalog: HelpSearchCatalogEntry[],
+  limit = 12,
+): RankedCatalogSuggestion[] {
+  const queryTokens = searchTokens(query);
+  if (queryTokens.length === 0) return [];
+  const expandedTokens = new Set(
+    queryTokens.flatMap((token) => HELP_SEARCH_ALIASES[token] ?? []),
+  );
+  const normalizedQuery = searchText(query);
+
+  return catalog
+    .map((entry, index) => {
+      const title = searchText(entry.title);
+      const category = searchText(entry.categoryTitle);
+      const excerpt = searchText(entry.excerpt ?? "");
+      const slug = searchText(entry.slug);
+      const titleTokens = new Set(title.split(" "));
+      const categoryTokens = new Set(category.split(" "));
+      const excerptTokens = new Set(excerpt.split(" "));
+      const slugTokens = new Set(slug.split(" "));
+      let score = 0;
+      let originalMatches = 0;
+
+      for (const token of queryTokens) {
+        let matched = false;
+        if (titleTokens.has(token)) {
+          score += 12;
+          matched = true;
+        }
+        if (categoryTokens.has(token)) {
+          score += 8;
+          matched = true;
+        }
+        if (excerptTokens.has(token)) {
+          score += 5;
+          matched = true;
+        }
+        if (slugTokens.has(token)) {
+          score += 3;
+          matched = true;
+        }
+        if (matched) originalMatches += 1;
+      }
+
+      for (const token of expandedTokens) {
+        if (queryTokens.includes(token)) continue;
+        if (titleTokens.has(token)) score += 4;
+        if (categoryTokens.has(token)) score += 3;
+        if (excerptTokens.has(token)) score += 2;
+        if (slugTokens.has(token)) score += 1;
+      }
+
+      if (originalMatches >= 2) score += originalMatches * 5;
+      if (normalizedQuery.length >= 4 && title.includes(normalizedQuery)) {
+        score += 30;
+      }
+      return {
+        suggestion: catalogSuggestion(entry),
+        index,
+        score,
+        originalMatches,
+      };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, limit);
+}
+
 function cardsToSuggestions(
   cards: HelpArticleCard[],
   catalog: HelpSearchCatalogEntry[],
@@ -210,6 +380,10 @@ export async function searchPublishedHelpWithAi(
   if (catalog.length === 0) {
     return { results: keywordResults, mode: "keyword" };
   }
+  const deterministicCandidates = rankCatalogSuggestions(query, catalog);
+  const deterministicResults = deterministicCandidates.map(
+    (candidate) => candidate.suggestion,
+  );
 
   // A typed document name is deterministic and already the strongest possible
   // match. Avoid spending an AI call or allowing a model to move it down.
@@ -227,11 +401,27 @@ export async function searchPublishedHelpWithAi(
     };
   }
 
+  // Two or more direct query-word matches in the best published entry are a
+  // stronger and faster signal than asking a model to rediscover the same
+  // article. Gemini remains additive for aliases, paraphrases, and languages
+  // that do not have this deterministic coverage.
+  if ((deterministicCandidates[0]?.originalMatches ?? 0) >= 2) {
+    return {
+      results: uniqueSuggestions([deterministicResults, keywordResults], 30),
+      mode: "keyword",
+    };
+  }
+
   const { allowed } = await rateLimit(
     `help:ai-search:${clientIp(await headers())}`,
     { max: 30, windowSeconds: 3600 },
   );
-  if (!allowed) return { results: keywordResults, mode: "keyword" };
+  if (!allowed) {
+    return {
+      results: uniqueSuggestions([deterministicResults, keywordResults], 30),
+      mode: "keyword",
+    };
+  }
 
   const catalogueForModel = catalog.map((entry) => ({
     slug: entry.slug,
@@ -259,7 +449,12 @@ You must only use the PUBLISHED DOCUMENT CATALOGUE supplied by the application.
       responseSchema: AI_HELP_SEARCH_SCHEMA,
     },
   );
-  if (error || !text) return { results: keywordResults, mode: "keyword" };
+  if (error || !text) {
+    return {
+      results: uniqueSuggestions([deterministicResults, keywordResults], 30),
+      mode: "keyword",
+    };
+  }
 
   let parsed: { queries?: unknown; slugs?: unknown };
   try {
@@ -268,7 +463,10 @@ You must only use the PUBLISHED DOCUMENT CATALOGUE supplied by the application.
       slugs?: unknown;
     };
   } catch {
-    return { results: keywordResults, mode: "keyword" };
+    return {
+      results: uniqueSuggestions([deterministicResults, keywordResults], 30),
+      mode: "keyword",
+    };
   }
 
   const queries = Array.isArray(parsed.queries)
@@ -295,6 +493,7 @@ You must only use the PUBLISHED DOCUMENT CATALOGUE supplied by the application.
   const results = uniqueSuggestions(
     [
       selected.map(catalogSuggestion),
+      deterministicResults,
       keywordResults,
       ...expandedCards.map((cards) => cardsToSuggestions(cards, catalog)),
     ],
@@ -403,6 +602,23 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function refreshArticleSemanticIndex(articleId: string | undefined) {
+  if (!articleId) return;
+  after(async () => {
+    try {
+      await refreshHelpArticleEmbeddings(articleId);
+    } catch (error) {
+      // The article save is the source of truth and must never be rolled back by
+      // a derived-index failure. The hourly reconciler retries stale/missing
+      // vectors from the article's updated_at revision.
+      logWarn("Help article semantic index refresh failed", {
+        articleId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+}
+
 const ARTICLE_ADMIN_COLS = {
   id: helpArticles.id,
   categoryId: helpArticles.categoryId,
@@ -469,6 +685,32 @@ function cleanInput(input: HelpArticleInput) {
   };
 }
 
+function publishedContentError(article: {
+  status: HelpStatus;
+  categoryId: string | null;
+  excerpt: string | null;
+  body: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+}): string | null {
+  if (article.status !== "published") return null;
+  if (!article.categoryId) return "Choose a category before publishing.";
+  if (!article.excerpt) return "Add a short summary before publishing.";
+
+  const readableBody = (article.body ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(?:nbsp|#160);/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (readableBody.length < 40) {
+    return "Add useful article content before publishing.";
+  }
+  if (!article.seoTitle || !article.seoDescription) {
+    return "Add an SEO title and description before publishing.";
+  }
+  return null;
+}
+
 export async function createHelpArticle(
   input: HelpArticleInput,
 ): Promise<ActionResult<{ id: string; slug: string }>> {
@@ -477,9 +719,8 @@ export async function createHelpArticle(
   if (!input.title.trim()) return { error: "Title is required." };
 
   const c = cleanInput(input);
-  if (c.status === "published" && !c.categoryId) {
-    return { error: "Choose a category before publishing." };
-  }
+  const publishError = publishedContentError(c);
+  if (publishError) return { error: publishError };
   const slug = await resolveHelpSlug(input.slug || input.title);
   const ts = nowIso();
   try {
@@ -498,6 +739,7 @@ export async function createHelpArticle(
         .returning({ id: helpArticles.id, slug: helpArticles.slug }),
     );
     updateTag(TAGS.help);
+    refreshArticleSemanticIndex(rows[0]?.id);
     if (c.status === "published") pingArticle(c.categoryId, slug);
     return { success: true, data: rows[0] };
   } catch (e) {
@@ -517,9 +759,8 @@ export async function updateHelpArticle(
   if (!existing) return { error: "Article not found." };
 
   const c = cleanInput(input);
-  if (c.status === "published" && !c.categoryId) {
-    return { error: "Choose a category before publishing." };
-  }
+  const publishError = publishedContentError(c);
+  if (publishError) return { error: publishError };
   const slug = await resolveHelpSlug(input.slug || input.title, id);
   const ts = nowIso();
   // Publish timestamp: set when transitioning into published; keep otherwise.
@@ -546,6 +787,7 @@ export async function updateHelpArticle(
       if (orphaned.length) await deleteStorageUrls(orphaned).catch(() => {});
     });
     updateTag(TAGS.help);
+    refreshArticleSemanticIndex(id);
     if (c.status === "published") pingArticle(c.categoryId, slug);
     return { success: true, data: { slug } };
   } catch (e) {
@@ -583,9 +825,8 @@ export async function setHelpArticleStatus(
   if (status === "published") {
     const existing = await getHelpArticleForEditor(id);
     if (!existing) return { error: "Article not found." };
-    if (!existing.categoryId) {
-      return { error: "Choose a category before publishing." };
-    }
+    const publishError = publishedContentError({ ...existing, status });
+    if (publishError) return { error: publishError };
   }
   const ts = nowIso();
   try {
@@ -605,6 +846,7 @@ export async function setHelpArticleStatus(
         }),
     );
     updateTag(TAGS.help);
+    refreshArticleSemanticIndex(id);
     if (status === "published" && rows[0])
       pingArticle(rows[0].categoryId, rows[0].slug);
     return { success: true };
@@ -687,20 +929,31 @@ export async function updateHelpCategory(
 ): Promise<ActionResult> {
   const op = await requireOperator();
   if (!op) return { error: "Not authorized." };
+  if (!input.title.trim()) return { error: "Title is required." };
+  const ts = nowIso();
   try {
-    await withService((db) =>
-      db
+    const affected = await withService(async (db) => {
+      await db
         .update(helpCategories)
         .set({
           title: input.title.trim(),
           description: input.description.trim() || null,
           icon: input.icon.trim() || null,
           ...(input.slug ? { slug: slugify(input.slug) } : {}),
-          updatedAt: nowIso(),
+          updatedAt: ts,
         })
-        .where(eq(helpCategories.id, id)),
-    );
+        .where(eq(helpCategories.id, id));
+      // Category title is embedded retrieval metadata. Advancing the parent
+      // article revision makes old chunks fail closed under RLS until the
+      // durable worker regenerates them with the new category wording.
+      return db
+        .update(helpArticles)
+        .set({ updatedAt: ts })
+        .where(eq(helpArticles.categoryId, id))
+        .returning({ id: helpArticles.id });
+    });
     updateTag(TAGS.help);
+    if (affected.length > 0) after(() => triggerHelpEmbeddingWorker());
     return { success: true };
   } catch (e) {
     return { error: dbMessage(e) };

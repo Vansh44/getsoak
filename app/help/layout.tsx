@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { HELP_URL } from "@/lib/site";
 import { platformOrganizationSchema } from "@/lib/seo/brand-identity";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
+import { HelpAssistant } from "./components/help-assistant";
 import { HelpSearchBox } from "./components/search-box";
 import "./help.css";
 
@@ -65,13 +66,16 @@ export default function HelpLayout({
             Store<span>Mink</span> Help
           </Link>
           <HelpSearchBox compact />
-          <a
-            href="https://storemink.com/signup"
-            className="hc-topbar-cta"
-            rel="noopener"
-          >
-            Create your store
-          </a>
+          <div className="hc-topbar-actions">
+            <a
+              href="https://storemink.com/signup"
+              className="hc-topbar-cta"
+              rel="noopener"
+            >
+              Create your store
+            </a>
+            <HelpAssistant />
+          </div>
         </div>
       </header>
 

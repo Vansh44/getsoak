@@ -1679,10 +1679,14 @@ hand, which was the step that mattered.
 were PROMOTED out of this table into Steps 19, 14 and 20 on 2026-08-18. An item
 in two places is an item nobody owns.
 
-| Item                           | Why it matters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Analytics **remaining phases** | Phase 1, Phase 2a–2d, Search Console Phase 3a–3d, the first report/CSV release, platform feature controls, the complete Analytics Help Centre guide set, and Phase 8 merchant pixels shipped through 2026-08-20. GA4 and Meta Pixel are Pro-only, independently operator-controlled, configured at Settings → Analytics tracking, and blocked on the storefront until the visitor explicitly allows the matching Analytics or Marketing category; rejection and later withdrawal remain available. Migration `20260820_0010_merchant_pixels` enables those modules and publishes their detailed setup guides. Cloud Scheduler still needs deployment-time creation/verification. Next product build: Phase 9 Pro-only first-party storefront conversion analytics, followed by Phase 10 margin. Spec: `docs/analytics-and-search-console-plan.md` |
-| Live **Razorpay** run          | Refunds and metered billing have never touched a real account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Item                                                    | Why it matters                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics **remaining phases**                          | Phase 1, Phase 2a–2d, Search Console Phase 3a–3d, the first report/CSV release, platform feature controls, the complete Analytics Help Centre guide set, and Phase 8 merchant pixels shipped through 2026-08-20. GA4 and Meta Pixel are Pro-only, independently operator-controlled, configured at Settings → Analytics tracking, and blocked on the storefront until the visitor explicitly allows the matching Analytics or Marketing category; rejection and later withdrawal remain available. Migration `20260820_0010_merchant_pixels` enables those modules and publishes their detailed setup guides. Cloud Scheduler still needs deployment-time creation/verification. Next product build: Phase 9 Pro-only first-party storefront conversion analytics, followed by Phase 10 margin. Spec: `docs/analytics-and-search-console-plan.md` |
+| Live **Razorpay** run                                   | Refunds and metered billing have never touched a real account                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Help-sweep **security and money gaps**                  | The 2026-08-26 documentation audit found controls that public copy must not overstate: order-detail and cancellation reads do not consistently enforce assigned-location scope (and scope lookup errors currently fail open); storefront Razorpay callback/webhook paths do not all independently reject amount/currency mismatches; and Email/SMS rows record initial provider acceptance rather than final delivery. Harden these paths, add negative authorization/payment tests, then remove the corresponding Help warnings only after verification.                                                                                                                                                                                                                                                                                         |
+| Activity/log **location scope**                         | Activity, Email, SMS and failure logs are store-scoped but are not narrowed to the viewer's assigned locations. Treat Activity as permission to review store-wide operational evidence, then decide whether each log should gain location ownership/scope and add negative tests before public Help can promise per-location isolation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Coupon targeting **tenant and entitlement enforcement** | Coupon group selectors currently load groups without a store filter, and the clear-then-best-effort-insert path can leave a coupon public when a selected link fails. Filter every selector by acting store, validate every group ID, and replace the operation atomically/fail-closed. Coupon campaign email is intended to be Pro-only but the current UI/action lacks a plan gate; enforce it server-side and hide/disable it in lower plans. Public Help requires an outside-member/guest test until the targeting fix ships.                                                                                                                                                                                                                                                                                                                 |
+| Help-sweep **fulfilment and document gaps**             | Priority routing compares raw `on_hand` instead of `on_hand - reserved`; missing parcel measurements silently use 500 g and 10×10×5 cm; website checkout does not capture buyer GSTIN or persist a CGST/SGST/IGST split; and historical invoice reprints combine immutable transaction values with the current merchant template/identity. These are product gaps now described honestly in Help, not missing documentation.                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -1738,6 +1742,66 @@ receipts, stock, cash shifts, pickup, returns, refunds/store credit/exchanges,
 reporting, and connection-aware troubleshooting. These rows are installed by
 the migration ledger, so staging and production receive the same public support
 content and the existing Help search/sitemap pipeline discovers every guide.
+
+The public merchant documentation now has a broad coverage baseline for the
+product that is actually shipped. Migrations
+`20260826_0019_getting_started_account_help` through
+`20260826_0024_marketing_communications_help` upsert 81 guide records
+covering Getting started, account/staff/billing, Website Builder and storefront,
+domains, products/inventory, customers/enquiries, payments/GST/COD,
+orders/locations/shipping, and marketing/blog/email/SMS. The public taxonomy
+has 11 canonical baseline categories; operators may add more later. The
+existing POS, Analytics and Mink AI guides stay in the same operator-editable
+database source. When the existing
+custom-domain guide is present, the batch adds 80 net-new guides and updates
+that one record in place. Publication now
+fails closed when a guide is missing its category, excerpt, meaningful body or
+SEO metadata, and the offline deterministic vocabulary covers each product
+area. `scripts/help-content-migrations.test.mjs` is the release contract for the
+six content batches: exact counts and order, unique slugs, complete metadata,
+substantial bodies, valid internal links, and no links to unshipped surfaces.
+
+The documentation deliberately does **not** get ahead of the application. Do
+not publish a Returns-settings guide until that registry is rendered in the
+Orders settings UI, or a Promotions guide until the route exists. Newsletter
+subscriber management/export, full product-review moderation, arbitrary
+merchant store-credit grants, and inbound Twilio STOP handling also remain
+excluded because those merchant workflows are not built. Before documenting a
+self-service customer deletion flow, fix the current account-delete cascade and
+confirmation copy so account-linked order/invoice records cannot disappear
+without an explicit, legally informed decision. Shiprocket merchant-account
+rates, booking and webhook guidance remains conditional on a controlled live
+smoke test, and the Razorpay refund guide requires a controlled first-live
+refund plus reconciliation. These are product backlog or release-evidence
+items, not missing Help copy. The same audit exposed authorization and data
+integrity work that must stay visible in this roadmap: enforce location scope
+on order-detail/cancellation reads and fail closed when scope cannot be loaded;
+validate amount/currency/capture consistently on every storefront Razorpay
+settlement path; route on reservation-adjusted availability; replace silent
+parcel defaults with an explicit measurement workflow; and separate immutable
+invoice facts from current-template reprints. Email and SMS logs remain
+send-attempt evidence, not final-delivery tracking.
+
+Mink AI retrieval now has a durable semantic layer as well as the deterministic
+one. Migration `20260825_0017_help_article_embeddings` installs pgvector and a
+published-parent-scoped, 768-dimensional chunk table; migration
+`20260826_0018_help_embedding_hardening` adds complete-set and parser-version
+metadata before the worker is deployed. Published guides are
+split at headings, embedded with retrieval-specific query/document task types,
+and combined with exact/title/category/alias results through reciprocal-rank
+fusion. Exact matches keep reserved places; vectors add paraphrase and
+multilingual recall without being allowed to erase them. Missing credentials,
+provider timeouts, an unapplied migration, or an empty backfill all fail soft to
+the existing search path. Article saves refresh their own derived index, while
+the CRON-secret-gated hourly worker backfills and repairs stale/model-changed
+chunks in bounded, self-chaining batches. Chunk sets are versioned and carry
+their expected count, so parser releases and partial sets are reconciled; an
+article-level advisory lock plus a full source recheck prevents concurrent or
+same-timestamp edits from publishing stale vectors. Long guides are embedded in
+provider-sized batches, and retrieval limits each article to its best three
+semantic sections before cross-article fusion. The next retrieval step is an
+operator-owned golden query set with measured recall/precision before changing
+the default similarity threshold or introducing any approximate vector index.
 
 ### Returns, exchanges, BORIS, credit notes
 

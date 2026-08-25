@@ -27,6 +27,17 @@ vi.mock("@/lib/storage/cleanup", () => ({
   ),
 }));
 vi.mock("@/lib/ai/gemini", () => ({ callGemini: vi.fn() }));
+vi.mock("@/lib/help/embedding-worker", () => ({
+  refreshHelpArticleEmbeddings: vi.fn(async () => ({
+    status: "indexed",
+    articleId: "article-1",
+    chunks: 1,
+  })),
+}));
+vi.mock("@/lib/help/embedding-trigger", () => ({
+  triggerHelpEmbeddingWorker: vi.fn(async () => undefined),
+}));
+vi.mock("@/lib/observability/logger", () => ({ logWarn: vi.fn() }));
 vi.mock("@/lib/seo/search-engines", () => ({
   pingIndexNow: vi.fn(async () => {}),
   submitSitemapToGoogle: vi.fn(async () => ({ ok: true, status: 204 })),
@@ -51,6 +62,8 @@ import {
   extractMediaUrlsFromHtml,
 } from "@/lib/storage/cleanup";
 import { callGemini } from "@/lib/ai/gemini";
+import { refreshHelpArticleEmbeddings } from "@/lib/help/embedding-worker";
+import { triggerHelpEmbeddingWorker } from "@/lib/help/embedding-trigger";
 import { pingIndexNow, submitSitemapToGoogle } from "@/lib/seo/search-engines";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -85,7 +98,7 @@ const ARTICLE_INPUT: HelpArticleInput = {
   slug: "connect-domain",
   categoryId: "category-1",
   excerpt: " Connect your domain. ",
-  body: '<p>Safe</p><script>alert("x")</script>',
+  body: '<p>Safe instructions explain how to connect and verify the domain.</p><h2>Steps</h2><ol><li>Open Domain settings.</li></ol><script>alert("x")</script>',
   status: "published",
   seoTitle: " Custom domains ",
   seoDescription: " Learn how to connect a domain. ",
@@ -97,14 +110,14 @@ const ARTICLE = {
   slug: "connect-domain",
   title: "Connect a custom domain",
   excerpt: "Connect your domain.",
-  body: '<p>Old</p><img src="https://storage.test/old.webp">',
+  body: '<p>Existing instructions explain how to connect and verify the domain safely.</p><img src="https://storage.test/old.webp">',
   status: "draft",
   position: 0,
   viewCount: 10,
   helpfulYes: 2,
   helpfulNo: 1,
   seoTitle: "Custom domains",
-  seoDescription: "Learn how.",
+  seoDescription: "Learn how to connect and verify a custom store domain.",
   createdBy: "operator-1",
   updatedBy: "operator-1",
   createdAt: "2026-08-14T00:00:00.000Z",
@@ -132,6 +145,98 @@ const SEARCH_CATALOGUE = [
     excerpt: "Connect and verify a domain you own.",
   },
 ];
+
+const POS_SEARCH_CATALOGUE = [
+  {
+    id: "article-pos-sale",
+    categoryId: "category-pos",
+    categorySlug: "point-of-sale",
+    categoryTitle: "Point of Sale",
+    slug: "process-an-in-store-sale",
+    title: "Process an in-store sale",
+    excerpt:
+      "Add products, attach a customer, take payment, and finish a sale safely.",
+  },
+  {
+    id: "article-pos-device",
+    categoryId: "category-pos",
+    categorySlug: "point-of-sale",
+    categoryTitle: "Point of Sale",
+    slug: "authorise-a-pos-device",
+    title: "Authorise a POS device",
+    excerpt: "Connect a phone, tablet, or computer to a location.",
+  },
+];
+
+const COMPLETE_HELP_SEARCH_CATALOGUE = [
+  {
+    categorySlug: "getting-started",
+    categoryTitle: "Getting started",
+    slug: "troubleshoot-signup-login-and-store-access",
+    title: "Troubleshoot signup, login, and store access",
+    excerpt: "Fix password and account access problems.",
+  },
+  {
+    categorySlug: "storefront",
+    categoryTitle: "Setting up your store",
+    slug: "use-the-storemink-website-builder",
+    title: "Use the StoreMink Website Builder",
+    excerpt: "Build and publish storefront pages and sections.",
+  },
+  {
+    categorySlug: "products",
+    categoryTitle: "Products & inventory",
+    slug: "track-inventory-and-allow-backorders",
+    title: "Track inventory and allow backorders",
+    excerpt: "Understand stock, availability, and backorders.",
+  },
+  {
+    categorySlug: "customers",
+    categoryTitle: "Customers & enquiries",
+    slug: "create-and-manage-customer-groups",
+    title: "Create and manage customer groups",
+    excerpt: "Organize shoppers into useful customer groups.",
+  },
+  {
+    categorySlug: "payments",
+    categoryTitle: "Payments, GST & COD",
+    slug: "connect-razorpay-and-accept-online-payments",
+    title: "Connect Razorpay and accept online payments",
+    excerpt: "Connect a gateway and take verified online payments.",
+  },
+  {
+    categorySlug: "domains",
+    categoryTitle: "Domains",
+    slug: "how-to-add-custom-domain",
+    title: "Connect a custom domain",
+    excerpt: "Add DNS records and wait for secure HTTPS.",
+  },
+  {
+    categorySlug: "orders",
+    categoryTitle: "Orders, locations & shipping",
+    slug: "set-shipping-charges-and-delivery-estimates",
+    title: "Set shipping charges and delivery estimates",
+    excerpt: "Configure delivery prices and promises.",
+  },
+  {
+    categorySlug: "marketing",
+    categoryTitle: "Marketing, blogs & communication",
+    slug: "send-a-coupon-email-campaign",
+    title: "Send a coupon email campaign",
+    excerpt: "Send a discount offer to registered customers.",
+  },
+  {
+    categorySlug: "account",
+    categoryTitle: "Account, staff & billing",
+    slug: "manage-your-storemink-plan-and-subscription",
+    title: "Manage your StoreMink plan and subscription",
+    excerpt: "Upgrade, cancel, or resume your billing plan.",
+  },
+].map((article, index) => ({
+  id: `article-complete-${index}`,
+  categoryId: `category-complete-${index}`,
+  ...article,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -253,6 +358,70 @@ describe("public help actions", () => {
     });
   });
 
+  it("finds a POS sale deterministically without an AI-search round trip", async () => {
+    vi.mocked(getHelpSearchCatalog).mockResolvedValue(
+      POS_SEARCH_CATALOGUE as any,
+    );
+    vi.mocked(searchHelpArticles).mockResolvedValue([]);
+    vi.mocked(callGemini).mockResolvedValue({ error: "offline" });
+
+    expect(
+      await searchPublishedHelpWithAi("How do I process a POS sale?"),
+    ).toEqual({
+      mode: "keyword",
+      results: [
+        expect.objectContaining({
+          url: "/help/point-of-sale/process-an-in-store-sale",
+        }),
+        expect.objectContaining({
+          url: "/help/point-of-sale/authorise-a-pos-device",
+        }),
+      ],
+    });
+    expect(callGemini).not.toHaveBeenCalled();
+  });
+
+  it("keeps deterministic alias retrieval when AI search is rate limited", async () => {
+    vi.mocked(getHelpSearchCatalog).mockResolvedValue(SEARCH_CATALOGUE as any);
+    vi.mocked(rateLimit).mockResolvedValue({ allowed: false } as any);
+
+    const result = await searchPublishedHelpWithAi("use my website address");
+
+    expect(result.results[0]?.url).toBe("/help/domains/connect-domain");
+    expect(callGemini).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["forgot password", "troubleshoot-signup-login-and-store-access"],
+    ["website builder page", "use-the-storemink-website-builder"],
+    ["inventory stock backorder", "track-inventory-and-allow-backorders"],
+    ["customer shopper groups", "create-and-manage-customer-groups"],
+    ["Razorpay gateway payment", "connect-razorpay-and-accept-online-payments"],
+    ["custom domain DNS", "how-to-add-custom-domain"],
+    [
+      "shipping delivery charges",
+      "set-shipping-charges-and-delivery-estimates",
+    ],
+    ["promotion", "send-a-coupon-email-campaign"],
+    [
+      "billing plan subscription",
+      "manage-your-storemink-plan-and-subscription",
+    ],
+  ])(
+    "retrieves %s from the cross-category catalogue without AI",
+    async (query, expectedSlug) => {
+      vi.mocked(getHelpSearchCatalog).mockResolvedValue(
+        COMPLETE_HELP_SEARCH_CATALOGUE as any,
+      );
+      vi.mocked(rateLimit).mockResolvedValue({ allowed: false } as any);
+
+      const result = await searchPublishedHelpWithAi(query);
+
+      expect(result.results[0]?.url).toMatch(new RegExp(`/${expectedSlug}$`));
+      expect(callGemini).not.toHaveBeenCalled();
+    },
+  );
+
   it("rate limits view inflation by IP and writes through the anon RPC", async () => {
     await recordHelpArticleView("article-1");
     expect(rateLimit).toHaveBeenCalledWith("help:view:203.0.113.10", {
@@ -336,7 +505,9 @@ describe("article administration", () => {
 
   it("returns the full editor row and contains read errors", async () => {
     dbHolder.current = makeDbMock({ selectQueue: [[ARTICLE]] });
-    expect((await getHelpArticleForEditor("article-1"))?.body).toContain("Old");
+    expect((await getHelpArticleForEditor("article-1"))?.body).toContain(
+      "Existing instructions",
+    );
 
     dbHolder.current.db.select = vi.fn(() => {
       throw new Error("offline");
@@ -361,12 +532,39 @@ describe("article administration", () => {
     expect(dbHolder.current.calls.values[0]).toMatchObject({
       title: "Connect a custom domain",
       excerpt: "Connect your domain.",
-      body: "<p>Safe</p>",
+      body: "<p>Safe instructions explain how to connect and verify the domain.</p><h2>Steps</h2><ol><li>Open Domain settings.</li></ol>",
       status: "published",
       slug: "connect-domain",
       createdBy: "operator-1",
       updatedBy: "operator-1",
     });
+    expect(refreshHelpArticleEmbeddings).toHaveBeenCalledWith("article-1");
+  });
+
+  it("refuses to publish empty or incomplete help content", async () => {
+    expect(
+      await createHelpArticle({
+        ...ARTICLE_INPUT,
+        excerpt: "",
+      }),
+    ).toEqual({ error: "Add a short summary before publishing." });
+
+    expect(
+      await createHelpArticle({
+        ...ARTICLE_INPUT,
+        body: "<p>Too short</p>",
+      }),
+    ).toEqual({ error: "Add useful article content before publishing." });
+
+    expect(
+      await createHelpArticle({
+        ...ARTICLE_INPUT,
+        seoDescription: "",
+      }),
+    ).toEqual({
+      error: "Add an SEO title and description before publishing.",
+    });
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
   it("chooses the next available global slug", async () => {
@@ -420,7 +618,7 @@ describe("article administration", () => {
     });
     await updateHelpArticle("article-1", {
       ...ARTICLE_INPUT,
-      body: "<p>New body</p>",
+      body: "<p>New instructions explain how to connect and verify the domain safely.</p>",
     });
     await vi.waitFor(() =>
       expect(deleteStorageUrls).toHaveBeenCalledWith([
@@ -451,6 +649,7 @@ describe("article administration", () => {
       status: "published",
       updatedBy: "operator-1",
     });
+    expect(refreshHelpArticleEmbeddings).toHaveBeenCalledWith("article-1");
     await vi.waitFor(() =>
       expect(pingIndexNow).toHaveBeenCalledWith([
         "https://help.storemink.com/help/domains/connect-domain",
@@ -470,6 +669,17 @@ describe("article administration", () => {
 
     expect(await setHelpArticleStatus("article-1", "published")).toEqual({
       error: "Choose a category before publishing.",
+    });
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("refuses to publish a draft with no useful body", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[{ ...ARTICLE, body: "<p></p>" }]],
+    });
+
+    expect(await setHelpArticleStatus("article-1", "published")).toEqual({
+      error: "Add useful article content before publishing.",
     });
     expect(dbHolder.current.calls.update).toHaveLength(0);
   });
@@ -523,6 +733,16 @@ describe("category administration", () => {
     expect(
       await updateHelpCategory("category-1", {
         slug: "",
+        title: " ",
+        description: "",
+        icon: "",
+      }),
+    ).toEqual({ error: "Title is required." });
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+
+    expect(
+      await updateHelpCategory("category-1", {
+        slug: "",
         title: " Domains and DNS ",
         description: "",
         icon: " globe ",
@@ -534,6 +754,8 @@ describe("category administration", () => {
       icon: "globe",
     });
     expect(dbHolder.current.calls.set[0]).not.toHaveProperty("slug");
+    expect(dbHolder.current.calls.set[1]).toHaveProperty("updatedAt");
+    expect(triggerHelpEmbeddingWorker).toHaveBeenCalledOnce();
   });
 
   it("atomically deletes only an empty category", async () => {
