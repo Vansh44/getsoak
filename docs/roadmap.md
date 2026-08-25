@@ -1731,6 +1731,14 @@ the production Help sitemap with real update dates, notify IndexNow, and trigger
 an immediate Google Search Console sitemap submission. The daily SEO job remains
 the durable retry, while Google retains final control over crawl and indexing.
 
+The dedicated **Point of Sale** Help category now publishes 17 editable guides
+covering the shipped counter journey end to end: setup, locations, staff and
+authorised devices, register policy, scanning, sales, tenders, discounts,
+receipts, stock, cash shifts, pickup, returns, refunds/store credit/exchanges,
+reporting, and connection-aware troubleshooting. These rows are installed by
+the migration ledger, so staging and production receive the same public support
+content and the existing Help search/sitemap pipeline discovers every guide.
+
 ### Returns, exchanges, BORIS, credit notes
 
 Spec: `docs/returns-exchanges-plan.md`. The twelve `returns.*` settings,

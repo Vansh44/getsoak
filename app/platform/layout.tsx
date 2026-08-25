@@ -11,7 +11,7 @@ import "./platform.css";
 // depend on a network fetch while a crawler waits.
 const OG_IMAGE = brandOgImageUrl({
   title: "StoreMink",
-  subtitle: "Launch your store in a day. Keep 100% of every sale.",
+  subtitle: "One place to build, sell and grow.",
   color: "#17130f",
   logo: "/brand/storemink-mark.png",
   footer: "storemink.com",
@@ -30,7 +30,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const DESCRIPTION = `The India-first store builder with everything included — storefront, Point of Sale, GST invoicing, blogs, reviews, coupons and email campaigns. D2C + B2B from ₹${cheapestPaid.toLocaleString("en-IN")}/month. No apps to buy, no transaction fees.`;
 
   return {
-    title: "StoreMink — Launch your store in a day. Keep 100% of every sale.",
+    title: "StoreMink — Build, sell and grow in one place",
     description: DESCRIPTION,
     applicationName: "StoreMink",
     // Self-canonical. Without this the apex emitted NO canonical at all, while
@@ -55,7 +55,7 @@ export async function generateMetadata(): Promise<Metadata> {
       "shopify alternative india",
     ],
     openGraph: {
-      title: "StoreMink — Launch your store in a day",
+      title: "StoreMink — Build, sell and grow in one place",
       description: DESCRIPTION,
       url: "/",
       siteName: "StoreMink",
@@ -64,7 +64,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     twitter: {
       card: "summary_large_image",
-      title: "StoreMink — Launch your store in a day",
+      title: "StoreMink — Build, sell and grow in one place",
       description: DESCRIPTION,
       images: [OG_IMAGE],
     },

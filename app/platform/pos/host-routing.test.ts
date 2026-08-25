@@ -93,7 +93,7 @@ describe("POS product host discovery metadata", () => {
     });
   });
 
-  it("keeps the closing CTA legible and the light footer compact", () => {
+  it("ships the real multidevice product story with responsive, isolated styling", () => {
     const page = readFileSync(
       join(process.cwd(), "app/platform/pos/page.tsx"),
       "utf8",
@@ -103,16 +103,30 @@ describe("POS product host discovery metadata", () => {
       "utf8",
     );
 
-    expect(page).toMatch(
-      /href=\{PLATFORM_URL\}\s+className="stq-btn stq-btn-outline"[\s\S]*?Back to StoreMink/,
+    expect(page).toContain(
+      'import posDevicesImage from "@/public/brand/storemink-pos-multidevice.png"',
     );
-    expect(page).toContain('className="stq-footer stq-footer-compact"');
+    expect(page).toContain("src={posDevicesImage}");
+    expect(page).toContain('<a href="#checkout">Checkout</a>');
+    expect(page).toContain('<a href="#inventory">Inventory</a>');
+    expect(page).toContain('<a href="#fulfilment">Pickup & returns</a>');
+    expect(page).toContain('<a href="#operations">Operations</a>');
+    expect(page).toContain('<a href="#pricing">Pricing</a>');
+    expect(page).not.toMatch(
+      /POS_URL[^\n]*#(?:checkout|inventory|fulfilment|operations|pricing)/,
+    );
+    expect(page).toContain('id="checkout"');
+    expect(page).toContain('id="inventory"');
+    expect(page).toContain('id="fulfilment"');
+    expect(page).toContain('id="operations"');
+    expect(page).toContain('id="pricing"');
+    expect(page).toContain('className="posx-footer"');
     expect(page).toContain('type="application/ld+json"');
     expect(css).toMatch(
-      /\.stq-footer-simple \.stq-logo\s*\{[\s\S]*?color: var\(--stq-ink\)/,
+      /\.posx-footer\s*\{[\s\S]*?color: #d9d5e7;[\s\S]*?background: #0c0a1d/,
     );
     expect(css).toMatch(
-      /\.stq-footer-simple p\s*\{[\s\S]*?color: var\(--stq-muted\)/,
+      /@media \(max-width: 640px\)\s*\{[\s\S]*?\.posx-journey-grid,[\s\S]*?grid-template-columns: 1fr/,
     );
   });
 });

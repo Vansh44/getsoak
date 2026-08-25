@@ -354,6 +354,27 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260825_0015_pos_help_documents",
+      "description": "Publish a dedicated Point of Sale Help Centre category with complete plain-language operating guides",
+      "file": "sql/20260825_0015_pos_help_documents.sql",
+      "transaction": true,
+      "requires": ["20260823_0014_store_deletion_cascade"],
+      "verify": {
+        "queries": [
+          {
+            "name": "Point of Sale Help category has the intended grid position and icon",
+            "sql": "select count(*)::text from public.help_categories where slug = 'point-of-sale' and title = 'Point of Sale' and position = 4 and icon = 'ScanLine'",
+            "equals": "1"
+          },
+          {
+            "name": "all Point of Sale Help guides are published in their canonical category",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'point-of-sale' and a.status = 'published'",
+            "equals": "17"
+          }
+        ]
+      }
     }
   ]
 }

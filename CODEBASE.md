@@ -30,7 +30,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build). Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                              |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -340,7 +340,11 @@ wholesip/
 │   │                          # (e.g. blogs → blogs/settings — see convention #9)
 │   │
 │   ├── platform/              # ★ STOREMINK PLATFORM (served on storemink.com via rewrite)
-│   │   ├── page.tsx           # Marketing landing page
+│   │   ├── page.tsx           # Marketing landing page — connected commerce
+│   │   │                      # story (storefront + operations + POS + growth),
+│   │   │                      # with scoped visuals in homepage.css; live plan
+│   │   │                      # prices still resolve from the canonical catalog
+│   │   ├── homepage-mobile-nav.tsx # Accessible, auto-closing mobile menu
 │   │   ├── signup/            # ★ Store creation wizard (see §19): Shopify-style
 │   │   │                      # step order — email → password (+ Continue with
 │   │   │                      # Google) → email OTP → phone OTP → name → store →
@@ -1246,8 +1250,20 @@ wholesip/
 │                              # legal-acceptance immutability outside a parent-store purge.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
-│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates only
-│   │                          # generated .next/dev caches over 3 GB; signal-safe
+│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
+│   │                          # generated .next/dev caches over 3 GB, ALWAYS reclaims
+│   │                          # .next/cache over 256 MB (next build's webpack cache —
+│   │                          # Turbopack dev never reads it, so dropping it is a free
+│   │                          # reclaim, not a speed trade); warns when swap is ≥60%
+│   │                          # full BEFORE starting; drops a `.metadata_never_index`
+│   │                          # marker in .next/node_modules/coverage on every start
+│   │                          # (they are gitignored AND wiped by dev:reset / npm ci,
+│   │                          # so a one-time marker silently disappears); signal-safe.
+│   │                          # ⚠ The heap cap bounds V8's old space ONLY — Turbopack
+│   │                          # is Rust, so its module graph and source maps are native
+│   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
+│   │                          # boot → 1.77 GB after eight routes, cap never binding.
+│   │                          # Restarting the server is what reclaims memory, not the cap
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
 │   │                          # guard, advisory lock, one transaction per migration,
 │   │                          # checksum drift/unknown-row refusal, RLS/table/column/
@@ -2676,6 +2692,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `20260820_0012_gross_margin` add the first-party conversion and gross-margin
       guides. All rows remain editable through the operator Help
       Centre console; no second static docs source exists.
+    - **Point of Sale Help Centre guides (2026-08-25):** migration
+      `20260825_0015_pos_help_documents` adds the dedicated Point of Sale
+      category and 17 published, plain-language guides covering requirements,
+      locations, staff/PINs, authorised tills, settings, scanning and register
+      layout, checkout, tenders, discounts, receipts, location stock, shifts,
+      pickup, returns, refunds/store credit/exchanges/credit notes, reporting,
+      and troubleshooting. `ScanLine` is part of the fixed public/admin Help
+      icon catalogue. The rows use the existing Help query/search/sitemap path
+      and remain operator-editable; POS documentation is not duplicated in a
+      static route.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
@@ -7006,8 +7032,13 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 > 300–500 ms on network before React starts. Independent dashboard-shell reads
 > run concurrently, but the durable fix for the remaining network floor is a
 > local Postgres (not built; the doc says what it would take). On an 8 GB machine
-> the second cost is memory, so the default dev runner now caps Next at 2 GB and
-> rotates `.next/dev` only after its generated cache exceeds 3 GB.
+> the second cost is memory, so the default dev runner now caps Next at 2 GB,
+> rotates `.next/dev` only after its generated cache exceeds 3 GB, and always
+> reclaims `.next/cache` (dead in dev) once it passes 256 MB. **The cap bounds
+> V8's old space only** — Turbopack's native memory sits outside it, so total RSS
+> still climbs through a session; restart the server rather than trusting the cap.
+> The runner also warns when swap is already ≥60% full at startup, because on an
+> 8 GB machine that, not compilation, is what the slowdown actually is.
 
 ```bash
 npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
