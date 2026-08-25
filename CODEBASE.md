@@ -340,7 +340,11 @@ wholesip/
 │   │                          # (e.g. blogs → blogs/settings — see convention #9)
 │   │
 │   ├── platform/              # ★ STOREMINK PLATFORM (served on storemink.com via rewrite)
-│   │   ├── page.tsx           # Marketing landing page
+│   │   ├── page.tsx           # Marketing landing page — connected commerce
+│   │   │                      # story (storefront + operations + POS + growth),
+│   │   │                      # with scoped visuals in homepage.css; live plan
+│   │   │                      # prices still resolve from the canonical catalog
+│   │   ├── homepage-mobile-nav.tsx # Accessible, auto-closing mobile menu
 │   │   ├── signup/            # ★ Store creation wizard (see §19): Shopify-style
 │   │   │                      # step order — email → password (+ Continue with
 │   │   │                      # Google) → email OTP → phone OTP → name → store →
