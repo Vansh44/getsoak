@@ -2688,6 +2688,16 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `20260820_0012_gross_margin` add the first-party conversion and gross-margin
       guides. All rows remain editable through the operator Help
       Centre console; no second static docs source exists.
+    - **Point of Sale Help Centre guides (2026-08-25):** migration
+      `20260825_0015_pos_help_documents` adds the dedicated Point of Sale
+      category and 17 published, plain-language guides covering requirements,
+      locations, staff/PINs, authorised tills, settings, scanning and register
+      layout, checkout, tenders, discounts, receipts, location stock, shifts,
+      pickup, returns, refunds/store credit/exchanges/credit notes, reporting,
+      and troubleshooting. `ScanLine` is part of the fixed public/admin Help
+      icon catalogue. The rows use the existing Help query/search/sitemap path
+      and remain operator-editable; POS documentation is not duplicated in a
+      static route.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.

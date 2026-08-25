@@ -50,6 +50,20 @@ and FAQ anchors remain same-document native fragments on `pos.storemink.com`
 (and therefore preserve `http://` on `pos.localhost`), while StoreMink home,
 platform pricing, login, and signup deliberately navigate to `storemink.com`.
 
+**PS-0.3 — The Help Centre covers the full shipped POS journey**
+Open `help.storemink.com` after migration
+`20260825_0015_pos_help_documents` is applied.
+**Expect:** a dedicated **Point of Sale** card appears fourth in the category
+grid with its own scan icon and 17 published articles. The guides use easy
+language and cover requirements, locations, staff/PINs, authorised devices,
+settings, layout/scanning, checkout, tenders, discounts, receipts, stock,
+shifts, pickup, returns, refunds/store credit/exchanges/credit notes, reporting,
+and troubleshooting. Every article appears in the Topics tree and Help search,
+has a canonical `/help/point-of-sale/<slug>` URL, and is included in the Help
+sitemap. Claims describe shipped behaviour only, including the requirement for
+an internet connection to complete a sale; the articles remain editable from
+the operator Help console.
+
 ---
 
 ## 0. Before you can test anything
