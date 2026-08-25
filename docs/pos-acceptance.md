@@ -16,18 +16,28 @@ stories are here.**
 
 **PS-0.0 — A lower-plan merchant can understand POS before upgrading**
 Open `/dashboard/pos` for a Free or Basic store at desktop and mobile widths.
-**Expect:** a responsive feature banner explains barcode checkout, payment
-methods, live inventory sync, and staff access without requiring an upgrade.
-The primary action opens Plans & Billing, while **Explore all POS features**
-opens `https://pos.storemink.com` in a new tab so the merchant's dashboard
-session remains in place. The current plan and the two locations included with
-Pro remain explicit.
+**Expect:** a responsive feature banner shows the real StoreMink register UI
+across desktop, tablet and phone hardware, and leads with complete retail
+journeys: fast in-store checkout, multi-location inventory, GST receipts and
+cash-up, plus pickup, returns and store credit. It does not spend the limited
+feature space on baseline payment methods or staff roles. The primary action
+opens Plans & Billing, while **Explore all POS features** opens
+`https://pos.storemink.com` in a new tab so the merchant's dashboard session
+remains in place. The current plan and the two locations included with Pro
+remain explicit.
 
 **PS-0.1 — The POS product site is not a merchant storefront**
 Open `pos.storemink.com` (or `pos.localhost:3000` in local development).
 **Expect:** the public Point of Sale product page renders. It canonicalises to
 `https://pos.storemink.com`, advertises that host's own robots and one-page
 sitemap, and never attempts store resolution or POS operator authentication.
+The page leads with the real StoreMink register running across desktop, tablet
+and phone, then explains complete retail workflows in this order: in-store
+checkout, shared multi-location inventory, pickup/returns/store credit, and
+daily operations. The early feature space is reserved for these outcomes;
+baseline tender types and staff/device controls appear only in the deeper
+operational detail. Pro pricing, two included locations, authorised till limits
+and the requirement for a connection to complete a sale remain explicit.
 An unknown path such as `/not-a-page` stays inside the product route tree and
 404s; it must not expose an unrelated platform page.
 
@@ -35,8 +45,10 @@ An unknown path such as `/not-a-page` stays inside the product route tree and
 Open `{slug}.storemink.com/pos` for a real merchant.
 **Expect:** the merchant's operational register and credential gate behave as
 before. Creating a store with the slug `pos` is refused as reserved. On the
-public product page, Features/FAQ remain on `pos.storemink.com`, while StoreMink
-home, pricing, login, and signup deliberately navigate to `storemink.com`.
+public product page, checkout, inventory, pickup/returns, operations, pricing
+and FAQ anchors remain same-document native fragments on `pos.storemink.com`
+(and therefore preserve `http://` on `pos.localhost`), while StoreMink home,
+platform pricing, login, and signup deliberately navigate to `storemink.com`.
 
 ---
 

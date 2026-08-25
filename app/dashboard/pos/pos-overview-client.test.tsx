@@ -29,8 +29,16 @@ describe("POS overview upgrade banner", () => {
     expect(
       screen.getByRole("heading", { name: /a faster checkout/i }),
     ).toBeVisible();
-    expect(screen.getByText("Barcode-fast checkout")).toBeVisible();
-    expect(screen.getByText("Live inventory sync")).toBeVisible();
+    expect(screen.getByText("Fast in-store checkout")).toBeVisible();
+    expect(screen.getByText("Live multi-location inventory")).toBeVisible();
+    expect(screen.getByText("GST receipts & cash-up")).toBeVisible();
+    expect(screen.getByText("Pickup, returns & store credit")).toBeVisible();
+    expect(
+      screen.getByRole("img", {
+        name: /StoreMink POS running across a desktop register/i,
+      }),
+    ).toHaveAttribute("loading", "eager");
+    expect(screen.queryByText("Staff roles & access")).not.toBeInTheDocument();
 
     expect(
       screen.getByRole("link", { name: "Upgrade to Pro" }),

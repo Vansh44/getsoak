@@ -1,32 +1,34 @@
 "use client";
 
 import { useTransition } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import posMultiDeviceImage from "@/public/brand/storemink-pos-multidevice.png";
 import {
   ArrowUpRight,
-  Barcode,
   Boxes,
   Check,
   CheckCircle2,
-  CreditCard,
   ExternalLink,
   Gem,
   Loader2,
   MapPin,
+  PackageCheck,
+  ReceiptText,
+  ShoppingCart,
   Store,
-  Users,
 } from "lucide-react";
 import { enablePos, disablePos } from "@/app/actions/location-actions";
 import { PLAN_META } from "@/lib/plans";
 import type { PosState } from "@/lib/pos/locations";
 
 const POS_UPSELL_FEATURES = [
-  { label: "Barcode-fast checkout", icon: Barcode },
-  { label: "Cash & card payments", icon: CreditCard },
-  { label: "Live inventory sync", icon: Boxes },
-  { label: "Staff roles & access", icon: Users },
+  { label: "Fast in-store checkout", icon: ShoppingCart },
+  { label: "Live multi-location inventory", icon: Boxes },
+  { label: "GST receipts & cash-up", icon: ReceiptText },
+  { label: "Pickup, returns & store credit", icon: PackageCheck },
 ] as const;
 
 export function PosOverviewClient({
@@ -106,9 +108,9 @@ export function PosOverviewClient({
                   </span>
                 </h2>
                 <p className="mt-4 max-w-xl text-sm leading-6 text-slate-300 sm:text-[15px]">
-                  Turn any counter into a powerful register that already knows
-                  your catalog, customers, and stock—so every sale stays in
-                  sync, online and in store.
+                  Run counter sales, click-and-collect, returns, and stock
+                  across every location from the same commerce system as your
+                  website.
                 </p>
 
                 <ul className="mt-6 grid gap-2.5 sm:grid-cols-2">
@@ -160,71 +162,19 @@ export function PosOverviewClient({
 
               <div className="relative mx-auto w-full max-w-md lg:ml-auto">
                 <div className="rounded-[22px] border border-white/15 bg-white/10 p-2 shadow-2xl shadow-black/30 backdrop-blur-md">
-                  <div className="overflow-hidden rounded-2xl bg-[#f8f9fc] text-[#17182d] shadow-sm">
-                    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-                          <Store className="h-4 w-4" strokeWidth={2} />
-                        </span>
-                        <div>
-                          <p className="text-xs font-bold">New sale</p>
-                          <p className="text-[10px] text-slate-500">
-                            Main counter
-                          </p>
-                        </div>
-                      </div>
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                        Synced
-                      </span>
-                    </div>
-
-                    <div className="space-y-2 p-3 sm:p-4">
-                      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
-                          <Barcode className="h-5 w-5" strokeWidth={1.8} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold">
-                            Everyday essentials
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-slate-500">
-                            Scanned · Qty 2
-                          </p>
-                        </div>
-                        <span className="text-xs font-bold">₹1,798</span>
-                      </div>
-
-                      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
-                          <Users className="h-5 w-5" strokeWidth={1.8} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold">
-                            Customer attached
-                          </p>
-                          <p className="mt-0.5 text-[10px] text-slate-500">
-                            Orders and history connected
-                          </p>
-                        </div>
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                      </div>
-                    </div>
-
-                    <div className="border-t border-slate-200 bg-white p-4">
-                      <div className="mb-3 flex items-end justify-between">
-                        <span className="text-[11px] font-medium text-slate-500">
-                          Total
-                        </span>
-                        <span className="text-xl font-bold tracking-tight">
-                          ₹1,798.00
-                        </span>
-                      </div>
-                      <div className="flex h-11 items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white shadow-lg shadow-indigo-600/20">
-                        <CreditCard className="h-4 w-4" strokeWidth={2} />
-                        Take payment
-                      </div>
-                    </div>
+                  <div className="relative aspect-[3/2] overflow-hidden rounded-2xl bg-[#d6c3ae] shadow-sm">
+                    <Image
+                      src={posMultiDeviceImage}
+                      alt="StoreMink POS running across a desktop register, tablet, and phone with the real checkout interface"
+                      fill
+                      sizes="(max-width: 640px) calc(100vw - 80px), (max-width: 1200px) 42vw, 440px"
+                      loading="eager"
+                      className="object-cover"
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[#111329]/35 to-transparent"
+                    />
                   </div>
                 </div>
 
@@ -232,7 +182,7 @@ export function PosOverviewClient({
                   <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-400/15 text-emerald-300">
                     <Boxes className="h-3.5 w-3.5" strokeWidth={2} />
                   </span>
-                  Inventory updated instantly
+                  Website + counter, always in sync
                 </div>
               </div>
             </div>
