@@ -19,13 +19,19 @@ const LEDGER = "public.schema_migrations";
 const LOCK_NAME = "storemink:schema-migrations:v1";
 
 function connectionConfig() {
+  const adminUser = process.env.DB_ADMIN_USER;
+  if (!adminUser) {
+    throw new Error(
+      "DB_ADMIN_USER is required; the migration runner never falls back to the application login",
+    );
+  }
   const host = process.env.DB_HOST;
   const isSocket = host?.startsWith("/");
   return {
     host,
     port: isSocket ? undefined : Number(process.env.DB_PORT ?? 5432),
-    user: process.env.DB_ADMIN_USER ?? process.env.DB_USER,
-    password: process.env.DB_ADMIN_PASSWORD ?? process.env.DB_PASSWORD,
+    user: adminUser,
+    password: process.env.DB_ADMIN_PASSWORD,
     database: process.env.DB_NAME,
     ssl: false,
     application_name: "storemink-db-migrate",
@@ -52,7 +58,9 @@ async function createLedger(client) {
       applied_at      timestamptz not null default clock_timestamp()
     )
   `);
-  await client.query(`revoke all on ${LEDGER} from public`);
+  await client.query(
+    `revoke all on ${LEDGER} from public, app_user, app_service`,
+  );
 }
 
 async function appliedRows(client) {
@@ -126,6 +134,19 @@ async function verifyContract(client, verify, context) {
   }
 }
 
+async function verifyMigration(client, migration, mode, context) {
+  await verifyContract(client, migration.verify, `${context} durable contract`);
+  const oneTimeContract =
+    mode === "apply" ? migration.applyVerify : migration.adoptVerify;
+  if (oneTimeContract) {
+    await verifyContract(
+      client,
+      oneTimeContract,
+      `${context} ${mode} contract`,
+    );
+  }
+}
+
 async function schemaFingerprint(client) {
   const result = await client.query(`
     with objects as (
@@ -168,9 +189,25 @@ async function schemaFingerprint(client) {
         from information_schema.triggers where trigger_schema = 'public'
       union all
       select 'function', p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
-             pg_get_functiondef(p.oid)
+             case
+               -- pg_get_functiondef() rejects aggregates (pgvector installs
+               -- avg(vector) and sum(vector) in public) and window routines.
+               -- Keep those objects in the fingerprint using stable catalogue
+               -- metadata instead of silently omitting extension-owned schema.
+               when p.prokind in ('f', 'p') then pg_get_functiondef(p.oid)
+               else concat_ws('|',
+                      concat('kind=', p.prokind),
+                      concat('result=', pg_get_function_result(p.oid)),
+                      concat('language=', l.lanname),
+                      concat('source=', p.prosrc),
+                      concat('volatility=', p.provolatile),
+                      concat('parallel=', p.proparallel),
+                      concat('strict=', p.proisstrict),
+                      concat('security_definer=', p.prosecdef))
+             end
         from pg_proc p
         join pg_namespace n on n.oid = p.pronamespace
+        join pg_language l on l.oid = p.prolang
        where n.nspname = 'public'
     )
     select kind, name, definition from objects order by kind, name, definition
@@ -189,11 +226,185 @@ function assertHealthyPlan(plan, allowPending = false) {
       `Applied migration checksum drift: ${plan.drifted.map((row) => row.id).join(", ")}`,
     );
   }
+  if (plan.outOfOrder.length) {
+    throw new Error(
+      `Ledger contains out-of-order migrations: ${plan.outOfOrder.map((row) => row.id).join(", ")}`,
+    );
+  }
   if (!allowPending && plan.pending.length) {
     throw new Error(
       `Pending migrations: ${plan.pending.map((migration) => migration.id).join(", ")}`,
     );
   }
+}
+
+function pendingMigrationsThrough(manifest, plan, through) {
+  if (!through) return plan.pending;
+  const targetIndex = manifest.migrations.findIndex(
+    (migration) => migration.id === through,
+  );
+  if (targetIndex === -1) {
+    throw new Error(`Unknown migration target: ${through}`);
+  }
+  const indexes = new Map(
+    manifest.migrations.map((migration, index) => [migration.id, index]),
+  );
+  return plan.pending.filter(
+    (migration) => indexes.get(migration.id) <= targetIndex,
+  );
+}
+
+function assertMigrationRequirements(migration, available) {
+  const missing = migration.requires.filter((id) => !available.has(id));
+  if (missing.length) {
+    throw new Error(`${migration.id} requires ${missing.join(", ")}`);
+  }
+}
+
+async function auditPendingMigrations(client, manifest, rows, plan, through) {
+  if (!plan.baselineApplied) {
+    throw new Error("Baseline is missing; run the baseline command first");
+  }
+  const candidates = pendingMigrationsThrough(manifest, plan, through);
+  if (!candidates.length) {
+    console.log(
+      through
+        ? `No pending migrations through ${through}.`
+        : "No pending migrations to audit.",
+    );
+    return;
+  }
+
+  console.log("ADOPTION AUDIT — migration SQL and ledger writes are disabled.");
+  await client.query("begin isolation level repeatable read read only");
+  try {
+    const available = new Set(rows.map((row) => row.id));
+    for (const migration of candidates) {
+      assertMigrationRequirements(migration, available);
+      try {
+        await verifyContract(
+          client,
+          migration.verify,
+          `adoption audit ${migration.id} durable contract`,
+        );
+        if (migration.adoptVerify) {
+          await verifyContract(
+            client,
+            migration.adoptVerify,
+            `adoption audit ${migration.id} adoption contract`,
+          );
+        }
+      } catch (error) {
+        console.log(`  blocked ${migration.id}`);
+        throw error;
+      }
+      console.log(
+        `  adoptable ${migration.id} checksum=${migration.checksum} file=${migration.file}`,
+      );
+      available.add(migration.id);
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+  console.log(`Adoption audit passed for ${candidates.length} migration(s).`);
+  console.log("Migration SQL executed: no. Ledger writes: no.");
+}
+
+async function adoptPendingMigrations(
+  client,
+  manifest,
+  migrationId,
+  confirmedChecksum,
+  environment,
+  commit,
+  user,
+) {
+  const migration = manifest.migrations.find(
+    (candidate) => candidate.id === migrationId,
+  );
+  if (!migration) {
+    throw new Error(`Unknown migration target: ${migrationId}`);
+  }
+  if (confirmedChecksum !== migration.checksum) {
+    throw new Error(
+      `Adoption checksum confirmation does not match ${migration.id}: expected ${migration.checksum}`,
+    );
+  }
+
+  console.log(
+    `ADOPTION — recording verified existing migration ${migration.id}; migration SQL will not execute.`,
+  );
+  await client.query("begin isolation level serializable");
+  try {
+    await client.query(`lock table ${LEDGER} in share row exclusive mode`);
+    const lockedRows = await appliedRows(client);
+    const lockedPlan = migrationPlan(manifest, lockedRows);
+    assertHealthyPlan(lockedPlan, true);
+    if (!lockedPlan.baselineApplied) {
+      throw new Error("Baseline is missing; run the baseline command first");
+    }
+    const firstPending = lockedPlan.pending[0];
+    if (!firstPending) {
+      throw new Error("No pending migration is available to adopt");
+    }
+    if (firstPending.id !== migration.id) {
+      throw new Error(
+        `Adoption target must be the first pending migration: ${firstPending.id}`,
+      );
+    }
+    const available = new Set(lockedRows.map((row) => row.id));
+    assertMigrationRequirements(migration, available);
+    await verifyContract(client, manifest.baseline.verify, "adoption baseline");
+    for (const recorded of manifest.migrations) {
+      if (!available.has(recorded.id)) break;
+      await verifyContract(
+        client,
+        recorded.verify,
+        `adoption prerequisite ${recorded.id}`,
+      );
+    }
+    await verifyMigration(
+      client,
+      migration,
+      "adopt",
+      `adoption ${migration.id}`,
+    );
+    const source = `adopt:${migration.file}`;
+    await client.query(
+      `insert into ${LEDGER}
+           (id, checksum, source, environment, app_commit, applied_by, execution_ms)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+      [migration.id, migration.checksum, source, environment, commit, user, 0],
+    );
+    const recorded = await client.query(
+      `select id, checksum, source, environment, app_commit, applied_by, execution_ms
+         from ${LEDGER}
+        where id = $1`,
+      [migration.id],
+    );
+    const row = recorded.rows[0];
+    if (
+      recorded.rowCount !== 1 ||
+      row.id !== migration.id ||
+      row.checksum !== migration.checksum ||
+      row.source !== source ||
+      row.environment !== environment ||
+      row.app_commit !== commit ||
+      row.applied_by !== user ||
+      row.execution_ms !== 0
+    ) {
+      throw new Error(`Adoption ledger read-back failed for ${migration.id}`);
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+
+  console.log(`Adopted verified existing migration ${migration.id}.`);
+  console.log("Migration SQL executed: no.");
 }
 
 function printStatus(database, environment, manifest, rows, plan, fingerprint) {
@@ -208,6 +419,8 @@ function printStatus(database, environment, manifest, rows, plan, fingerprint) {
   for (const drift of plan.drifted) console.log(`  drift ${drift.id}`);
   console.log(`unknown=${plan.unknown.length}`);
   for (const row of plan.unknown) console.log(`  unknown ${row.id}`);
+  console.log(`out_of_order=${plan.outOfOrder.length}`);
+  for (const row of plan.outOfOrder) console.log(`  out_of_order ${row.id}`);
   console.log(`schema_sha256=${fingerprint}`);
   console.log(`manifest=${manifest.path}`);
 }
@@ -216,7 +429,9 @@ async function main() {
   const options = parseCli(process.argv.slice(2));
   const manifest = await loadManifest(options.manifest);
   const mutating =
-    options.command === "baseline" || options.command === "apply";
+    options.command === "baseline" ||
+    options.command === "apply" ||
+    options.command === "adopt";
   const client = new Client(connectionConfig());
   await client.connect();
   try {
@@ -224,6 +439,11 @@ async function main() {
       "select current_database() as database, current_user as user",
     );
     const { database, user } = identity.rows[0];
+    if (user !== process.env.DB_ADMIN_USER) {
+      throw new Error(
+        `Migration admin guard refused ${user}; expected ${process.env.DB_ADMIN_USER}`,
+      );
+    }
     const guard = validateEnvironment(options.environment, database, mutating);
     if (
       guard.needsProductionConfirmation &&
@@ -233,10 +453,24 @@ async function main() {
         `Production mutation requires --confirm-production ${database}`,
       );
     }
+    if (
+      options.command === "adopt" &&
+      options["confirm-database"] !== database
+    ) {
+      throw new Error(
+        `Migration adoption requires --confirm-database ${database}`,
+      );
+    }
 
     if (mutating) {
       await client.query("select pg_advisory_lock(hashtext($1))", [LOCK_NAME]);
-      await createLedger(client);
+      if (options.command === "adopt") {
+        if (!(await ledgerExists(client))) {
+          throw new Error("Migration adoption requires an existing ledger");
+        }
+      } else {
+        await createLedger(client);
+      }
     }
 
     if (options.command === "baseline") {
@@ -288,9 +522,10 @@ async function main() {
         await client.query("begin");
         try {
           await client.query(migration.sql);
-          await verifyContract(
+          await verifyMigration(
             client,
-            migration.verify,
+            migration,
+            "apply",
             `migration ${migration.id}`,
           );
           await client.query(
@@ -317,6 +552,34 @@ async function main() {
         plan = migrationPlan(manifest, rows);
         assertHealthyPlan(plan, true);
       }
+    }
+
+    if (options.command === "audit") {
+      const rows = await appliedRows(client);
+      const plan = migrationPlan(manifest, rows);
+      assertHealthyPlan(plan, true);
+      await auditPendingMigrations(
+        client,
+        manifest,
+        rows,
+        plan,
+        options.through,
+      );
+    }
+
+    if (options.command === "adopt") {
+      const rows = await appliedRows(client);
+      const plan = migrationPlan(manifest, rows);
+      assertHealthyPlan(plan, true);
+      await adoptPendingMigrations(
+        client,
+        manifest,
+        options.migration,
+        options["confirm-checksum"],
+        options.environment,
+        options.commit ?? process.env.GIT_COMMIT ?? null,
+        user,
+      );
     }
 
     const rows = await appliedRows(client);

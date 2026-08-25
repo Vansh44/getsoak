@@ -109,8 +109,9 @@ wholesip/
 │                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
-│                              # daily seo-refresh, search-metrics, and prune-logs
-│                              # (docs/cron-jobs.md)
+│                              # seo-refresh, search-metrics, domain-reconcile, prune-logs,
+│                              # analytics-rollup, import-worker, billing, help-embeddings
+│                              # (authoritative deployment state: docs/cron-jobs.md)
 ├── vitest.config.ts / vitest.setup.ts / vitest.server-only-stub.ts
 ├── eslint.config.mjs / postcss.config.mjs / tsconfig.json / components.json
 │
@@ -323,13 +324,13 @@ wholesip/
 │   │   ├── activity/          # ★ THE LOGS HUB (§33). layout.tsx + logs-rail.tsx
 │   │   │                      # give every log one left rail (log-types.ts is the
 │   │   │                      # registry); the sidebar has NO children anymore, or
-│   │   │                      # there'd be two navigations for the same five pages.
+│   │   │                      # there'd be two navigations for the same six rail views.
 │   │   │                      # page.tsx = activity_events audit feed (§22, day-
 │   │   │                      # grouped); email-logs/ = what was SENT (§24);
 │   │   │                      # ★ import-export/ = CSV job history + [jobId] per-ROW
 │   │   │                      # error log (§31), split into Import/Export by ?kind=;
 │   │   │                      # ★ failures/ = everything that DIDN'T work, read
-│   │   │                      # across the other tables (§33). FIVE logs, ONE
+│   │   │                      # across the other tables (§33). SIX views, ONE
 │   │   │                      # `activity` permission
 │   │   └── settings/          # account/ + domain/ + shipping/ (checkout rate policy) +
 │   │                          # ★ analytics/ (Pro GA4 + Meta IDs and enable switches) +
@@ -513,6 +514,9 @@ wholesip/
 │       ├── cron/search-metrics/ # ★ Daily Search Console ingest (§20): GET reconciles
 │       │                      # source epochs + the trailing work window; leased POST
 │       │                      # self-chain replaces one durable PT bucket at a time
+│       ├── cron/help-embeddings/ # ★ Hourly Mink AI semantic-index reconciler (§21):
+│       │                      # CRON_SECRET-gated bounded batches, self-chains while
+│       │                      # work remains, and returns 503 on provider failure
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
 │       │                      # whose certificate issued after the merchant closed
 │       │                      # the tab. Without it a domain only ever goes live if
@@ -595,9 +599,11 @@ wholesip/
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
 │   ├── shipping/              # ★ §35 checkout policy/types + pure rate translation +
 │   │                          # server-only origin-aware Shiprocket quotation
-│   ├── sms/                   # ★ §37 India DLT rules (PURE): template check +
-│   │                          # positional render + carrier-match + 6-char
-│   │                          # sender header + segment cost. No provider yet.
+│   ├── sms/                   # ★ §37 India DLT + BYO Twilio: pure template check,
+│   │                          # positional render, carrier match, 6-char sender header
+│   │                          # and segment cost, plus the one send choke point, queue,
+│   │                          # initial-result log and per-store suppression. Final
+│   │                          # delivery callbacks and inbound STOP ingestion are not built.
 │   ├── phone.ts               # ★ Indian mobile normalization — the ONE copy.
 │   │                          # Shared by checkout, Shiprocket AND the POS
 │   │                          # customer claim (§36): a second copy there had
@@ -710,8 +716,9 @@ wholesip/
 │   │                          # digest.ts (clock-aligned send windows),
 │   │                          # routing.ts (per-event recipient rules; NARROWS
 │   │                          # the permission set, never widens),
-│   │                          # channels.ts (email/web live; sms/push/whatsapp
-│   │                          # declared but LOCKED — no provider), config.ts
+│   │                          # channels.ts (email/web live; SMS configurable only with
+│   │                          # the store's enabled Twilio + mirrored DLT template;
+│   │                          # push/WhatsApp remain locked), config.ts
 │   │                          # (registry ← platform definition ← store
 │   │                          # settings), variables.ts + template.ts (merchant
 │   │                          # {{token}} copy, validated at save). Tested,
@@ -876,6 +883,16 @@ wholesip/
 │   ├── ai/gemini.ts           # Gemini/Vertex AI client for AI copy (dual backend, §7);
 │   │                          # emits ai.generate telemetry (latency + tokens) via observability
 │   ├── ai/credits.ts          # ★ AI credit pack catalog (pure — the one place to reprice)
+│   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
+│   │                          # assistant-input.ts rejects low-signal turns; chunks.ts
+│   │                          # creates heading-aware plain-text sections; embeddings.ts
+│   │                          # is the fail-soft Gemini API/Vertex 768-dim transport;
+│   │                          # vector-search.ts runs exact cosine search under anon RLS;
+│   │                          # hybrid-ranking.ts fuses lexical articles + semantic chunks
+│   │                          # with stable RRF; embedding-worker.ts atomically replaces
+│   │                          # current-revision chunks and reconciles missing/stale/model-
+│   │                          # changed rows; embedding-trigger.ts continues bounded batches
+│   │                          # on the current request origin, with the platform as fallback
 │   ├── observability/         # ★ Structured logging for Google Cloud (GCP migration Phase 2):
 │   │                          # logger.ts — logInfo/logWarn/logError emit Cloud Logging-
 │   │                          # compatible JSON (severity+message) in prod, readable lines in
@@ -1247,7 +1264,16 @@ wholesip/
 │                              # 0013 adds per-tender order_payments.shift_id, backfills
 │                              # legacy rows and makes drawer attribution deposit-safe;
 │                              # 0014 makes every direct store FK cascade and preserves
-│                              # legal-acceptance immutability outside a parent-store purge.
+│                              # legal-acceptance immutability outside a parent-store purge;
+│                              # 0017 installs pgvector + the global Help chunk index and
+│                              # updates the public Mink AI guide; 0018 adds complete/versioned
+│                              # chunk reconciliation, restores the fail-safe singleton Analytics
+│                              # control row, and removes app_user EXECUTE from the Search Console
+│                              # SECURITY DEFINER rate-slot function; 0019–0024 publish the complete
+│                              # merchant Help baseline across Getting started/account, storefront/
+│                              # domains, products/customers, payments/tax, orders/shipping, and
+│                              # marketing/communications, while keeping every article editable in
+│                              # the operator Help console.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -1264,11 +1290,24 @@ wholesip/
 │   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
 │   │                          # boot → 1.77 GB after eight routes, cap never binding.
 │   │                          # Restarting the server is what reclaims memory, not the cap
-│   ├── db-migrate.mjs         # ★ status/baseline/apply/verify runner: physical DB
-│   │                          # guard, advisory lock, one transaction per migration,
-│   │                          # checksum drift/unknown-row refusal, RLS/table/column/
-│   │                          # constraint postconditions + complete schema fingerprint
-│   └── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│   ├── db-migrate.mjs         # ★ status/baseline/apply/verify + recovery-only audit/adopt
+│   │                          # runner: physical DB guard, advisory lock, one transaction
+│   │                          # per migration, checksum drift/unknown-row refusal, and
+│   │                          # durable `verify`, immediate `applyVerify`, and evolved-schema
+│   │                          # `adoptVerify` postconditions, all checksummed. Recovery audit
+│   │                          # is database-enforced read-only; adoption never executes SQL
+│   │                          # and can record only the exact first-pending migration, with
+│   │                          # repeated ID/checksum/database confirmation, in one serializable
+│   │                          # ledger transaction. The routine-kind-aware schema fingerprint
+│   │                          # catalogues extension aggregates without passing them to
+│   │                          # pg_get_functiondef(). DB_ADMIN_USER is mandatory; the runner
+│   │                          # never falls back to the app login, whose ledger grants are
+│   │                          # removed by migration 0018.
+│   ├── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│   └── help-content-migrations.test.mjs # static contract for the 0019–0024 public Help
+│                              # baseline: exact file/order/article counts, unique slugs,
+│                              # complete metadata/substantial bodies, valid internal links,
+│                              # and explicit rejection of unshipped Promotions/Returns-settings docs
 │
 ├── brand/tasks/               # AI copy TASK prompts (product-desc.md, seo-meta.md), read at
 │                              # runtime by product actions + traced into the serverless bundle via
@@ -2141,8 +2180,11 @@ InvoiceDocument` (server, presentational) + `invoice.css` (`@media print`
     confirmation page; guards the host via `requireStorefrontStoreId()` and
     404s unless the order belongs to the host store). Access control is UUID +
     RLS/store-scope, never a guessable code. The invoice's Bill To/Ship To and
-    tax column derive from the ORDER's snapshot (`tax_inclusive`, per-line
-    `tax_rate`), never live settings — historical invoices are immutable.
+    tax column derive from the ORDER's monetary snapshot (`tax_inclusive`,
+    per-line `tax_rate`), never today's product price or tax class. A reprint
+    does load the current invoice template and merchant identity (logo, prefix,
+    address, contacts and GSTIN), so a merchant that needs an immutable issued
+    copy must save the PDF when it is issued.
 
 18. **Online payments — BYO Razorpay per store (Channels).** A merchant
     connects their OWN Razorpay account at **`/dashboard/channels`** (section
@@ -2632,7 +2674,74 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       titles bypass AI; throttling, malformed output, missing AI config, or
       service errors fall back to keyword results. The model never generates an
       answer or URL, so multilingual interpretation cannot invent a StoreMink
-      feature. Reads via
+      feature. The responsive **Mink AI Help Assistant** is mounted in the Help
+      header beside **Create your store** through `app/help/layout.tsx` and
+      `components/help-assistant.tsx`. It opens as an accessible right-side
+      drawer instead of a floating popup: desktop width is pointer- and
+      keyboard-resizable (360–760 px, clamped to the viewport and remembered in
+      local storage), while phones use a full-screen sheet. Its public,
+      stateless server action is isolated in
+      `app/actions/help-assistant-actions.ts`: shared validation in
+      `lib/help/assistant-input.ts` rejects low-signal keyboard noise before it
+      can inherit an earlier topic; only explicitly contextual follow-ups add
+      the prior user question to retrieval. The action validates an eight-turn
+      conversation window, rate-limits by IP, and runs two retrieval paths:
+      deterministic/Postgres search and exact pgvector cosine search over
+      heading-aware published-article chunks. `searchPublishedHelpWithAi`
+      supplies the lexical side by scoring title, excerpt, slug, category, and
+      reviewed StoreMink aliases (including POS ↔ point of
+      sale/register/checkout), with Gemini selection/query expansion only as an
+      additive layer. `lib/help/vector-search.ts` supplies semantic paraphrase
+      and multilingual recall from `gemini-embedding-001` at 768 dimensions.
+      It filters by current source revision, embedding model, and explicit
+      chunker/index version, and caps each article at its best three chunks
+      before the global result limit so one long guide cannot crowd out other
+      relevant guides.
+      `fuseHelpRankings` combines article and chunk ranks with reciprocal-rank
+      fusion: lexical matches reserve their places, semantic agreement can
+      promote them, and vector-only articles fill spare capacity. The best
+      semantic sections are placed before the bounded full-article context so
+      a relevant late section is not lost to the 5,000-character per-document
+      cap. It retrieves at most six final published articles through anon RLS
+      (with one fresh retry after an empty transient read) and asks Gemini for a
+      constrained plain-text answer/steps/notes/source-slugs DTO. An embedding
+      timeout, provider rejection, missing table, or empty vector index fails
+      soft to the deterministic path; vector search never erases exact results.
+      A failed catalogue read is caught outside
+      `unstable_cache` and retried once uncached, so a transient outage is not
+      cached as an empty Help Centre for five minutes. Returned source slugs are
+      validated against the retrieved published rows; a generated answer with
+      no valid citation is replaced by a safe guide-only fallback, no
+      model-produced URL or HTML is rendered, and insufficient documentation
+      produces an explicit no-answer state instead of a guess. If answer
+      generation is unavailable, the assistant still returns verified source
+      guides. The browser keeps the conversation only in Help layout state
+      (including across Help-page navigation); it is not persisted server-side.
+      The drawer includes focus trapping, keyboard/Escape handling, an ARIA
+      dialog and live response region, ordered steps, privacy guidance,
+      suggested follow-ups, reset, backdrop close, and reduced-motion support.
+      Migration `20260825_0016_help_assistant_guide` publishes the plain-language
+      guide for using Mink AI. Migration
+      `20260825_0017_help_article_embeddings` installs pgvector, adds the
+      platform-global `help_article_chunks` derived table, scopes anonymous RLS
+      to a current published parent, and updates that guide with the hybrid
+      search behaviour. Migration `20260826_0018_help_embedding_hardening`
+      adds complete-set and parser-version metadata used by the reconciler and
+      removes an inherited `app_user` EXECUTE grant from the Search Console
+      SECURITY DEFINER rate-slot function; it also restores a missing singleton
+      Analytics control row with safe defaults. Published article
+      creates/edits/status changes refresh
+      their derived index after commit. `/api/cron/help-embeddings` is the
+      hourly durable reconciler for initial backfill, stale source timestamps,
+      incomplete chunk sets, failed provider calls, embedding-model changes,
+      and chunker-version changes. Chunk rows carry their expected set size and
+      index version; replacement/deletion is serialized with a per-article
+      advisory transaction lock and a post-lock source snapshot check. Long
+      guides are embedded in bounded provider batches, and a one-row lookahead
+      self-chains only when more work really remains. Internal continuations
+      target the current request environment, with the platform origin as the
+      requestless-cron fallback. Retrieval uses exact vector scans deliberately
+      (the corpus is too small to justify approximate HNSW recall loss). Reads via
       cached `lib/help/queries.ts` (`withAnon`, tag `TAGS.help`); types +
       mappers in `lib/help/types.ts`. SEO: per-page `generateMetadata` +
       canonical on `HELP_URL` (`lib/site.ts`), `helpArticleSchema` (TechArticle)
@@ -2702,13 +2811,75 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       icon catalogue. The rows use the existing Help query/search/sitemap path
       and remain operator-editable; POS documentation is not duplicated in a
       static route.
+    - **Merchant Help coverage baseline (2026-08-26):** migrations
+      `20260826_0019_getting_started_account_help` through
+      `20260826_0024_marketing_communications_help` upsert 81 guide records
+      across the areas that were previously sparse or empty: Getting
+      started, account/staff/billing, storefront setup, domains, products and
+      inventory, customers and enquiries, payments/GST/COD, orders/locations/
+      shipping, and marketing/blog/email/SMS. Together with the existing POS,
+      Analytics and Mink AI guides, the public taxonomy has 11 canonical
+      baseline categories. Operators may add more categories later. That is 80
+      net-new guides when the pre-existing custom-domain
+      article is present, because one record upgrades it in place. The
+      migrations preserve `published_at`, remove the two
+      known empty operator test articles, and remain idempotent with
+      `ON CONFLICT (slug) DO UPDATE`. Their migration contracts use one-time
+      `applyVerify`/`adoptVerify` evidence only—recurring `verify` is empty
+      because operators are allowed to improve published content later.
+      `scripts/help-content-migrations.test.mjs` locks the batch order and
+      counts, metadata/body quality, slug uniqueness, article-link integrity,
+      and the deliberate absence of guides for product surfaces that are not
+      actually shipped. The operator actions also refuse a transition to
+      `published` unless the article has a category, excerpt, meaningful body,
+      SEO title and SEO description; deterministic Help aliases cover the new
+      product vocabulary so Mink AI still finds these guides when Gemini or
+      vectors are unavailable.
+      **Truthful exclusions are part of the contract:** there is no Promotions
+      route, the Returns settings registry is not yet rendered in the Orders
+      settings UI, newsletter subscribers have no merchant list/export,
+      product reviews have no complete merchant moderation surface, arbitrary
+      store-credit grants are not exposed, and Twilio does not ingest inbound
+      STOP messages. The builder guide states that editing requires at least a
+      768 px viewport. Every Shiprocket-dependent operational guide requires a
+      controlled live test before relying on merchant-account rates, booking or
+      webhooks for customer parcels, and the refund guide carries the equivalent
+      first-live-Razorpay-refund reconciliation gate.
+      The customer-data guide also warns that the current permanent account
+      deletion path can cascade into account-linked orders and routes merchants
+      to support instead of publishing an unsafe click-through deletion recipe.
+      The accuracy sweep also records the product gaps it had to explain rather
+      than hide: location scope is applied to the main Orders list but not yet
+      consistently to order-detail and cancellation reads; storefront Razorpay
+      confirmation paths do not all independently enforce captured amount and
+      currency; priority fulfilment currently compares raw on-hand stock instead
+      of reservation-adjusted availability; missing parcel measurements fall
+      back to 500 g and 10×10×5 cm; website checkout has no buyer-GSTIN or
+      persisted CGST/SGST/IGST split; invoice reprints use the current merchant
+      template; and Email/SMS logs show initial provider send attempts rather
+      than final inbox or handset delivery. Public guides state these boundaries
+      directly until the underlying workflows are hardened.
+      The Activity permission is likewise store-wide evidence access today:
+      Activity, Email, SMS and failure-log reads are store-scoped but are not
+      narrowed to assigned locations. Help tells owners to grant that permission
+      only to staff allowed to see operational evidence across the store.
+      Coupon group targeting has its own release blocker: some dashboard group
+      selectors are not store-filtered, and `syncCouponGroups` clears existing
+      links before a best-effort insert. A cross-store or failed link can
+      therefore expose group metadata or leave the saved coupon public. Help
+      requires member/outside-member/guest verification and tells merchants to
+      disable the code on any mismatch; the product fix is store-filtered
+      selectors plus atomic, fail-closed group validation. Coupon email is also
+      intended to be Pro-only, but its current UI/action lacks an entitlement
+      check, so that gate must be enforced server-side before relying on it.
     - **Production-only indexing**: the `SEARCH_INDEXABLE` gate already keeps
       staging/dev help pages `noindex` (help metadata sets robots noindex
       off-prod too); only `storemink.com` is ever crawled.
 
-22. **Point of Sale (POS) — multi-location foundation (Phase 0, IN PROGRESS).**
-    An omnichannel in-store register served at **`{slug}.storemink.com/pos`** (a
-    SEPARATE app shell from `/dashboard`, own auth gate — NOT yet built; Phase 1+).
+22. **Point of Sale (POS) — shipped multi-location register; roadmap hardening
+    continues.** An omnichannel in-store register served at
+    **`{slug}.storemink.com/pos`** in a separate app shell from `/dashboard`,
+    with its own authentication and authorised-device gate.
     The public product site is separately served at **`pos.storemink.com`** by
     rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
     uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
@@ -5855,7 +6026,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       documented list against `gcloud scheduler jobs list`, which is the only
       method that has ever caught it.
 
-33. **Logs — five of them, one hub, one permission.** `/dashboard/logs`,
+33. **Logs — six rail views, one hub, one permission.** `/dashboard/logs`,
     with `lib/logs/` behind the newest of them.
     - **★ THE CAPABILITY WAS THERE; THE IA WASN'T.** Activity, Email, Import
       and Export logs all existed, and the Email table already carried To /
@@ -5870,7 +6041,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       the same reason `navigation` kept its key when it folded into the
       builder. Only the LABEL and the URL changed.
     - **★ THE ROUTES ARE `/dashboard/logs/*`** (was `/dashboard/activity/*`).
-      The old path named ONE of the five logs after the section holding all of
+      The old path named ONE of the six views after the section holding all of
       them, so the URL contradicted the nav the moment you opened Email logs.
       **The old paths still resolve** — a 307 pair in `next.config.ts`, query
       string preserved. Not a courtesy to bookmarks: every notification email
@@ -5935,21 +6106,25 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       MERCHANT-READABLE failures. Stack traces and platform internals stay in
       Cloud Logging / Error Reporting, which already group and alert on them;
       copying them into a table would be a worse duplicate that nobody prunes.
-    - **⚠ SMS and Push are NOT here**, and can't be: both are marked
-      `available: false` in `lib/notifications/channels.ts` with no provider
-      connected. A log of sends that never happen is an empty table. They need
-      a provider (Twilio/MSG91, FCM) first — the log is the last 10% of that
-      work.
-    - **⚠ The activity feed is still day-grouped CARDS** while the other four
+    - **SMS is the sixth rail view; Push is still unavailable.**
+      `/dashboard/logs/sms-logs` records every attempted BYO-Twilio send as
+      sent, failed or skipped, with the provider message id, segment count and
+      initial error. StoreMink does not currently supply Twilio's
+      `StatusCallback` or ingest a delivery webhook, so this log proves the
+      send attempt and initial provider acceptance—not final handset delivery.
+      Push remains `available: false` until an FCM provider exists.
+    - **⚠ The activity feed is still day-grouped CARDS** while the other five
       are tables. Left alone deliberately: it is working UI, and a
       chronological event stream reads better as cards than as rows.
 
-34. **Platform → merchant billing (IN PROGRESS — schema only, nothing applied).**
-    Full design: **`docs/billing-architecture.md`**. This is StoreMink billing its
-    OWN merchants, and is distinct from §17 (a merchant invoicing their shopper)
-    and §18 (a merchant's BYO gateway). Greenfield: there are no production
-    customers, so it REPLACES the Razorpay-Subscriptions design rather than
-    migrating it. Phases 1–2 are done; §3 onward is unbuilt.
+34. **Platform → merchant billing (IN PROGRESS — applied foundation and live
+    workflows).** Full design: **`docs/billing-architecture.md`**. This is
+    StoreMink billing its OWN merchants, and is distinct from §17 (a merchant
+    invoicing their shopper) and §18 (a merchant's BYO gateway). The token-based
+    recurring foundation, invoices, plan changes, credits, collection worker,
+    billing UI and operator controls are applied; the roadmap remains the source
+    of truth for the remaining production validation and hardening work. It
+    replaces the earlier Razorpay-Subscriptions design rather than migrating it.
     - **★★ THE PRICE MUST NOT LIVE IN A PROVIDER-SIDE PLAN.** Razorpay's own
       docs: _"You can only update a Subscription authorised using cards and not
       via UPI and Emandate."_ Every amount change — tier, period, locations —
@@ -6742,9 +6917,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **★ SO SMS IS BYO PER STORE, LIKE RAZORPAY (§18), NOT PLATFORM-WIDE LIKE
       EMAIL (§24).** The header IS the merchant's registered identity, so
       StoreMink cannot send on their behalf from a generic one.
-      `available: false` in `lib/notifications/channels.ts` must therefore NOT simply be
-      flipped: a channel switched on with no registration accepts a "yes" it
-      can never honour, which is the exact thing that flag exists to prevent.
+      SMS is now platform-available in `lib/notifications/channels.ts`, but that
+      flag alone never makes a store deliverable: fan-out still requires the
+      store's connected and enabled Twilio account, its own SMS switch, and a
+      mirrored DLT template for the exact event and audience. This preserves
+      the original fail-closed rule without pretending StoreMink owns a generic
+      sending identity.
     - **★★ IT BREAKS THE FREE-TEXT TEMPLATE MODEL.** §24's merchant templates
       are free text with `{{token}}` substitution, validated only for unknown
       tokens. DLT is the opposite — the body is FIXED at registration and only
@@ -6806,9 +6984,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       drifted from its registered template) and one chip cannot stand for two
       remedies. The extra column is **segments**, because that is what the
       merchant is billed. ⚠ The page says the thing merchants otherwise learn
-      the hard way: **a message a carrier blocked for not matching its DLT
-      template appears here as SENT.** Carriers drop those silently, so a
-      delivery report is the only place they exist.
+      the hard way: **a message Twilio initially accepts appears here as SENT,
+      even when an Indian carrier later blocks it for a DLT mismatch.** There is
+      no StoreMink status-callback endpoint yet, so the current log does not
+      receive final delivered/undelivered state; inspect Twilio when that proof
+      is required.
     - **★ TEMPLATES ARE A MIRROR, NOT AN EDITOR**
       (`app/actions/sms-template-actions.ts`). Validated on save against the
       pure rules; the variable mapping must match the template's shape exactly,
@@ -7173,7 +7353,12 @@ npm run format      # prettier --write
   key.) Same request/response shape both ways; callers see the unchanged
   `{text,error}` contract. Vertex needs `google-auth-library` +
   `roles/aiplatform.user` on the runtime credentials (see
-  `docs/gcp-migration-phase5-6.md`).
+  `docs/gcp-migration-phase5-6.md`). Mink AI embeddings use the same backend
+  precedence and credentials through `lib/help/embeddings.ts`, with
+  **`GEMINI_EMBEDDING_MODEL`** defaulting to `gemini-embedding-001` and a fixed
+  768-dimensional schema contract. **`HELP_VECTOR_MIN_SIMILARITY`** optionally
+  overrides the conservative `0.55` semantic-match floor (0–1); leave it unset
+  until the retrieval evaluation set justifies a tuned value.
 - **Razorpay** (§18, §16): two SEPARATE credential sets. Per-store BYO gateway
   creds live in the DB (`store_payment_providers`, encrypted with env
   **`PAYMENT_CRED_KEY`** — 32-byte base64; generate with

@@ -26,3 +26,22 @@ them as part of the change, not as follow-up work:
 A roadmap or test doc that lags the code is worse than none: it gets read once,
 found wrong, and then quietly ignored — after which nobody can tell what is
 built without reading every file.
+
+# Product changes must update the codebase map and Help Centre
+
+Every implementation that adds a capability or changes an existing user flow
+is incomplete until both of these are updated in the same change:
+
+1. Update `CODEBASE.md` with the new or changed behaviour, even when the change
+   does not add, remove, or move a route, server action, library module, or SQL
+   file.
+2. Update or add the relevant plain-language Help Centre guide. Published Help
+   Centre content is database-backed, so make content changes through a new
+   forward-only migration in `drizzle/migrations/sql/`; do not edit an already
+   applied migration. Keep the guide consistent with the shipped UI, limits,
+   permissions, edge cases, and troubleshooting steps.
+
+Do not defer either documentation update to follow-up work. If a change is
+strictly internal and has no user-visible behaviour to document, state that
+explicitly in the implementation handoff; `CODEBASE.md` must still be reviewed
+and updated whenever the internal architecture or codebase map changes.

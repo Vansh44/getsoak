@@ -92,7 +92,7 @@ not separate instances or projects.
 
 ---
 
-## 2. Dry run — prod Cloud SQL, before the window (historical)
+## 2. Historical cutover rehearsal — do not repeat
 
 - [ ] Apply the schema to prod Cloud SQL in order:
       `drizzle/manual/0000_compat_setup.sql` → `0001_schema.sql` →
@@ -106,6 +106,8 @@ not separate instances or projects.
 > databases now use `npm run db:migrate` and `public.schema_migrations`; see
 > [`drizzle/manual/README.md`](../drizzle/manual/README.md). The runner verifies
 > the baseline, records immutable checksums, and refuses the wrong database.
+> This historical section is unrelated to the recovery-only, database-enforced
+> read-only `db:migrate audit` command.
 
 ---
 

@@ -100,6 +100,18 @@ export async function loadManifest(manifestPath = DEFAULT_MANIFEST) {
       throw new Error(`Migration ${entry.id} must declare requires`);
     }
     assertVerifyContract(entry.verify, `migration ${entry.id}`);
+    if (entry.applyVerify !== undefined) {
+      assertVerifyContract(
+        entry.applyVerify,
+        `migration ${entry.id}.applyVerify`,
+      );
+    }
+    if (entry.adoptVerify !== undefined) {
+      assertVerifyContract(
+        entry.adoptVerify,
+        `migration ${entry.id}.adoptVerify`,
+      );
+    }
     const sqlPath = path.resolve(baseDir, entry.file);
     const sql = await readFile(sqlPath, "utf8");
     if (!sql.trim()) throw new Error(`Migration ${entry.id} is empty`);
@@ -145,6 +157,7 @@ export function migrationPlan(manifest, appliedRows) {
   const unknown = appliedRows.filter((row) => !known.has(row.id));
   const drifted = [];
   const pending = [];
+  const outOfOrder = [];
 
   const baselineRow = applied.get(manifest.baseline.id);
   if (baselineRow && baselineRow.checksum !== manifest.baseline.checksum) {
@@ -154,10 +167,15 @@ export function migrationPlan(manifest, appliedRows) {
       actual: baselineRow.checksum,
     });
   }
+  let sawGap = !baselineRow;
   for (const migration of manifest.migrations) {
     const row = applied.get(migration.id);
-    if (!row) pending.push(migration);
-    else if (row.checksum !== migration.checksum) {
+    if (!row) {
+      pending.push(migration);
+      sawGap = true;
+    } else {
+      if (sawGap) outOfOrder.push({ id: row.id });
+      if (row.checksum === migration.checksum) continue;
       drifted.push({
         id: migration.id,
         expected: migration.checksum,
@@ -171,6 +189,7 @@ export function migrationPlan(manifest, appliedRows) {
     drifted,
     pending,
     unknown,
+    outOfOrder,
   };
 }
 
@@ -178,17 +197,48 @@ export function parseCli(argv) {
   const [command, ...rest] = argv;
   if (
     !command ||
-    !["status", "baseline", "apply", "verify"].includes(command)
+    !["status", "baseline", "apply", "verify", "audit", "adopt"].includes(
+      command,
+    )
   ) {
     throw new Error(
-      "Usage: db-migrate <status|baseline|apply|verify> --environment <local|staging|production>",
+      "Usage: db-migrate <status|baseline|apply|verify|audit|adopt> --environment <local|staging|production>",
     );
   }
+  const allowedFlags = {
+    status: new Set(["environment", "manifest"]),
+    baseline: new Set([
+      "environment",
+      "manifest",
+      "commit",
+      "confirm-production",
+    ]),
+    apply: new Set(["environment", "manifest", "commit", "confirm-production"]),
+    verify: new Set(["environment", "manifest"]),
+    audit: new Set(["environment", "through"]),
+    adopt: new Set([
+      "environment",
+      "migration",
+      "confirm-adopt",
+      "confirm-checksum",
+      "confirm-database",
+      "confirm-production",
+      "commit",
+    ]),
+  }[command];
   const options = { command };
+  const seenFlags = new Set();
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     if (!flag.startsWith("--")) throw new Error(`Unexpected argument: ${flag}`);
     const key = flag.slice(2);
+    if (!allowedFlags.has(key)) {
+      throw new Error(`Unknown flag for ${command}: ${flag}`);
+    }
+    if (seenFlags.has(key)) {
+      throw new Error(`Duplicate flag: ${flag}`);
+    }
+    seenFlags.add(key);
     const value = rest[index + 1];
     if (!value || value.startsWith("--")) {
       throw new Error(`Missing value for ${flag}`);
@@ -197,5 +247,21 @@ export function parseCli(argv) {
     index += 1;
   }
   if (!options.environment) throw new Error("--environment is required");
+  if (options.through) assertIdentifier(options.through, "migration");
+  if (command === "adopt") {
+    if (!options.migration) {
+      throw new Error("adopt requires --migration <migration-id>");
+    }
+    assertIdentifier(options.migration, "migration");
+    if (options["confirm-adopt"] !== options.migration) {
+      throw new Error("adopt requires --confirm-adopt to match --migration");
+    }
+    if (!/^[0-9a-f]{64}$/.test(options["confirm-checksum"] ?? "")) {
+      throw new Error("adopt requires --confirm-checksum <64-hex-checksum>");
+    }
+    if (!options["confirm-database"]) {
+      throw new Error("adopt requires --confirm-database <database-name>");
+    }
+  }
   return options;
 }

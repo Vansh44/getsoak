@@ -30,6 +30,13 @@ For a release containing migrations:
 6. Watch the `storemink-web-prod` Cloud Build to success, confirm the Cloud Run
    revision carries that commit, and smoke-test the apex plus one tenant host.
 
+`audit`/`adopt` are one-time ledger-recovery commands for schema that was
+already applied manually; they are not substitutes for `apply`. Their
+fail-closed workflow is read-only audit followed by one exact, first-pending
+migration at a time, with repeated ID/checksum/database confirmations. It is
+documented in
+[`drizzle/manual/README.md`](../drizzle/manual/README.md).
+
 Application rollback is a Cloud Run revision rollback. Database migrations are
 forward-only by default: never drop the newly-added objects during an app
 rollback. A destructive migration needs its own reviewed restore/forward-fix

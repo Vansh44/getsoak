@@ -25,15 +25,16 @@ stores, 0 orders, 0 lapsed plans, 0 pending razorpay orders, 0 campaign
 recipients.** Nothing was lost, because production has no real traffic yet — but
 each job is a landmine the moment it does:
 
-| Job                       | What its absence would have cost under real traffic                                                                                                                                                                                      |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                       |
-| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                          |
-| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently** — and it also carries the PICKUP sweeps, so expired collections never lapse and no collection reminder is ever sent.       |
-| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                               |
-| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices.                                                                              |
-| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                               |
-| `billing`                 | **No merchant is ever charged.** No renewal invoice is issued, no cycle advances, no grace window opens and no unpaid plan is downgraded — the entire subscription business stops silently, looking exactly like nobody has renewed yet. |
+| Job                       | What its absence would have cost under real traffic                                                                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                                     |
+| `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                                        |
+| `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently** — and it also carries the PICKUP sweeps, so expired collections never lapse and no collection reminder is ever sent.                     |
+| `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                                             |
+| `import-worker`           | A CSV import whose worker chain broke mid-file (a deploy, an OOM, a kick that never landed) **never resumes** — it sits half-applied until someone notices.                                                                                            |
+| `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                                             |
+| `billing`                 | **No merchant is ever charged.** No renewal invoice is issued, no cycle advances, no grace window opens and no unpaid plan is downgraded — the entire subscription business stops silently, looking exactly like nobody has renewed yet.               |
+| `help-embeddings`         | Existing published guides never receive semantic chunks after the initial migration, and a failed article-save refresh is never retried. Mink AI still falls back to lexical/category search, but paraphrase and multilingual recall silently degrade. |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -55,6 +56,7 @@ each job is a landmine the moment it does:
 | `storemink-analytics-rollup`        | `40 * * * *`   | `https://storemink.com/api/cron/analytics-rollup`        |
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
 | `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
+| `storemink-help-embeddings`         | `50 * * * *`   | `https://storemink.com/api/cron/help-embeddings`         |
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
@@ -62,8 +64,13 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-**All ten jobs exist** (verified against `gcloud scheduler jobs list`,
-2026-08-21), but ⚠ **`storemink-search-metrics` and `storemink-analytics-rollup`
+**All ten pre-existing jobs exist** (verified against `gcloud scheduler jobs list`,
+2026-08-21), but ⚠ **`storemink-help-embeddings` is new in the 2026-08-25
+working tree and does not exist in Cloud Scheduler yet. Create it only after the
+route and migrations `20260825_0017_help_article_embeddings` plus
+`20260826_0018_help_embedding_hardening` reach the target environment; until
+then it would 404 or query an incomplete table.** Also,
+**`storemink-search-metrics` and `storemink-analytics-rollup`
 are PAUSED**: their routes are on `staging` and NOT YET on `main`, and prod
 deploys from `main` — so both 404 against `https://storemink.com`
 (`analytics-rollup`'s first run returned NOT_FOUND at 11:40Z). **Resume both
@@ -255,6 +262,25 @@ gcloud scheduler jobs create http storemink-seo-refresh \
   --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
   --attempt-deadline=300s --max-retry-attempts=3
 ```
+
+After the pgvector migration and route deploy are verified, create the Help
+embedding reconciliation heartbeat:
+
+```bash
+gcloud scheduler jobs create http storemink-help-embeddings \
+  --project=storemink-prod --location=asia-south1 \
+  --schedule="50 * * * *" --time-zone="Etc/UTC" \
+  --uri="https://storemink.com/api/cron/help-embeddings" \
+  --http-method=GET --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
+  --attempt-deadline=300s --max-retry-attempts=3
+```
+
+Its source of truth is the published article revision plus the active embedding
+model, chunker version, and complete expected chunk count—not a lossy in-memory
+queue. The worker rebuilds missing, partial, stale, or old-version sets. A `503`
+means provider/indexing work failed and should be retried; a `200` with
+`remaining:true` means a one-row lookahead proved more work exists and schedules
+a bounded authenticated POST continuation.
 
 After the search-metrics migration and deploy are verified, create its separate
 worker heartbeat. The route's GET reconciles the five-day PT correction window;
@@ -546,6 +572,6 @@ environment's `CRON_SECRET`.
 ## If you rotate `CRON_SECRET`
 
 The header is baked into each job at creation. Rotating the secret without
-updating the jobs makes all ten start returning 401 — silently, because a
-failing cron looks identical to one that had nothing to do. Use the coordinated
-rotation procedure above, then re-verify with the logging query.
+updating the jobs makes every configured job start returning 401 — silently,
+because a failing cron looks identical to one that had nothing to do. Use the
+coordinated rotation procedure above, then re-verify with the logging query.
