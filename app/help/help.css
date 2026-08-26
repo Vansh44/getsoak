@@ -1159,7 +1159,6 @@
   font-size: 10.5px;
   text-align: center;
 }
-.hc-assistant-privacy,
 .hc-assistant-powered {
   display: inline-flex;
   align-items: center;
@@ -1168,8 +1167,6 @@
 }
 .hc-assistant-powered {
   flex: 0 0 auto;
-  border-left: 1px solid var(--hc-line);
-  padding-left: 10px;
   color: var(--hc-ink-soft);
 }
 .hc-assistant-powered img {
@@ -1300,10 +1297,6 @@
   .hc-assistant-footer {
     flex-direction: column;
     gap: 5px;
-  }
-  .hc-assistant-powered {
-    border-left: 0;
-    padding-left: 0;
   }
 }
 

@@ -38,9 +38,14 @@ describe("HelpAssistant", () => {
     expect(
       screen.getByRole("dialog", { name: "Mink AI Help Assistant" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Powered by/)).toHaveTextContent(
-      "Powered by StoreMink",
+    const credit = screen.getByLabelText("Powered by StoreMink");
+    expect(credit.children).toHaveLength(3);
+    expect(credit.children[0]).toHaveTextContent("Powered by");
+    expect(credit.children[1]).toHaveAttribute(
+      "src",
+      expect.stringContaining("storemink-mark.webp"),
     );
+    expect(credit.children[2]).toHaveTextContent("StoreMink");
 
     fireEvent.change(
       screen.getByLabelText("Ask Mink AI a StoreMink question"),

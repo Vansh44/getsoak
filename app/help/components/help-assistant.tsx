@@ -8,7 +8,6 @@ import {
   MessageCircle,
   RefreshCw,
   Send,
-  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -529,12 +528,11 @@ export function HelpAssistant() {
               </button>
             </form>
             <footer className="hc-assistant-footer">
-              <div className="hc-assistant-privacy">
-                <ShieldCheck size={13} aria-hidden />
-                Don&apos;t share passwords, OTPs, card details, or customer
-                data.
-              </div>
-              <div className="hc-assistant-powered">
+              <div
+                className="hc-assistant-powered"
+                aria-label="Powered by StoreMink"
+              >
+                <span>Powered by</span>
                 <Image
                   src="/brand/storemink-mark.webp"
                   alt=""
@@ -542,9 +540,7 @@ export function HelpAssistant() {
                   height={18}
                   aria-hidden
                 />
-                <span>
-                  Powered by <strong>StoreMink</strong>
-                </span>
+                <strong>StoreMink</strong>
               </div>
             </footer>
           </section>
