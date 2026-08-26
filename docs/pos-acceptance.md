@@ -154,11 +154,15 @@ history. Simulate a declined renewal that moves the store to Free.
 **Expect:** no row, file reference, join, credential, setting, layout or history
 is deleted, reset, unpublished or reassigned. Every existing product remains
 visible and editable, but a new product and staff invite are refused at the
-Free caps; gated runtime features pause. Move to Basic: the original groups,
-blog submissions, custom code, Shiprocket state and detailed Analytics return,
-with creation allowed up to 50 products and three total staff. Move to Pro: the
-same custom domain, campaigns, advanced Analytics, POS and unlimited catalogue
-access return. No restore job or manual data repair is needed.
+Free caps; gated runtime features pause. Existing groups and memberships remain
+editable, unused custom roles can be deleted, and a retained custom-code section
+can stay or be removed while other page edits still save. Shiprocket checkout
+uses the retained manual/free option instead of exposing merchant plan copy to
+shoppers. Move to Basic: the original blog submissions, custom code, Shiprocket
+state and detailed Analytics return, with creation allowed up to 50 products
+and three total staff. Move to Pro: the same custom domain, campaigns, advanced
+Analytics, POS and unlimited catalogue access return. No restore job or manual
+data repair is needed.
 
 **PS-1.4 — A single-location store never sees Locations**
 Fresh Pro store with one location and POS off.
@@ -1035,6 +1039,15 @@ page with Website lifecycle filters and Website rows only. Load a stale
 `?channel=pos` URL and export Orders on those stores: the server still returns
 Website orders only. Re-enabling POS restores the omnichannel workspace without
 deleting or rewriting historical register sales.
+
+**PS-C.30e ★★ — Combined counts sum channels and missing ids stay missing**
+Create Website and POS orders in the same lifecycle status, then open All
+orders. **Expect:** that status tab is the sum of both channel groups, never the
+last grouped row returned by Postgres. Invoke a fulfilment-status action with a
+nonexistent order id and expect “order no longer exists”; only a real,
+store-scoped POS sale receives the POS-fulfilment refusal. Inspect the detail
+query for sale and pickup locations: both joins carry the location id and an
+explicit `store_id` predicate, with no per-column correlated subqueries.
 
 **PS-C.31 ★★ — THE CLAIM. Their signup adopts the row**
 As that same person, sign up on the storefront with the SAME mobile number.

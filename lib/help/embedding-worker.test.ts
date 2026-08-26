@@ -99,7 +99,7 @@ describe("refreshHelpArticleEmbeddings", () => {
         chunkIndex: 0,
         chunkCount: 1,
         sourceUpdatedAt: ARTICLE.updatedAt,
-        indexVersion: 1,
+        indexVersion: 2,
         embeddingModel: "gemini-embedding-001",
       }),
     ]);

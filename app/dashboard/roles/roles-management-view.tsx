@@ -106,7 +106,7 @@ export function RolesManagementView({
             can access.
           </p>
         </div>
-        {canManage && (
+        {canManage && !planLocked && (
           <button
             className="dash-btn dash-btn-primary shrink-0"
             onClick={() => openEditor()}
@@ -121,7 +121,8 @@ export function RolesManagementView({
         <div className="dash-card mb-3.5 flex items-center justify-between gap-3 px-4 py-3.5 text-[13px]">
           <span>
             Custom roles are available on Basic and Pro. Existing roles,
-            permissions and staff assignments remain safe and return after an
+            permissions and staff assignments remain safe. You can remove an
+            unused custom role, but creating or editing roles requires an
             upgrade.
           </span>
           <Link
@@ -213,16 +214,18 @@ export function RolesManagementView({
                             align="end"
                             className="min-w-[160px]"
                           >
-                            <DropdownMenuItem
-                              className="cursor-pointer"
-                              onClick={() => openEditor(role)}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
+                            {!planLocked && (
+                              <DropdownMenuItem
+                                className="cursor-pointer"
+                                onClick={() => openEditor(role)}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
+                            )}
                             {!role.is_system && (
                               <>
-                                <DropdownMenuSeparator />
+                                {!planLocked && <DropdownMenuSeparator />}
                                 <DropdownMenuItem
                                   variant="destructive"
                                   className="cursor-pointer"

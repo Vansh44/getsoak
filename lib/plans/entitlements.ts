@@ -79,18 +79,41 @@ async function lockLimit(db: Db, storeId: string, resource: string) {
  * stay visible and editable; only net-new rows above the current cap stop.
  */
 export async function assertCanCreateProduct(db: Db, storeId: string) {
+  const capacity = await getProductCreateCapacity(db, storeId, 1);
+  if (capacity.allowed === 0) {
+    throw new PlanEntitlementError(capacity.error);
+  }
+}
+
+export interface ProductCreateCapacity {
+  allowed: number;
+  error: string;
+}
+
+/**
+ * Reserve up to `requested` product inserts inside the caller's transaction.
+ * The advisory lock remains held until that transaction commits, so a CSV
+ * slice can read the plan/count once, insert every allowed row, and prevent a
+ * concurrent editor/import from taking the same slots.
+ */
+export async function getProductCreateCapacity(
+  db: Db,
+  storeId: string,
+  requested: number,
+): Promise<ProductCreateCapacity> {
   await lockLimit(db, storeId, "products");
   const { plan, limits } = await planContextWithDb(db, storeId);
-  if (limits.maxProducts === null) return;
+  const safeRequested = Math.max(0, Math.trunc(requested));
+  const error = `${plan === "free" ? "Free" : "Basic"} includes up to ${limits.maxProducts ?? "unlimited"} products. Upgrade to add another product; your existing products remain safe.`;
+  if (limits.maxProducts === null) {
+    return { allowed: safeRequested, error };
+  }
   const [row] = await db
     .select({ n: count() })
     .from(products)
     .where(eq(products.storeId, storeId));
-  if ((row?.n ?? 0) >= limits.maxProducts) {
-    throw new PlanEntitlementError(
-      `${plan === "free" ? "Free" : "Basic"} includes up to ${limits.maxProducts} products. Upgrade to add another product; your existing products remain safe.`,
-    );
-  }
+  const available = Math.max(0, limits.maxProducts - (row?.n ?? 0));
+  return { allowed: Math.min(safeRequested, available), error };
 }
 
 /** Same soft-limit rule as products; staff already present are never removed. */

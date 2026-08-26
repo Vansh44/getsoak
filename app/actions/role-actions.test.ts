@@ -26,6 +26,7 @@ vi.mock("@/lib/db/client", () => ({
 
 import { createRole, updateRole, deleteRole } from "./role-actions";
 import { getServerUser } from "@/lib/auth/server-user";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
 
 const validForm = {
   name: "Editor",
@@ -58,6 +59,7 @@ describe("role-actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getServerUser).mockResolvedValue(user as any);
+    vi.mocked(storeAllowsPlanFeature).mockResolvedValue(true);
     setup([SUPERADMIN, []]);
   });
 
@@ -184,6 +186,17 @@ describe("role-actions", () => {
       const result = await deleteRole("editor-id");
       expect(result.success).toBe(true);
       expect(dbHolder.current.calls.delete).toHaveLength(1);
+    });
+
+    it("allows cleanup deletion after a downgrade", async () => {
+      vi.mocked(storeAllowsPlanFeature).mockResolvedValue(false);
+      setup([SUPERADMIN, [{ slug: "editor", is_system: false }], [{ n: 0 }]]);
+
+      const result = await deleteRole("editor-id");
+
+      expect(result.success).toBe(true);
+      expect(dbHolder.current.calls.delete).toHaveLength(1);
+      expect(storeAllowsPlanFeature).not.toHaveBeenCalled();
     });
   });
 });

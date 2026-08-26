@@ -52,10 +52,10 @@ import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { analyticsReportHref } from "@/lib/analytics/reports";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
-import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
+import { analyticsFeatureAllowed } from "@/lib/analytics/features";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 import {
   getStorefrontAnalytics,
-  storeHasProAnalytics,
   type StorefrontAnalytics,
 } from "./storefront-data";
 
@@ -457,15 +457,18 @@ export default async function AnalyticsPage({
       </div>
     );
   }
-  const [canCustomize, canUseReports, canUseSearch] = await Promise.all([
-    storeHasAnalyticsFeature(storeId, "dashboardCustomization"),
-    storeHasAnalyticsFeature(storeId, "drilldownReports"),
-    storeHasAnalyticsFeature(storeId, "googleSearchConsole"),
-  ]);
-  const [timeZone, locationOptions] = await Promise.all([
+  // Resolve the store plan once for this render. Calling the per-feature DAL
+  // for every card repeated the same stores read five times.
+  const [{ plan }, timeZone, locationOptions] = await Promise.all([
+    getStorePlanContext(storeId),
     getStoreAnalyticsTimeZone(storeId),
     getAnalyticsLocationOptions(storeId, locationScope),
   ]);
+  const canUse = (feature: Parameters<typeof analyticsFeatureAllowed>[1]) =>
+    analyticsFeatureAllowed(platformFeatures, feature, plan);
+  const canCustomize = canUse("dashboardCustomization");
+  const canUseReports = canUse("drilldownReports");
+  const canUseSearch = canUse("googleSearchConsole");
   const range: AnalyticsRange = parseAnalyticsRange(params, timeZone);
   const location = resolveAnalyticsLocation(
     params.location,
@@ -495,12 +498,10 @@ export default async function AnalyticsPage({
   const returns = getReturnsAndRefunds(storeId, location, range);
   const velocity = getInventoryVelocity(storeId, location, range);
   const search = canUseSearch ? getSearchAnalytics(storeId, range) : null;
-  const storefront =
-    platformFeatures.storefrontConversion &&
-    (await storeHasProAnalytics(storeId))
-      ? getStorefrontAnalytics(storeId, range)
-      : null;
-  const margin = (await storeHasAnalyticsFeature(storeId, "grossMargin"))
+  const storefront = canUse("storefrontConversion")
+    ? getStorefrontAnalytics(storeId, range)
+    : null;
+  const margin = canUse("grossMargin")
     ? getGrossMarginAnalytics(storeId, location, range)
     : null;
   const totalSalesReport = canUseReports

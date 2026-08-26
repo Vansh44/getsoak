@@ -102,8 +102,6 @@ export async function updateUserGroup(
   // Scope by store_id (the service scope bypasses RLS) so a group can only be
   // edited by an admin of the store that owns it.
   const storeId = await getActingStoreId();
-  const planError = await groupsPlanError(storeId);
-  if (planError) return { error: planError };
   try {
     await withService((db) =>
       db
@@ -135,8 +133,6 @@ export async function deleteUserGroup(id: string): Promise<ActionResult> {
   if (!admin) return { error: "Not authenticated" };
 
   const storeId = await getActingStoreId();
-  const planError = await groupsPlanError(storeId);
-  if (planError) return { error: planError };
   try {
     await withService((db) =>
       db
@@ -165,8 +161,6 @@ export async function setGroupMembers(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
-  const planError = await groupsPlanError(storeId);
-  if (planError) return { error: planError };
 
   // De-dupe defensively; an empty selection just clears the group.
   const ids = Array.from(new Set(customerIds.filter(Boolean)));

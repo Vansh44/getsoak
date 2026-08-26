@@ -34,6 +34,7 @@ import { groupBadgeClass, type UserGroup } from "./shared";
 type Props = {
   groups: UserGroup[];
   canManage?: boolean;
+  canCreate?: boolean;
   planLocked?: boolean;
 };
 
@@ -50,6 +51,7 @@ function formatDate(value: string): string {
 export function GroupsManagementView({
   groups,
   canManage = true,
+  canCreate = canManage,
   planLocked = false,
 }: Props) {
   const router = useRouter();
@@ -88,7 +90,7 @@ export function GroupsManagementView({
           <h1>User Groups</h1>
           <p>Segment customers to target coupons and marketing emails</p>
         </div>
-        {canManage && (
+        {canCreate && (
           <Link
             href={`${BASE}/new`}
             className="dash-btn dash-btn-primary shrink-0"
@@ -103,8 +105,8 @@ export function GroupsManagementView({
         <div className="dash-card mb-3.5 flex items-center justify-between gap-3 px-4 py-3.5 text-[13px]">
           <span>
             Customer groups are available on Basic and Pro. Your existing
-            groups, members and coupon links are retained and will become
-            editable again after an upgrade.
+            groups, members and coupon links are retained and remain editable;
+            creating another group requires an upgrade.
           </span>
           <Link
             href="/dashboard/plans"
@@ -152,7 +154,7 @@ export function GroupsManagementView({
                 ? "Try a different search term."
                 : "Create a group, then add customers to it."}
             </p>
-            {!search && canManage && (
+            {!search && canCreate && (
               <Link href={`${BASE}/new`} className="dash-btn dash-btn-primary">
                 <Plus className="h-4 w-4" />
                 New group

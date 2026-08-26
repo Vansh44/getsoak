@@ -6,6 +6,7 @@ import {
   assertCanActivateCoupon,
   assertCanCreateProduct,
   assertCanInviteStaff,
+  getProductCreateCapacity,
   PlanEntitlementError,
 } from "./entitlements";
 
@@ -44,6 +45,16 @@ describe("transactional plan limits", () => {
     await expect(
       assertCanCreateProduct(mock.db as any, STORE),
     ).resolves.toBeUndefined();
+  });
+
+  it("reserves a CSV slice with one plan/count read", async () => {
+    const mock = dbFor("free", 3);
+
+    await expect(
+      getProductCreateCapacity(mock.db as any, STORE, 8),
+    ).resolves.toMatchObject({ allowed: 2, error: expect.stringMatching(/5/) });
+    expect(mock.calls.execute).toHaveLength(1);
+    expect(mock.calls.select).toHaveLength(2);
   });
 
   it("counts the owner in the staff cap", async () => {

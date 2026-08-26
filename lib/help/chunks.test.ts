@@ -71,7 +71,7 @@ describe("buildHelpArticleChunks", () => {
       body: "<h2>Checkout</h2>",
     });
 
-    expect(HELP_CHUNK_INDEX_VERSION).toBe(1);
+    expect(HELP_CHUNK_INDEX_VERSION).toBe(2);
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toMatchObject({
       chunkIndex: 0,
@@ -81,6 +81,20 @@ describe("buildHelpArticleChunks", () => {
     expect(chunks[0].embeddingText).toContain(
       "Article: Process an in-store sale",
     );
+  });
+
+  it("decodes HTML entities before storing and embedding plain text", () => {
+    const [chunk] = buildHelpArticleChunks({
+      ...SOURCE,
+      title: "Shipping &amp; delivery",
+      excerpt: "Rates &amp; promises",
+      body: "<h2>Rates &amp; zones</h2><p>Tea &amp; coffee cost &#8377;50.</p>",
+    });
+
+    expect(chunk.heading).toBe("Rates & zones");
+    expect(chunk.content).toBe("Tea & coffee cost ₹50.");
+    expect(chunk.embeddingText).toContain("Article: Shipping & delivery");
+    expect(chunk.embeddingText).not.toContain("&amp;");
   });
 
   it("bounds operator-owned metadata before it reaches the provider", () => {

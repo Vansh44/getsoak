@@ -102,6 +102,7 @@ describe("order-actions", () => {
           [{ n: 3 }],
           [
             { sales_channel: "online", status: "pending", n: 2 },
+            { sales_channel: "pos", status: "pending", n: 3 },
             { sales_channel: "online", status: "delivered", n: 1 },
             { sales_channel: "pos", status: "completed", n: 4 },
           ],
@@ -112,11 +113,11 @@ describe("order-actions", () => {
       expect(result.orders).toEqual([{ id: "o1", total: 100 }]);
       expect(result.total).toBe(3);
       // Per-status tab counts come from the grouped-count query.
-      expect(result.counts.all).toBe(7);
-      expect(result.counts.pending).toBe(2);
+      expect(result.counts.all).toBe(10);
+      expect(result.counts.pending).toBe(5);
       expect(result.counts.delivered).toBe(1);
       expect(result.counts.completed).toBe(4);
-      expect(result.channelCounts).toEqual({ all: 7, website: 3, pos: 4 });
+      expect(result.channelCounts).toEqual({ all: 10, website: 3, pos: 7 });
       // List + count + grouped-count queries, all store-scoped.
       expect(dbHolder.current.calls.where).toHaveLength(3);
       // Never selects the order_items join for the list.
@@ -270,6 +271,12 @@ describe("order-actions", () => {
       expect(res.order?.items).toHaveLength(1);
       // The order lookup is scoped by id AND store (its where carries both).
       expect(dbHolder.current.calls.where.length).toBeGreaterThanOrEqual(1);
+      // Customer and both location lookups use joins instead of per-column
+      // correlated subqueries, and every join is explicitly tenant-scoped.
+      expect(dbHolder.current.calls.leftJoin).toHaveLength(5);
+      for (const [, condition] of dbHolder.current.calls.leftJoin.slice(0, 3)) {
+        expect(sqlParamValues(condition)).toContain(STORE);
+      }
     });
 
     it("errors when the order isn't in this store", async () => {
@@ -319,9 +326,19 @@ describe("order-actions", () => {
     });
 
     it("does not put a standard POS sale into a fulfillment state", async () => {
-      dbHolder.current = makeDbMock({ returning: [] });
+      dbHolder.current = makeDbMock({
+        returning: [],
+        selectQueue: [[{ salesChannel: "pos" }]],
+      });
       const result = await updateOrderStatus("pos-1", "shipped");
       expect(result.error).toMatch(/pos sales do not use fulfillment/i);
+    });
+
+    it("reports a missing order instead of calling it a POS sale", async () => {
+      dbHolder.current = makeDbMock({ returning: [], selectQueue: [[]] });
+      const result = await updateOrderStatus("missing", "shipped");
+      expect(result.error).toMatch(/no longer exists/i);
+      expect(result.error).not.toMatch(/pos/i);
     });
 
     it("restocks a reserved order exactly once when cancelled", async () => {
@@ -398,7 +415,17 @@ describe("order-actions", () => {
       // stock_status is not 'reserved' (a legacy 'none' order, or one already
       // 'released' by a prior cancel/reinstate), so the claim UPDATE matches no
       // row — guards both the phantom restock and the double restock.
-      dbHolder.current = makeDbMock({ returning: [] });
+      dbHolder.current = makeDbMock({
+        returningQueue: [
+          [],
+          [
+            {
+              order_ref: "ORD-1",
+              customer_id: null,
+            },
+          ],
+        ],
+      });
 
       const result = await updateOrderStatus("o1", "cancelled");
       expect(result.success).toBe(true);

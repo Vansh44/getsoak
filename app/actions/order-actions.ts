@@ -14,6 +14,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { revalidatePath } from "next/cache";
 import { withService, withUser } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
@@ -421,7 +422,11 @@ export async function getOrders(
       if (salesChannel && row.sales_channel !== salesChannel) continue;
       counts.all += row.n;
       if (row.status && row.status in counts) {
-        (counts as unknown as Record<string, number>)[row.status] = row.n;
+        // The grouped query has one row per channel + status. In the combined
+        // All book, the same lifecycle status can therefore appear twice
+        // (Website and POS) and must be summed rather than overwritten by the
+        // later channel row.
+        (counts as unknown as Record<string, number>)[row.status] += row.n;
       }
     }
 
@@ -534,19 +539,34 @@ export async function updateOrderStatus(
   }
 
   const row = updated[0];
-  if (!row && isFulfillmentStatus) {
-    return { error: "POS sales do not use fulfillment statuses." };
+  if (!row) {
+    if (isFulfillmentStatus) {
+      // The UPDATE deliberately excludes POS sales, so a zero-row result is
+      // ambiguous: it can mean either "POS" or "missing". Resolve that
+      // distinction before choosing the message instead of telling a caller
+      // that an unknown id is a POS sale.
+      const existing = await withUser(admin, (db) =>
+        db
+          .select({ salesChannel: orders.salesChannel })
+          .from(orders)
+          .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
+          .limit(1),
+      ).catch(() => []);
+      if (existing[0]?.salesChannel === "pos") {
+        return { error: "POS sales do not use fulfillment statuses." };
+      }
+    }
+    return { error: "This order no longer exists." };
   }
-  if (row) {
-    emitEvent({
-      type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
-      storeId,
-      actor: { type: "admin", id: admin.uid, label: admin.email },
-      subject: { type: "order", id: orderId, label: row.order_ref },
-      customerId: row.customer_id,
-      payload: { status, ...(paymentStatus ? { paymentStatus } : {}) },
-    });
-  }
+
+  emitEvent({
+    type: status === "cancelled" ? "order.cancelled" : "order.status_changed",
+    storeId,
+    actor: { type: "admin", id: admin.uid, label: admin.email },
+    subject: { type: "order", id: orderId, label: row.order_ref },
+    customerId: row.customer_id,
+    payload: { status, ...(paymentStatus ? { paymentStatus } : {}) },
+  });
 
   revalidatePath("/dashboard/orders");
   return { success: true };
@@ -725,6 +745,9 @@ export interface OrderDetail {
   items: OrderDetailItem[];
 }
 
+const saleLocation = alias(storeLocations, "sale_location");
+const pickupLocation = alias(storeLocations, "pickup_location");
+
 const ORDER_DETAIL_COLUMNS = {
   id: orders.id,
   customer_id: orders.customerId,
@@ -751,42 +774,18 @@ const ORDER_DETAIL_COLUMNS = {
   sales_channel: orders.salesChannel,
   receipt_no: orders.receiptNo,
   cashier_name: orders.cashierName,
-  customer_first_name: sql<string | null>`(
-    select u.first_name from ${users} u
-    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
-    limit 1
-  )`,
-  customer_last_name: sql<string | null>`(
-    select u.last_name from ${users} u
-    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
-    limit 1
-  )`,
-  customer_phone: sql<string | null>`(
-    select u.phone from ${users} u
-    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
-    limit 1
-  )`,
-  customer_email: sql<string | null>`(
-    select u.email from ${users} u
-    where u.id = ${orders.customerId} and u.store_id = ${orders.storeId}
-    limit 1
-  )`,
-  sale_location_name: sql<string | null>`(
-    select l.name from ${storeLocations} l where l.id = ${orders.locationId}
-  )`,
-  sale_location_address: sql<Record<string, unknown> | null>`(
-    select l.address from ${storeLocations} l where l.id = ${orders.locationId}
-  )`,
+  customer_first_name: users.firstName,
+  customer_last_name: users.lastName,
+  customer_phone: users.phone,
+  customer_email: users.email,
+  sale_location_name: saleLocation.name,
+  sale_location_address: saleLocation.address,
   fulfilment_type: orders.fulfilmentType,
   pickup_status: orders.pickupStatus,
   pickup_ready_at: orders.pickupReadyAt,
   pickup_expires_at: orders.pickupExpiresAt,
-  pickup_location_name: sql<string | null>`(
-    select l.name from ${storeLocations} l where l.id = ${orders.pickupLocationId}
-  )`,
-  pickup_location_address: sql<Record<string, unknown> | null>`(
-    select l.address from ${storeLocations} l where l.id = ${orders.pickupLocationId}
-  )`,
+  pickup_location_name: pickupLocation.name,
+  pickup_location_address: pickupLocation.address,
 };
 
 /**
@@ -808,6 +807,24 @@ export async function getOrderDetail(
       const orderRows = await db
         .select(ORDER_DETAIL_COLUMNS)
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, storeId)),
+        )
+        .leftJoin(
+          saleLocation,
+          and(
+            eq(saleLocation.id, orders.locationId),
+            eq(saleLocation.storeId, storeId),
+          ),
+        )
+        .leftJoin(
+          pickupLocation,
+          and(
+            eq(pickupLocation.id, orders.pickupLocationId),
+            eq(pickupLocation.storeId, storeId),
+          ),
+        )
         .where(and(eq(orders.id, orderId), eq(orders.storeId, storeId)))
         .limit(1);
       const order = orderRows[0];

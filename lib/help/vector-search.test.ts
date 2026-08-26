@@ -95,7 +95,7 @@ describe("searchHelpArticleChunksByMeaning", () => {
 
     const query = execute.mock.calls[0]?.[0];
     expect(sqlParamValues(query)).toEqual(
-      expect.arrayContaining(["gemini-embedding-001", 1, 0.72, 3, 12]),
+      expect.arrayContaining(["gemini-embedding-001", 2, 0.72, 3, 12]),
     );
     expect(sqlText(query)).toMatch(/chunk\.index_version\s*=/i);
     expect(sqlText(query)).toMatch(

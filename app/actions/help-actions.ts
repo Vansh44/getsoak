@@ -685,17 +685,30 @@ function cleanInput(input: HelpArticleInput) {
   };
 }
 
-function publishedContentError(article: {
+type PublishedRequirement = "category" | "excerpt" | "body" | "seo";
+
+function publishedContentIssues(article: {
   status: HelpStatus;
   categoryId: string | null;
   excerpt: string | null;
   body: string | null;
   seoTitle: string | null;
   seoDescription: string | null;
-}): string | null {
-  if (article.status !== "published") return null;
-  if (!article.categoryId) return "Choose a category before publishing.";
-  if (!article.excerpt) return "Add a short summary before publishing.";
+}): { key: PublishedRequirement; message: string }[] {
+  if (article.status !== "published") return [];
+  const issues: { key: PublishedRequirement; message: string }[] = [];
+  if (!article.categoryId) {
+    issues.push({
+      key: "category",
+      message: "Choose a category before publishing.",
+    });
+  }
+  if (!article.excerpt) {
+    issues.push({
+      key: "excerpt",
+      message: "Add a short summary before publishing.",
+    });
+  }
 
   const readableBody = (article.body ?? "")
     .replace(/<[^>]*>/g, " ")
@@ -703,12 +716,24 @@ function publishedContentError(article: {
     .replace(/\s+/g, " ")
     .trim();
   if (readableBody.length < 40) {
-    return "Add useful article content before publishing.";
+    issues.push({
+      key: "body",
+      message: "Add useful article content before publishing.",
+    });
   }
   if (!article.seoTitle || !article.seoDescription) {
-    return "Add an SEO title and description before publishing.";
+    issues.push({
+      key: "seo",
+      message: "Add an SEO title and description before publishing.",
+    });
   }
-  return null;
+  return issues;
+}
+
+function publishedContentError(
+  article: Parameters<typeof publishedContentIssues>[0],
+): string | null {
+  return publishedContentIssues(article)[0]?.message ?? null;
 }
 
 export async function createHelpArticle(
@@ -759,7 +784,19 @@ export async function updateHelpArticle(
   if (!existing) return { error: "Article not found." };
 
   const c = cleanInput(input);
-  const publishError = publishedContentError(c);
+  // Older published guides predate today's completeness rules. Do not make
+  // them impossible to edit: require a newly-published guide to satisfy every
+  // rule, and prevent an already-published guide from introducing any NEW
+  // missing requirement while allowing legacy gaps to be repaired gradually.
+  const previousIssueKeys = new Set(
+    publishedContentIssues(existing).map((issue) => issue.key),
+  );
+  const publishError =
+    existing.status === "published" && c.status === "published"
+      ? (publishedContentIssues(c).find(
+          (issue) => !previousIssueKeys.has(issue.key),
+        )?.message ?? null)
+      : publishedContentError(c);
   if (publishError) return { error: publishError };
   const slug = await resolveHelpSlug(input.slug || input.title, id);
   const ts = nowIso();

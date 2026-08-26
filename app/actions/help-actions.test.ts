@@ -612,6 +612,48 @@ describe("article administration", () => {
     );
   });
 
+  it("allows a legacy published guide to be edited without first filling old gaps", async () => {
+    const legacy = {
+      ...ARTICLE,
+      status: "published",
+      excerpt: null,
+      seoTitle: null,
+      seoDescription: null,
+      publishedAt: "2025-01-01T00:00:00.000Z",
+    };
+    dbHolder.current = makeDbMock({
+      selectQueue: [[legacy], [{ id: "article-1", slug: "connect-domain" }]],
+    });
+
+    const result = await updateHelpArticle("article-1", {
+      ...ARTICLE_INPUT,
+      title: "Updated legacy guide",
+      excerpt: "",
+      seoTitle: "",
+      seoDescription: "",
+    });
+
+    expect(result.success).toBe(true);
+    expect(dbHolder.current.calls.set[0].title).toBe("Updated legacy guide");
+  });
+
+  it("still blocks a new completeness regression on a published guide", async () => {
+    const published = {
+      ...ARTICLE,
+      status: "published",
+      publishedAt: "2026-08-01T00:00:00.000Z",
+    };
+    dbHolder.current = makeDbMock({ selectQueue: [[published]] });
+
+    const result = await updateHelpArticle("article-1", {
+      ...ARTICLE_INPUT,
+      categoryId: "",
+    });
+
+    expect(result).toEqual({ error: "Choose a category before publishing." });
+    expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
   it("deletes media removed from an article body after the write", async () => {
     dbHolder.current = makeDbMock({
       selectQueue: [[ARTICLE], [{ id: "article-1", slug: "connect-domain" }]],

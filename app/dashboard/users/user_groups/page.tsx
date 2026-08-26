@@ -29,7 +29,8 @@ export default async function UserGroupsPage() {
   return (
     <GroupsManagementView
       groups={groups}
-      canManage={canManage && limits.customerGroups}
+      canManage={canManage}
+      canCreate={canManage && limits.customerGroups}
       planLocked={!limits.customerGroups}
     />
   );

@@ -9,6 +9,7 @@ import {
 import { withService } from "@/lib/db/client";
 import { getShiprocketSessionForStore } from "@/lib/logistics/connection";
 import { checkShiprocketServiceability } from "@/lib/logistics/shiprocket";
+import { PlanEntitlementError } from "@/lib/plans/entitlements";
 import { manualShippingOption, shiprocketShippingOptions } from "./rates";
 import {
   DEFAULT_SHIPPING_SETTINGS,
@@ -129,6 +130,23 @@ export async function quoteShippingForOrder(input: {
       ? { options }
       : { options: [], error: "No courier is available for this PIN code." };
   } catch (error) {
+    if (error instanceof PlanEntitlementError) {
+      // A billing downgrade is a merchant concern, never shopper-facing copy.
+      // Keep checkout usable with the store's retained manual/free/flat
+      // settings while Shiprocket is plan-locked; the saved provider setup is
+      // untouched and resumes after an upgrade.
+      return {
+        options: [
+          manualShippingOption(
+            {
+              ...settings,
+              mode: settings.flatRate > 0 ? "flat" : "free",
+            },
+            input.merchandiseSubtotal,
+          ),
+        ],
+      };
+    }
     return {
       options: [],
       error:

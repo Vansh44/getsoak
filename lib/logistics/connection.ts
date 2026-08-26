@@ -7,7 +7,10 @@ import { storeLogisticsProviders } from "@/drizzle/schema";
 import { decryptSecret, encryptSecret } from "@/lib/payments/crypto";
 import { PLATFORM_URL } from "@/lib/store/host";
 import { shiprocketLogin } from "./shiprocket";
-import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
+import {
+  PlanEntitlementError,
+  storeAllowsPlanFeature,
+} from "@/lib/plans/entitlements";
 
 export interface ShiprocketConnectionSession {
   id: string;
@@ -144,7 +147,7 @@ export async function getShiprocketSessionForStore(
   requireEnabled = true,
 ) {
   if (!(await storeAllowsPlanFeature(storeId, "shippingIntegration"))) {
-    throw new Error(
+    throw new PlanEntitlementError(
       "Shiprocket is available on Basic and Pro. Your connection and shipment history remain safe until you upgrade.",
     );
   }

@@ -219,8 +219,6 @@ export async function deleteRole(id: string): Promise<RoleActionResult> {
     return { error: "You do not have permission to manage roles." };
 
   const storeId = await getActingStoreId();
-  const planError = await rolesPlanError(storeId);
-  if (planError) return { error: planError };
 
   const roleRows = await withService((db) =>
     db

@@ -286,7 +286,9 @@ wholesip/
 │   │   ├── orders/            # ★ Channel-aware Orders workspace: horizontal All / Website /
 │   │   │                      # POS books (never extra app-rail destinations), server-paginated
 │   │   │                      # with channel-specific filters/columns and a shared detail drawer
-│   │   │                      # that never presents a register sale as fulfilment work (§22)
+│   │   │                      # that never presents a register sale as fulfilment work; combined
+│   │   │                      # lifecycle counts sum both channels, and an unknown order id is
+│   │   │                      # reported as missing rather than mislabelled as POS (§22)
 │   │   ├── categories/ colors/ blogs/ media/   # content management (media/ = the
 │   │   │                      # per-store Media Library: confirm-first upload + grid +
 │   │   │                      # view + copy-URL + delete (media_assets row + GCS object),
@@ -1278,7 +1280,9 @@ wholesip/
 │                              # marketing/communications, while keeping every article editable in
 │                              # the operator Help console; 0025 updates the Mink AI guide for
 │                              # answer-start positioning and full-screen maximize; 0026 publishes
-│                              # the full plan matrix and soft-downgrade no-data-loss contract.
+│                              # the full plan matrix and soft-downgrade no-data-loss contract;
+│                              # 0027 clarifies downgrade-safe cleanup/editing and shopper-safe
+│                              # shipping fallback after the entitlement review.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -1997,10 +2001,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     the owning action). `lib/plans/entitlements.ts` resolves the effective plan
     server-side and uses per-store advisory transaction locks for products,
     staff and active coupons so simultaneous writes cannot overshoot a cap.
+    Product CSV slices reserve their whole creation capacity with one locked
+    effective-plan/count read and insert the allowed base rows before releasing
+    that lock; they do not repeat the lock, plan read and `COUNT(*)` per row.
     **Soft downgrade is the contract:** existing rows, settings, joins,
     credentials, layouts and history are never deleted or reset; new over-cap
     rows and paid runtime capabilities pause, then the same stored data becomes
-    available when an eligible plan returns. The platform landing page
+    available when an eligible plan returns. Existing customer groups and
+    memberships remain editable, an unused custom role can still be deleted,
+    and a locked custom-code section can stay or be removed while the rest of
+    its page remains saveable (adding/editing code still waits for Basic).
+    A retained Shiprocket-rate store falls back to its manual/free checkout
+    option below Basic so shoppers never see merchant billing copy. The platform landing page
     (`app/platform/page.tsx`) derives both pricing cards and the complete
     comparison table from `PLAN_META`/`PLAN_LIMITS`/`PLAN_FEATURE_MATRIX`, so
     advertising and enforcement cannot drift. `stores.plan` is CHECK-constrained to the three ids
@@ -2760,14 +2772,19 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       distinction between reply guidance and submitted messages. Migration
       `20260826_0026_plan_entitlements_help` publishes the complete Free/Basic/
       Pro matrix and the no-data-loss downgrade contract, and repairs affected
-      product, AI, group, blog, custom-code, Shiprocket and Analytics guides. Published
+      product, AI, group, blog, custom-code, Shiprocket and Analytics guides.
+      `20260827_0027_plan_review_followups_help` documents editable retained
+      groups, role cleanup, locked-code page editing and the shopper-safe
+      shipping fallback. Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,
       incomplete chunk sets, failed provider calls, embedding-model changes,
       and chunker-version changes. Chunk rows carry their expected set size and
       index version; replacement/deletion is serialized with a per-article
-      advisory transaction lock and a post-lock source snapshot check. Long
+      advisory transaction lock and a post-lock source snapshot check. Chunker
+      index version 2 decodes HTML/numeric entities before hashing and embedding,
+      so prompts contain `&`/`₹` rather than literal `&amp;`/`&#…;`. Long
       guides are embedded in bounded provider batches, and a one-row lookahead
       self-chains only when more work really remains. Internal continuations
       target the current request environment, with the platform origin as the

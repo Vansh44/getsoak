@@ -38,6 +38,7 @@ sequence AND the spec for everything still to build.
 | —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
 | —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
 | —      | Plan matrix + transactional soft-downgrade entitlements         | M    | ✅ done |
+| —      | Post-review order, entitlement and Help compatibility hardening | M    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |

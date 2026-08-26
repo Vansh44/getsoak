@@ -292,6 +292,9 @@ function developerRequest(
   return {
     model: `models/${provider.model}`,
     content: { parts: [{ text: input.text }] },
+    // This is the REST wire field from EmbedContentRequest. The Google GenAI
+    // JavaScript SDK calls its convenience input `config`, but serializes it
+    // to this `embedContentConfig` object for the HTTP API.
     embedContentConfig: {
       taskType: task,
       outputDimensionality: HELP_EMBEDDING_DIMENSIONS,

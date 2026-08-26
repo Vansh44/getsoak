@@ -125,12 +125,16 @@ export interface DbMock {
     offset: any[];
     forUpdate: any[];
     innerJoin: any[];
+    leftJoin: any[];
   };
 }
 
 export function makeDbMock(
   opts: {
     returning?: any[];
+    // Optional per-write returning rows. Each .returning() consumes one entry;
+    // useful when one action performs multiple conditional updates.
+    returningQueue?: any[][];
     // An `Error` entry makes THAT select reject — for testing how an action
     // reports a failed read. Needed once reads run concurrently: which batch
     // failed decides which message the user sees.
@@ -143,6 +147,7 @@ export function makeDbMock(
   } = {},
 ): DbMock {
   const returning = opts.returning ?? [{ id: "row-1" }];
+  const returningQueue = [...(opts.returningQueue ?? [])];
   const failInsertFor = opts.failInsertFor ?? [];
   const failUpdateFor = opts.failUpdateFor ?? [];
   // A step whose await / terminals reject — models a failing write.
@@ -170,6 +175,7 @@ export function makeDbMock(
     offset: [],
     forUpdate: [],
     innerJoin: [],
+    leftJoin: [],
   };
 
   // A thenable step that also exposes .where()/.returning() terminals, so both
@@ -188,7 +194,9 @@ export function makeDbMock(
       calls.onConflict.push(c);
       return step(result);
     }),
-    returning: vi.fn(async () => returning),
+    returning: vi.fn(async () =>
+      returningQueue.length ? returningQueue.shift()! : returning,
+    ),
     then: (resolve: any) => Promise.resolve(result).then(resolve),
   });
 
@@ -200,7 +208,10 @@ export function makeDbMock(
         calls.where.push(c);
         return s;
       }),
-      leftJoin: vi.fn(() => s),
+      leftJoin: vi.fn((...args: any[]) => {
+        calls.leftJoin.push(args);
+        return s;
+      }),
       innerJoin: vi.fn((...args: any[]) => {
         calls.innerJoin.push(args);
         return s;

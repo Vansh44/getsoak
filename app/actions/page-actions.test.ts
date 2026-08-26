@@ -57,8 +57,8 @@ const richSection = (html = "<p>Hi</p>") => ({
   config: { html, width: "contained" },
 });
 
-const codeSection = () => ({
-  id: crypto.randomUUID(),
+const codeSection = (id = crypto.randomUUID()) => ({
+  id,
   type: "custom_code",
   enabled: true,
   config: {
@@ -143,13 +143,48 @@ describe("page-actions", () => {
       expect(update.sections[0].config.html).not.toContain("<script");
     });
 
-    it("refuses custom_code when the store setting is off", async () => {
+    it("refuses newly-added custom_code when the store setting is off", async () => {
       dbHolder.current = makeDbMock({
-        selectQueue: [[{ slug: "about", updated_at: "t0" }]],
+        selectQueue: [[{ slug: "about", updated_at: "t0", sections: [] }]],
       });
       vi.mocked(getStoreSetting).mockResolvedValue(false);
       const r = await savePageDraft("p1", [codeSection()]);
-      expect(r.error).toMatch(/custom code is disabled/i);
+      expect(r.error).toMatch(/cannot be added or changed/i);
+      expect(dbHolder.current.calls.update).toHaveLength(0);
+    });
+
+    it("keeps an unchanged custom_code section saveable after downgrade", async () => {
+      const retained = codeSection("paid-section");
+      dbHolder.current = makeDbMock({
+        returning: [{ updated_at: "t1" }],
+        selectQueue: [
+          [{ slug: "about", updated_at: "t0", sections: [retained] }],
+        ],
+      });
+      vi.mocked(getStoreSetting).mockResolvedValue(false);
+
+      const r = await savePageDraft("p1", [retained, richSection()]);
+
+      expect(r.success).toBe(true);
+      expect(dbHolder.current.calls.set[0].sections[0]).toEqual(retained);
+    });
+
+    it("does not let a downgraded store edit retained custom code", async () => {
+      const retained = codeSection("paid-section");
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [{ slug: "about", updated_at: "t0", sections: [retained] }],
+        ],
+      });
+      vi.mocked(getStoreSetting).mockResolvedValue(false);
+
+      const changed = {
+        ...retained,
+        config: { ...retained.config, html: "<div>changed</div>" },
+      };
+      const r = await savePageDraft("p1", [changed]);
+
+      expect(r.error).toMatch(/cannot be added or changed/i);
       expect(dbHolder.current.calls.update).toHaveLength(0);
     });
 

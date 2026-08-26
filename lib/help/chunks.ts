@@ -7,7 +7,7 @@ export const HELP_CHUNK_MAX_CHARS = 1_900;
 // The durable worker includes it in reconciliation, so an unchanged article is
 // still rebuilt after a chunker release instead of keeping structurally stale
 // vectors forever.
-export const HELP_CHUNK_INDEX_VERSION = 1;
+export const HELP_CHUNK_INDEX_VERSION = 2;
 
 const HELP_CHUNK_METADATA_MAX_CHARS = 500;
 
@@ -35,12 +35,47 @@ interface Section {
   paragraphs: string[];
 }
 
+const HTML_TEXT_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+
+/** sanitize-html correctly removes markup but deliberately re-escapes the
+ * five characters that are special in HTML. Chunks are plain text, so decode
+ * those entities (and numeric entities) before hashing or embedding them. */
+function decodePlainTextEntities(value: string): string {
+  return value.replace(
+    /&(#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);/gi,
+    (match, raw: string) => {
+      if (raw[0] !== "#") {
+        return HTML_TEXT_ENTITIES[raw.toLowerCase()] ?? match;
+      }
+      const hex = raw[1]?.toLowerCase() === "x";
+      const codePoint = Number.parseInt(raw.slice(hex ? 2 : 1), hex ? 16 : 10);
+      if (
+        !Number.isInteger(codePoint) ||
+        codePoint < 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        return match;
+      }
+      return String.fromCodePoint(codePoint);
+    },
+  );
+}
+
 function plainText(html: string): string {
-  return sanitizeHtml(html, {
-    allowedTags: [],
-    allowedAttributes: {},
-  })
-    .replace(/&nbsp;/gi, " ")
+  return decodePlainTextEntities(
+    sanitizeHtml(html, {
+      allowedTags: [],
+      allowedAttributes: {},
+    }),
+  )
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -70,10 +105,12 @@ function articleSections(body: string | null): Section[] {
     .replace(/<\/(p|div|li|ol|ul|blockquote|pre|table|tr)>/gi, "\n")
     .replace(/<\/(td|th)>/gi, " · ");
 
-  const text = sanitizeHtml(marked, {
-    allowedTags: [],
-    allowedAttributes: {},
-  })
+  const text = decodePlainTextEntities(
+    sanitizeHtml(marked, {
+      allowedTags: [],
+      allowedAttributes: {},
+    }),
+  )
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -157,7 +194,7 @@ function sha256(value: string): string {
 }
 
 function boundedMetadata(value: string | null, max: number): string {
-  return (value ?? "")
+  return decodePlainTextEntities(value ?? "")
     .normalize("NFKC")
     .replace(/\s+/g, " ")
     .trim()

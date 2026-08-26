@@ -925,6 +925,42 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260827_0027_plan_review_followups_help",
+      "description": "Clarify downgrade-safe cleanup, custom-code editing, and shopper-safe shipping fallback in Help Centre guides",
+      "file": "sql/20260827_0027_plan_review_followups_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0026_plan_entitlements_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "plan guide explains editable retained data and shopper-safe shipping fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%Existing customer groups and memberships remain editable below Basic%' and body like '%shoppers receive the retained manual or free shipping option%'",
+            "equals": "1"
+          },
+          {
+            "name": "custom-code and role guides explain downgrade-safe cleanup",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-safe-custom-code-to-a-page' and body like '%other page sections remain editable%') or (slug = 'create-roles-permissions-and-location-access' and body like '%unused custom role can still be deleted%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "plan guide explains editable retained data and shopper-safe shipping fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%Existing customer groups and memberships remain editable below Basic%' and body like '%shoppers receive the retained manual or free shipping option%'",
+            "equals": "1"
+          },
+          {
+            "name": "custom-code and role guides explain downgrade-safe cleanup",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-safe-custom-code-to-a-page' and body like '%other page sections remain editable%') or (slug = 'create-roles-permissions-and-location-access' and body like '%unused custom role can still be deleted%'))",
+            "equals": "2"
+          }
+        ]
+      }
     }
   ]
 }

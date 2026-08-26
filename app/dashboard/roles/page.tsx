@@ -63,7 +63,7 @@ export default async function RolesPage() {
   return (
     <RolesManagementView
       roles={roles}
-      canManage={canManage && limits.customRoles}
+      canManage={canManage}
       planLocked={!limits.customRoles}
     />
   );
