@@ -88,6 +88,10 @@ function planFeatures(plan: Plan): string[] {
     `${l.aiGenerationsPerMonth === null ? "Unlimited" : l.aiGenerationsPerMonth} AI generations / month`,
     l.customDomain ? "Custom domain" : "Subdomain only",
     l.onlinePayments ? "Online payments (own gateway)" : "Cash on Delivery",
+    ...(l.customerBlogSubmissions ? ["Customer blog submissions"] : []),
+    ...(l.customerGroups ? ["Customer groups"] : []),
+    ...(l.shippingIntegration ? ["Shiprocket integration"] : []),
+    ...(l.customCode ? ["Custom-code page sections"] : []),
     ...(l.emailCampaigns ? ["Email campaigns"] : []),
     ...(l.advancedAnalytics
       ? ["Advanced analytics — GA4, Meta Pixel and conversion insights"]
@@ -512,12 +516,9 @@ export function PlansBillingClient({
               <div className="flex items-start gap-3 rounded-md bg-amber-50 p-4">
                 <Lock className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
                 <div className="text-sm text-amber-800">
-                  <p className="font-medium">
-                    Credit top-ups are available from the Basic plan.
-                  </p>
+                  <p className="font-medium">Credit top-ups are unavailable.</p>
                   <p className="mt-1">
-                    Upgrade below to buy AI credits and unlock a larger monthly
-                    allowance.
+                    Please try again later or contact StoreMink support.
                   </p>
                 </div>
               </div>
@@ -1197,58 +1198,51 @@ function UpgradeModal({
                   expire. They use a separate payment and invoice from your
                   plan.
                 </p>
-                {selectedPlan === "free" ? (
-                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-                    AI-credit top-ups require Basic or Pro. No add-on will be
-                    added to this change.
-                  </div>
-                ) : (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPackId(null)}
+                    className={`rounded-xl border bg-white p-4 text-left ${
+                      selectedPackId === null
+                        ? "border-indigo-700 ring-2 ring-indigo-100"
+                        : "border-[#e5e7eb]"
+                    }`}
+                  >
+                    <span className="font-semibold text-[#111827]">
+                      No top-up
+                    </span>
+                    <p className="mt-1 text-xs text-[#5b6472]">
+                      Continue with the plan allowance.
+                    </p>
+                  </button>
+                  {packs.map((pack) => (
                     <button
+                      key={pack.id}
                       type="button"
-                      onClick={() => setSelectedPackId(null)}
-                      className={`rounded-xl border bg-white p-4 text-left ${
-                        selectedPackId === null
+                      onClick={() => setSelectedPackId(pack.id)}
+                      className={`relative rounded-xl border bg-white p-4 text-left ${
+                        selectedPackId === pack.id
                           ? "border-indigo-700 ring-2 ring-indigo-100"
                           : "border-[#e5e7eb]"
                       }`}
                     >
+                      {pack.popular && (
+                        <span className="absolute right-3 top-3 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+                          Popular
+                        </span>
+                      )}
                       <span className="font-semibold text-[#111827]">
-                        No top-up
+                        {pack.credits} credits
                       </span>
+                      <p className="mt-1 text-sm font-semibold text-[#111827]">
+                        ₹{pack.priceInr.toLocaleString("en-IN")} once
+                      </p>
                       <p className="mt-1 text-xs text-[#5b6472]">
-                        Continue with the plan allowance.
+                        {pack.name} pack · never expires
                       </p>
                     </button>
-                    {packs.map((pack) => (
-                      <button
-                        key={pack.id}
-                        type="button"
-                        onClick={() => setSelectedPackId(pack.id)}
-                        className={`relative rounded-xl border bg-white p-4 text-left ${
-                          selectedPackId === pack.id
-                            ? "border-indigo-700 ring-2 ring-indigo-100"
-                            : "border-[#e5e7eb]"
-                        }`}
-                      >
-                        {pack.popular && (
-                          <span className="absolute right-3 top-3 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
-                            Popular
-                          </span>
-                        )}
-                        <span className="font-semibold text-[#111827]">
-                          {pack.credits} credits
-                        </span>
-                        <p className="mt-1 text-sm font-semibold text-[#111827]">
-                          ₹{pack.priceInr.toLocaleString("en-IN")} once
-                        </p>
-                        <p className="mt-1 text-xs text-[#5b6472]">
-                          {pack.name} pack · never expires
-                        </p>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                  ))}
+                </div>
               </div>
             )}
 

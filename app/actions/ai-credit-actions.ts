@@ -21,7 +21,7 @@ import {
 } from "@/lib/billing/credit-invoice";
 import { aiCreditLedger, aiCreditPurchases, stores } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
-import { effectivePlan, planAllows } from "@/lib/plans";
+import { effectivePlan } from "@/lib/plans";
 import { CREDIT_PACKS, getCreditPack } from "@/lib/ai/credits";
 import { getAiUsage, type AiUsageSummary } from "@/lib/ai/quota";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
@@ -223,7 +223,7 @@ export async function getAiUsagePageData(): Promise<AiUsagePageData> {
     plan,
     planExpiresAt: store?.plan_expires_at ?? null,
     planSource: store?.plan_source ?? null,
-    canBuyCredits: planAllows(plan, "basic"),
+    canBuyCredits: true,
     purchasesAvailable: getPlatformRazorpayCreds() !== null,
     ledger,
   };
@@ -250,21 +250,6 @@ export async function startCreditPurchase(
   if (!pack) return { error: "Unknown credit pack." };
 
   const storeId = await getActingStoreId();
-
-  // Plan gate (server-side, convention #9): credits are a paid-plan top-up.
-  const storeRows = await withService((db) =>
-    db
-      .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1),
-  ).catch(() => []);
-  if (!planAllows(effectivePlan(storeRows[0] ?? {}), "basic")) {
-    return {
-      error:
-        "AI credits are available on the Basic plan and above. Upgrade your plan to buy credits.",
-    };
-  }
 
   const creds = getPlatformRazorpayCreds();
   if (!creds) {

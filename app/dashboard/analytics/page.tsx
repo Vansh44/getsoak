@@ -457,6 +457,11 @@ export default async function AnalyticsPage({
       </div>
     );
   }
+  const [canCustomize, canUseReports, canUseSearch] = await Promise.all([
+    storeHasAnalyticsFeature(storeId, "dashboardCustomization"),
+    storeHasAnalyticsFeature(storeId, "drilldownReports"),
+    storeHasAnalyticsFeature(storeId, "googleSearchConsole"),
+  ]);
   const [timeZone, locationOptions] = await Promise.all([
     getStoreAnalyticsTimeZone(storeId),
     getAnalyticsLocationOptions(storeId, locationScope),
@@ -489,9 +494,7 @@ export default async function AnalyticsPage({
   const discounts = getDiscountImpact(storeId, location, range);
   const returns = getReturnsAndRefunds(storeId, location, range);
   const velocity = getInventoryVelocity(storeId, location, range);
-  const search = platformFeatures.googleSearchConsole
-    ? getSearchAnalytics(storeId, range)
-    : null;
+  const search = canUseSearch ? getSearchAnalytics(storeId, range) : null;
   const storefront =
     platformFeatures.storefrontConversion &&
     (await storeHasProAnalytics(storeId))
@@ -500,18 +503,19 @@ export default async function AnalyticsPage({
   const margin = (await storeHasAnalyticsFeature(storeId, "grossMargin"))
     ? getGrossMarginAnalytics(storeId, location, range)
     : null;
-  const totalSalesReport = platformFeatures.drilldownReports
+  const totalSalesReport = canUseReports
     ? analyticsReportHref("total-sales", params)
     : undefined;
-  const salesOverTimeReport = platformFeatures.drilldownReports
+  const salesOverTimeReport = canUseReports
     ? analyticsReportHref("sales-over-time", params)
     : undefined;
-  const topProductsReport = platformFeatures.drilldownReports
+  const topProductsReport = canUseReports
     ? analyticsReportHref("top-products", params)
     : undefined;
-  const searchQueriesReport = platformFeatures.drilldownReports
-    ? analyticsReportHref("search-queries", params)
-    : undefined;
+  const searchQueriesReport =
+    canUseReports && canUseSearch
+      ? analyticsReportHref("search-queries", params)
+      : undefined;
 
   const slots: Partial<Record<WidgetId, ReactNode>> = {
     metric_revenue: (
@@ -741,7 +745,7 @@ export default async function AnalyticsPage({
           </>
         }
         initialLayout={initialLayout}
-        canCustomize={platformFeatures.dashboardCustomization}
+        canCustomize={canCustomize}
       />
     </div>
   );

@@ -21,6 +21,7 @@ import { getStoreAnalyticsTimeZone } from "@/lib/analytics/settings";
 import { resolveAnalyticsLocation } from "@/lib/analytics/location";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 const PAGE_ROW_LIMIT = 250;
 
@@ -67,6 +68,13 @@ export default async function AnalyticsReportPage({
   if (!isAnalyticsReportId(report)) notFound();
   if (!features.coreDashboard || !features.drilldownReports) notFound();
   if (report === "search-queries" && !features.googleSearchConsole) notFound();
+  if (!(await storeHasAnalyticsFeature(storeId, "drilldownReports")))
+    notFound();
+  if (
+    report === "search-queries" &&
+    !(await storeHasAnalyticsFeature(storeId, "googleSearchConsole"))
+  )
+    notFound();
 
   const timeZone = await getStoreAnalyticsTimeZone(storeId);
   const range = parseAnalyticsRange(query, timeZone);

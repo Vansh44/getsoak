@@ -250,7 +250,7 @@ export function ChannelsClient({
     id === "razorpay"
       ? state.enabled
       : id === "shiprocket"
-        ? shiprocketState.enabled
+        ? shiprocketState.enabled && shiprocketState.availableOnPlan
         : id === "twilio"
           ? smsState.enabled
           : false;
@@ -359,7 +359,8 @@ export function ChannelsClient({
                   : { text: "Paused", tone: "amber" }
               }
               toggle={
-                canManage ? (
+                canManage &&
+                (c.id !== "shiprocket" || shiprocketState.availableOnPlan) ? (
                   <Toggle
                     on={isEnabled(c.id)}
                     onClick={() => handleToggle(c.id)}
@@ -385,7 +386,9 @@ export function ChannelsClient({
               badge={
                 c.id === "razorpay" && !state.planAllowsOnlinePayments
                   ? { text: "Basic plan", tone: "amber", icon: Lock }
-                  : undefined
+                  : c.id === "shiprocket" && !shiprocketState.availableOnPlan
+                    ? { text: "Basic plan", tone: "amber", icon: Lock }
+                    : undefined
               }
               cta="Connect"
               onClick={() => setOpenId(c.id)}
@@ -516,6 +519,7 @@ function ShiprocketModal({
     setBusy(false);
     if (result.error) return toast.error(result.error);
     onState({
+      availableOnPlan: state.availableOnPlan,
       connected: false,
       enabled: false,
       accountEmail: null,
@@ -563,6 +567,13 @@ function ShiprocketModal({
         </div>
 
         <div className="space-y-4 p-5">
+          {!state.availableOnPlan ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Shiprocket is available on Basic and Pro. This saved connection,
+              warehouse mappings and shipment history are retained and will work
+              again after an upgrade.
+            </div>
+          ) : null}
           {state.connected && !showForm ? (
             <>
               <div className="rounded-lg border border-[rgba(17,24,39,0.08)] bg-[#f9fafb] p-4">
@@ -619,7 +630,7 @@ function ShiprocketModal({
                   <button
                     type="button"
                     onClick={handleRotate}
-                    disabled={!canManage || busy}
+                    disabled={!canManage || !state.availableOnPlan || busy}
                     className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 disabled:opacity-50"
                   >
                     <RefreshCw className="h-3.5 w-3.5" /> Generate a new webhook
@@ -628,7 +639,7 @@ function ShiprocketModal({
                 )}
               </div>
 
-              {canManage && (
+              {canManage && state.availableOnPlan && (
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -686,7 +697,7 @@ function ShiprocketModal({
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required
-                  disabled={!canManage || busy}
+                  disabled={!canManage || !state.availableOnPlan || busy}
                 />
               </div>
               <div>
@@ -704,14 +715,14 @@ function ShiprocketModal({
                   onChange={(event) => setPassword(event.target.value)}
                   required
                   autoComplete="off"
-                  disabled={!canManage || busy}
+                  disabled={!canManage || !state.availableOnPlan || busy}
                 />
               </div>
               <div className="flex gap-2">
                 <button
                   type="submit"
                   className="dash-btn dash-btn-primary"
-                  disabled={!canManage || busy}
+                  disabled={!canManage || !state.availableOnPlan || busy}
                 >
                   {busy ? "Verifying…" : "Verify & connect"}
                 </button>

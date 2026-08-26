@@ -77,8 +77,11 @@ export interface SettingDef {
   section: string;
   type: "boolean" | "number" | "select";
   defaultValue: boolean | number | string;
-  /** Minimum plan required to change this setting (locked to default below). */
+  /** Minimum plan required to change this setting. */
   minPlan?: Plan;
+  /** Runtime value while the plan is below minPlan. The stored override is
+   *  deliberately untouched, so it is restored verbatim after an upgrade. */
+  lockedValue?: boolean | number | string;
   /** Another boolean setting this one only applies under (UI dims it when the
    *  parent is off; consumers must check the parent themselves). */
   dependsOn?: SettingKey;
@@ -111,6 +114,8 @@ export const SETTINGS: readonly SettingDef[] = [
     section: "blogs",
     type: "boolean",
     defaultValue: true,
+    minPlan: "basic",
+    lockedValue: false,
   },
   {
     key: "blogs.requireApproval",
@@ -132,7 +137,8 @@ export const SETTINGS: readonly SettingDef[] = [
     section: "builder",
     type: "boolean",
     defaultValue: true,
-    // minPlan intentionally unset for now — gate to a paid plan when billing ships.
+    minPlan: "basic",
+    lockedValue: false,
   },
   {
     key: "marketing.showAllCoupons",
@@ -593,7 +599,8 @@ export type StoreSettingValues = Record<SettingKey, boolean | number | string>;
 /**
  * Resolve a store's feature settings from its raw settings jsonb + plan:
  * defaults ← overridden by settings.features, except plan-locked settings,
- * which always resolve to their default. Unknown/non-boolean overrides are
+ * which resolve to their explicit locked value (or default). Stored overrides
+ * are never changed by resolution. Unknown/non-boolean overrides are
  * ignored, so junk in the column can never break a storefront.
  */
 export function resolveStoreSettings(
@@ -631,7 +638,10 @@ export function resolveStoreSettings(
         continue;
       }
     }
-    out[def.key] = def.defaultValue;
+    out[def.key] =
+      !planAllows(p, def.minPlan) && def.lockedValue !== undefined
+        ? def.lockedValue
+        : def.defaultValue;
   }
   return out;
 }

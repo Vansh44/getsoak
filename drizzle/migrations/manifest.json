@@ -889,6 +889,42 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260826_0026_plan_entitlements_help",
+      "description": "Publish the complete plan matrix and soft-downgrade no-data-loss contract across Help Centre guides",
+      "file": "sql/20260826_0026_plan_entitlements_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0025_mink_ai_fullscreen_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "equals": "1"
+          },
+          {
+            "name": "feature guides contain current plan availability",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-or-edit-a-product' and body like '%<strong>Free:</strong> up to 5 products.%' and body like '%CSV imports%') or (slug = 'allow-and-review-customer-blog-submissions' and body like '%available on Basic and Pro%') or (slug = 'add-safe-custom-code-to-a-page' and body like '%available on Basic and Pro%') or (slug = 'create-and-manage-customer-groups' and body like '%available on Basic and Pro%') or (slug = 'connect-shiprocket-and-sync-warehouses' and body like '%available on Basic and Pro%') or (slug = 'understand-analytics-dashboard' and body like '%Dashboard customization, detailed reports, CSV exports, and Search Console analytics require Basic or Pro%') or (slug = 'understand-ai-usage-and-credits' and body like '%Top-ups are available on Free, Basic, and Pro.%'))",
+            "equals": "7"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "equals": "1"
+          },
+          {
+            "name": "feature guides contain current plan availability",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-or-edit-a-product' and body like '%<strong>Free:</strong> up to 5 products.%' and body like '%CSV imports%') or (slug = 'allow-and-review-customer-blog-submissions' and body like '%available on Basic and Pro%') or (slug = 'add-safe-custom-code-to-a-page' and body like '%available on Basic and Pro%') or (slug = 'create-and-manage-customer-groups' and body like '%available on Basic and Pro%') or (slug = 'connect-shiprocket-and-sync-warehouses' and body like '%available on Basic and Pro%') or (slug = 'understand-analytics-dashboard' and body like '%Dashboard customization, detailed reports, CSV exports, and Search Console analytics require Basic or Pro%') or (slug = 'understand-ai-usage-and-credits' and body like '%Top-ups are available on Free, Basic, and Pro.%'))",
+            "equals": "7"
+          }
+        ]
+      }
     }
   ]
 }

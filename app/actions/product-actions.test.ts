@@ -40,6 +40,10 @@ vi.mock("@/lib/ai/gemini", () => ({
 vi.mock("@/lib/analytics/store-entitlement", () => ({
   storeHasAnalyticsFeature: vi.fn(async () => true),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  assertCanCreateProduct: vi.fn(async () => undefined),
+  PlanEntitlementError: class PlanEntitlementError extends Error {},
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));

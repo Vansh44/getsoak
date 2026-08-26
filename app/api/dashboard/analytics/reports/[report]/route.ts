@@ -20,6 +20,7 @@ import { serializeCsv } from "@/lib/csv/serialize";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { rateLimit } from "@/lib/rate-limit";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 export const runtime = "nodejs";
 
@@ -62,6 +63,21 @@ export async function GET(
   if (report === "search-queries" && !features.googleSearchConsole) {
     return NextResponse.json(
       { error: "Google Search analytics is currently disabled." },
+      { status: 403 },
+    );
+  }
+  if (!(await storeHasAnalyticsFeature(ctx.storeId, "drilldownReports"))) {
+    return NextResponse.json(
+      { error: "Detailed analytics reports are available on Basic and Pro." },
+      { status: 403 },
+    );
+  }
+  if (
+    report === "search-queries" &&
+    !(await storeHasAnalyticsFeature(ctx.storeId, "googleSearchConsole"))
+  ) {
+    return NextResponse.json(
+      { error: "Search Console analytics is available on Basic and Pro." },
       { status: 403 },
     );
   }

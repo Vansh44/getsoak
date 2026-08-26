@@ -26,7 +26,12 @@ import {
   platformOrganizationSchema,
   platformWebsiteSchema,
 } from "@/lib/seo/brand-identity";
-import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
+import {
+  PLAN_FEATURE_MATRIX,
+  PLAN_LIMITS,
+  PLAN_META,
+  type PlanMatrixValue,
+} from "@/lib/plans";
 import { getPlanPricing } from "@/lib/plans/pricing";
 import { BrandMark } from "./brand-mark";
 import { PricingCards, type PricingCard } from "./pricing-cards";
@@ -60,12 +65,11 @@ const PLANS = [
     who: "For new brands getting their first orders.",
     features: [
       "Everything in Free, plus:",
-      "Your own custom domain",
       "Online payments — your own gateway, 0% to us",
       `${PLAN_LIMITS.basic.maxProducts} products`,
       `${PLAN_LIMITS.basic.maxStaff} staff accounts with roles`,
-      "Coupons and customer groups",
-      "Media library",
+      "Customer groups and blog submissions",
+      "Shiprocket fulfilment and custom code",
       `${PLAN_LIMITS.basic.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.basic.name}`,
@@ -81,6 +85,7 @@ const PLANS = [
       "Stock per location, and transfers",
       "Buy online, collect in store",
       "Email campaigns",
+      "Your own custom domain",
       "Advanced analytics — GA4, Meta Pixel and conversion insights",
       "Unlimited products and staff",
       `${PLAN_LIMITS.pro.aiGenerationsPerMonth} AI generations a month`,
@@ -89,6 +94,72 @@ const PLANS = [
     popular: false,
   },
 ];
+
+function MatrixValue({ value }: { value: PlanMatrixValue }) {
+  if (value === true) {
+    return (
+      <span className="smh-matrix-yes" aria-label="Included">
+        <Check size={17} aria-hidden="true" />
+      </span>
+    );
+  }
+  if (value === false || value === "—") {
+    return (
+      <span className="smh-matrix-no" aria-label="Not included">
+        —
+      </span>
+    );
+  }
+  return <span>{value}</span>;
+}
+
+function PlanComparison() {
+  return (
+    <div className="smh-matrix-wrap">
+      <h3>Compare every feature</h3>
+      <div className="smh-matrix-scroll">
+        <table className="smh-matrix">
+          <thead>
+            <tr>
+              <th scope="col">Feature</th>
+              <th scope="col">Free</th>
+              <th scope="col">Basic</th>
+              <th scope="col">Pro</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PLAN_FEATURE_MATRIX.flatMap((section) => [
+              <tr className="smh-matrix-section" key={section.title}>
+                <th colSpan={4} scope="colgroup">
+                  {section.title}
+                </th>
+              </tr>,
+              ...section.rows.map((row) => (
+                <tr key={`${section.title}-${row.label}`}>
+                  <th scope="row">{row.label}</th>
+                  <td>
+                    <MatrixValue value={row.free} />
+                  </td>
+                  <td>
+                    <MatrixValue value={row.basic} />
+                  </td>
+                  <td>
+                    <MatrixValue value={row.pro} />
+                  </td>
+                </tr>
+              )),
+            ])}
+          </tbody>
+        </table>
+      </div>
+      <p className="smh-matrix-note">
+        If a payment fails or you downgrade, StoreMink keeps your existing
+        products, settings, content and history. Lower-plan limits only pause
+        gated features and new over-limit additions; upgrading restores access.
+      </p>
+    </div>
+  );
+}
 
 const FAQS = [
   {
@@ -742,9 +813,10 @@ export default async function StoreminkLanding() {
               <div className="smh-pricing-component">
                 <PricingCards plans={pricingCards} />
               </div>
+              <PlanComparison />
               <p className="smh-pricing-foot">
-                <CircleCheck size={16} /> Your store, products and customer data
-                move with you when you upgrade.
+                <CircleCheck size={16} /> Your store data is never deleted by a
+                plan downgrade or failed payment.
               </p>
             </div>
           </section>

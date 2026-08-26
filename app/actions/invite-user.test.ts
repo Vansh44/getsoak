@@ -12,6 +12,11 @@ vi.mock("@/lib/auth/firebase-claims", () => ({
   setUserClaims: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/auth/server-user", () => ({ getServerUser: vi.fn() }));
+const planMocks = vi.hoisted(() => ({ assertCanInviteStaff: vi.fn() }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  assertCanInviteStaff: planMocks.assertCanInviteStaff,
+  PlanEntitlementError: class PlanEntitlementError extends Error {},
+}));
 vi.mock("./location-actions", () => ({ setAdminLocations: vi.fn() }));
 vi.mock("@/lib/email/layout", () => ({
   wrapBrandedEmail: vi.fn((s: string) => s),
@@ -53,6 +58,7 @@ import { createAuthUser, deleteAuthUser } from "@/lib/auth/firebase-users";
 import { setUserClaims } from "@/lib/auth/firebase-claims";
 import { getServerUser } from "@/lib/auth/server-user";
 import { setAdminLocations } from "./location-actions";
+import { PlanEntitlementError } from "@/lib/plans/entitlements";
 
 function makeFormData(fields: Record<string, string | null | undefined>) {
   const fd = new FormData();
@@ -86,6 +92,7 @@ describe("inviteUser", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    planMocks.assertCanInviteStaff.mockResolvedValue(undefined);
     resendSend.mockClear();
     resendSend.mockResolvedValue({});
     process.env.RESEND_API_KEY = "re_actual_key";
@@ -141,6 +148,15 @@ describe("inviteUser", () => {
     superadminCaller(true);
     const result = await inviteUser(makeFormData(validForm));
     expect(result.error).toMatch(/already exists/i);
+    expect(createAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("checks the staff cap before creating an auth identity", async () => {
+    planMocks.assertCanInviteStaff.mockRejectedValueOnce(
+      new PlanEntitlementError("Free includes 1 staff account."),
+    );
+    const result = await inviteUser(makeFormData(validForm));
+    expect(result.error).toMatch(/1 staff account/i);
     expect(createAuthUser).not.toHaveBeenCalled();
   });
 

@@ -21,6 +21,11 @@ import { can } from "@/app/dashboard/lib/permissions";
 import { TAGS } from "@/lib/storefront/tags";
 import { getCurrentStore } from "@/lib/store/resolve";
 import { resolveStoreSettings } from "@/lib/settings/registry";
+import {
+  assertCanActivateCoupon,
+  PlanEntitlementError,
+  storeAllowsPlanFeature,
+} from "@/lib/plans/entitlements";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -227,16 +232,28 @@ export async function createCoupon(
   const invalid = validateForm(form);
   if (invalid) return { error: invalid };
 
+  const allowsGroups = await storeAllowsPlanFeature(storeId, "customerGroups");
+  if (!allowsGroups && (form.restricted_group_ids?.length ?? 0) > 0) {
+    return {
+      error:
+        "Customer-group coupon restrictions are available on Basic and Pro.",
+    };
+  }
+
   let created: Record<string, unknown>;
   try {
-    const [row] = await withUser(admin, (db) =>
-      db
+    const [row] = await withUser(admin, async (db) => {
+      if (form.status === "active") {
+        await assertCanActivateCoupon(db, storeId);
+      }
+      return db
         .insert(coupons)
         .values({ ...buildRow(form, userId, true), storeId })
-        .returning(),
-    );
+        .returning();
+    });
     created = row as Record<string, unknown>;
   } catch (err) {
+    if (err instanceof PlanEntitlementError) return { error: err.message };
     if (isUniqueViolation(err))
       return { error: "A coupon with that code already exists." };
     console.error("createCoupon error:", err);
@@ -282,22 +299,38 @@ export async function updateCoupon(
   const invalid = validateForm(form);
   if (invalid) return { error: invalid };
 
+  const allowsGroups = await storeAllowsPlanFeature(storeId, "customerGroups");
+
   try {
     // RLS (is_store_admin) confines the update to the caller's own store.
-    await withUser(admin, (db) =>
-      db
+    await withUser(admin, async (db) => {
+      const [existing] = await db
+        .select({ status: coupons.status })
+        .from(coupons)
+        .where(and(eq(coupons.id, id), eq(coupons.storeId, storeId)))
+        .limit(1);
+      if (!existing) throw new Error("Coupon not found.");
+      if (existing.status !== "active" && form.status === "active") {
+        await assertCanActivateCoupon(db, storeId, id);
+      }
+      return db
         .update(coupons)
         .set(buildRow(form, userId, false))
-        .where(eq(coupons.id, id)),
-    );
+        .where(and(eq(coupons.id, id), eq(coupons.storeId, storeId)));
+    });
   } catch (err) {
+    if (err instanceof PlanEntitlementError) return { error: err.message };
     if (isUniqueViolation(err))
       return { error: "A coupon with that code already exists." };
     console.error("updateCoupon error:", err);
     return { error: dbErrorMessage(err, "Failed to update coupon.") };
   }
 
-  await syncCouponGroups(admin, id, form.restricted_group_ids, storeId);
+  // A downgrade makes group restrictions read-only. Never clear the join rows
+  // simply because the locked selector was absent from a submitted form.
+  if (allowsGroups) {
+    await syncCouponGroups(admin, id, form.restricted_group_ids, storeId);
+  }
 
   revalidateCoupons();
   return { success: true };

@@ -71,6 +71,8 @@ type Props = {
   categoryFilter: string;
   canUseGrossMargin?: boolean;
   missingCostCount?: number;
+  canCreateProduct?: boolean;
+  productLimit?: number | null;
 };
 
 export function ProductsManagementView({
@@ -86,6 +88,8 @@ export function ProductsManagementView({
   categoryFilter,
   canUseGrossMargin = false,
   missingCostCount = 0,
+  canCreateProduct = true,
+  productLimit = null,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -215,13 +219,38 @@ export function ProductsManagementView({
             }}
           />
           {canManage && (
-            <button className="dash-btn dash-btn-primary" onClick={openCreate}>
+            <button
+              className="dash-btn dash-btn-primary"
+              onClick={openCreate}
+              disabled={!canCreateProduct}
+              title={
+                canCreateProduct
+                  ? undefined
+                  : `Your plan includes ${productLimit} products`
+              }
+            >
               <Plus className="h-4 w-4" />
               New product
             </button>
           )}
         </div>
       </header>
+
+      {canManage && !canCreateProduct && productLimit !== null ? (
+        <div className="dash-card mb-3.5 flex items-center justify-between gap-3 px-4 py-3.5 text-[13px]">
+          <span>
+            Your plan includes {productLimit} products. All {counts.all}{" "}
+            existing products remain visible and editable; upgrade to add
+            another.
+          </span>
+          <Link
+            href="/dashboard/plans"
+            className="dash-btn dash-btn-primary shrink-0"
+          >
+            View plans
+          </Link>
+        </div>
+      ) : null}
 
       {categories.length === 0 && (
         <div className="dash-card mb-3.5 flex items-center gap-2 px-4 py-3.5 text-[13px]">
@@ -313,7 +342,8 @@ export function ProductsManagementView({
             {!search &&
               filter === "all" &&
               categoryFilter === "all" &&
-              canManage && (
+              canManage &&
+              canCreateProduct && (
                 <button
                   className="dash-btn dash-btn-primary"
                   onClick={openCreate}

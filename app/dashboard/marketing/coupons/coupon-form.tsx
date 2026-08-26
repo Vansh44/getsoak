@@ -17,6 +17,7 @@ import type { Coupon, CouponGroup } from "./page";
 type Props = {
   coupon: Coupon | null;
   groups: CouponGroup[];
+  allowsGroups?: boolean;
 };
 
 const LIST_HREF = "/dashboard/marketing/coupons";
@@ -65,7 +66,7 @@ function initialForm(coupon: Coupon | null): CouponFormData {
   };
 }
 
-export function CouponForm({ coupon, groups }: Props) {
+export function CouponForm({ coupon, groups, allowsGroups = true }: Props) {
   const router = useRouter();
   const [form, setForm] = useState<CouponFormData>(() => initialForm(coupon));
   const [isPending, startTransition] = useTransition();
@@ -251,7 +252,19 @@ export function CouponForm({ coupon, groups }: Props) {
 
           <div>
             <label className={labelClass}>Restrict to user groups</label>
-            {groups.length === 0 ? (
+            {!allowsGroups ? (
+              <p className="rounded-md border border-[#e5e7eb] bg-[#f9fafb] p-3 text-xs text-[#6b7280]">
+                Customer-group targeting is available on Basic and Pro. Any
+                restrictions saved before a downgrade are retained and return
+                when the store upgrades.{" "}
+                <Link
+                  href="/dashboard/plans"
+                  className="font-semibold text-[#4f46e5]"
+                >
+                  View plans
+                </Link>
+              </p>
+            ) : groups.length === 0 ? (
               <p className="text-[11px] text-[#9ca3af]">
                 No user groups yet. Create groups under Users → User Groups to
                 limit a coupon to specific customers.

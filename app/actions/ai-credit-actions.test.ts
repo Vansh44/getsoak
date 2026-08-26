@@ -117,13 +117,15 @@ describe("startCreditPurchase", () => {
     expect(invoice.draftCreditInvoice).not.toHaveBeenCalled();
   });
 
-  it("★ refuses a plan below Basic, before anything is written", async () => {
+  it("★ lets a Free store buy a one-time credit top-up", async () => {
     dbHolder.current = makeDbMock({
-      selectQueue: [[{ plan: "free", plan_expires_at: null }]],
+      returning: [{ id: "pur-free" }],
     });
     const res = await startCreditPurchase("small");
-    expect("error" in res && res.error).toMatch(/Basic plan/i);
-    expect(invoice.draftCreditInvoice).not.toHaveBeenCalled();
+    expect("success" in res).toBe(true);
+    expect(invoice.draftCreditInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ storeId: STORE, purchaseId: "pur-free" }),
+    );
   });
 
   it("refuses an unknown pack", async () => {

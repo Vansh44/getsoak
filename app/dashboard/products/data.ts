@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import {
   cardColors,
@@ -20,6 +20,7 @@ import type {
   TaxClassOption,
 } from "./page";
 import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
+import { effectivePlan, PLAN_LIMITS, type Plan } from "@/lib/plans";
 
 /**
  * The option lists (categories, card colours, tax classes) + the store default
@@ -33,6 +34,10 @@ export async function getProductCreateData(): Promise<{
   taxClasses: TaxClassOption[];
   defaultTrackInventory: boolean;
   canUseGrossMargin: boolean;
+  canCreateProduct: boolean;
+  productCount: number;
+  productLimit: number | null;
+  plan: Plan;
 }> {
   const storeId = await getActingStoreId();
   const canUseGrossMargin = await storeHasAnalyticsFeature(
@@ -66,14 +71,29 @@ export async function getProductCreateData(): Promise<{
       .where(eq(taxClasses.storeId, storeId))
       .orderBy(asc(taxClasses.sortOrder), asc(taxClasses.name));
     const storeRows = await db
-      .select({ settings: stores.settings, plan: stores.plan })
+      .select({
+        settings: stores.settings,
+        plan: stores.plan,
+        planExpiresAt: stores.planExpiresAt,
+      })
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1);
+    const [productCountRow] = await db
+      .select({ n: count() })
+      .from(products)
+      .where(eq(products.storeId, storeId));
+
+    const plan = effectivePlan({
+      plan: storeRows[0]?.plan,
+      plan_expires_at: storeRows[0]?.planExpiresAt,
+    });
+    const productLimit = PLAN_LIMITS[plan].maxProducts;
+    const productCount = productCountRow?.n ?? 0;
 
     const settings = resolveStoreSettings(
       storeRows[0]?.settings as Record<string, unknown>,
-      storeRows[0]?.plan,
+      plan,
     );
 
     return {
@@ -82,6 +102,10 @@ export async function getProductCreateData(): Promise<{
       taxClasses: taxClassRows as TaxClassOption[],
       defaultTrackInventory: Boolean(settings["inventory.simpleTrackDefault"]),
       canUseGrossMargin,
+      canCreateProduct: productLimit === null || productCount < productLimit,
+      productCount,
+      productLimit,
+      plan,
     };
   });
 }

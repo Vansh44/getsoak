@@ -37,6 +37,7 @@ sequence AND the spec for everything still to build.
 | —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
 | —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
 | —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
+| —      | Plan matrix + transactional soft-downgrade entitlements         | M    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |

@@ -8,11 +8,13 @@ import {
 } from "../lib/access";
 import { normalizePermissions } from "../lib/permissions";
 import { RolesManagementView } from "./roles-management-view";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 
 export default async function RolesPage() {
   const access = await requireSectionAccess("roles", "view");
   const canManage = access.can("roles", "manage");
   const storeId = await getActingStoreId();
+  const { limits } = await getStorePlanContext(storeId);
 
   let rolesRaw: Record<string, unknown>[];
   let profiles: { role: string }[];
@@ -58,5 +60,11 @@ export default async function RolesPage() {
     member_count: counts.get((r as unknown as Role).slug) ?? 0,
   }));
 
-  return <RolesManagementView roles={roles} canManage={canManage} />;
+  return (
+    <RolesManagementView
+      roles={roles}
+      canManage={canManage && limits.customRoles}
+      planLocked={!limits.customRoles}
+    />
+  );
 }

@@ -18,6 +18,7 @@ import { withService } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { getViewerLocations } from "@/lib/locations/scope";
 import { getPlatformAnalyticsFeatures } from "@/lib/analytics/platform-feature-store";
+import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
 
 export interface AnalyticsLayoutActionResult {
   success?: boolean;
@@ -32,13 +33,20 @@ async function actionContext() {
   if (!can(viewer.permissions, "analytics", "view", viewer.isSuperadmin)) {
     return null;
   }
-  const [scope, features] = await Promise.all([
+  const [scope, features, canCustomize, canUseSearch] = await Promise.all([
     getViewerLocations(),
     getPlatformAnalyticsFeatures(),
+    storeHasAnalyticsFeature(viewer.storeId, "dashboardCustomization"),
+    storeHasAnalyticsFeature(viewer.storeId, "googleSearchConsole"),
   ]);
-  if (!features.coreDashboard || !features.dashboardCustomization) return null;
+  if (
+    !features.coreDashboard ||
+    !features.dashboardCustomization ||
+    !canCustomize
+  )
+    return null;
   const allowed = new Set<WidgetId>(Object.keys(WIDGETS) as WidgetId[]);
-  if (!features.googleSearchConsole) {
+  if (!canUseSearch) {
     for (const id of allowed) {
       if (WIDGETS[id].group === "Search") allowed.delete(id);
     }

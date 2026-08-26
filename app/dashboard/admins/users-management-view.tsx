@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   Select,
@@ -62,6 +63,8 @@ type Props = {
   /** adminId → location ids. An admin ABSENT from this map is unrestricted —
    *  absence is not restriction (lib/locations/scope.ts). */
   bindings?: Record<string, string[]>;
+  canInvite?: boolean;
+  staffLimit?: number | null;
 };
 
 export function UsersManagementView({
@@ -71,6 +74,8 @@ export function UsersManagementView({
   canManage = true,
   locations = [],
   bindings = {},
+  canInvite = true,
+  staffLimit = null,
 }: Props) {
   const router = useRouter();
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
@@ -163,7 +168,7 @@ export function UsersManagementView({
           <h1>Admins</h1>
           <p>Manage dashboard access — only authorised admins</p>
         </div>
-        {canManage && (
+        {canManage && canInvite && (
           <InviteUserDialog
             className="dash-btn dash-btn-primary shrink-0"
             label="Invite user"
@@ -172,6 +177,22 @@ export function UsersManagementView({
           />
         )}
       </header>
+
+      {canManage && !canInvite && staffLimit !== null ? (
+        <div className="dash-card mb-3.5 flex items-center justify-between gap-3 px-4 py-3.5 text-[13px]">
+          <span>
+            Your plan includes {staffLimit} staff account
+            {staffLimit === 1 ? "" : "s"}, including the owner. Existing staff
+            and their assignments remain safe; upgrade to invite someone new.
+          </span>
+          <Link
+            href="/dashboard/plans"
+            className="dash-btn dash-btn-primary shrink-0"
+          >
+            View plans
+          </Link>
+        </div>
+      ) : null}
 
       <div className="dash-card">
         <div className="dash-card-header">

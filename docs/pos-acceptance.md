@@ -145,6 +145,21 @@ With POS enabled, downgrade the store to Basic from the platform console.
 locations, staff and stock are all intact when you restore Pro. Soft-on-
 downgrade: caps block NEW rows, never destroy existing ones.
 
+**PS-1.3a ★★ — Every plan downgrade is reversible without data loss**
+Start on Pro with more than 50 products, more than three staff, active coupons,
+customer groups and members, customer blog drafts/submissions, saved custom
+code, a custom domain, a Shiprocket connection and warehouse mappings, a saved
+Analytics layout, campaign history, locations, inventory, orders and POS
+history. Simulate a declined renewal that moves the store to Free.
+**Expect:** no row, file reference, join, credential, setting, layout or history
+is deleted, reset, unpublished or reassigned. Every existing product remains
+visible and editable, but a new product and staff invite are refused at the
+Free caps; gated runtime features pause. Move to Basic: the original groups,
+blog submissions, custom code, Shiprocket state and detailed Analytics return,
+with creation allowed up to 50 products and three total staff. Move to Pro: the
+same custom domain, campaigns, advanced Analytics, POS and unlimited catalogue
+access return. No restore job or manual data repair is needed.
+
 **PS-1.4 — A single-location store never sees Locations**
 Fresh Pro store with one location and POS off.
 **Expect:** no Locations entry in the sidebar. It appears once the store has 2+

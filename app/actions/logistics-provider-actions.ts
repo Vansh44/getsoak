@@ -33,8 +33,13 @@ import {
   locationCan,
   normalizeCapabilities,
 } from "@/lib/locations/capabilities";
+import {
+  getStorePlanContext,
+  storeAllowsPlanFeature,
+} from "@/lib/plans/entitlements";
 
 export interface ShiprocketChannelState {
+  availableOnPlan: boolean;
   connected: boolean;
   enabled: boolean;
   accountEmail: string | null;
@@ -71,10 +76,14 @@ export async function getShiprocketChannelState(): Promise<ShiprocketChannelStat
       webhookUrl: null,
       mappedLocations: 0,
       eligibleLocations: 0,
+      availableOnPlan: false,
     };
   }
   const storeId = await getActingStoreId();
+  let availableOnPlan = false;
   try {
+    const { limits } = await getStorePlanContext(storeId);
+    availableOnPlan = limits.shippingIntegration;
     const [connections, locations, mappings] = await Promise.all([
       withService((db) =>
         db
@@ -134,6 +143,7 @@ export async function getShiprocketChannelState(): Promise<ShiprocketChannelStat
       webhookUrl: row ? shiprocketWebhookUrl(row.id) : null,
       mappedLocations: mappings.length,
       eligibleLocations,
+      availableOnPlan,
     };
   } catch (error) {
     console.error("getShiprocketChannelState:", error);
@@ -145,6 +155,7 @@ export async function getShiprocketChannelState(): Promise<ShiprocketChannelStat
       webhookUrl: null,
       mappedLocations: 0,
       eligibleLocations: 0,
+      availableOnPlan,
     };
   }
 }
@@ -165,6 +176,11 @@ export async function saveShiprocketCredentials(
     return { error: "Enter your Shiprocket API user password." };
   }
 
+  const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "shippingIntegration"))) {
+    return { error: "Shiprocket is available on Basic and Pro." };
+  }
+
   let session;
   try {
     session = await shiprocketLogin(email, password);
@@ -174,7 +190,6 @@ export async function saveShiprocketCredentials(
     };
   }
 
-  const storeId = await getActingStoreId();
   const webhookSecret = newWebhookSecret();
   const values = {
     provider: "shiprocket",
@@ -220,6 +235,12 @@ export async function setShiprocketEnabled(
     return { error: "You don't have permission to do this." };
   }
   const storeId = await getActingStoreId();
+  if (
+    enabled &&
+    !(await storeAllowsPlanFeature(storeId, "shippingIntegration"))
+  ) {
+    return { error: "Shiprocket is available on Basic and Pro." };
+  }
   const rows = await withService((db) =>
     db
       .update(storeLogisticsProviders)
@@ -242,6 +263,9 @@ export async function rotateShiprocketWebhookSecret(): Promise<LogisticsActionRe
     return { error: "You don't have permission to do this." };
   }
   const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "shippingIntegration"))) {
+    return { error: "Shiprocket is available on Basic and Pro." };
+  }
   const secret = newWebhookSecret();
   const rows = await withService((db) =>
     db

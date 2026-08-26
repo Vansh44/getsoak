@@ -13,6 +13,13 @@ import {
   type RolePermissions,
   ROLE_COLORS,
 } from "@/app/dashboard/lib/permissions";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
+
+async function rolesPlanError(storeId: string): Promise<string | null> {
+  return (await storeAllowsPlanFeature(storeId, "customRoles"))
+    ? null
+    : "Custom roles are available on Basic and Pro. Existing roles and assignments remain safe until you upgrade.";
+}
 
 export interface RoleFormData {
   name: string;
@@ -102,6 +109,8 @@ export async function createRole(
   if (!callerId)
     return { error: "You do not have permission to manage roles." };
   const storeId = await getActingStoreId();
+  const planError = await rolesPlanError(storeId);
+  if (planError) return { error: planError };
 
   const invalid = validate(form);
   if (invalid) return { error: invalid };
@@ -150,6 +159,8 @@ export async function updateRole(
   // Scope every query by store_id — the service scope bypasses RLS, so an id
   // alone would let a store's roles manager edit another store's roles.
   const storeId = await getActingStoreId();
+  const planError = await rolesPlanError(storeId);
+  if (planError) return { error: planError };
 
   const existingRows = await withService((db) =>
     db
@@ -208,6 +219,8 @@ export async function deleteRole(id: string): Promise<RoleActionResult> {
     return { error: "You do not have permission to manage roles." };
 
   const storeId = await getActingStoreId();
+  const planError = await rolesPlanError(storeId);
+  if (planError) return { error: planError };
 
   const roleRows = await withService((db) =>
     db

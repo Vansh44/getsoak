@@ -3,7 +3,7 @@
 //
 // Three plans, gated by business maturity:
 //   free  → try it         (COD only, subdomain, small catalog)
-//   basic → run a business (custom domain, online payments, AI copy)
+//   basic → run a business (online payments, shipping, team tools)
 //   pro   → scale it        (advanced analytics, POS, campaigns)
 //
 // `stores.plan` holds one of PLAN_IDS (DB CHECK constraint, plans_02_*.sql).
@@ -99,7 +99,7 @@ export const PLAN_META: Record<Plan, PlanMeta> = {
   basic: {
     id: "basic",
     name: "Basic",
-    tagline: "Run a real business — domain, payments, AI",
+    tagline: "Run a real business — payments, shipping, team tools",
     monthlyInr: 1500,
     // Ten months for twelve — the "two months free" the pricing page and the
     // FAQ both promise. Keep the 10× relationship if these ever move, or that
@@ -170,6 +170,23 @@ export interface PlanLimits {
   customDomain: boolean;
   /** May connect a payment gateway (Razorpay) for online payments. */
   onlinePayments: boolean;
+  /** May accept customer-authored blog drafts/submissions. Stored drafts are
+   *  retained below this plan and become available again after an upgrade. */
+  customerBlogSubmissions: boolean;
+  /** May add and run sandboxed custom-code page sections. */
+  customCode: boolean;
+  /** May create and assign customer groups. */
+  customerGroups: boolean;
+  /** May create and edit custom dashboard roles. */
+  customRoles: boolean;
+  /** May connect Shiprocket for rates, fulfilment and tracking. */
+  shippingIntegration: boolean;
+  /** May customise the analytics dashboard and save layouts. */
+  analyticsCustomization: boolean;
+  /** May open drill-down analytics reports, CSV and Search Console data. */
+  detailedAnalytics: boolean;
+  /** May buy additional AI credits after the included allowance is used. */
+  aiCreditTopUps: boolean;
   /** May send coupon email campaigns. */
   emailCampaigns: boolean;
   /** May connect merchant analytics pixels and use advanced conversion/margin
@@ -190,12 +207,20 @@ export interface PlanLimits {
 
 export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
   free: {
-    maxProducts: 25,
+    maxProducts: 5,
     maxStaff: 1,
     aiGenerationsPerMonth: 3,
     maxActiveCoupons: 3,
     customDomain: false,
     onlinePayments: false,
+    customerBlogSubmissions: false,
+    customCode: false,
+    customerGroups: false,
+    customRoles: false,
+    shippingIntegration: false,
+    analyticsCustomization: false,
+    detailedAnalytics: false,
+    aiCreditTopUps: true,
     emailCampaigns: false,
     advancedAnalytics: false,
     removeBadge: false,
@@ -204,7 +229,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     posDevicesPerLocation: 0,
   },
   basic: {
-    maxProducts: 500,
+    maxProducts: 50,
     maxStaff: 3,
     aiGenerationsPerMonth: 10,
     maxActiveCoupons: null,
@@ -214,6 +239,14 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     // its feature list from here, so this flag is also what it advertises.
     customDomain: false,
     onlinePayments: true,
+    customerBlogSubmissions: true,
+    customCode: true,
+    customerGroups: true,
+    customRoles: true,
+    shippingIntegration: true,
+    analyticsCustomization: true,
+    detailedAnalytics: true,
+    aiCreditTopUps: true,
     emailCampaigns: false,
     advancedAnalytics: false,
     removeBadge: true,
@@ -228,6 +261,14 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     maxActiveCoupons: null,
     customDomain: true,
     onlinePayments: true,
+    customerBlogSubmissions: true,
+    customCode: true,
+    customerGroups: true,
+    customRoles: true,
+    shippingIntegration: true,
+    analyticsCustomization: true,
+    detailedAnalytics: true,
+    aiCreditTopUps: true,
     emailCampaigns: true,
     advancedAnalytics: true,
     removeBadge: true,
@@ -241,6 +282,196 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
 export function limitsFor(plan: unknown): PlanLimits {
   return PLAN_LIMITS[normalizePlan(plan)];
 }
+
+/** Boolean capabilities in PlanLimits. Used by the server entitlement helper
+ * and the comparison UI so feature names cannot drift between layers. */
+export type PlanFeature = {
+  [K in keyof PlanLimits]: PlanLimits[K] extends boolean ? K : never;
+}[keyof PlanLimits];
+
+export type PlanMatrixValue = boolean | string;
+export interface PlanMatrixRow {
+  label: string;
+  free: PlanMatrixValue;
+  basic: PlanMatrixValue;
+  pro: PlanMatrixValue;
+}
+export interface PlanMatrixSection {
+  title: string;
+  rows: readonly PlanMatrixRow[];
+}
+
+/** Complete customer-facing comparison. Values that are limits are derived
+ * from PLAN_LIMITS; feature availability is enforced from the same object. */
+export const PLAN_FEATURE_MATRIX: readonly PlanMatrixSection[] = [
+  {
+    title: "Storefront & catalogue",
+    rows: [
+      {
+        label: "Hosted storefront and StoreMink subdomain",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "Themes and visual page builder",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "Products",
+        free: String(PLAN_LIMITS.free.maxProducts),
+        basic: String(PLAN_LIMITS.basic.maxProducts),
+        pro: "Unlimited",
+      },
+      {
+        label: "Custom HTML, CSS and JavaScript sections",
+        free: false,
+        basic: PLAN_LIMITS.basic.customCode,
+        pro: PLAN_LIMITS.pro.customCode,
+      },
+      {
+        label: "Custom domain",
+        free: false,
+        basic: false,
+        pro: PLAN_LIMITS.pro.customDomain,
+      },
+      {
+        label: "Remove Powered by StoreMink badge",
+        free: PLAN_LIMITS.free.removeBadge,
+        basic: PLAN_LIMITS.basic.removeBadge,
+        pro: PLAN_LIMITS.pro.removeBadge,
+      },
+    ],
+  },
+  {
+    title: "Selling & fulfilment",
+    rows: [
+      { label: "Cash on delivery", free: true, basic: true, pro: true },
+      {
+        label: "Online payments (your own gateway)",
+        free: PLAN_LIMITS.free.onlinePayments,
+        basic: PLAN_LIMITS.basic.onlinePayments,
+        pro: PLAN_LIMITS.pro.onlinePayments,
+      },
+      {
+        label: "GST invoices and tax classes",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "Inventory, orders and returns",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "Shiprocket integration",
+        free: PLAN_LIMITS.free.shippingIntegration,
+        basic: PLAN_LIMITS.basic.shippingIntegration,
+        pro: PLAN_LIMITS.pro.shippingIntegration,
+      },
+      { label: "Point of Sale", free: false, basic: false, pro: true },
+      {
+        label: "Multi-location stock, transfers and store pickup",
+        free: false,
+        basic: false,
+        pro: true,
+      },
+      {
+        label: "Included POS locations",
+        free: "—",
+        basic: "—",
+        pro: String(PLAN_LIMITS.pro.posLocationsIncluded),
+      },
+      {
+        label: "Authorised tills per location",
+        free: "—",
+        basic: "—",
+        pro: String(PLAN_LIMITS.pro.posDevicesPerLocation),
+      },
+    ],
+  },
+  {
+    title: "Customers & marketing",
+    rows: [
+      {
+        label: "Customer accounts, reviews and enquiries",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "Customer blog submissions",
+        free: PLAN_LIMITS.free.customerBlogSubmissions,
+        basic: PLAN_LIMITS.basic.customerBlogSubmissions,
+        pro: PLAN_LIMITS.pro.customerBlogSubmissions,
+      },
+      {
+        label: "Customer groups",
+        free: PLAN_LIMITS.free.customerGroups,
+        basic: PLAN_LIMITS.basic.customerGroups,
+        pro: PLAN_LIMITS.pro.customerGroups,
+      },
+      {
+        label: "Active coupons",
+        free: String(PLAN_LIMITS.free.maxActiveCoupons),
+        basic: "Unlimited",
+        pro: "Unlimited",
+      },
+      {
+        label: "Coupon email campaigns",
+        free: false,
+        basic: false,
+        pro: PLAN_LIMITS.pro.emailCampaigns,
+      },
+    ],
+  },
+  {
+    title: "Team, analytics & AI",
+    rows: [
+      {
+        label: "Staff accounts (including owner)",
+        free: String(PLAN_LIMITS.free.maxStaff),
+        basic: String(PLAN_LIMITS.basic.maxStaff),
+        pro: "Unlimited",
+      },
+      {
+        label: "Custom roles and permissions",
+        free: PLAN_LIMITS.free.customRoles,
+        basic: PLAN_LIMITS.basic.customRoles,
+        pro: PLAN_LIMITS.pro.customRoles,
+      },
+      { label: "Core analytics dashboard", free: true, basic: true, pro: true },
+      {
+        label: "Custom dashboard, detailed reports and Search Console",
+        free: false,
+        basic: true,
+        pro: true,
+      },
+      {
+        label: "GA4, Meta Pixel, conversion and gross margin analytics",
+        free: false,
+        basic: false,
+        pro: true,
+      },
+      {
+        label: "Included AI generations each month",
+        free: String(PLAN_LIMITS.free.aiGenerationsPerMonth),
+        basic: String(PLAN_LIMITS.basic.aiGenerationsPerMonth),
+        pro: String(PLAN_LIMITS.pro.aiGenerationsPerMonth),
+      },
+      {
+        label: "Buy additional AI credits",
+        free: true,
+        basic: true,
+        pro: true,
+      },
+    ],
+  },
+] as const;
 
 // ---------------------------------------------------------------------------
 // Expiry warnings (notifications §22 — "fire on the crossing, not the state")
