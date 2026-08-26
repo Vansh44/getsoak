@@ -64,6 +64,7 @@ beforeEach(() => {
       notes: ["Review the total before completing the sale."],
       sourceSlugs: [DOCUMENT.slug, "invented-guide"],
       followUps: ["How do I split a payment?"],
+      clarificationPrompts: [],
       needsHuman: false,
     }),
   });
@@ -106,6 +107,7 @@ describe("askHelpAssistant", () => {
             excerpt: DOCUMENT.excerpt,
           },
         ],
+        clarificationPrompts: [],
         followUps: ["How do I split a payment?"],
         needsHuman: false,
       },
@@ -142,7 +144,16 @@ describe("askHelpAssistant", () => {
 
     expect(result).toMatchObject({
       success: true,
-      data: { needsHuman: true, sources: [], steps: [] },
+      data: {
+        needsHuman: true,
+        sources: [],
+        steps: [],
+        followUps: [],
+        clarificationPrompts: [
+          "The StoreMink page or menu you are using",
+          "What you want to complete and what happened after your last step",
+        ],
+      },
     });
     expect(callGemini).not.toHaveBeenCalled();
   });
@@ -345,6 +356,7 @@ describe("askHelpAssistant", () => {
         notes: [],
         sourceSlugs: ["invented-guide"],
         followUps: [],
+        clarificationPrompts: [],
         needsHuman: false,
       }),
     });
@@ -363,6 +375,39 @@ describe("askHelpAssistant", () => {
     });
     expect(result).not.toMatchObject({
       data: { answer: "Use an invented control." },
+    });
+  });
+
+  it("never exposes clarification prompts as clickable follow-up questions", async () => {
+    vi.mocked(callGemini).mockResolvedValue({
+      text: JSON.stringify({
+        answer: "I need a little more context to confirm the right steps.",
+        steps: [],
+        notes: [],
+        sourceSlugs: [DOCUMENT.slug],
+        followUps: ["Which StoreMink page are you on?"],
+        clarificationPrompts: [
+          "The StoreMink page or menu you are using",
+          "The result you expected",
+        ],
+        needsHuman: true,
+      }),
+    });
+
+    const result = await askHelpAssistant({
+      message: "How do I fix this StoreMink issue?",
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      data: {
+        needsHuman: true,
+        followUps: [],
+        clarificationPrompts: [
+          "The StoreMink page or menu you are using",
+          "The result you expected",
+        ],
+      },
     });
   });
 

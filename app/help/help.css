@@ -763,6 +763,24 @@
   box-shadow: -18px 0 55px rgba(23, 19, 15, 0.13);
   animation: hc-assistant-slide-in 0.2s ease-out;
 }
+.hc-assistant-panel.is-maximized {
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  min-width: 0;
+  height: 100dvh;
+  border-left: 0;
+  box-shadow: none;
+}
+.hc-assistant-panel.is-maximized .hc-assistant-messages {
+  padding-right: max(24px, calc((100vw - 960px) / 2));
+  padding-left: max(24px, calc((100vw - 960px) / 2));
+}
+.hc-assistant-panel.is-maximized .hc-assistant-composer {
+  width: min(960px, calc(100% - 32px));
+  margin-right: auto;
+  margin-left: auto;
+}
 .hc-assistant-backdrop {
   position: fixed;
   z-index: 71;
@@ -906,6 +924,7 @@
   align-items: flex-start;
   gap: 8px;
   margin-bottom: 14px;
+  scroll-margin-top: 8px;
 }
 .hc-assistant-row.user {
   justify-content: flex-end;
@@ -1022,6 +1041,42 @@
 }
 .hc-assistant-sources svg {
   flex: 0 0 auto;
+}
+.hc-assistant-clarifications {
+  margin-top: 12px;
+  border-top: 1px solid var(--hc-line);
+  padding-top: 11px;
+}
+.hc-assistant-clarifications > strong {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--hc-ink-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.hc-assistant-clarifications ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hc-assistant-clarifications li {
+  position: relative;
+  border-radius: 9px;
+  padding: 8px 10px 8px 25px;
+  background: #f7f5ff;
+  color: #4f456e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.hc-assistant-clarifications li::before {
+  position: absolute;
+  top: 7px;
+  left: 10px;
+  color: #7356eb;
+  content: "•";
 }
 .hc-assistant-followups,
 .hc-assistant-starters {
@@ -1159,7 +1214,6 @@
   font-size: 10.5px;
   text-align: center;
 }
-.hc-assistant-privacy,
 .hc-assistant-powered {
   display: inline-flex;
   align-items: center;
@@ -1168,8 +1222,6 @@
 }
 .hc-assistant-powered {
   flex: 0 0 auto;
-  border-left: 1px solid var(--hc-line);
-  padding-left: 10px;
   color: var(--hc-ink-soft);
 }
 .hc-assistant-powered img {
@@ -1264,6 +1316,9 @@
   .hc-assistant-resizer {
     display: none;
   }
+  button.hc-assistant-maximize {
+    display: none;
+  }
 }
 
 @media (max-width: 620px) {
@@ -1300,10 +1355,6 @@
   .hc-assistant-footer {
     flex-direction: column;
     gap: 5px;
-  }
-  .hc-assistant-powered {
-    border-left: 0;
-    padding-left: 0;
   }
 }
 

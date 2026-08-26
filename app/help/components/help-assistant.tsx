@@ -5,10 +5,11 @@ import Link from "next/link";
 import {
   Bot,
   ExternalLink,
+  Maximize2,
   MessageCircle,
+  Minimize2,
   RefreshCw,
   Send,
-  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
@@ -45,6 +46,8 @@ type AssistantMessage = {
 };
 
 type ChatMessage = UserMessage | AssistantMessage;
+
+type ScrollTarget = { kind: "end" } | { kind: "message"; messageId: number };
 
 const INTRO: AssistantMessage = {
   id: 1,
@@ -107,11 +110,14 @@ export function HelpAssistant() {
   const [drawerWidth, setDrawerWidth] = useState(DRAWER_DEFAULT_WIDTH);
   const [drawerMaximum, setDrawerMaximum] = useState(DRAWER_MAX_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const nextId = useRef(2);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollTargetRef = useRef<ScrollTarget | null>(null);
   const hasConversationContext = messages.some(
     (message) => message.role === "user",
   );
@@ -121,6 +127,7 @@ export function HelpAssistant() {
 
   const closeAssistant = useCallback(() => {
     setIsResizing(false);
+    setIsMaximized(false);
     setOpen(false);
     requestAnimationFrame(() => launcherRef.current?.focus());
   }, []);
@@ -183,8 +190,39 @@ export function HelpAssistant() {
   }, [closeAssistant, open]);
 
   useEffect(() => {
-    if (open) endRef.current?.scrollIntoView?.({ block: "end" });
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      endRef.current?.scrollIntoView?.({ block: "end" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !scrollTargetRef.current) return;
+    const target = scrollTargetRef.current;
+    const frame = requestAnimationFrame(() => {
+      if (target.kind === "end") {
+        endRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+      } else {
+        messagesRef.current
+          ?.querySelector<HTMLElement>(
+            `[data-message-id="${target.messageId}"]`,
+          )
+          ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      }
+      if (scrollTargetRef.current === target) scrollTargetRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [messages, open, pending]);
+
+  useEffect(() => {
+    if (!open || !isMaximized) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isMaximized, open]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -243,6 +281,7 @@ export function HelpAssistant() {
       role: "user",
       content: content.slice(0, HELP_ASSISTANT_MAX_MESSAGE_LENGTH),
     };
+    scrollTargetRef.current = { kind: "end" };
     setMessages((current) => [...current, userMessage]);
     setDraft("");
     setError("");
@@ -262,6 +301,10 @@ export function HelpAssistant() {
         content: result.data.answer,
         answer: result.data,
       };
+      scrollTargetRef.current = {
+        kind: "message",
+        messageId: assistantMessage.id,
+      };
       setMessages((current) => [...current, assistantMessage]);
     } catch {
       setError(
@@ -273,6 +316,7 @@ export function HelpAssistant() {
   }
 
   function resetConversation() {
+    scrollTargetRef.current = { kind: "end" };
     setMessages([INTRO]);
     setDraft("");
     setError("");
@@ -325,25 +369,27 @@ export function HelpAssistant() {
           <section
             id="hc-mink-ai-drawer"
             ref={panelRef}
-            className={`hc-assistant-panel${isResizing ? " is-resizing" : ""}`}
-            style={{ width: drawerWidth }}
+            className={`hc-assistant-panel${isResizing ? " is-resizing" : ""}${isMaximized ? " is-maximized" : ""}`}
+            style={isMaximized ? undefined : { width: drawerWidth }}
             role="dialog"
             aria-modal="true"
             aria-label="Mink AI Help Assistant"
             aria-describedby="hc-assistant-description"
           >
-            <div
-              className="hc-assistant-resizer"
-              role="separator"
-              aria-label="Resize Mink AI drawer"
-              aria-orientation="vertical"
-              aria-valuemin={DRAWER_MIN_WIDTH}
-              aria-valuemax={drawerMaximum}
-              aria-valuenow={drawerWidth}
-              tabIndex={0}
-              onPointerDown={startResizing}
-              onKeyDown={resizeWithKeyboard}
-            />
+            {!isMaximized && (
+              <div
+                className="hc-assistant-resizer"
+                role="separator"
+                aria-label="Resize Mink AI drawer"
+                aria-orientation="vertical"
+                aria-valuemin={DRAWER_MIN_WIDTH}
+                aria-valuemax={drawerMaximum}
+                aria-valuenow={drawerWidth}
+                tabIndex={0}
+                onPointerDown={startResizing}
+                onKeyDown={resizeWithKeyboard}
+              />
+            )}
 
             <header className="hc-assistant-header">
               <div className="hc-assistant-identity">
@@ -368,6 +414,25 @@ export function HelpAssistant() {
                 </button>
                 <button
                   type="button"
+                  className="hc-assistant-maximize"
+                  onClick={() => {
+                    setIsResizing(false);
+                    setIsMaximized((current) => !current);
+                  }}
+                  aria-label={
+                    isMaximized ? "Restore Mink AI drawer" : "Maximize Mink AI"
+                  }
+                  aria-pressed={isMaximized}
+                  title={isMaximized ? "Restore drawer" : "Maximize"}
+                >
+                  {isMaximized ? (
+                    <Minimize2 size={17} />
+                  ) : (
+                    <Maximize2 size={17} />
+                  )}
+                </button>
+                <button
+                  type="button"
                   onClick={closeAssistant}
                   aria-label="Close Mink AI"
                 >
@@ -376,11 +441,16 @@ export function HelpAssistant() {
               </div>
             </header>
 
-            <div className="hc-assistant-messages" aria-live="polite">
+            <div
+              ref={messagesRef}
+              className="hc-assistant-messages"
+              aria-live="polite"
+            >
               {messages.map((message) => (
                 <div
                   className={`hc-assistant-row ${message.role}`}
                   key={message.id}
+                  data-message-id={message.id}
                 >
                   {message.role === "assistant" && (
                     <span className="hc-assistant-mini-avatar" aria-hidden>
@@ -421,6 +491,19 @@ export function HelpAssistant() {
                                 <ExternalLink size={14} aria-hidden />
                               </Link>
                             ))}
+                          </div>
+                        )}
+                        {(message.answer.clarificationPrompts ?? []).length >
+                          0 && (
+                          <div className="hc-assistant-clarifications">
+                            <strong>Include these details in your reply</strong>
+                            <ul>
+                              {(message.answer.clarificationPrompts ?? []).map(
+                                (prompt) => (
+                                  <li key={prompt}>{prompt}</li>
+                                ),
+                              )}
+                            </ul>
                           </div>
                         )}
                         {message.answer.followUps.length > 0 && (
@@ -529,12 +612,11 @@ export function HelpAssistant() {
               </button>
             </form>
             <footer className="hc-assistant-footer">
-              <div className="hc-assistant-privacy">
-                <ShieldCheck size={13} aria-hidden />
-                Don&apos;t share passwords, OTPs, card details, or customer
-                data.
-              </div>
-              <div className="hc-assistant-powered">
+              <div
+                className="hc-assistant-powered"
+                aria-label="Powered by StoreMink"
+              >
+                <span>Powered by</span>
                 <Image
                   src="/brand/storemink-mark.webp"
                   alt=""
@@ -542,9 +624,7 @@ export function HelpAssistant() {
                   height={18}
                   aria-hidden
                 />
-                <span>
-                  Powered by <strong>StoreMink</strong>
-                </span>
+                <strong>StoreMink</strong>
               </div>
             </footer>
           </section>

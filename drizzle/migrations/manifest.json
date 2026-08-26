@@ -863,6 +863,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260826_0025_mink_ai_fullscreen_help",
+      "description": "Document Mink AI answer-start positioning, full-screen controls, and non-clickable clarification guidance",
+      "file": "sql/20260826_0025_mink_ai_fullscreen_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0024_marketing_communications_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "published Mink AI guide explains answer positioning, full-screen controls, and clarification guidance",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and c.slug = 'getting-started' and a.status = 'published' and a.body like '%<strong>Maximize</strong> in the Mink AI header%' and a.body like '%<strong>Restore drawer</strong>%' and a.body like '%at the beginning of the new answer%' and a.body like '%non-clickable examples of details you can add%' and a.body like '%never submitted as your message%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "published Mink AI guide explains answer positioning, full-screen controls, and clarification guidance",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and c.slug = 'getting-started' and a.status = 'published' and a.body like '%<strong>Maximize</strong> in the Mink AI header%' and a.body like '%<strong>Restore drawer</strong>%' and a.body like '%at the beginning of the new answer%' and a.body like '%non-clickable examples of details you can add%' and a.body like '%never submitted as your message%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
