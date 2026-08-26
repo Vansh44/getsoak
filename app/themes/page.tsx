@@ -17,6 +17,7 @@ import {
   THEME_META,
   canPreviewTheme,
   isThemeSelectable,
+  newestThemesFirst,
   type ThemeIndustry,
   type ThemeMeta,
 } from "@/lib/themes/meta";
@@ -25,6 +26,7 @@ import {
   ThemeHeroStage,
   type ShowcaseTheme,
 } from "./theme-showcases";
+import { ThemeCatalogCarousel } from "./theme-catalog-carousel";
 
 const FEATURE_LABELS: Record<string, string> = {
   "advanced-search": "Advanced search",
@@ -86,25 +88,17 @@ export default async function ThemesPage({
   )
     ? (requested as ThemeIndustry | "all")
     : "all";
-  const selectableThemes = THEME_META.filter(isThemeSelectable);
-  const orderedShowcaseThemes = [
-    ...selectableThemes.filter(
-      (theme) => theme.catalog.visibility === "public",
-    ),
-    ...selectableThemes.filter(
-      (theme) => theme.catalog.visibility !== "public",
-    ),
-  ];
-  const showcaseThemes: ShowcaseTheme[] = orderedShowcaseThemes.map(
-    (theme) => ({
-      id: theme.id,
-      name: theme.name,
-      industry: industryLabel(theme),
-      previewImage: theme.catalog.previewImage,
-      previewAlt:
-        theme.catalog.screenshots[0]?.alt ?? `${theme.name} theme preview`,
-    }),
+  const selectableThemes = newestThemesFirst(
+    THEME_META.filter(isThemeSelectable),
   );
+  const showcaseThemes: ShowcaseTheme[] = selectableThemes.map((theme) => ({
+    id: theme.id,
+    name: theme.name,
+    industry: industryLabel(theme),
+    previewImage: theme.catalog.previewImage,
+    previewAlt:
+      theme.catalog.screenshots[0]?.alt ?? `${theme.name} theme preview`,
+  }));
   const themes = selectableThemes.filter(
     (theme) =>
       selected === "all" || theme.catalog.industries.includes(selected),
@@ -239,7 +233,7 @@ export default async function ThemesPage({
             ))}
           </nav>
 
-          <div className="themes-grid">
+          <ThemeCatalogCarousel count={themes.length}>
             {themes.map((theme, index) => {
               const previewable = canPreviewTheme(theme);
               return (
@@ -249,7 +243,7 @@ export default async function ThemesPage({
                       src={theme.catalog.previewImage}
                       alt={`${theme.name} theme storefront preview`}
                       fill
-                      sizes="(max-width: 760px) 100vw, (max-width: 1180px) 50vw, 34vw"
+                      sizes="(max-width: 680px) 86vw, (max-width: 1180px) 34vw, 390px"
                       loading={index === 0 ? "eager" : "lazy"}
                     />
                     <div className="theme-card-badges">
@@ -317,7 +311,7 @@ export default async function ThemesPage({
                 </article>
               );
             })}
-          </div>
+          </ThemeCatalogCarousel>
         </section>
 
         <section className="themes-standard" id="standard">

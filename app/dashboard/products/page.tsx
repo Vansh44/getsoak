@@ -22,6 +22,7 @@ import {
 import { ProductsManagementView } from "./products-management-view";
 import { RealtimeRefresher } from "../components/realtime-refresher";
 import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 
 export type ProductFilter = "all" | "published" | "drafts" | "featured";
 const PRODUCT_FILTERS: ProductFilter[] = [
@@ -145,6 +146,7 @@ export default async function ProductsPage({
   const from = (page - 1) * pageSize;
 
   const storeId = await getActingStoreId();
+  const planContext = await getStorePlanContext(storeId);
   const canUseGrossMargin = await storeHasAnalyticsFeature(
     storeId,
     "grossMargin",
@@ -311,6 +313,12 @@ export default async function ProductsPage({
         categoryFilter={categoryFilter}
         canUseGrossMargin={canUseGrossMargin}
         missingCostCount={missingCostCount}
+        canCreateProduct={
+          canManage &&
+          (planContext.limits.maxProducts === null ||
+            counts.all < planContext.limits.maxProducts)
+        }
+        productLimit={planContext.limits.maxProducts}
       />
     </>
   );

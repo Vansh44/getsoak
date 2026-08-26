@@ -50,10 +50,22 @@ The runner:
   `public.schema_migrations`;
 - refuses edited, unknown, partially-applied, or out-of-order migrations; and
 - prints a hash of the complete public schema (tables, columns, constraints,
-  indexes, policies, triggers, and functions) for staging/prod drift comparison.
+  indexes, policies, triggers, functions, and extension aggregates) for
+  staging/prod drift comparison.
+
+Each manifest entry may have three postcondition contracts, all covered by its
+immutable checksum. `verify` contains durable structural invariants and runs on
+every later status/verification pass. `applyVerify` runs once immediately after
+the runner executes that migration's SQL. `adoptVerify` is the one-time evidence
+used by `audit`/`adopt` when checking an evolved database whose SQL was applied
+outside the ledger. This keeps legitimate later data changes from invalidating
+an older migration's recurring structural verification.
 
 Run through the Cloud SQL Auth Proxy as `postgres`. Put the admin password in
 `DB_ADMIN_PASSWORD` using a silent prompt; never put it in shell history:
+
+The runner requires `DB_ADMIN_USER` and deliberately does not fall back to
+`DB_USER`. Application roles have no access to `public.schema_migrations`.
 
 ```bash
 export DB_ADMIN_USER=postgres
@@ -65,6 +77,46 @@ npm run db:migrate -- baseline --environment staging --commit "$(git rev-parse H
 npm run db:migrate -- apply --environment staging --commit "$(git rev-parse HEAD)"
 npm run db:migrate -- verify --environment staging
 ```
+
+### Recovering migrations that were applied outside the ledger
+
+`audit` and `adopt` are recovery commands, not part of the normal release flow.
+Use them only when SQL was already applied manually but its immutable checksum
+was never recorded. `audit` runs in a database-enforced read-only transaction
+and walks the ordered pending prefix, requiring every migration's declared
+schema and adoption postconditions to pass:
+
+```bash
+npm run db:migrate -- audit --environment staging \
+  --through 20260825_0017_help_article_embeddings
+```
+
+The audit prints the canonical checksum for each adoptable migration. Review the
+output, then adopt **only the first pending migration**, repeating its exact ID
+and checksum plus the physical database name. `adopt` repeats the checks inside
+one serializable transaction and writes one ledger row. It does not execute the
+migration SQL or alter application tables:
+
+```bash
+npm run db:migrate -- adopt --environment staging \
+  --migration 20260816_0003_pos_pickup_prepared_at \
+  --confirm-adopt 20260816_0003_pos_pickup_prepared_at \
+  --confirm-checksum <64-character-checksum-from-audit> \
+  --confirm-database storemink_staging \
+  --commit "$(git rev-parse HEAD)"
+
+# Re-run audit and adopt one migration at a time, in manifest order, then:
+npm run db:migrate -- verify --environment staging
+```
+
+The runner refuses an unknown, already-recorded, non-first, checksum-mismatched,
+or out-of-order target. If any postcondition fails, adoption rolls back
+completely; both application tables and the ledger remain unchanged. Never
+weaken a postcondition, add `IF NOT EXISTS`, or insert directly into
+`public.schema_migrations` to force adoption. Bring the first pending target's
+declared durable and adoption contracts to their reviewed state before retrying.
+Production also requires both `--confirm-database storemink` and the existing
+`--confirm-production storemink` guard.
 
 Production mutations require a second explicit guard:
 

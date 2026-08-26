@@ -145,6 +145,24 @@ describe("catalog consistency", () => {
     expect(PLAN_LIMITS.pro.onlinePayments).toBe(true);
   });
 
+  it("matches the published product and feature tiers", () => {
+    expect(PLAN_LIMITS.free.maxProducts).toBe(5);
+    expect(PLAN_LIMITS.basic.maxProducts).toBe(50);
+    expect(PLAN_LIMITS.pro.maxProducts).toBeNull();
+
+    expect(PLAN_LIMITS.free.customDomain).toBe(false);
+    expect(PLAN_LIMITS.basic.customDomain).toBe(false);
+    expect(PLAN_LIMITS.pro.customDomain).toBe(true);
+
+    expect(PLAN_LIMITS.free.customerBlogSubmissions).toBe(false);
+    expect(PLAN_LIMITS.basic.customerBlogSubmissions).toBe(true);
+    expect(PLAN_LIMITS.pro.customerBlogSubmissions).toBe(true);
+
+    expect(PLAN_LIMITS.free.aiCreditTopUps).toBe(true);
+    expect(PLAN_LIMITS.basic.aiCreditTopUps).toBe(true);
+    expect(PLAN_LIMITS.pro.aiCreditTopUps).toBe(true);
+  });
+
   it("limits never shrink as plans go up", () => {
     const cap = (n: number | null) => n ?? Infinity;
     expect(cap(PLAN_LIMITS.basic.maxProducts)).toBeGreaterThan(

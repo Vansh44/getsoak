@@ -9,6 +9,13 @@ import {
   getManagerIdentity,
   getActingStoreId,
 } from "@/app/dashboard/lib/access";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
+
+async function groupsPlanError(storeId: string): Promise<string | null> {
+  return (await storeAllowsPlanFeature(storeId, "customerGroups"))
+    ? null
+    : "Customer groups are available on Basic and Pro. Your existing groups and memberships remain safe until you upgrade.";
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,6 +53,8 @@ export async function createUserGroup(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
+  const planError = await groupsPlanError(storeId);
+  if (planError) return { error: planError };
 
   const name = form.name.trim();
   if (!name) return { error: "Group name is required." };

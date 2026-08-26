@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   KeyRound,
@@ -37,6 +38,7 @@ type RoleRow = Role & { member_count: number };
 type Props = {
   roles: RoleRow[];
   canManage: boolean;
+  planLocked?: boolean;
 };
 
 function summarize(role: RoleRow) {
@@ -54,7 +56,11 @@ function summarize(role: RoleRow) {
   return { viewable, manageable };
 }
 
-export function RolesManagementView({ roles, canManage }: Props) {
+export function RolesManagementView({
+  roles,
+  canManage,
+  planLocked = false,
+}: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [deleteTarget, setDeleteTarget] = useState<RoleRow | null>(null);
@@ -100,7 +106,7 @@ export function RolesManagementView({ roles, canManage }: Props) {
             can access.
           </p>
         </div>
-        {canManage && (
+        {canManage && !planLocked && (
           <button
             className="dash-btn dash-btn-primary shrink-0"
             onClick={() => openEditor()}
@@ -110,6 +116,23 @@ export function RolesManagementView({ roles, canManage }: Props) {
           </button>
         )}
       </header>
+
+      {planLocked ? (
+        <div className="dash-card mb-3.5 flex items-center justify-between gap-3 px-4 py-3.5 text-[13px]">
+          <span>
+            Custom roles are available on Basic and Pro. Existing roles,
+            permissions and staff assignments remain safe. You can remove an
+            unused custom role, but creating or editing roles requires an
+            upgrade.
+          </span>
+          <Link
+            href="/dashboard/plans"
+            className="dash-btn dash-btn-primary shrink-0"
+          >
+            View plans
+          </Link>
+        </div>
+      ) : null}
 
       <div className="dash-card">
         <div className="dash-card-header">
@@ -191,16 +214,18 @@ export function RolesManagementView({ roles, canManage }: Props) {
                             align="end"
                             className="min-w-[160px]"
                           >
-                            <DropdownMenuItem
-                              className="cursor-pointer"
-                              onClick={() => openEditor(role)}
-                            >
-                              <Pencil className="mr-2 h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
+                            {!planLocked && (
+                              <DropdownMenuItem
+                                className="cursor-pointer"
+                                onClick={() => openEditor(role)}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
+                            )}
                             {!role.is_system && (
                               <>
-                                <DropdownMenuSeparator />
+                                {!planLocked && <DropdownMenuSeparator />}
                                 <DropdownMenuItem
                                   variant="destructive"
                                   className="cursor-pointer"

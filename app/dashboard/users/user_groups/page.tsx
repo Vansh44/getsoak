@@ -1,10 +1,13 @@
-import { requireSectionAccess } from "../../lib/access";
+import { getActingStoreId, requireSectionAccess } from "../../lib/access";
 import { getUserGroupsData } from "./data";
 import { GroupsManagementView } from "./groups-management-view";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 
 export default async function UserGroupsPage() {
   const access = await requireSectionAccess("users", "view");
   const canManage = access.can("users", "manage");
+  const storeId = await getActingStoreId();
+  const { limits } = await getStorePlanContext(storeId);
 
   const { groups, error } = await getUserGroupsData();
 
@@ -23,5 +26,12 @@ export default async function UserGroupsPage() {
     );
   }
 
-  return <GroupsManagementView groups={groups} canManage={canManage} />;
+  return (
+    <GroupsManagementView
+      groups={groups}
+      canManage={canManage}
+      canCreate={canManage && limits.customerGroups}
+      planLocked={!limits.customerGroups}
+    />
+  );
 }

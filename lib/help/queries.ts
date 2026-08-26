@@ -1,5 +1,5 @@
 import { unstable_cache } from "next/cache";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { withAnon } from "@/lib/db/client";
 import { helpArticles, helpCategories } from "@/drizzle/schema";
 import { TAGS } from "@/lib/storefront/tags";
@@ -114,40 +114,109 @@ export interface HelpSearchCatalogEntry {
   excerpt: string | null;
 }
 
-export const getHelpSearchCatalog = unstable_cache(
-  async (): Promise<HelpSearchCatalogEntry[]> => {
-    try {
-      return await withAnon((db) =>
-        db
-          .select({
-            id: helpArticles.id,
-            categoryId: helpCategories.id,
-            categorySlug: helpCategories.slug,
-            categoryTitle: helpCategories.title,
-            slug: helpArticles.slug,
-            title: helpArticles.title,
-            excerpt: helpArticles.excerpt,
-          })
-          .from(helpArticles)
-          .innerJoin(
-            helpCategories,
-            eq(helpArticles.categoryId, helpCategories.id),
-          )
-          .where(PUBLISHED)
-          .orderBy(
-            asc(helpCategories.position),
-            asc(helpArticles.position),
-            asc(helpArticles.title),
-          )
-          .limit(500),
-      );
-    } catch {
-      return [];
-    }
-  },
+/** Minimal published-document DTO used by the public Help Assistant. Article
+ * bodies never go to a browser wholesale: this server-only retrieval shape is
+ * reduced to a structured answer and validated source links by the action. */
+export interface HelpAssistantDocument {
+  slug: string;
+  categorySlug: string;
+  categoryTitle: string;
+  title: string;
+  excerpt: string | null;
+  body: string | null;
+  updatedAt: string | null;
+}
+
+async function loadHelpSearchCatalog(): Promise<HelpSearchCatalogEntry[]> {
+  return withAnon((db) =>
+    db
+      .select({
+        id: helpArticles.id,
+        categoryId: helpCategories.id,
+        categorySlug: helpCategories.slug,
+        categoryTitle: helpCategories.title,
+        slug: helpArticles.slug,
+        title: helpArticles.title,
+        excerpt: helpArticles.excerpt,
+      })
+      .from(helpArticles)
+      .innerJoin(helpCategories, eq(helpArticles.categoryId, helpCategories.id))
+      .where(PUBLISHED)
+      .orderBy(
+        asc(helpCategories.position),
+        asc(helpArticles.position),
+        asc(helpArticles.title),
+      )
+      .limit(500),
+  );
+}
+
+const getHelpSearchCatalogCached = unstable_cache(
+  loadHelpSearchCatalog,
   ["help-search-catalog"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
+
+/** Keep a transient failure out of the cache and retry it once uncached. */
+export async function getHelpSearchCatalog(): Promise<
+  HelpSearchCatalogEntry[]
+> {
+  try {
+    return await getHelpSearchCatalogCached();
+  } catch {
+    try {
+      return await loadHelpSearchCatalog();
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** Full text for a small, already-ranked set of published article slugs.
+ * The inner join both validates the canonical category URL and keeps legacy
+ * category-less articles out. Request order is restored after the SQL query so
+ * the assistant receives the search rank chosen by the retrieval layer. */
+export async function getPublishedHelpDocumentsForAssistant(
+  requestedSlugs: string[],
+): Promise<HelpAssistantDocument[]> {
+  const slugs = [
+    ...new Set(
+      requestedSlugs
+        .filter((slug): slug is string => typeof slug === "string")
+        .map((slug) => slug.trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 8);
+  if (slugs.length === 0) return [];
+
+  try {
+    const rows = await withAnon((db) =>
+      db
+        .select({
+          slug: helpArticles.slug,
+          categorySlug: helpCategories.slug,
+          categoryTitle: helpCategories.title,
+          title: helpArticles.title,
+          excerpt: helpArticles.excerpt,
+          body: helpArticles.body,
+          updatedAt: helpArticles.updatedAt,
+        })
+        .from(helpArticles)
+        .innerJoin(
+          helpCategories,
+          eq(helpArticles.categoryId, helpCategories.id),
+        )
+        .where(and(PUBLISHED, inArray(helpArticles.slug, slugs))),
+    );
+    const bySlug = new Map(rows.map((row) => [row.slug, row]));
+    return slugs.flatMap((slug) => {
+      const row = bySlug.get(slug);
+      return row ? [row] : [];
+    });
+  } catch {
+    return [];
+  }
+}
 
 /** The full Topics tree — every category with its published articles, ordered.
  *  Powers the left docs sidebar. */

@@ -18,6 +18,7 @@ import {
   bigint,
   pgSequence,
   date,
+  vector,
 } from "drizzle-orm/pg-core";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -5187,6 +5188,94 @@ export const helpArticles = pgTable(
       using: sql`(status = 'published'::text) OR ( SELECT is_platform_admin())`,
     }),
     pgPolicy("Write help_articles", {
+      for: "all",
+      to: ["public"],
+      using: sql`( SELECT is_platform_admin())`,
+      withCheck: sql`( SELECT is_platform_admin())`,
+    }),
+  ],
+);
+
+// Heading-aware, model-versioned semantic-search slices of Help articles.
+// The source rows remain in help_articles; chunks are replaceable derived data
+// and cascade away with their parent. Anonymous visibility follows the parent
+// article's published state through the RLS policy below.
+export const helpArticleChunks = pgTable(
+  "help_article_chunks",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    articleId: uuid("article_id").notNull(),
+    chunkIndex: integer("chunk_index").notNull(),
+    chunkCount: integer("chunk_count").notNull(),
+    heading: text(),
+    headingAnchor: text("heading_anchor"),
+    headingLevel: integer("heading_level"),
+    content: text().notNull(),
+    tokenCount: integer("token_count").notNull(),
+    contentHash: text("content_hash").notNull(),
+    sourceUpdatedAt: timestamp("source_updated_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    indexVersion: integer("index_version").notNull(),
+    embedding: vector({ dimensions: 768 }).notNull(),
+    embeddingModel: text("embedding_model").notNull(),
+    embeddedAt: timestamp("embedded_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("help_article_chunks_article_chunk_key").on(
+      table.articleId,
+      table.chunkIndex,
+    ),
+    index("help_article_chunks_content_hash_idx").on(table.contentHash),
+    index("help_article_chunks_model_embedded_idx").on(
+      table.embeddingModel,
+      table.embeddedAt,
+    ),
+    foreignKey({
+      columns: [table.articleId],
+      foreignColumns: [helpArticles.id],
+      name: "help_article_chunks_article_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "help_article_chunks_chunk_index_check",
+      sql`chunk_index >= 0 AND chunk_index < chunk_count`,
+    ),
+    check("help_article_chunks_chunk_count_check", sql`chunk_count > 0`),
+    check(
+      "help_article_chunks_heading_check",
+      sql`(heading IS NULL AND heading_anchor IS NULL AND heading_level IS NULL) OR (heading IS NOT NULL AND btrim(heading) <> '' AND heading_level IS NOT NULL AND heading_level BETWEEN 1 AND 6 AND (heading_anchor IS NULL OR heading_anchor ~ '^[a-z0-9]+(-[a-z0-9]+)*$'))`,
+    ),
+    check("help_article_chunks_content_check", sql`btrim(content) <> ''`),
+    check("help_article_chunks_token_count_check", sql`token_count > 0`),
+    check(
+      "help_article_chunks_content_hash_check",
+      sql`content_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("help_article_chunks_index_version_check", sql`index_version > 0`),
+    check(
+      "help_article_chunks_embedding_model_check",
+      sql`btrim(embedding_model) <> ''`,
+    ),
+    check(
+      "help_article_chunks_embedding_freshness_check",
+      sql`embedded_at >= source_updated_at`,
+    ),
+    pgPolicy("Read help_article_chunks", {
+      for: "select",
+      to: ["public"],
+      using: sql`EXISTS (SELECT 1 FROM help_articles article WHERE article.id = help_article_chunks.article_id AND (( SELECT is_platform_admin()) OR (article.status = 'published'::text AND article.updated_at = help_article_chunks.source_updated_at)))`,
+    }),
+    pgPolicy("Write help_article_chunks", {
       for: "all",
       to: ["public"],
       using: sql`( SELECT is_platform_admin())`,

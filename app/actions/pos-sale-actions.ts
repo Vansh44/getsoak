@@ -2047,10 +2047,16 @@ export async function listPosSales(
           created_at: orders.createdAt,
           cashier_name: orders.cashierName,
           shipping_address: orders.shippingAddress,
+          customer_first_name: users.firstName,
+          customer_last_name: users.lastName,
           payment_method: orders.paymentMethod,
           status: orders.status,
         })
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, op.storeId)),
+        )
         .where(
           and(
             eq(orders.storeId, op.storeId),
@@ -2061,6 +2067,10 @@ export async function listPosSales(
                   ilike(orders.receiptNo, like),
                   ilike(orders.orderRef, like),
                   sql`${orders.shippingAddress}::text ilike ${like}`,
+                  ilike(users.firstName, like),
+                  ilike(users.lastName, like),
+                  ilike(users.phone, like),
+                  ilike(users.email, like),
                 )
               : undefined,
             // Half-open [from, to): `yesterday` ends exactly where `today`
@@ -2104,6 +2114,10 @@ export async function listPosSales(
       sales: rows.map((r) => {
         const addr = (r.shipping_address ?? {}) as Record<string, unknown>;
         const name =
+          [r.customer_first_name, r.customer_last_name]
+            .filter(Boolean)
+            .join(" ")
+            .trim() ||
           [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() ||
           null;
         return {

@@ -16,7 +16,7 @@
     "lint": "eslint .",
     "prettier": "prettier --check .",
     "format": "prettier --write .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:shuffle": "vitest run --coverage=false --sequence.shuffle --sequence.seed=20260813",

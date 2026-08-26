@@ -94,8 +94,15 @@ staging), in order:
 #   drizzle/manual/0002_postflight.sql     (drop auth.users FKs + regrant)
 #   supabase/phase6_01_uid_columns_to_text.sql   (uid columns -> text)
 # then give the login role its RLS memberships:
-#   GRANT app_user, app_service TO app;
+#   gcloud sql users assign-roles app --instance=$DB_INSTANCE --type=BUILT_IN \
+#     --database-roles=app_user,app_service --revoke-existing-roles
 ```
+
+The role replacement is security-critical: Cloud SQL grants
+`cloudsqlsuperuser` automatically to a built-in user created without explicit
+database roles. Replacing the memberships preserves StoreMink's scoped
+`app_user`/`app_service` model while removing schema-administrator privileges
+from the application login.
 
 ## 3. Prod media bucket
 

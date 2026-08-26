@@ -13,6 +13,10 @@ import { slugify } from "@/lib/slug";
 import type { ProductDraft, VariantDraft } from "../parse";
 import type { RowIssue } from "../types";
 import {
+  getProductCreateCapacity,
+  PlanEntitlementError,
+} from "@/lib/plans/entitlements";
+import {
   failure,
   issue,
   present,
@@ -378,6 +382,13 @@ async function applyVariants(
 // The importer
 // ---------------------------------------------------------------------------
 
+interface PendingProductCreate {
+  draft: ProductDraft;
+  handle: string;
+  issues: RowIssue[];
+  values: typeof products.$inferInsert;
+}
+
 export async function importProducts(
   ctx: ImportContext,
   drafts: readonly ProductDraft[],
@@ -386,6 +397,7 @@ export async function importProducts(
   if (drafts.length === 0) return results;
 
   const refs = new ReferenceCache(ctx);
+  const pendingCreates: PendingProductCreate[] = [];
 
   const slugs = drafts.map((d) => slugify(d.handle)).filter(Boolean);
   let existing = new Map<
@@ -578,59 +590,57 @@ export async function importProducts(
 
         const status = (patch.status as string | undefined) ?? "draft";
         const initialStock = draft.values.stock;
-
-        const [inserted] = await withUser(ctx.admin, (db) =>
-          db
-            .insert(products)
-            .values({
-              storeId: ctx.storeId,
-              slug: handle,
-              name,
-              description: (patch.description as string | null) ?? null,
-              categoryId: categoryId ?? null,
-              taxClassId: taxClassId ?? null,
-              basePrice: prices.basePrice ?? 0,
-              sellingPrice: prices.sellingPrice ?? prices.basePrice ?? 0,
-              imageUrl: (patch.imageUrl as string | null) ?? null,
-              images: (patch.images as string[] | undefined) ?? [],
-              status,
-              featured: (patch.featured as boolean | undefined) ?? false,
-              sortOrder: (patch.sortOrder as number | undefined) ?? 0,
-              cardColor: (patch.cardColor as string | null) ?? null,
-              // SEO falls back to the product's own name rather than being
-              // required: the editor demands both because someone is sitting
-              // there filling a form, but a 2,000-row migration from another
-              // platform has no such columns and failing all of it would be
-              // absurd. A title is a better default than an empty <title>.
-              seoTitle: (patch.seoTitle as string | null) ?? name,
-              seoDescription:
-                (patch.seoDescription as string | null) ??
-                (patch.description as string | null) ??
-                null,
-              publishedAt:
-                status === "published" ? new Date().toISOString() : null,
-              trackInventory:
-                (patch.trackInventory as boolean | undefined) ?? false,
-              allowBackorder:
-                (patch.allowBackorder as boolean | undefined) ?? false,
-              lowStockThreshold:
-                (patch.lowStockThreshold as number | undefined) ?? null,
-              barcode: (patch.barcode as string | null) ?? null,
-              hsnCode: (patch.hsnCode as string | null) ?? null,
-              returnable: (patch.returnable as boolean | undefined) ?? true,
-              returnWindowDays:
-                (patch.returnWindowDays as number | undefined) ?? null,
-              // Safe on an INSERT only: the seed trigger copies it onto the
-              // default location's shelf, so the aggregate holds from birth.
-              stock: typeof initialStock === "number" ? initialStock : 0,
-              createdBy: ctx.admin.uid,
-              updatedBy: ctx.admin.uid,
-              // sku / sku_no are owned by the BEFORE-INSERT trigger.
-            } as typeof products.$inferInsert)
-            .returning({ id: products.id }),
-        );
-        productId = inserted.id;
-        outcome = "created";
+        pendingCreates.push({
+          draft,
+          handle,
+          issues,
+          values: {
+            storeId: ctx.storeId,
+            slug: handle,
+            name,
+            description: (patch.description as string | null) ?? null,
+            categoryId: categoryId ?? null,
+            taxClassId: taxClassId ?? null,
+            basePrice: prices.basePrice ?? 0,
+            sellingPrice: prices.sellingPrice ?? prices.basePrice ?? 0,
+            imageUrl: (patch.imageUrl as string | null) ?? null,
+            images: (patch.images as string[] | undefined) ?? [],
+            status,
+            featured: (patch.featured as boolean | undefined) ?? false,
+            sortOrder: (patch.sortOrder as number | undefined) ?? 0,
+            cardColor: (patch.cardColor as string | null) ?? null,
+            // SEO falls back to the product's own name rather than being
+            // required: the editor demands both because someone is sitting
+            // there filling a form, but a 2,000-row migration from another
+            // platform has no such columns and failing all of it would be
+            // absurd. A title is a better default than an empty <title>.
+            seoTitle: (patch.seoTitle as string | null) ?? name,
+            seoDescription:
+              (patch.seoDescription as string | null) ??
+              (patch.description as string | null) ??
+              null,
+            publishedAt:
+              status === "published" ? new Date().toISOString() : null,
+            trackInventory:
+              (patch.trackInventory as boolean | undefined) ?? false,
+            allowBackorder:
+              (patch.allowBackorder as boolean | undefined) ?? false,
+            lowStockThreshold:
+              (patch.lowStockThreshold as number | undefined) ?? null,
+            barcode: (patch.barcode as string | null) ?? null,
+            hsnCode: (patch.hsnCode as string | null) ?? null,
+            returnable: (patch.returnable as boolean | undefined) ?? true,
+            returnWindowDays:
+              (patch.returnWindowDays as number | undefined) ?? null,
+            // Safe on an INSERT only: the seed trigger copies it onto the
+            // default location's shelf, so the aggregate holds from birth.
+            stock: typeof initialStock === "number" ? initialStock : 0,
+            createdBy: ctx.admin.uid,
+            updatedBy: ctx.admin.uid,
+            // sku / sku_no are owned by the BEFORE-INSERT trigger.
+          } as typeof products.$inferInsert,
+        });
+        continue;
       }
 
       if (found && draft.values.stock !== undefined) {
@@ -659,14 +669,132 @@ export async function importProducts(
       // is in `issues` and shows up in the log.
       results.push({ lines: draft.lines, outcome, issues });
     } catch (error) {
-      const message = isUniqueViolation(error)
-        ? `A product with the handle "${handle}" already exists.`
-        : dbErrorMessage(error, "Couldn't save this product.");
+      const message =
+        error instanceof PlanEntitlementError
+          ? error.message
+          : isUniqueViolation(error)
+            ? `A product with the handle "${handle}" already exists.`
+            : dbErrorMessage(error, "Couldn't save this product.");
       results.push({
         lines: draft.lines,
         outcome: "failed",
-        issues: [...issues, issue(draft.line, null, "write_failed", message)],
+        issues: [
+          ...issues,
+          issue(
+            draft.line,
+            null,
+            error instanceof PlanEntitlementError
+              ? "plan_limit"
+              : "write_failed",
+            message,
+          ),
+        ],
       });
+    }
+  }
+
+  if (pendingCreates.length > 0) {
+    try {
+      const batch = await withUser(ctx.admin, async (db) => {
+        // One lock + one effective-plan read + one COUNT for the whole worker
+        // slice. The lock stays held while all allowed base rows are inserted,
+        // so concurrent editor/import requests cannot claim the same slots.
+        const capacity = await getProductCreateCapacity(
+          db,
+          ctx.storeId,
+          pendingCreates.length,
+        );
+        const ids: (string | null)[] = Array(pendingCreates.length).fill(null);
+        const attempted: boolean[] = Array(pendingCreates.length).fill(false);
+        let insertedCount = 0;
+        for (let index = 0; index < pendingCreates.length; index++) {
+          if (insertedCount >= capacity.allowed) break;
+          const pending = pendingCreates[index];
+          attempted[index] = true;
+          const [inserted] = await db
+            .insert(products)
+            .values(pending.values)
+            // A duplicate handle elsewhere in the same file is a row error,
+            // not a reason to abort every valid insert in the batch.
+            .onConflictDoNothing()
+            .returning({ id: products.id });
+          ids[index] = inserted?.id ?? null;
+          if (inserted?.id) insertedCount++;
+        }
+        return { capacity, ids, attempted };
+      });
+
+      for (let index = 0; index < pendingCreates.length; index++) {
+        const pending = pendingCreates[index];
+        if (!batch.attempted[index]) {
+          results.push({
+            lines: pending.draft.lines,
+            outcome: "failed",
+            issues: [
+              ...pending.issues,
+              issue(
+                pending.draft.line,
+                null,
+                "plan_limit",
+                batch.capacity.error,
+              ),
+            ],
+          });
+          continue;
+        }
+
+        const productId = batch.ids[index];
+        if (!productId) {
+          results.push({
+            lines: pending.draft.lines,
+            outcome: "failed",
+            issues: [
+              ...pending.issues,
+              issue(
+                pending.draft.line,
+                "Handle",
+                "write_failed",
+                `A product with the handle "${pending.handle}" already exists.`,
+              ),
+            ],
+          });
+          continue;
+        }
+
+        const variantResult = await applyVariants(
+          ctx,
+          productId,
+          pending.draft.variants,
+          true,
+        );
+        results.push({
+          lines: pending.draft.lines,
+          outcome: "created",
+          issues: [...pending.issues, ...variantResult.issues],
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof PlanEntitlementError
+          ? error.message
+          : dbErrorMessage(error, "Couldn't save these products.");
+      for (const pending of pendingCreates) {
+        results.push({
+          lines: pending.draft.lines,
+          outcome: "failed",
+          issues: [
+            ...pending.issues,
+            issue(
+              pending.draft.line,
+              null,
+              error instanceof PlanEntitlementError
+                ? "plan_limit"
+                : "write_failed",
+              message,
+            ),
+          ],
+        });
+      }
     }
   }
 

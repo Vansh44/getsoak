@@ -1,4 +1,23 @@
+import Image from "next/image";
 import Link from "next/link";
+import {
+  ArrowRight,
+  BarChart3,
+  Check,
+  ChevronDown,
+  CircleCheck,
+  Globe2,
+  LayoutTemplate,
+  Mail,
+  Megaphone,
+  Package,
+  Receipt,
+  RefreshCcw,
+  ShoppingBag,
+  Smartphone,
+  Store,
+  Users,
+} from "lucide-react";
 import { PLATFORM_URL, POS_URL, THEMES_URL } from "@/lib/site";
 import { LEGAL_DOCS } from "@/lib/legal/documents";
 import {
@@ -7,136 +26,23 @@ import {
   platformOrganizationSchema,
   platformWebsiteSchema,
 } from "@/lib/seo/brand-identity";
-import { PLAN_LIMITS, PLAN_META } from "@/lib/plans";
+import {
+  PLAN_FEATURE_MATRIX,
+  PLAN_LIMITS,
+  PLAN_META,
+  type PlanMatrixValue,
+} from "@/lib/plans";
+import { getPlanPricing } from "@/lib/plans/pricing";
 import { BrandMark } from "./brand-mark";
 import { PricingCards, type PricingCard } from "./pricing-cards";
-import { getPlanPricing } from "@/lib/plans/pricing";
-import {
-  BuilderArt,
-  InvoiceArt,
-  RegisterArt,
-  StorefrontArt,
-} from "./product-art";
-import {
-  ArrowRight,
-  Building2,
-  Check,
-  CircleCheck,
-  Globe,
-  IndianRupee,
-  LayoutTemplate,
-  Mail,
-  Megaphone,
-  PenLine,
-  Rocket,
-  Star,
-  Users,
-  X,
-} from "lucide-react";
+import { BuilderArt, InvoiceArt, StorefrontArt } from "./product-art";
+import { HomepageMobileNav } from "./homepage-mobile-nav";
+import "./homepage.css";
 
-// ---------------------------------------------------------------------------
-// storemink.com landing page. Pure server component — no client JS (the FAQ
-// uses native <details>), so it stays fast and fully crawlable.
-// Positioning: everything included (no app tax), 0% transaction fees (BYO
-// gateway), B2B + D2C together, live in a day, dogfooded on WholeSip.
-// ---------------------------------------------------------------------------
+// The homepage stays a server component. The only client JavaScript is the
+// isolated monthly/yearly switch inside PricingCards and the mobile menu;
+// everything else remains fast, crawlable and keyboard-friendly.
 
-// Short on purpose. Six cards each carrying a three-line paragraph is a wall of
-// text pretending to be a grid — the heading is the point, the line under it is
-// a caption, not an essay.
-const FEATURES = [
-  {
-    icon: LayoutTemplate,
-    title: "Your own storefront",
-    body: "Your brand, your colours, your domain.",
-  },
-  {
-    icon: PenLine,
-    title: "Blogs and community posts",
-    body: "Customers can write them. You approve them.",
-  },
-  {
-    icon: Megaphone,
-    title: "Marketing built in",
-    body: "Coupons, segments and email campaigns.",
-  },
-  {
-    icon: Star,
-    title: "Reviews and ratings",
-    body: "Social proof, with Google-ready markup.",
-  },
-  {
-    icon: Users,
-    title: "A team, with permissions",
-    body: "Staff roles down to the individual action.",
-  },
-  {
-    icon: Building2,
-    title: "D2C and B2B together",
-    body: "Retail and wholesale from one store.",
-  },
-];
-const COMPARE: {
-  label: string;
-  mink: { ok: boolean; text: string };
-  other: { ok: boolean; text: string };
-}[] = [
-  {
-    label: "Monthly price",
-    mink: { ok: true, text: "₹0–₹1,500, in rupees" },
-    other: { ok: false, text: "₹1,994+ before apps, USD-linked" },
-  },
-  {
-    label: "Transaction fees",
-    mink: { ok: true, text: "₹0 — your own gateway" },
-    other: { ok: false, text: "Extra fees on third-party gateways" },
-  },
-  {
-    label: "Blog + community posts",
-    mink: { ok: true, text: "Included" },
-    other: { ok: false, text: "Paid app" },
-  },
-  {
-    label: "Product reviews",
-    mink: { ok: true, text: "Included" },
-    other: { ok: false, text: "Paid app" },
-  },
-  {
-    label: "Email campaigns",
-    mink: { ok: true, text: "Included" },
-    other: { ok: false, text: "Paid app" },
-  },
-  {
-    label: "Customer segments & targeted coupons",
-    mink: { ok: true, text: "Included" },
-    other: { ok: false, text: "Paid app" },
-  },
-  {
-    label: "Team roles & permissions",
-    mink: { ok: true, text: "Included" },
-    other: { ok: false, text: "Higher plans only" },
-  },
-  {
-    label: "B2B / wholesale selling",
-    mink: { ok: true, text: "Enquiry-based selling built in" },
-    other: { ok: false, text: "Enterprise plans, lakhs per month" },
-  },
-  {
-    label: "Point of Sale (in-store till)",
-    // Pro includes PLAN_LIMITS.pro.posLocationsIncluded locations.
-    mink: { ok: true, text: "Included on Pro — 2 locations" },
-    other: { ok: false, text: "Paid add-on, charged per location" },
-  },
-  {
-    label: "GST invoicing",
-    mink: { ok: true, text: "Included on every plan, free included" },
-    other: { ok: false, text: "Paid app" },
-  },
-];
-
-// Derived from the canonical plan catalog (lib/plans.ts) — prices and AI
-// generation counts render from PLAN_META/PLAN_LIMITS so this page can never
-// drift from what the platform actually sells.
 const PLANS = [
   {
     meta: PLAN_META.free,
@@ -159,12 +65,11 @@ const PLANS = [
     who: "For new brands getting their first orders.",
     features: [
       "Everything in Free, plus:",
-      "Your own custom domain",
       "Online payments — your own gateway, 0% to us",
       `${PLAN_LIMITS.basic.maxProducts} products`,
       `${PLAN_LIMITS.basic.maxStaff} staff accounts with roles`,
-      "Coupons and customer groups",
-      "Media library",
+      "Customer groups and blog submissions",
+      "Shiprocket fulfilment and custom code",
       `${PLAN_LIMITS.basic.aiGenerationsPerMonth} AI generations a month`,
     ],
     cta: `Choose ${PLAN_META.basic.name}`,
@@ -180,6 +85,7 @@ const PLANS = [
       "Stock per location, and transfers",
       "Buy online, collect in store",
       "Email campaigns",
+      "Your own custom domain",
       "Advanced analytics — GA4, Meta Pixel and conversion insights",
       "Unlimited products and staff",
       `${PLAN_LIMITS.pro.aiGenerationsPerMonth} AI generations a month`,
@@ -188,49 +94,339 @@ const PLANS = [
     popular: false,
   },
 ];
-const priceInr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+
+function MatrixValue({ value }: { value: PlanMatrixValue }) {
+  if (value === true) {
+    return (
+      <span className="smh-matrix-yes" aria-label="Included">
+        <Check size={17} aria-hidden="true" />
+      </span>
+    );
+  }
+  if (value === false || value === "—") {
+    return (
+      <span className="smh-matrix-no" aria-label="Not included">
+        —
+      </span>
+    );
+  }
+  return <span>{value}</span>;
+}
+
+function PlanComparison() {
+  return (
+    <div className="smh-matrix-wrap">
+      <h3>Compare every feature</h3>
+      <div className="smh-matrix-scroll">
+        <table className="smh-matrix">
+          <thead>
+            <tr>
+              <th scope="col">Feature</th>
+              <th scope="col">Free</th>
+              <th scope="col">Basic</th>
+              <th scope="col">Pro</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PLAN_FEATURE_MATRIX.flatMap((section) => [
+              <tr className="smh-matrix-section" key={section.title}>
+                <th colSpan={4} scope="colgroup">
+                  {section.title}
+                </th>
+              </tr>,
+              ...section.rows.map((row) => (
+                <tr key={`${section.title}-${row.label}`}>
+                  <th scope="row">{row.label}</th>
+                  <td>
+                    <MatrixValue value={row.free} />
+                  </td>
+                  <td>
+                    <MatrixValue value={row.basic} />
+                  </td>
+                  <td>
+                    <MatrixValue value={row.pro} />
+                  </td>
+                </tr>
+              )),
+            ])}
+          </tbody>
+        </table>
+      </div>
+      <p className="smh-matrix-note">
+        If a payment fails or you downgrade, StoreMink keeps your existing
+        products, settings, content and history. Lower-plan limits only pause
+        gated features and new over-limit additions; upgrading restores access.
+      </p>
+    </div>
+  );
+}
 
 const FAQS = [
   {
-    q: "Do you take a cut of my sales?",
-    a: "No. Zero. You connect your own payment gateway (like Razorpay or Cashfree), so money from every order settles directly into your bank account. StoreMink never sits between you and your revenue — you only ever pay the flat monthly plan.",
+    q: "Can I start without paying?",
+    a: "Yes. The Free plan lets you build and publish a working StoreMink storefront without a credit card. When you need your own domain, online payments, more products or Point of Sale, you can upgrade without rebuilding anything.",
   },
   {
-    q: "How is StoreMink different from Shopify or StoreHippo?",
-    a: "Shopify's real cost isn't the plan — it's the apps. Blogs, reviews, email campaigns and customer segments are all paid add-ons, billed in dollars. On StoreMink they're built in. StoreHippo is enterprise-shaped: sales calls, setup fees, implementation timelines. On StoreMink you sign up and your store exists the same minute.",
+    q: "Does StoreMink charge a transaction fee?",
+    a: "No. Connect your own supported payment gateway and customer payments settle directly to you. StoreMink charges the plan price, not a percentage of your sales.",
   },
   {
-    q: "Do I need to know how to code?",
-    a: "Not at all. StoreMink is fully no-code: pick a name, brand your storefront, add products and go live from a single dashboard. If you ever want help, the help centre and support are right there.",
+    q: "Can my website and physical shop share inventory?",
+    a: "Yes. StoreMink Point of Sale uses the same catalogue, customer records and location-aware inventory as your online store. Sales, returns, pickup orders and stock transfers stay connected.",
   },
   {
-    q: "Can I use my own domain?",
-    a: "Yes — on the Basic plan and above you can connect your own domain (like yourbrand.com) with guided DNS verification. Until then your store lives at your-name.storemink.com.",
+    q: "Do I need a developer to design my store?",
+    a: "No. Choose a theme, add your brand, and arrange ready-made sections in the visual website builder. You can preview changes before publishing them.",
   },
   {
-    q: "Can I sell B2B and D2C from the same store?",
-    a: "Yes — that's one of the main reasons StoreMink exists. Enquiry-based selling and wholesale customer groups sit on top of your regular storefront, so distributors and retail customers are served from one place.",
+    q: "Can I sell both D2C and B2B?",
+    a: "Yes. A single StoreMink store can handle regular online purchases alongside enquiry-based and wholesale selling, so your catalogue and customer data do not split into separate systems.",
   },
   {
-    q: "What happens when I outgrow my plan?",
-    a: "Upgrade anytime from your dashboard — your store, data and customers carry over untouched. Annual billing gets you two months free.",
+    q: "Is StoreMink built for Indian businesses?",
+    a: "Yes. Plans are priced in rupees, GST tax classes and invoices are built in, and StoreMink supports the payment and fulfilment workflows Indian brands use every day.",
   },
 ];
 
-export default async function StoreminkLanding() {
-  // Operator-set prices, folded onto the code defaults. Cached + tag-busted on
-  // save, so a change in the console shows here immediately.
-  const pricing = await getPlanPricing();
+const priceInr = (value: number) => `₹${value.toLocaleString("en-IN")}`;
 
-  // One explicit Offer per plan, derived from the canonical catalog so the
-  // structured data can never drift from what the page (and billing) actually
-  // charge. Each carries a per-MONTH UnitPriceSpecification so Google reads the
-  // exact recurring price (₹0 / ₹500 / ₹1,500) rather than scraping a figure
-  // out of the prose — which is how a stale "₹399" leaked into an AI Overview.
-  // "From ₹X/month" in the hero must track the operator's prices too, or the
-  // headline contradicts the cards further down the same page.
+function CommerceCommandCentre() {
+  const orders = [
+    ["#1028", "Aarav Mehta", "₹2,490", "Paid"],
+    ["#1027", "Naina Kapoor", "₹1,280", "Ready"],
+    ["#1026", "Riya Shah", "₹3,940", "Packed"],
+  ];
+
+  return (
+    <div className="smh-command" aria-hidden="true">
+      <div className="smh-command-window">
+        <div className="smh-command-bar">
+          <span className="smh-command-dots">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="smh-command-address">app.storemink.com</span>
+          <span className="smh-live">
+            <i /> Live
+          </span>
+        </div>
+        <div className="smh-command-body">
+          <aside className="smh-command-rail">
+            <span className="is-brand">
+              <BrandMark size={18} />
+            </span>
+            <span className="is-active">
+              <BarChart3 size={15} />
+            </span>
+            <span>
+              <ShoppingBag size={15} />
+            </span>
+            <span>
+              <Package size={15} />
+            </span>
+            <span>
+              <Users size={15} />
+            </span>
+          </aside>
+          <div className="smh-command-main">
+            <div className="smh-command-heading">
+              <div>
+                <small>Tuesday, 25 August</small>
+                <b>Good afternoon, Rhea</b>
+              </div>
+              <span>
+                Last 30 days <ChevronDown size={11} />
+              </span>
+            </div>
+            <div className="smh-metrics">
+              <div>
+                <span>Net sales</span>
+                <b>₹48,420</b>
+                <small>↗ 18.4%</small>
+              </div>
+              <div>
+                <span>Orders</span>
+                <b>128</b>
+                <small>↗ 12.1%</small>
+              </div>
+              <div>
+                <span>Customers</span>
+                <b>94</b>
+                <small>↗ 8.7%</small>
+              </div>
+            </div>
+            <div className="smh-command-grid">
+              <div className="smh-chart-card">
+                <span>Sales across your store</span>
+                <div className="smh-chart">
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                  <i />
+                </div>
+                <div className="smh-chart-labels">
+                  <span>1 Aug</span>
+                  <span>15 Aug</span>
+                  <span>Today</span>
+                </div>
+              </div>
+              <div className="smh-channel-card">
+                <span>Sales by channel</span>
+                <div className="smh-donut">
+                  <i>76%</i>
+                </div>
+                <small>
+                  <i className="online" /> Online store
+                </small>
+                <small>
+                  <i className="retail" /> Retail POS
+                </small>
+              </div>
+            </div>
+            <div className="smh-orders-card">
+              <div>
+                <b>Latest orders</b>
+                <span>View all</span>
+              </div>
+              {orders.map(([id, customer, amount, status]) => (
+                <p key={id}>
+                  <b>{id}</b>
+                  <span>{customer}</span>
+                  <strong>{amount}</strong>
+                  <em>{status}</em>
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="smh-float-store">
+        <span>
+          <Globe2 size={15} />
+        </span>
+        <div>
+          <small>Online store</small>
+          <b>yourbrand.com</b>
+        </div>
+        <em>Live</em>
+      </div>
+      <div className="smh-float-pos">
+        <span>
+          <Store size={16} />
+        </span>
+        <div>
+          <small>Retail POS</small>
+          <b>Connaught Place</b>
+        </div>
+        <em>Online</em>
+      </div>
+      <div className="smh-float-order">
+        <CircleCheck size={16} />
+        <span>
+          <b>New order</b>
+          <small>₹2,490 · just now</small>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function OrderFlowArt() {
+  return (
+    <div className="smh-order-art" aria-hidden="true">
+      <div className="smh-order-top">
+        <span>Orders</span>
+        <em>All locations</em>
+      </div>
+      <div className="smh-order-tabs">
+        <b>All</b>
+        <span>Unfulfilled</span>
+        <span>Ready</span>
+        <span>Delivered</span>
+      </div>
+      <div className="smh-order-row is-head">
+        <span>Order</span>
+        <span>Customer</span>
+        <span>Channel</span>
+        <span>Total</span>
+      </div>
+      <div className="smh-order-row">
+        <b>#1028</b>
+        <span>Aarav Mehta</span>
+        <span>
+          <i className="smh-dot-purple" /> Online
+        </span>
+        <strong>₹2,490</strong>
+      </div>
+      <div className="smh-order-row">
+        <b>#1027</b>
+        <span>Naina Kapoor</span>
+        <span>
+          <i className="smh-dot-green" /> POS
+        </span>
+        <strong>₹1,280</strong>
+      </div>
+      <div className="smh-order-row">
+        <b>#1026</b>
+        <span>Riya Shah</span>
+        <span>
+          <i className="smh-dot-purple" /> Online
+        </span>
+        <strong>₹3,940</strong>
+      </div>
+      <div className="smh-sync-pill">
+        <RefreshCcw size={13} /> Inventory synced across 2 locations
+      </div>
+    </div>
+  );
+}
+
+function GrowthArt() {
+  return (
+    <div className="smh-growth-art" aria-hidden="true">
+      <div className="smh-growth-stat">
+        <small>Returning customer rate</small>
+        <b>34.8%</b>
+        <span>+6.2% this month</span>
+      </div>
+      <div className="smh-growth-bars">
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+        <i />
+      </div>
+      <div className="smh-growth-actions">
+        <span>
+          <Megaphone size={15} /> Campaign sent <b>2,840</b>
+        </span>
+        <span>
+          <Receipt size={15} /> Coupon orders <b>126</b>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export default async function StoreminkLanding() {
+  const pricing = await getPlanPricing();
   const cheapestPaidInr = Math.min(
-    ...PLANS.map((p) => pricing[p.meta.id].monthlyInr).filter((n) => n > 0),
+    ...PLANS.map((plan) => pricing[plan.meta.id].monthlyInr).filter(
+      (price) => price > 0,
+    ),
   );
 
   const pricingCards: PricingCard[] = PLANS.map((plan) => ({
@@ -255,7 +451,6 @@ export default async function StoreminkLanding() {
       "@type": "UnitPriceSpecification",
       priceCurrency: "INR",
       price: pricing[plan.meta.id].monthlyInr,
-      // Recurring monthly subscription (P1M = one-month billing period).
       billingDuration: 1,
       billingIncrement: 1,
       unitCode: "MON",
@@ -267,14 +462,9 @@ export default async function StoreminkLanding() {
     },
   }));
 
-  // Organization + SoftwareApplication JSON-LD so search engines understand
-  // what StoreMink is and its price range (₹0 up to the Pro monthly price).
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
-      // Organization + WebSite come from lib/seo/brand-identity.ts because the
-      // help centre emits the SAME nodes under the same @id. Two hand-written
-      // copies would drift, and a contradictory entity is worse than none.
       platformOrganizationSchema(),
       platformWebsiteSchema(),
       {
@@ -303,531 +493,451 @@ export default async function StoreminkLanding() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <div className="stq-navbar">
-        <nav className="stq-nav">
-          <Link href="/" className="stq-logo">
-            <BrandMark size={26} priority />
-            <em>
-              Store<span>Mink</span>
-            </em>
-          </Link>
-          <div className="stq-nav-links">
-            <a href="#features">Features</a>
-            <a href={THEMES_URL}>Themes</a>
-            <Link href={POS_URL}>Point of Sale</Link>
-            <a href="#compare">Compare</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#faq">FAQ</a>
-          </div>
-          <div className="stq-nav-actions">
-            <Link href="/login" className="stq-btn stq-btn-ghost">
-              Log in
-            </Link>
-            <Link href="/signup" className="stq-btn stq-btn-primary">
-              Start free
-            </Link>
-          </div>
-        </nav>
-      </div>
+      <div className="smh">
+        <a className="smh-skip" href="#main-content">
+          Skip to content
+        </a>
 
-      {/* ------------------------------ hero ------------------------------ */}
-      <header className="stq-hero2">
-        <div className="stq-hero2-bg" />
-        <div className="stq-hero2-inner">
-          <div>
-            <span className="stq-kicker stq-rise">
-              Built for India 🇮🇳 · D2C + B2B
-            </span>
-            <h1 className="stq-rise stq-rise-1">
-              Launch your store in a day.{" "}
-              <span className="stq-grad">Keep 100% of every sale.</span>
-            </h1>
-            <p className="stq-sub stq-rise stq-rise-2">
-              StoreMink is the India-first store builder with everything
-              included — storefront, blogs, reviews, coupons, email campaigns
-              and a full team dashboard. From {priceInr(cheapestPaidInr)}/month.
-              No apps to buy. No transaction fees. Ever.
-            </p>
-            <div className="stq-hero-cta stq-rise stq-rise-3">
-              <Link href="/signup" className="stq-btn stq-btn-primary">
-                Create your store free <ArrowRight size={17} />
-              </Link>
-              <a href="#pricing" className="stq-btn stq-btn-ghost">
-                See pricing
-              </a>
-            </div>
-            <ul className="stq-hero-ticks stq-rise stq-rise-4">
-              <li>
-                <CircleCheck size={17} /> Free plan forever
-              </li>
-              <li>
-                <CircleCheck size={17} /> No credit card to start
-              </li>
-              <li>
-                <CircleCheck size={17} /> Live the same day
-              </li>
-            </ul>
-          </div>
-
-          <div className="stq-mock-wrap stq-rise stq-rise-2">
-            <StorefrontArt />
-            <div className="stq-float stq-float-1" aria-hidden="true">
-              <CircleCheck size={17} /> Order received — ₹648
-            </div>
-            <div className="stq-float stq-float-2" aria-hidden="true">
-              <IndianRupee size={16} />
+        <header className="smh-header">
+          <nav className="smh-nav" aria-label="Main navigation">
+            <Link href="/" className="smh-logo" aria-label="StoreMink home">
+              <BrandMark size={29} priority />
               <span>
-                Platform fee on this sale: <b>₹0</b>
+                Store<em>Mink</em>
+              </span>
+            </Link>
+            <div className="smh-nav-links">
+              <a href="#platform">Platform</a>
+              <Link href={POS_URL}>Point of Sale</Link>
+              <a href={THEMES_URL}>Themes</a>
+              <a href="#pricing">Pricing</a>
+              <a href="https://help.storemink.com">Resources</a>
+            </div>
+            <div className="smh-nav-actions">
+              <Link href="/login" className="smh-link-button">
+                Log in
+              </Link>
+              <Link href="/signup" className="smh-button smh-button-dark">
+                Start free <ArrowRight size={16} />
+              </Link>
+            </div>
+            <HomepageMobileNav posUrl={POS_URL} themesUrl={THEMES_URL} />
+          </nav>
+        </header>
+
+        <main id="main-content">
+          <section className="smh-hero">
+            <div className="smh-hero-wash" aria-hidden="true" />
+            <div className="smh-container smh-hero-copy">
+              <p className="smh-eyebrow">
+                <span>New</span> Commerce, made for India{" "}
+                <ArrowRight size={13} />
+              </p>
+              <h1>
+                One place to <em>build, sell</em> and grow.
+              </h1>
+              <p className="smh-hero-lead">
+                Your online store, in-store checkout, orders, customers,
+                inventory and marketing—working together from day one.
+              </p>
+              <div className="smh-hero-actions">
+                <Link href="/signup" className="smh-button smh-button-primary">
+                  Create your store free <ArrowRight size={17} />
+                </Link>
+                <a href="#platform" className="smh-button smh-button-soft">
+                  Explore the platform
+                </a>
+              </div>
+              <div className="smh-hero-proof">
+                <span>
+                  <Check size={15} /> Free plan forever
+                </span>
+                <span>
+                  <Check size={15} /> No credit card
+                </span>
+                <span>
+                  <Check size={15} /> 0% transaction fee
+                </span>
+              </div>
+            </div>
+            <div className="smh-container smh-command-wrap">
+              <CommerceCommandCentre />
+            </div>
+          </section>
+
+          <section className="smh-outcomes" aria-label="StoreMink advantages">
+            <div className="smh-container smh-outcome-grid">
+              <div>
+                <b>₹0</b>
+                <span>to start building</span>
+              </div>
+              <div>
+                <b>0%</b>
+                <span>StoreMink transaction fee</span>
+              </div>
+              <div>
+                <b>D2C + B2B</b>
+                <span>in one storefront</span>
+              </div>
+              <div>
+                <b>Online + POS</b>
+                <span>one connected operation</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="smh-intro" id="platform">
+            <div className="smh-container">
+              <p className="smh-section-label">
+                The complete commerce platform
+              </p>
+              <h2>
+                Everything your brand needs.
+                <br />
+                <em>Nothing to stitch together.</em>
+              </h2>
+              <p className="smh-section-lead">
+                Start with a storefront. Add a counter, a team and new locations
+                when you are ready. Your data stays in one place through every
+                stage.
+              </p>
+            </div>
+          </section>
+
+          <section
+            className="smh-bento smh-container"
+            aria-label="Commerce platform features"
+          >
+            <article className="smh-bento-card smh-bento-store">
+              <div className="smh-bento-copy">
+                <span className="smh-icon-chip">
+                  <LayoutTemplate size={20} />
+                </span>
+                <p className="smh-card-label">Online store</p>
+                <h3>A storefront that feels like your brand.</h3>
+                <p>
+                  Choose a theme, arrange sections, add your own domain and
+                  publish—without waiting on a developer.
+                </p>
+                <a href={THEMES_URL}>
+                  Explore themes <ArrowRight size={15} />
+                </a>
+              </div>
+              <div className="smh-store-art">
+                <StorefrontArt />
+              </div>
+            </article>
+
+            <article className="smh-bento-card smh-bento-builder">
+              <div className="smh-bento-copy">
+                <span className="smh-icon-chip">
+                  <Globe2 size={20} />
+                </span>
+                <p className="smh-card-label">Visual builder</p>
+                <h3>Make every page yours.</h3>
+                <p>
+                  Build with ready-made sections, preview every change and
+                  publish when it is right.
+                </p>
+              </div>
+              <BuilderArt />
+            </article>
+
+            <article className="smh-bento-card smh-bento-orders">
+              <div className="smh-bento-copy">
+                <span className="smh-icon-chip">
+                  <Package size={20} />
+                </span>
+                <p className="smh-card-label">Orders & inventory</p>
+                <h3>Every order. Every location. One clear view.</h3>
+                <p>
+                  Track fulfilment, pickup, returns and stock without hopping
+                  between systems.
+                </p>
+              </div>
+              <OrderFlowArt />
+            </article>
+
+            <article className="smh-bento-card smh-bento-growth">
+              <div className="smh-bento-copy">
+                <span className="smh-icon-chip">
+                  <BarChart3 size={20} />
+                </span>
+                <p className="smh-card-label">Customers & growth</p>
+                <h3>Turn first orders into lasting relationships.</h3>
+                <p>
+                  Use customer groups, coupons, reviews, blogs and email
+                  campaigns—all fed by the same customer history.
+                </p>
+              </div>
+              <GrowthArt />
+            </article>
+          </section>
+
+          <section className="smh-pos">
+            <div className="smh-container smh-pos-grid">
+              <div className="smh-pos-copy">
+                <p className="smh-section-label">StoreMink Point of Sale</p>
+                <h2>
+                  Your website and your counter, finally on the same page.
+                </h2>
+                <p>
+                  Sell from a computer, tablet or phone. Products, customers and
+                  location stock stay connected to your online store in real
+                  time.
+                </p>
+                <ul>
+                  <li>
+                    <CircleCheck size={18} />
+                    <span>
+                      <b>Fast in-store checkout</b> with barcode search, held
+                      sales and split payments.
+                    </span>
+                  </li>
+                  <li>
+                    <CircleCheck size={18} />
+                    <span>
+                      <b>Live multi-location inventory</b> with transfers and
+                      low-stock visibility.
+                    </span>
+                  </li>
+                  <li>
+                    <CircleCheck size={18} />
+                    <span>
+                      <b>Connected fulfilment</b> for pickup, returns and store
+                      credit.
+                    </span>
+                  </li>
+                </ul>
+                <Link href={POS_URL} className="smh-button smh-button-light">
+                  Explore Point of Sale <ArrowRight size={17} />
+                </Link>
+              </div>
+              <div className="smh-pos-media">
+                <Image
+                  src="/brand/storemink-pos-multidevice.png"
+                  alt="StoreMink Point of Sale running on a desktop, tablet and phone"
+                  width={1536}
+                  height={1024}
+                  sizes="(max-width: 900px) 100vw, 56vw"
+                />
+                <span className="smh-pos-badge">
+                  <Smartphone size={16} /> Works across your devices
+                </span>
+              </div>
+            </div>
+          </section>
+
+          <section className="smh-journey">
+            <div className="smh-container">
+              <div className="smh-journey-head">
+                <div>
+                  <p className="smh-section-label">From idea to first order</p>
+                  <h2>Open your store today.</h2>
+                </div>
+                <p>
+                  No agency handoff. No app checklist. Just three focused steps
+                  inside one dashboard.
+                </p>
+              </div>
+              <ol className="smh-journey-steps">
+                <li>
+                  <span>01</span>
+                  <div className="smh-step-icon">
+                    <Store size={22} />
+                  </div>
+                  <h3>Create your store</h3>
+                  <p>
+                    Choose your name and your storefront is ready immediately.
+                  </p>
+                </li>
+                <li>
+                  <span>02</span>
+                  <div className="smh-step-icon">
+                    <LayoutTemplate size={22} />
+                  </div>
+                  <h3>Make it unmistakably yours</h3>
+                  <p>Add products, colours, content and your own domain.</p>
+                </li>
+                <li>
+                  <span>03</span>
+                  <div className="smh-step-icon">
+                    <ShoppingBag size={22} />
+                  </div>
+                  <h3>Start selling everywhere</h3>
+                  <p>
+                    Take online orders, counter sales, enquiries and pickups.
+                  </p>
+                </li>
+              </ol>
+            </div>
+          </section>
+
+          <section className="smh-tax smh-container">
+            <div className="smh-tax-copy">
+              <p className="smh-section-label">Built for the way India sells</p>
+              <h2>GST-ready from the first invoice.</h2>
+              <p>
+                Set your tax classes and place of supply once. StoreMink
+                prepares clear, printable invoices for every order—online or in
+                store.
+              </p>
+              <div className="smh-tax-points">
+                <span>
+                  <Check size={16} /> Inclusive or exclusive pricing
+                </span>
+                <span>
+                  <Check size={16} /> HSN and tax breakdowns
+                </span>
+                <span>
+                  <Check size={16} /> Downloadable invoices
+                </span>
+              </div>
+            </div>
+            <div className="smh-tax-art">
+              <InvoiceArt />
+            </div>
+          </section>
+
+          <section className="smh-pricing-area" id="pricing">
+            <div className="smh-container">
+              <div className="smh-pricing-head">
+                <p className="smh-section-label">Simple pricing</p>
+                <h2>Start free. Grow for less.</h2>
+                <p>
+                  Every plan includes a real storefront and 0% StoreMink
+                  transaction fees. Paid plans start at{" "}
+                  {priceInr(cheapestPaidInr)} per month.
+                </p>
+              </div>
+              <div className="smh-pricing-component">
+                <PricingCards plans={pricingCards} />
+              </div>
+              <PlanComparison />
+              <p className="smh-pricing-foot">
+                <CircleCheck size={16} /> Your store data is never deleted by a
+                plan downgrade or failed payment.
+              </p>
+            </div>
+          </section>
+
+          <section className="smh-faq" id="faq">
+            <div className="smh-container smh-faq-grid">
+              <div className="smh-faq-copy">
+                <p className="smh-section-label">Good to know</p>
+                <h2>Questions before you begin?</h2>
+                <p>
+                  Find step-by-step guides in the{" "}
+                  <a href="https://help.storemink.com">StoreMink Help Centre</a>
+                  , or email us at{" "}
+                  <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
+                </p>
+              </div>
+              <div className="smh-faq-list">
+                {FAQS.map((faq) => (
+                  <details key={faq.q}>
+                    <summary>
+                      {faq.q}
+                      <ChevronDown size={19} />
+                    </summary>
+                    <p>{faq.a}</p>
+                  </details>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="smh-final">
+            <div className="smh-container smh-final-card">
+              <div className="smh-final-glow" aria-hidden="true" />
+              <p className="smh-section-label">Your next chapter starts here</p>
+              <h2>Build a store people remember.</h2>
+              <p>
+                Start free today. Bring your products, your brand and your
+                ambition.
+              </p>
+              <div>
+                <Link href="/signup" className="smh-button smh-button-light">
+                  Create your store free <ArrowRight size={17} />
+                </Link>
+                <a href="#pricing" className="smh-button smh-button-outline">
+                  See plans
+                </a>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <footer className="smh-footer">
+          <div className="smh-container smh-footer-grid">
+            <div className="smh-footer-brand">
+              <Link href="/" className="smh-logo">
+                <BrandMark size={29} />
+                <span>
+                  Store<em>Mink</em>
+                </span>
+              </Link>
+              <p>
+                One connected platform to build, sell and grow your brand—online
+                and in person.
+              </p>
+              <span>
+                Made in India <Globe2 size={14} />
               </span>
             </div>
-          </div>
-        </div>
-      </header>
-
-      {/* --------------------------- stats strip --------------------------- */}
-      <div className="stq-strip">
-        <div className="stq-strip-inner">
-          <div className="stq-stat">
-            <b>0%</b>
-            <span>transaction fees, on every plan</span>
-          </div>
-          <div className="stq-stat">
-            <b>Everything</b>
-            <span>included — no paid apps</span>
-          </div>
-          <div className="stq-stat">
-            <b>1 day</b>
-            <span>from signup to selling</span>
-          </div>
-          <div className="stq-stat">
-            <b>D2C + B2B</b>
-            <span>from a single store</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ---------------------------- features ---------------------------- */}
-      <section className="stq-section-lg" id="features">
-        <div className="stq-sec-head">
-          <span className="stq-kicker">Everything included</span>
-          <h2>
-            The tools others sell as apps? They&apos;re just&hellip; here.
-          </h2>
-          <p>
-            One monthly price. Every feature. Your store gets more powerful
-            every time we ship — at no extra cost.
-          </p>
-        </div>
-        <div className="stq-grid">
-          {FEATURES.map((f) => (
-            <div className="stq-feature" key={f.title}>
-              <div className="stq-feature-icon">
-                <f.icon size={20} />
-              </div>
-              <h3>{f.title}</h3>
-              <p>{f.body}</p>
+            <div>
+              <h3>Platform</h3>
+              <nav>
+                <a href="#platform">Overview</a>
+                <Link href={POS_URL}>Point of Sale</Link>
+                <a href={THEMES_URL}>Themes</a>
+                <a href="#pricing">Pricing</a>
+              </nav>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* --------------------------- comparison --------------------------- */}
-      <section
-        className="stq-section-lg"
-        id="compare"
-        style={{ paddingTop: 0 }}
-      >
-        <div className="stq-sec-head">
-          <span className="stq-kicker">The app tax ends here</span>
-          <h2>Do the maths before you pay it.</h2>
-          <p>
-            On legacy platforms the plan is just the entry fee — real
-            functionality is sold back to you app by app, in dollars.
-          </p>
-        </div>
-        <div className="stq-compare-wrap">
-          <table className="stq-compare">
-            <thead>
-              <tr>
-                <th></th>
-                <th>StoreMink</th>
-                <th>Legacy platforms*</th>
-              </tr>
-            </thead>
-            <tbody>
-              {COMPARE.map((row) => (
-                <tr key={row.label}>
-                  <td>{row.label}</td>
-                  <td>
-                    <span className="stq-cell-yes">
-                      <Check size={16} /> {row.mink.text}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="stq-cell-no">
-                      <X size={16} /> {row.other.text}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="stq-compare-note">
-          *Typical global store-builder setup with equivalent paid apps, billed
-          in USD.
-        </p>
-      </section>
-
-      {/* --------------------------- 0% fees split -------------------------- */}
-      <section className="stq-section-lg" style={{ paddingTop: 0 }}>
-        <div className="stq-split">
-          <div>
-            <span className="stq-kicker">Your money stays yours</span>
-            <h2>We never touch your revenue.</h2>
-            <p>
-              Connect your own payment gateway — Razorpay, Cashfree, whichever
-              you trust. Customers pay you, money settles straight into your
-              bank account, and StoreMink takes exactly nothing from it.
-            </p>
-            <ul className="stq-checklist">
-              <li>
-                <CircleCheck size={19} />
-                <span>
-                  <b>0% commission,</b> on every order, on every plan
-                </span>
-              </li>
-              <li>
-                <CircleCheck size={19} />
-                <span>
-                  <b>Direct settlement</b> — no platform wallet, no payout
-                  delays
-                </span>
-              </li>
-              <li>
-                <CircleCheck size={19} />
-                <span>
-                  <b>One flat monthly price</b> that never scales with your
-                  success
-                </span>
-              </li>
-            </ul>
-          </div>
-          <div className="stq-money" aria-hidden="true">
-            <div className="stq-money-row">
-              <span>Order value</span>
-              <b>₹10,000</b>
+            <div>
+              <h3>Get started</h3>
+              <nav>
+                <Link href="/signup">Create your store</Link>
+                <Link href="/login">Log in</Link>
+                <a href="https://help.storemink.com">Help Centre</a>
+                <a href={`mailto:${SUPPORT_EMAIL}`}>Contact support</a>
+              </nav>
             </div>
-            <div className="stq-money-row">
-              <span>Marketplace commission</span>
-              <b style={{ textDecoration: "line-through", opacity: 0.45 }}>
-                −₹2,500
-              </b>
-            </div>
-            <div className="stq-money-row">
-              <span>Platform transaction fee</span>
-              <b style={{ textDecoration: "line-through", opacity: 0.45 }}>
-                −₹200
-              </b>
-            </div>
-            <div className="stq-money-row stq-money-total">
-              <span>You keep</span>
-              <b>₹10,000</b>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* --------------------------- product showcase ----------------------- */}
-      {/* A dark band, because the page was white end to end and had no rhythm
-          for a visual to sit against. Each card's artwork is DRAWN IN CSS (see
-          platform.css) rather than photographed — we have no brand photography,
-          and stock imagery is the look of a product with nothing to show. What
-          these depict is real: the register, the builder, GST invoicing. */}
-      <section className="stq-showcase" id="showcase">
-        <div className="stq-showcase-inner">
-          <div className="stq-sec-head">
-            <span className="stq-kicker">Not a roadmap</span>
-            <h2>The parts other people charge extra for.</h2>
-            <p>All in the same plan. All working today.</p>
-          </div>
-
-          <div className="stq-show-grid">
-            {/* --- register --- */}
-            <article className="stq-show-card">
-              <RegisterArt compact />
-              <h3>Sell at the counter</h3>
-              <p>Your counter, sharing one catalogue with your website.</p>
-              <ul className="stq-show-list">
-                <li>
-                  <Check size={15} /> Barcode scanner, or your phone&apos;s
-                  camera
-                </li>
-                <li>
-                  <Check size={15} /> Shifts, cash drops and an end-of-day count
-                </li>
-                <li>
-                  <Check size={15} /> Stock per shop, and transfers between them
-                </li>
-                <li>
-                  <Check size={15} /> Buy online, collect in store
-                </li>
-              </ul>
-              <span className="stq-show-tag">Pro · 2 locations included</span>
-              <p className="stq-show-more">
-                <Link href={POS_URL}>
-                  Everything in Point of Sale <ArrowRight size={15} />
-                </Link>
-              </p>
-            </article>
-
-            {/* --- builder --- */}
-            <article className="stq-show-card">
-              <BuilderArt />
-              <h3>Build the site yourself</h3>
-              <p>Every page, section by section. No code, ever.</p>
-              <ul className="stq-show-list">
-                <li>
-                  <Check size={15} /> Twelve section types, drag to reorder
-                </li>
-                <li>
-                  <Check size={15} /> Live preview as you type
-                </li>
-                <li>
-                  <Check size={15} /> Draft and publish, with undo
-                </li>
-                <li>
-                  <Check size={15} /> Your own domain from Basic up
-                </li>
-              </ul>
-              <span className="stq-show-tag">Every plan</span>
-            </article>
-
-            {/* --- GST --- */}
-            <article className="stq-show-card">
-              <InvoiceArt />
-              <h3>GST that works itself out</h3>
-              <p>Set a rate once. Every invoice after that is correct.</p>
-              <ul className="stq-show-list">
-                <li>
-                  <Check size={15} /> Tax classes per product, 5% / 12% / 18%
-                </li>
-                <li>
-                  <Check size={15} /> Prices inclusive or exclusive — your call
-                </li>
-                <li>
-                  <Check size={15} /> Printable invoices customers can download
-                </li>
-                <li>
-                  <Check size={15} /> Place of supply decides the split
-                </li>
-              </ul>
-              <span className="stq-show-tag">Every plan, Free included</span>
-            </article>
-          </div>
-
-          <div className="stq-showcase-foot">
-            <p>No add-ons. No upgrade tier. No app store.</p>
-            <Link href="/signup" className="stq-btn stq-btn-light">
-              Create your store free <ArrowRight size={17} />
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* ------------------------------ steps ------------------------------ */}
-      <section className="stq-section-lg" style={{ paddingTop: 0 }}>
-        <div className="stq-sec-head">
-          <span className="stq-kicker">
-            <Rocket size={13} style={{ verticalAlign: "-2px" }} /> Live in a day
-          </span>
-          <h2>Three steps. No agency. No developer.</h2>
-        </div>
-        <div className="stq-steps">
-          <div className="stq-step">
-            <span className="stq-step-num">1</span>
-            <h3>Claim your store</h3>
-            <p>
-              Pick a name and sign up — your storefront and dashboard exist the
-              same minute at your-name.storemink.com.
-            </p>
-          </div>
-          <div className="stq-step">
-            <span className="stq-step-num">2</span>
-            <h3>Make it yours</h3>
-            <p>
-              Add your logo, colours and products. Compose your homepage from
-              ready-made sections — all from the dashboard.
-            </p>
-          </div>
-          <div className="stq-step">
-            <span className="stq-step-num">3</span>
-            <h3>Start selling</h3>
-            <p>
-              Share your link, take enquiries and orders, and grow with built-in
-              blogs, coupons and email campaigns.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* --------------------------- founder proof -------------------------- */}
-      {/* <section className="stq-section-lg" style={{ paddingTop: 0 }}>
-        <div className="stq-founder">
-          <span className="stq-kicker">
-            <ShieldCheck size={13} style={{ verticalAlign: "-2px" }} /> We use
-            it ourselves
-          </span>
-          <blockquote>
-            “We didn&apos;t build StoreMink to sell software. We built it to run
-            WholeSip — our own D2C brand. Every store here runs on the exact
-            platform we depend on ourselves, every single day.”
-          </blockquote>
-          <cite> */}
-      {/* <b>Vansh Gupta</b> — Founder, StoreMink &amp; WholeSip */}
-      {/* </cite>
-          <br />
-          <a
-            href="https://wholesip.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="stq-founder-link"
-          >
-            See WholeSip live on StoreMink <ArrowRight size={15} />
-          </a>
-        </div>
-      </section> */}
-
-      {/* ----------------------------- pricing ----------------------------- */}
-      <section
-        className="stq-section-lg"
-        id="pricing"
-        style={{ paddingTop: 0 }}
-      >
-        <div className="stq-sec-head">
-          <span className="stq-kicker">Simple, honest pricing</span>
-          <h2>Priced in rupees. Not in surprises.</h2>
-          <p>Start free. Upgrade when you grow.</p>
-        </div>
-        <PricingCards plans={pricingCards} />
-        <p className="stq-price-note">
-          Every plan: <b>0% transaction fees</b> — connect your own Razorpay or
-          Cashfree and keep everything you earn.
-        </p>
-      </section>
-
-      {/* ------------------------------- FAQ ------------------------------- */}
-      <section className="stq-section-lg" id="faq" style={{ paddingTop: 0 }}>
-        <div className="stq-sec-head">
-          <span className="stq-kicker">Questions, answered</span>
-          <h2>Frequently asked questions</h2>
-        </div>
-        <div className="stq-faq">
-          {FAQS.map((f) => (
-            <details key={f.q}>
-              <summary>{f.q}</summary>
-              <p>{f.a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
-
-      {/* ----------------------------- CTA band ----------------------------- */}
-      <section className="stq-cta-band">
-        <div className="stq-cta-band-inner">
-          <h2>Your brand deserves its own home.</h2>
-          <p>
-            Not a marketplace listing. Not a monthly app bill. A store that is
-            completely, permanently yours — live today.
-          </p>
-          <div className="stq-hero-cta">
-            <Link href="/signup" className="stq-btn stq-btn-light">
-              Create your store free <ArrowRight size={17} />
-            </Link>
-            <Link href="/login" className="stq-btn stq-btn-outline">
-              Log in to your store
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* ------------------------------ footer ------------------------------ */}
-      <footer className="stq-footer2">
-        <div className="stq-footer2-inner">
-          <div className="stq-footer2-brand">
-            <Link href="/" className="stq-logo">
-              <BrandMark size={26} />
-              <em>
-                Store<span>Mink</span>
-              </em>
-            </Link>
-            <p>
-              The India-first store builder with everything included. Launch
-              your D2C or B2B store in a day and keep 100% of every sale.
-            </p>
-          </div>
-          <div>
-            <h4>Product</h4>
-            <nav>
-              <a href="#features">Features</a>
-              <a href={THEMES_URL}>Themes</a>
-              <a href="#compare">Compare</a>
-              <a href="#pricing">Pricing</a>
-            </nav>
-          </div>
-          <div>
-            <h4>Get started</h4>
-            <nav>
-              <Link href="/signup">Create your store</Link>
-              <Link href="/login">Log in</Link>
-            </nav>
-          </div>
-          <div>
-            <h4>Support</h4>
-            <nav>
-              <a href="https://help.storemink.com">Help Centre</a>
-              <a href="#faq">FAQ</a>
-              <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
-            </nav>
-          </div>
-          <div>
-            <h4>Follow</h4>
-            {/* The visible half of the `sameAs` claim in the JSON-LD above —
-                same list, one source (lib/seo/brand-identity.ts), so a profile
-                can never be asserted in schema but missing from the page.
-                rel="me" is the standard "this account is us" annotation. */}
-            <nav>
-              {BRAND_SOCIAL_LINKS.map((s) => (
-                <a key={s.href} href={s.href} rel="me noopener" target="_blank">
-                  {s.label}
+            <div>
+              <h3>Company</h3>
+              <nav>
+                {BRAND_SOCIAL_LINKS.map((social) => (
+                  <a
+                    key={social.href}
+                    href={social.href}
+                    rel="me noopener"
+                    target="_blank"
+                  >
+                    {social.label}
+                  </a>
+                ))}
+                <a href={`mailto:${SUPPORT_EMAIL}`}>
+                  <Mail size={13} /> {SUPPORT_EMAIL}
                 </a>
-              ))}
-            </nav>
+              </nav>
+            </div>
+            <div>
+              <h3>Legal</h3>
+              <nav>
+                {LEGAL_DOCS.map((document) => (
+                  <Link key={document.slug} href={`/legal/${document.slug}`}>
+                    {document.title}
+                  </Link>
+                ))}
+              </nav>
+            </div>
           </div>
-          <div>
-            <h4>Legal</h4>
-            {/* Previously reachable only from inside the signup form, so both
-                the sitemap entry and the crawler had no path to them. */}
-            <nav>
-              {LEGAL_DOCS.map((d) => (
-                <Link key={d.slug} href={`/legal/${d.slug}`}>
-                  {d.title}
-                </Link>
-              ))}
-            </nav>
+          <div className="smh-container smh-footer-base">
+            <span>© {new Date().getFullYear()} StoreMink</span>
+            <span>Your brand. Your customers. Your growth.</span>
           </div>
-        </div>
-        <div className="stq-footer2-base">
-          <span>
-            © {new Date().getFullYear()} StoreMink. Made in India{" "}
-            <Globe size={13} style={{ verticalAlign: "-2px" }} />
-          </span>
-          <span>
-            <Mail size={13} style={{ verticalAlign: "-2px" }} /> Questions?
-            Visit the <a href="https://help.storemink.com">Help Centre</a>
-          </span>
-        </div>
-      </footer>
+        </footer>
+      </div>
     </>
   );
 }

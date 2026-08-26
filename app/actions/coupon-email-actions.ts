@@ -30,6 +30,10 @@ import {
   type CouponEmailContent,
 } from "@/lib/email/coupon-campaign";
 import { getStoreBrand } from "@/lib/store/brand";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
+
+const CAMPAIGN_PLAN_ERROR =
+  "Coupon email campaigns are available on Pro. Existing campaign history remains safe until you upgrade.";
 
 const RECIPIENT_PAGE_SIZE = 50;
 
@@ -133,6 +137,9 @@ export async function listEmailRecipients(
   const userId = await getManagerUserId("marketing");
   if (!userId) return { customers: [], total: 0, error: "Not authenticated" };
   const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "emailCampaigns"))) {
+    return { customers: [], total: 0, error: CAMPAIGN_PLAN_ERROR };
+  }
 
   const term = sanitizeSearch(search);
   try {
@@ -193,6 +200,9 @@ export async function generateCouponEmail(
 
   // Meter against the store's plan cap, then speak in ITS voice.
   const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "emailCampaigns"))) {
+    return { error: CAMPAIGN_PLAN_ERROR };
+  }
   const quota = await consumeAiQuota(storeId);
   if (!quota.allowed) return { error: quota.error };
 
@@ -260,6 +270,10 @@ export async function renderCouponEmailPreview(input: {
 }): Promise<{ html?: string; subject?: string; error?: string }> {
   const userId = await getManagerUserId("marketing");
   if (!userId) return { error: "Not authenticated" };
+  const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "emailCampaigns"))) {
+    return { error: CAMPAIGN_PLAN_ERROR };
+  }
 
   const firstName = input.sampleName?.trim() || "there";
   const brand = await getStoreBrand();
@@ -354,6 +368,9 @@ export async function sendCouponEmail(
   const userId = await getManagerUserId("marketing");
   if (!userId) return { error: "Not authenticated" };
   const storeId = await getActingStoreId();
+  if (!(await storeAllowsPlanFeature(storeId, "emailCampaigns"))) {
+    return { error: CAMPAIGN_PLAN_ERROR };
+  }
 
   if (!input.subject.trim() || !input.body.trim())
     return { error: "Add a subject and body before sending." };

@@ -23,6 +23,7 @@ import {
   Pencil,
   Store,
   Truck,
+  UserRound,
   X,
   XCircle,
 } from "lucide-react";
@@ -55,12 +56,15 @@ const STATUS_TONE: Record<string, string> = {
   processing: "bg-blue-50 text-blue-700 ring-blue-600/20",
   shipped: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
   delivered: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  completed: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   cancelled: "bg-rose-50 text-rose-700 ring-rose-600/20",
 };
 const PAY_TONE: Record<string, string> = {
   paid: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   pending: "bg-amber-50 text-amber-700 ring-amber-600/20",
   failed: "bg-rose-50 text-rose-700 ring-rose-600/20",
+  refunded: "bg-slate-100 text-slate-700 ring-slate-500/20",
+  partially_refunded: "bg-violet-50 text-violet-700 ring-violet-600/20",
 };
 
 function Pill({ value, tone }: { value: string; tone?: string }) {
@@ -123,11 +127,17 @@ function readAddress(a: Record<string, unknown> | null) {
 }
 
 function methodLabel(m: string): string {
-  return m === "cash_on_delivery"
-    ? "Cash on Delivery"
-    : m === "razorpay"
-      ? "Razorpay (online)"
-      : m;
+  const labels: Record<string, string> = {
+    cash_on_delivery: "Cash on Delivery",
+    pay_at_store: "Pay at store",
+    razorpay: "Razorpay (online)",
+    cash: "Cash",
+    card: "Card",
+    upi: "UPI",
+    store_credit: "Store credit",
+    split: "Split tender",
+  };
+  return labels[m] ?? m.replaceAll("_", " ");
 }
 
 export function OrderDetailDrawer({
@@ -213,6 +223,13 @@ export function OrderDetailDrawer({
   }
 
   const ship = readAddress(detail?.shipping_address ?? null);
+  const isPosSale = detail?.sales_channel === "pos";
+  const posCustomerName = detail
+    ? [detail.customer_first_name, detail.customer_last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim()
+    : "";
 
   return (
     <div className="flex max-h-[calc(100dvh-80px)] flex-col overflow-hidden rounded-[12px] border border-border bg-card shadow-sm">
@@ -223,10 +240,20 @@ export function OrderDetailDrawer({
             {detail?.order_ref || orderRef || "Order"}
           </div>
           <div className="text-xs text-muted-foreground">
-            {detail ? `Placed ${fmtDate(detail.created_at)}` : "Loading order…"}
+            {detail
+              ? `${isPosSale ? "Sold" : "Placed"} ${fmtDate(detail.created_at)}`
+              : "Loading order…"}
           </div>
           {detail && (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <Pill
+                value={isPosSale ? "POS sale" : "Website"}
+                tone={
+                  isPosSale
+                    ? "bg-violet-50 text-violet-700 ring-violet-600/20"
+                    : "bg-sky-50 text-sky-700 ring-sky-600/20"
+                }
+              />
               <Pill value={detail.status} tone={STATUS_TONE[detail.status]} />
               <Pill
                 value={`payment: ${detail.payment_status}`}
@@ -283,33 +310,55 @@ export function OrderDetailDrawer({
                   }
                   meta={methodLabel(detail.payment_method)}
                 />
-                <TimelineRow
-                  icon={
-                    detail.status === "cancelled" ? (
-                      <XCircle className="h-4 w-4 text-rose-600" />
-                    ) : detail.status === "delivered" ? (
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    ) : detail.status === "shipped" ? (
-                      <Truck className="h-4 w-4 text-indigo-600" />
-                    ) : detail.status === "processing" ? (
-                      <Package className="h-4 w-4 text-blue-600" />
-                    ) : (
-                      <Circle className="h-4 w-4 text-gray-400" />
-                    )
-                  }
-                  title={
-                    detail.status === "cancelled"
-                      ? "Cancelled"
-                      : detail.status === "delivered"
-                        ? "Delivered"
-                        : detail.status === "shipped"
-                          ? "Shipped"
-                          : detail.status === "processing"
-                            ? "Processing"
-                            : "Awaiting fulfillment"
-                  }
-                  meta={`Updated ${fmtDate(detail.updated_at)}`}
-                />
+                {isPosSale ? (
+                  <TimelineRow
+                    icon={
+                      detail.status === "cancelled" ? (
+                        <XCircle className="h-4 w-4 text-rose-600" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      )
+                    }
+                    title={
+                      detail.status === "cancelled"
+                        ? "Sale cancelled"
+                        : "Sale completed"
+                    }
+                    meta={
+                      detail.sale_location_name
+                        ? `At ${detail.sale_location_name}`
+                        : `Updated ${fmtDate(detail.updated_at)}`
+                    }
+                  />
+                ) : (
+                  <TimelineRow
+                    icon={
+                      detail.status === "cancelled" ? (
+                        <XCircle className="h-4 w-4 text-rose-600" />
+                      ) : detail.status === "delivered" ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      ) : detail.status === "shipped" ? (
+                        <Truck className="h-4 w-4 text-indigo-600" />
+                      ) : detail.status === "processing" ? (
+                        <Package className="h-4 w-4 text-blue-600" />
+                      ) : (
+                        <Circle className="h-4 w-4 text-gray-400" />
+                      )
+                    }
+                    title={
+                      detail.status === "cancelled"
+                        ? "Cancelled"
+                        : detail.status === "delivered"
+                          ? "Delivered"
+                          : detail.status === "shipped"
+                            ? "Shipped"
+                            : detail.status === "processing"
+                              ? "Processing"
+                              : "Awaiting fulfillment"
+                    }
+                    meta={`Updated ${fmtDate(detail.updated_at)}`}
+                  />
+                )}
               </ol>
             </section>
 
@@ -373,7 +422,9 @@ export function OrderDetailDrawer({
                   label={`Tax${detail.tax_inclusive ? " (incl.)" : ""}`}
                   value={formatPrice(detail.tax)}
                 />
-                <Row label="Shipping" value={formatPrice(detail.shipping)} />
+                {!isPosSale && (
+                  <Row label="Shipping" value={formatPrice(detail.shipping)} />
+                )}
                 <div className="mt-1 flex items-center justify-between border-t border-border pt-2 text-[15px] font-semibold">
                   <span>Total</span>
                   <span className="tabular-nums">
@@ -398,6 +449,76 @@ export function OrderDetailDrawer({
                   a read-and-set-status view. */}
               <RefundPanel orderId={detail.id} onRefunded={reload} />
             </section>
+
+            {isPosSale && (
+              <>
+                <section>
+                  <SectionTitle icon={<Store className="h-4 w-4" />}>
+                    Sold at
+                  </SectionTitle>
+                  <div className="mt-2 rounded-lg border border-border p-3 text-sm">
+                    <div className="font-medium text-foreground">
+                      {detail.sale_location_name ?? "Store location"}
+                    </div>
+                    {locationAddressLines(detail.sale_location_address).map(
+                      (line, i) => (
+                        <div key={i} className="text-muted-foreground">
+                          {line}
+                        </div>
+                      ),
+                    )}
+                    <div className="mt-2 grid gap-1 border-t border-border pt-2 text-xs text-muted-foreground">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Receipt</span>
+                        <span className="font-mono text-foreground">
+                          {detail.receipt_no ?? detail.order_ref}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Cashier</span>
+                        <span className="text-right text-foreground">
+                          {detail.cashier_name ?? "Not recorded"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section>
+                  <SectionTitle icon={<UserRound className="h-4 w-4" />}>
+                    Customer
+                  </SectionTitle>
+                  <div className="mt-2 rounded-lg border border-border p-3 text-sm">
+                    {detail.customer_id ? (
+                      <>
+                        <div className="font-medium text-foreground">
+                          {posCustomerName || "Customer"}
+                        </div>
+                        {detail.customer_phone && (
+                          <div className="text-muted-foreground">
+                            {detail.customer_phone}
+                          </div>
+                        )}
+                        {detail.customer_email && (
+                          <div className="truncate text-muted-foreground">
+                            {detail.customer_email}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium text-foreground">
+                          Walk-in
+                        </div>
+                        <div className="text-muted-foreground">
+                          No customer was attached at the register.
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
 
             {/* ★ Collection — where the goods are and who is coming for them.
                 Rendered ABOVE the contact block because for a pickup it is the
@@ -445,104 +566,106 @@ export function OrderDetailDrawer({
 
             {/* Delivery — or, for a collection, the customer's contact details:
                 the address is theirs, not a destination. */}
-            <section>
-              <SectionTitle icon={<MapPin className="h-4 w-4" />}>
-                {isPickupOrder(detail) ? "Customer" : "Delivery"}
-              </SectionTitle>
-              <div className="mt-2 rounded-lg border border-border p-3 text-sm">
-                {ship ? (
-                  <>
-                    {ship.name && (
-                      <div className="font-medium text-foreground">
-                        {ship.name}
-                      </div>
-                    )}
-                    {!isPickupOrder(detail) &&
-                    ["pending", "processing"].includes(detail.status) ? (
-                      editingPhone ? (
-                        <div className="mt-2 rounded-md bg-muted/40 p-2">
-                          <label className="text-xs font-medium text-muted-foreground">
-                            Delivery phone
-                          </label>
-                          <input
-                            type="tel"
-                            inputMode="tel"
-                            autoFocus
-                            value={phoneDraft}
-                            onChange={(event) =>
-                              setPhoneDraft(event.target.value)
-                            }
-                            placeholder="98765 43210"
-                            className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
-                          />
-                          <div className="mt-2 flex gap-2">
+            {!isPosSale && (
+              <section>
+                <SectionTitle icon={<MapPin className="h-4 w-4" />}>
+                  {isPickupOrder(detail) ? "Customer" : "Delivery"}
+                </SectionTitle>
+                <div className="mt-2 rounded-lg border border-border p-3 text-sm">
+                  {ship ? (
+                    <>
+                      {ship.name && (
+                        <div className="font-medium text-foreground">
+                          {ship.name}
+                        </div>
+                      )}
+                      {!isPickupOrder(detail) &&
+                      ["pending", "processing"].includes(detail.status) ? (
+                        editingPhone ? (
+                          <div className="mt-2 rounded-md bg-muted/40 p-2">
+                            <label className="text-xs font-medium text-muted-foreground">
+                              Delivery phone
+                            </label>
+                            <input
+                              type="tel"
+                              inputMode="tel"
+                              autoFocus
+                              value={phoneDraft}
+                              onChange={(event) =>
+                                setPhoneDraft(event.target.value)
+                              }
+                              placeholder="98765 43210"
+                              className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+                            />
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                disabled={saving}
+                                onClick={saveDeliveryPhone}
+                                className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                              >
+                                {saving ? "Saving…" : "Save phone"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={saving}
+                                onClick={() => setEditingPhone(false)}
+                                className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-muted-foreground">
+                              {ship.phone || "No phone on file"}
+                            </span>
                             <button
                               type="button"
-                              disabled={saving}
-                              onClick={saveDeliveryPhone}
-                              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                              onClick={() => {
+                                setPhoneDraft(ship.phone);
+                                setEditingPhone(true);
+                              }}
+                              className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
                             >
-                              {saving ? "Saving…" : "Save phone"}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={saving}
-                              onClick={() => setEditingPhone(false)}
-                              className="rounded-md border border-input px-3 py-1.5 text-xs font-medium text-foreground"
-                            >
-                              Cancel
+                              <Pencil className="h-3 w-3" /> Edit phone
                             </button>
                           </div>
-                        </div>
+                        )
                       ) : (
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-muted-foreground">
-                            {ship.phone || "No phone on file"}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPhoneDraft(ship.phone);
-                              setEditingPhone(true);
-                            }}
-                            className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary hover:underline"
-                          >
-                            <Pencil className="h-3 w-3" /> Edit phone
-                          </button>
+                        ship.phone && (
+                          <div className="text-muted-foreground">
+                            {ship.phone}
+                          </div>
+                        )
+                      )}
+                      {ship.line && (
+                        <div className="mt-1 text-muted-foreground">
+                          {ship.line}
                         </div>
-                      )
-                    ) : (
-                      ship.phone && (
+                      )}
+                      {ship.cityLine && (
                         <div className="text-muted-foreground">
-                          {ship.phone}
+                          {ship.cityLine}
                         </div>
-                      )
-                    )}
-                    {ship.line && (
-                      <div className="mt-1 text-muted-foreground">
-                        {ship.line}
-                      </div>
-                    )}
-                    {ship.cityLine && (
-                      <div className="text-muted-foreground">
-                        {ship.cityLine}
-                      </div>
-                    )}
-                    {ship.country && (
-                      <div className="text-muted-foreground">
-                        {ship.country}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">
-                    No shipping address on file.
-                  </span>
-                )}
-              </div>
-            </section>
+                      )}
+                      {ship.country && (
+                        <div className="text-muted-foreground">
+                          {ship.country}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      No shipping address on file.
+                    </span>
+                  )}
+                </div>
+              </section>
+            )}
 
-            {!isPickupOrder(detail) && (
+            {!isPosSale && !isPickupOrder(detail) && (
               <ShipmentPanel
                 orderId={detail.id}
                 onChanged={async () => {
@@ -569,50 +692,60 @@ export function OrderDetailDrawer({
       {/* Actions */}
       {detail && (
         <div className="border-t border-border bg-muted/30 p-4">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-              Fulfillment
-              <select
-                value={detail.status}
-                disabled={saving}
-                onChange={(e) => updateField({ status: e.target.value })}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm capitalize text-foreground disabled:opacity-60"
-              >
-                {ORDER_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
-              Payment
-              {DERIVED_PAYMENT_STATUSES.includes(detail.payment_status) ? (
-                // Derived from the refunds that actually settled, so it is
-                // shown and not offered — picking it would assert money went
-                // back with no order_refunds row saying so. Refunding (or a
-                // refund failing) is what moves it.
-                <span className="flex h-9 items-center rounded-md border border-input bg-muted/50 px-2 text-sm capitalize text-muted-foreground">
-                  {detail.payment_status.replace("_", " ")}
-                </span>
-              ) : (
+          {!isPosSale ? (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                Fulfillment
                 <select
-                  value={detail.payment_status}
+                  value={detail.status}
                   disabled={saving}
-                  onChange={(e) =>
-                    updateField({ paymentStatus: e.target.value })
-                  }
+                  onChange={(e) => updateField({ status: e.target.value })}
                   className="h-9 rounded-md border border-input bg-background px-2 text-sm capitalize text-foreground disabled:opacity-60"
                 >
-                  {PAYMENT_STATUSES.map((s) => (
+                  {ORDER_STATUSES.map((s) => (
                     <option key={s} value={s}>
                       {s}
                     </option>
                   ))}
                 </select>
-              )}
-            </label>
-          </div>
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+                Payment
+                {DERIVED_PAYMENT_STATUSES.includes(detail.payment_status) ? (
+                  // Derived from the refunds that actually settled, so it is
+                  // shown and not offered — picking it would assert money went
+                  // back with no order_refunds row saying so. Refunding (or a
+                  // refund failing) is what moves it.
+                  <span className="flex h-9 items-center rounded-md border border-input bg-muted/50 px-2 text-sm capitalize text-muted-foreground">
+                    {detail.payment_status.replace("_", " ")}
+                  </span>
+                ) : (
+                  <select
+                    value={detail.payment_status}
+                    disabled={saving}
+                    onChange={(e) =>
+                      updateField({ paymentStatus: e.target.value })
+                    }
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm capitalize text-foreground disabled:opacity-60"
+                  >
+                    {PAYMENT_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5 text-xs text-muted-foreground">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              <span>
+                This sale was handed over at the register. No fulfillment is
+                required.
+              </span>
+            </div>
+          )}
           <Link
             href={`/dashboard/orders/${detail.id}/invoice`}
             className="mt-3 flex h-9 items-center justify-center gap-1.5 rounded-md border border-input text-sm font-medium text-foreground transition-colors hover:bg-accent/10"

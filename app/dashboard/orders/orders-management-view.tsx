@@ -9,11 +9,17 @@ import {
   Settings,
   ShoppingBag,
   CircleSlash,
+  Globe2,
+  Store,
 } from "lucide-react";
 import { formatPrice } from "@/lib/pricing";
 import { ListPagination } from "@/app/dashboard/components/list-pagination";
 import { ImportExportMenu } from "@/app/dashboard/components/import-export-menu";
-import type { OrderStatusCounts } from "@/app/actions/order-actions";
+import type {
+  OrderChannel,
+  OrderChannelCounts,
+  OrderStatusCounts,
+} from "@/app/actions/order-actions";
 import type { OrderRow } from "./page";
 import { OrderDetailDrawer } from "./order-detail-drawer";
 import { PickupBadge, isPickupOrder, pickupStageLabel } from "./pickup-badge";
@@ -22,6 +28,7 @@ type Props = {
   orders: OrderRow[];
   total: number;
   counts: OrderStatusCounts;
+  channelCounts: OrderChannelCounts;
   page: number;
   pageSize: number;
   query: string;
@@ -29,21 +36,61 @@ type Props = {
   paymentStatus: string;
   paymentMethod: string;
   dateRange: string;
+  channel: OrderChannel;
+  supportsPos: boolean;
 };
 
-// Order-lifecycle tabs (the primary Shopify-style saved views). "" = All.
-const STATUS_TABS: {
+type StatusTab = {
   key: string;
   label: string;
-  countKey: keyof OrderStatusCounts;
-}[] = [
-  { key: "", label: "All", countKey: "all" },
-  { key: "pending", label: "Pending", countKey: "pending" },
-  { key: "processing", label: "Processing", countKey: "processing" },
-  { key: "shipped", label: "Shipped", countKey: "shipped" },
-  { key: "delivered", label: "Delivered", countKey: "delivered" },
-  { key: "cancelled", label: "Cancelled", countKey: "cancelled" },
+  countKeys: (keyof OrderStatusCounts)[];
+};
+
+// Order-lifecycle tabs (the primary saved views). "" = All. The combined
+// book groups lifecycle states into the cross-channel vocabulary in the ref.
+const ALL_STATUS_TABS: StatusTab[] = [
+  { key: "", label: "All", countKeys: ["all"] },
+  { key: "attention", label: "Needs attention", countKeys: ["pending"] },
+  { key: "open", label: "Open", countKeys: ["processing", "shipped"] },
+  {
+    key: "completed",
+    label: "Completed",
+    countKeys: ["delivered", "completed"],
+  },
 ];
+
+const WEBSITE_STATUS_TABS: StatusTab[] = [
+  { key: "", label: "All", countKeys: ["all"] },
+  { key: "pending", label: "Pending", countKeys: ["pending"] },
+  { key: "processing", label: "Processing", countKeys: ["processing"] },
+  { key: "shipped", label: "Shipped", countKeys: ["shipped"] },
+  { key: "delivered", label: "Delivered", countKeys: ["delivered"] },
+  { key: "cancelled", label: "Cancelled", countKeys: ["cancelled"] },
+];
+
+const POS_STATUS_TABS: StatusTab[] = [
+  { key: "", label: "All", countKeys: ["all"] },
+  { key: "completed", label: "Completed", countKeys: ["completed"] },
+  { key: "cancelled", label: "Cancelled", countKeys: ["cancelled"] },
+];
+
+const CHANNEL_COPY: Record<
+  OrderChannel,
+  { title: string; description: string }
+> = {
+  all: {
+    title: "All orders",
+    description: "Search and manage orders across every sales channel",
+  },
+  website: {
+    title: "Website orders",
+    description: "Orders placed through your online storefront",
+  },
+  pos: {
+    title: "POS orders",
+    description: "Completed in-person sales, payments and customer history",
+  },
+};
 
 const DATE_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "All time" },
@@ -58,12 +105,15 @@ const STATUS_TONE: Record<string, string> = {
   processing: "bg-blue-50 text-blue-700 ring-blue-600/20",
   shipped: "bg-indigo-50 text-indigo-700 ring-indigo-600/20",
   delivered: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  completed: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   cancelled: "bg-rose-50 text-rose-700 ring-rose-600/20",
 };
 const PAY_TONE: Record<string, string> = {
   paid: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
   pending: "bg-amber-50 text-amber-700 ring-amber-600/20",
   failed: "bg-rose-50 text-rose-700 ring-rose-600/20",
+  refunded: "bg-slate-100 text-slate-700 ring-slate-500/20",
+  partially_refunded: "bg-violet-50 text-violet-700 ring-violet-600/20",
 };
 
 function Pill({ value, tone }: { value: string; tone?: string }) {
@@ -92,6 +142,10 @@ function methodLabel(m: string): string {
   // "pay_at_store" in the list.
   if (m === "pay_at_store") return "Pay at store";
   if (m === "store_credit") return "Store credit";
+  if (m === "cash") return "Cash";
+  if (m === "card") return "Card";
+  if (m === "upi") return "UPI";
+  if (m === "split") return "Split tender";
   return m;
 }
 
@@ -116,6 +170,7 @@ export function OrdersManagementView({
   orders,
   total,
   counts,
+  channelCounts,
   page,
   pageSize,
   query,
@@ -123,6 +178,8 @@ export function OrdersManagementView({
   paymentStatus,
   paymentMethod,
   dateRange,
+  channel,
+  supportsPos,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -138,6 +195,7 @@ export function OrdersManagementView({
     payment?: string;
     method?: string;
     date?: string;
+    channel?: OrderChannel;
     page?: number;
   }): string => {
     const q = (next.q ?? query).trim();
@@ -145,12 +203,14 @@ export function OrdersManagementView({
     const pay = next.payment ?? paymentStatus;
     const method = next.method ?? paymentMethod;
     const date = next.date ?? dateRange;
+    const orderChannel = next.channel ?? channel;
     const changedFacet =
       next.q !== undefined ||
       next.status !== undefined ||
       next.payment !== undefined ||
       next.method !== undefined ||
-      next.date !== undefined;
+      next.date !== undefined ||
+      next.channel !== undefined;
     const p = next.page ?? (changedFacet ? 1 : page);
 
     const params = new URLSearchParams();
@@ -159,6 +219,9 @@ export function OrdersManagementView({
     if (pay) params.set("payment", pay);
     if (method) params.set("method", method);
     if (date) params.set("date", date);
+    if (supportsPos && orderChannel !== "all") {
+      params.set("channel", orderChannel);
+    }
     if (p > 1) params.set("page", String(p));
     const qs = params.toString();
     return qs ? `${pathname}?${qs}` : pathname;
@@ -181,6 +244,31 @@ export function OrdersManagementView({
     query || status || paymentStatus || paymentMethod || dateRange,
   );
 
+  const statusTabs = !supportsPos
+    ? WEBSITE_STATUS_TABS
+    : channel === "all"
+      ? ALL_STATUS_TABS
+      : channel === "pos"
+        ? POS_STATUS_TABS
+        : WEBSITE_STATUS_TABS;
+  const channelCopy = supportsPos
+    ? CHANNEL_COPY[channel]
+    : {
+        title: "Orders",
+        description: "View and manage all customer orders",
+      };
+
+  const switchChannel = (next: OrderChannel) => {
+    if (next === channel) return;
+    go({
+      channel: next,
+      status: "",
+      payment: "",
+      method: "",
+      page: 1,
+    });
+  };
+
   const selectClass =
     "rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-[7px] text-[13px] text-[var(--dash-text)] outline-none";
 
@@ -192,13 +280,16 @@ export function OrdersManagementView({
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="dash-page-header row">
             <div>
-              <h1>Orders</h1>
-              <p>View and manage all customer orders</p>
+              <h1>{channelCopy.title}</h1>
+              <p>{channelCopy.description}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {/* Export only — orders can never be imported. See the note on
                   ORDER_COLUMNS in lib/import-export/resources.ts. */}
-              <ImportExportMenu resource="orders" filters={{ status }} />
+              <ImportExportMenu
+                resource="orders"
+                filters={supportsPos ? { status, channel } : { status }}
+              />
               <Link
                 href="/dashboard/orders/returns"
                 className="dash-btn dash-btn-ghost"
@@ -220,14 +311,76 @@ export function OrdersManagementView({
                 <Settings className="h-4 w-4" />
                 Settings
               </Link>
+              {supportsPos && channel === "pos" && (
+                <Link href="/pos/sell" className="dash-btn dash-btn-primary">
+                  <Store className="h-4 w-4" />
+                  Open POS
+                </Link>
+              )}
             </div>
           </header>
 
           <div className="dash-card flex flex-col" style={{ flex: "1 1 auto" }}>
-            {/* Toolbar: status tabs + date/payment facets + search */}
+            {/* POS-enabled stores get the omnichannel workspace. Lower plans
+                and stores that have POS switched off keep the original Orders
+                page, with no empty/teasing channel navigation. */}
+            {supportsPos && (
+              <div className="grid grid-cols-3 border-b border-[var(--dash-border)] bg-[var(--dash-surface-2)]/55 p-1.5">
+                <button
+                  type="button"
+                  aria-pressed={channel === "all"}
+                  onClick={() => switchChannel("all")}
+                  className={`flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                    channel === "all"
+                      ? "bg-[var(--dash-surface)] text-[var(--dash-text)] shadow-sm ring-1 ring-[var(--dash-border)]"
+                      : "text-[var(--dash-text-2)] hover:text-[var(--dash-text)]"
+                  }`}
+                >
+                  <ShoppingBag className="h-4 w-4 shrink-0" />
+                  <span className="truncate">All orders</span>
+                  <span className="rounded-full bg-[var(--dash-surface-2)] px-2 py-0.5 text-[11px] tabular-nums text-[var(--dash-text-2)]">
+                    {channelCounts.all}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={channel === "website"}
+                  onClick={() => switchChannel("website")}
+                  className={`flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                    channel === "website"
+                      ? "bg-[var(--dash-surface)] text-[var(--dash-text)] shadow-sm ring-1 ring-[var(--dash-border)]"
+                      : "text-[var(--dash-text-2)] hover:text-[var(--dash-text)]"
+                  }`}
+                >
+                  <Globe2 className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Website orders</span>
+                  <span className="rounded-full bg-[var(--dash-surface-2)] px-2 py-0.5 text-[11px] tabular-nums text-[var(--dash-text-2)]">
+                    {channelCounts.website}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={channel === "pos"}
+                  onClick={() => switchChannel("pos")}
+                  className={`flex min-w-0 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                    channel === "pos"
+                      ? "bg-[var(--dash-surface)] text-[var(--dash-text)] shadow-sm ring-1 ring-[var(--dash-border)]"
+                      : "text-[var(--dash-text-2)] hover:text-[var(--dash-text)]"
+                  }`}
+                >
+                  <Store className="h-4 w-4 shrink-0" />
+                  <span className="truncate">POS orders</span>
+                  <span className="rounded-full bg-[var(--dash-surface-2)] px-2 py-0.5 text-[11px] tabular-nums text-[var(--dash-text-2)]">
+                    {channelCounts.pos}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            {/* Toolbar: channel-specific status tabs + shared facets/search. */}
             <div className="dash-toolbar px-5 pt-4 pb-2 border-b border-[var(--dash-border)] mb-0 flex flex-col gap-4">
               <div className="dash-filter-tabs">
-                {STATUS_TABS.map((tab) => (
+                {statusTabs.map((tab) => (
                   <button
                     key={tab.key || "all"}
                     className={`dash-filter-tab${status === tab.key ? " active" : ""}`}
@@ -235,7 +388,7 @@ export function OrdersManagementView({
                   >
                     {tab.label}
                     <span className="dash-tab-count">
-                      {counts[tab.countKey]}
+                      {tab.countKeys.reduce((sum, key) => sum + counts[key], 0)}
                     </span>
                   </button>
                 ))}
@@ -282,8 +435,33 @@ export function OrdersManagementView({
                     aria-label="Filter by payment method"
                   >
                     <option value="">All methods</option>
-                    <option value="cash_on_delivery">COD</option>
-                    <option value="razorpay">Online (Razorpay)</option>
+                    {channel === "website" ? (
+                      <>
+                        <option value="cash_on_delivery">COD</option>
+                        <option value="pay_at_store">Pay at store</option>
+                        <option value="razorpay">Online (Razorpay)</option>
+                      </>
+                    ) : channel === "pos" ? (
+                      <>
+                        <option value="cash">Cash</option>
+                        <option value="card">Card</option>
+                        <option value="upi">UPI</option>
+                        <option value="razorpay">Online (Razorpay)</option>
+                        <option value="store_credit">Store credit</option>
+                        <option value="split">Split tender</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="cash_on_delivery">COD</option>
+                        <option value="pay_at_store">Pay at store</option>
+                        <option value="cash">Cash</option>
+                        <option value="card">Card</option>
+                        <option value="upi">UPI</option>
+                        <option value="razorpay">Online (Razorpay)</option>
+                        <option value="store_credit">Store credit</option>
+                        <option value="split">Split tender</option>
+                      </>
+                    )}
                   </select>
                 </div>
 
@@ -291,7 +469,15 @@ export function OrdersManagementView({
                   <Search className="h-4 w-4 shrink-0 opacity-50" />
                   <input
                     type="text"
-                    placeholder="Search orders…"
+                    placeholder={
+                      !supportsPos
+                        ? "Search orders…"
+                        : channel === "all"
+                          ? "Order, receipt or customer…"
+                          : channel === "pos"
+                            ? "Receipt, customer, location…"
+                            : "Order or customer…"
+                    }
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
@@ -307,30 +493,82 @@ export function OrdersManagementView({
                 <div className="dash-empty-title">
                   {hasFilters
                     ? "No orders match your filters"
-                    : "No orders yet"}
+                    : !supportsPos
+                      ? "No orders yet"
+                      : channel === "all"
+                        ? "No orders yet"
+                        : channel === "pos"
+                          ? "No POS orders yet"
+                          : "No website orders yet"}
                 </div>
                 <p className="dash-empty-text">
                   {hasFilters
                     ? "Try adjusting your filters."
-                    : "No orders have been placed yet."}
+                    : !supportsPos
+                      ? "No orders have been placed yet."
+                      : channel === "all"
+                        ? "Website orders and register sales will appear here."
+                        : channel === "pos"
+                          ? "Sales completed at the register will appear here."
+                          : "Orders placed through your website will appear here."}
                 </p>
               </div>
             ) : (
               <table className="dash-table dash-table-wide">
                 <thead>
                   <tr>
-                    <th>Order</th>
+                    <th>{channel === "pos" ? "Receipt" : "Order"}</th>
+                    {channel === "all" && <th>Channel</th>}
                     <th>Customer</th>
+                    {channel === "pos" && <th>Location</th>}
                     <th>Date</th>
                     <th className="text-right">Total</th>
-                    <th>Payment</th>
-                    <th>Status</th>
+                    {channel !== "all" && <th>Payment</th>}
+                    <th>
+                      {channel === "all"
+                        ? "Next step"
+                        : channel === "pos"
+                          ? "Sale"
+                          : supportsPos
+                            ? "Fulfillment"
+                            : "Status"}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {orders.map((order) => {
-                    const customerName =
+                    const isPos = order.sales_channel === "pos";
+                    const websiteCustomer =
                       `${order.shipping_address?.firstName || ""} ${order.shipping_address?.lastName || ""}`.trim();
+                    const posCustomer =
+                      `${order.customer_first_name || ""} ${order.customer_last_name || ""}`.trim();
+                    const customerName = isPos ? posCustomer : websiteCustomer;
+                    const customerMeta = isPos
+                      ? order.customer_phone ||
+                        order.customer_email ||
+                        "No customer attached"
+                      : [
+                          order.shipping_address?.city,
+                          order.shipping_address?.state,
+                        ]
+                          .filter(Boolean)
+                          .join(", ");
+                    const orderLabel = isPos
+                      ? order.receipt_no || order.order_ref
+                      : order.order_ref;
+                    const allOrderMeta = isPos
+                      ? ["POS", order.location_name].filter(Boolean).join(" · ")
+                      : isPickupOrder(order)
+                        ? ["Pickup", order.location_name]
+                            .filter(Boolean)
+                            .join(" · ")
+                        : "Standard shipping";
+                    const nextStep =
+                      !isPos && isPickupOrder(order) && order.pickup_status
+                        ? pickupStageLabel(order.pickup_status)
+                        : !isPos && order.status === "pending"
+                          ? "Ready to fulfill"
+                          : order.status;
                     return (
                       <tr
                         key={order.id}
@@ -343,10 +581,40 @@ export function OrdersManagementView({
                           title={order.id}
                         >
                           <div className="flex flex-col items-start gap-1">
-                            {order.order_ref}
-                            {isPickupOrder(order) && <PickupBadge />}
+                            {orderLabel}
+                            {channel === "all" ? (
+                              <span className="font-sans text-[11px] font-normal text-[var(--dash-text-3)]">
+                                {allOrderMeta}
+                              </span>
+                            ) : isPos ? (
+                              order.receipt_no && (
+                                <span className="font-sans text-[11px] font-normal text-[var(--dash-text-3)]">
+                                  {order.order_ref}
+                                </span>
+                              )
+                            ) : (
+                              isPickupOrder(order) && <PickupBadge />
+                            )}
                           </div>
                         </td>
+                        {channel === "all" && (
+                          <td>
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                                isPos
+                                  ? "bg-slate-100 text-slate-700"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}
+                            >
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                  isPos ? "bg-slate-400" : "bg-blue-400"
+                                }`}
+                              />
+                              {isPos ? "POS" : "Website"}
+                            </span>
+                          </td>
+                        )}
                         <td>
                           <div className="flex items-center gap-2.5">
                             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--dash-surface-2)] text-[11px] font-semibold text-[var(--dash-text-2)]">
@@ -354,49 +622,63 @@ export function OrdersManagementView({
                             </span>
                             <div className="min-w-0">
                               <div className="truncate font-medium text-gray-900">
-                                {customerName || "Unknown"}
+                                {customerName ||
+                                  (isPos ? "Walk-in" : "Unknown")}
                               </div>
                               <div className="truncate text-xs text-[var(--dash-text-3)]">
-                                {[
-                                  order.shipping_address?.city,
-                                  order.shipping_address?.state,
-                                ]
-                                  .filter(Boolean)
-                                  .join(", ")}
+                                {customerMeta}
                               </div>
                             </div>
                           </div>
                         </td>
+                        {channel === "pos" && (
+                          <td>
+                            <div className="max-w-[150px] truncate font-medium text-gray-900">
+                              {order.location_name || "Unknown location"}
+                            </div>
+                            <div className="max-w-[150px] truncate text-xs text-[var(--dash-text-3)]">
+                              {order.cashier_name
+                                ? `By ${order.cashier_name}`
+                                : "Cashier not recorded"}
+                            </div>
+                          </td>
+                        )}
                         <td className="whitespace-nowrap text-xs">
                           {fmtListDate(order.created_at)}
                         </td>
                         <td className="text-right font-medium tabular-nums text-gray-900">
                           {formatPrice(order.total)}
                         </td>
+                        {channel !== "all" && (
+                          <td>
+                            <div className="flex flex-col items-start gap-0.5">
+                              <Pill
+                                value={order.payment_status}
+                                tone={PAY_TONE[order.payment_status]}
+                              />
+                              <span className="text-[11px] text-[var(--dash-text-3)]">
+                                {methodLabel(order.payment_method)}
+                              </span>
+                            </div>
+                          </td>
+                        )}
                         <td>
                           <div className="flex flex-col items-start gap-0.5">
                             <Pill
-                              value={order.payment_status}
-                              tone={PAY_TONE[order.payment_status]}
-                            />
-                            <span className="text-[11px] text-[var(--dash-text-3)]">
-                              {methodLabel(order.payment_method)}
-                            </span>
-                          </div>
-                        </td>
-                        <td>
-                          <div className="flex flex-col items-start gap-0.5">
-                            <Pill
-                              value={order.status}
+                              value={
+                                channel === "all" ? nextStep : order.status
+                              }
                               tone={STATUS_TONE[order.status]}
                             />
                             {/* The collection stage, where "processing" alone
                                 doesn't say whether it's packed or gone. */}
-                            {isPickupOrder(order) && order.pickup_status && (
-                              <span className="text-[11px] text-[var(--dash-text-3)]">
-                                {pickupStageLabel(order.pickup_status)}
-                              </span>
-                            )}
+                            {channel === "website" &&
+                              isPickupOrder(order) &&
+                              order.pickup_status && (
+                                <span className="text-[11px] text-[var(--dash-text-3)]">
+                                  {pickupStageLabel(order.pickup_status)}
+                                </span>
+                              )}
                           </div>
                         </td>
                       </tr>

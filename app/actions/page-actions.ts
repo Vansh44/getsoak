@@ -81,13 +81,36 @@ function revalidatePage(slug: string) {
 async function processSections(
   raw: unknown,
   mode: ValidateMode = "publish",
+  retainedRaw: unknown = [],
 ): Promise<{ sections: PageSectionItem[] } | { error: string }> {
   const result = validateSections(raw, { mode });
   if ("error" in result) return result;
 
   const hasCustomCode = result.sections.some((s) => s.type === "custom_code");
   if (hasCustomCode && !(await getStoreSetting("pages.customCode"))) {
-    return { error: "Custom code is disabled for this store." };
+    // A downgrade must not make the rest of a page impossible to save. Keep
+    // previously stored custom-code sections byte-for-byte equivalent after
+    // normalisation, while still rejecting newly-added or edited paid
+    // sections. Merchants may deliberately remove a locked section.
+    const retained = validateSections(retainedRaw, { mode: "draft" });
+    const retainedById = new Map(
+      "sections" in retained
+        ? retained.sections
+            .filter((section) => section.type === "custom_code")
+            .map((section) => [section.id, JSON.stringify(section)] as const)
+        : [],
+    );
+    const changedLockedSection = result.sections.some(
+      (section) =>
+        section.type === "custom_code" &&
+        retainedById.get(section.id) !== JSON.stringify(section),
+    );
+    if (changedLockedSection) {
+      return {
+        error:
+          "Custom code is available on Basic and Pro. Existing custom-code sections can stay or be removed, but cannot be added or changed until you upgrade.",
+      };
+    }
   }
 
   const sections = result.sections.map((s) => {
@@ -340,7 +363,11 @@ export async function savePageDraft(
 
   const pageRows = await withService((db) =>
     db
-      .select({ slug: storePages.slug, updated_at: storePages.updatedAt })
+      .select({
+        slug: storePages.slug,
+        updated_at: storePages.updatedAt,
+        sections: storePages.sections,
+      })
       .from(storePages)
       .where(and(eq(storePages.storeId, storeId), eq(storePages.id, id)))
       .limit(1),
@@ -361,7 +388,7 @@ export async function savePageDraft(
 
   // Draft mode: safety normalisation only — a half-configured section must
   // never make autosave fail (publish re-validates strictly).
-  const processed = await processSections(rawSections, "draft");
+  const processed = await processSections(rawSections, "draft", page.sections);
   if ("error" in processed) return { error: processed.error };
 
   // .returning() gives the trigger-stamped updated_at in the same round trip —
@@ -420,7 +447,11 @@ export async function publishPage(
 
   // Strict re-validation on publish (completeness rules + the custom-code
   // setting may have changed since the last draft save).
-  const processed = await processSections(page.sections, "publish");
+  const processed = await processSections(
+    page.sections,
+    "publish",
+    page.sections,
+  );
   if ("error" in processed) return { error: processed.error };
 
   let saved: { updated_at: string; published_at: string | null };

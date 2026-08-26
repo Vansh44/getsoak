@@ -19,6 +19,10 @@ import { sendEmail } from "@/lib/email/send";
 import { PLATFORM_URL } from "@/lib/site";
 import { getRequestOrigin } from "@/lib/request-url";
 import { randomInt } from "crypto";
+import {
+  assertCanInviteStaff,
+  PlanEntitlementError,
+} from "@/lib/plans/entitlements";
 
 function generateTempPassword(): string {
   const chars =
@@ -110,6 +114,17 @@ export async function inviteUser(formData: FormData) {
     return { error: "A user with this email already exists." };
   }
 
+  // Friendly preflight before creating an external auth identity. The same
+  // check runs again in the profile INSERT transaction to close races between
+  // simultaneous invites.
+  try {
+    await withService((db) => assertCanInviteStaff(db, storeId));
+  } catch (err) {
+    if (err instanceof PlanEntitlementError) return { error: err.message };
+    console.error("inviteUser plan preflight error:", err);
+    return { error: "Could not verify your plan's staff limit." };
+  }
+
   // Create the Identity Platform user.
   let uid: string;
   try {
@@ -137,17 +152,23 @@ export async function inviteUser(formData: FormData) {
     storeId,
   };
   try {
-    await withService((db) =>
-      db
+    await withService(async (db) => {
+      await assertCanInviteStaff(db, storeId);
+      return db
         .insert(admins)
         .values({ id: uid, ...profileFields })
-        .onConflictDoUpdate({ target: admins.id, set: profileFields }),
-    );
+        .onConflictDoUpdate({ target: admins.id, set: profileFields });
+    });
   } catch (err) {
     console.error("inviteUser profile insert error:", err);
     // Cleanup: delete the auth user so no orphan account is left behind.
     await deleteAuthUser(uid);
-    return { error: "Failed to create user profile." };
+    return {
+      error:
+        err instanceof PlanEntitlementError
+          ? err.message
+          : "Failed to create user profile.",
+    };
   }
 
   // ── Location scope ────────────────────────────────────────────────────────

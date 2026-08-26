@@ -9,6 +9,9 @@ vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(),
   getActingStoreId: vi.fn(async () => "a0000000-0000-4000-8000-000000000001"),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  storeAllowsPlanFeature: vi.fn(async () => true),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -27,6 +30,7 @@ import {
   setGroupMembers,
 } from "./user-group-actions";
 import { getManagerIdentity } from "@/app/dashboard/lib/access";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
 
 const STORE = "a0000000-0000-4000-8000-000000000001";
 
@@ -47,6 +51,7 @@ describe("user-group-actions", () => {
       uid: "user-1",
       email: "admin@example.com",
     });
+    vi.mocked(storeAllowsPlanFeature).mockResolvedValue(true);
   });
 
   describe("createUserGroup", () => {
@@ -116,6 +121,13 @@ describe("user-group-actions", () => {
       expect(dbHolder.current.calls.where).toHaveLength(1);
     });
 
+    it("keeps existing groups editable after a downgrade", async () => {
+      vi.mocked(storeAllowsPlanFeature).mockResolvedValue(false);
+      const result = await updateUserGroup("g1", validForm);
+      expect(result.success).toBe(true);
+      expect(storeAllowsPlanFeature).not.toHaveBeenCalled();
+    });
+
     it("returns friendly error on unique-violation", async () => {
       dbHolder.current.db.update = vi.fn(() => {
         throw Object.assign(new Error("dup"), { code: "23505" });
@@ -145,6 +157,13 @@ describe("user-group-actions", () => {
       expect(result.success).toBe(true);
       expect(dbHolder.current.calls.delete).toHaveLength(1);
       expect(dbHolder.current.calls.where).toHaveLength(1);
+    });
+
+    it("allows deleting an existing group after a downgrade", async () => {
+      vi.mocked(storeAllowsPlanFeature).mockResolvedValue(false);
+      const result = await deleteUserGroup("g1");
+      expect(result.success).toBe(true);
+      expect(storeAllowsPlanFeature).not.toHaveBeenCalled();
     });
 
     it("returns the message on a DB error", async () => {
@@ -182,6 +201,16 @@ describe("user-group-actions", () => {
         { groupId: "g1", userId: "c1", addedBy: "user-1", storeId: STORE },
         { groupId: "g1", userId: "c2", addedBy: "user-1", storeId: STORE },
       ]);
+    });
+
+    it("keeps existing memberships editable after a downgrade", async () => {
+      vi.mocked(storeAllowsPlanFeature).mockResolvedValue(false);
+      dbHolder.current = makeDbMock({ selectQueue: [[{ id: "g1" }]] });
+
+      const result = await setGroupMembers("g1", ["c1"]);
+
+      expect(result.success).toBe(true);
+      expect(storeAllowsPlanFeature).not.toHaveBeenCalled();
     });
 
     it("clears only when the selection is empty", async () => {

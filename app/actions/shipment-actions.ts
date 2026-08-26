@@ -112,6 +112,7 @@ async function orderForShipment(storeId: string, orderId: string) {
           orderRef: orders.orderRef,
           createdAt: orders.createdAt,
           status: orders.status,
+          salesChannel: orders.salesChannel,
           fulfilmentType: orders.fulfilmentType,
           locationId: orders.locationId,
           paymentMethod: orders.paymentMethod,
@@ -228,6 +229,9 @@ export async function getOrderLogisticsView(
   const storeId = await getActingStoreId();
   const { order, lines } = await orderForShipment(storeId, orderId);
   if (!order) return { error: "Order not found." };
+  if (order.salesChannel === "pos") {
+    return { error: "POS sales are completed at the register." };
+  }
 
   const fulfilmentId =
     order.fulfilmentType === "delivery"
@@ -320,6 +324,9 @@ export async function bookShiprocketShipment(
     };
     const { order, lines } = await orderForShipment(storeId, orderId);
     if (!order) return { error: "Order not found." };
+    if (order.salesChannel === "pos") {
+      return { error: "POS sales do not require fulfillment." };
+    }
     if (order.fulfilmentType !== "delivery")
       return { error: "Pickup orders are not shipped." };
     if (["cancelled", "delivered"].includes(order.status)) {
@@ -876,7 +883,11 @@ export async function createManualShipment(
     if (!courierName || !awb)
       return { error: "Enter the courier and tracking number." };
     const { order, lines } = await orderForShipment(storeId, orderId);
-    if (!order || order.fulfilmentType !== "delivery")
+    if (
+      !order ||
+      order.salesChannel === "pos" ||
+      order.fulfilmentType !== "delivery"
+    )
       return { error: "Delivery order not found." };
     const physical = lines.filter((line) => line.requiresShipping);
     if (!physical.length) return { error: "This order has no physical items." };

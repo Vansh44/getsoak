@@ -60,13 +60,13 @@ describe("settings registry", () => {
   describe("resolveStoreSettings", () => {
     it("returns defaults for an empty settings object", () => {
       const values = resolveStoreSettings({}, "free");
-      expect(values["blogs.customerSubmissions"]).toBe(true);
+      expect(values["blogs.customerSubmissions"]).toBe(false);
       expect(values["blogs.requireApproval"]).toBe(true);
     });
 
     it("tolerates null settings", () => {
       const values = resolveStoreSettings(null, null);
-      expect(values["blogs.customerSubmissions"]).toBe(true);
+      expect(values["blogs.customerSubmissions"]).toBe(false);
     });
 
     it("applies boolean overrides from settings.features", () => {
@@ -89,7 +89,7 @@ describe("settings registry", () => {
         },
         "free",
       );
-      expect(values["blogs.customerSubmissions"]).toBe(true);
+      expect(values["blogs.customerSubmissions"]).toBe(false);
       expect("made.up" in values).toBe(false);
     });
 
@@ -98,7 +98,24 @@ describe("settings registry", () => {
         { "blogs.customerSubmissions": false },
         "free",
       );
-      expect(values["blogs.customerSubmissions"]).toBe(true);
+      expect(values["blogs.customerSubmissions"]).toBe(false);
+    });
+
+    it("restores paid settings without rewriting their stored values", () => {
+      const settings = {
+        [FEATURES_KEY]: {
+          "blogs.customerSubmissions": true,
+          "pages.customCode": true,
+        },
+      };
+      expect(resolveStoreSettings(settings, "free")).toMatchObject({
+        "blogs.customerSubmissions": false,
+        "pages.customCode": false,
+      });
+      expect(resolveStoreSettings(settings, "basic")).toMatchObject({
+        "blogs.customerSubmissions": true,
+        "pages.customCode": true,
+      });
     });
   });
 });

@@ -72,6 +72,26 @@ export function paymentOptionsFor(input: PaymentOptionsInput): PaymentOptions {
 }
 
 /**
+ * The payment methods in their storefront display order.
+ *
+ * Online leads whenever the store can actually take it; otherwise it is absent
+ * rather than rendered as a dead choice. Keeping the order in the same pure
+ * policy as availability and the default means those three promises cannot
+ * drift apart in the checkout component.
+ */
+export function paymentMethodsFor(
+  input: PaymentOptionsInput,
+): CheckoutPaymentMethod[] {
+  const opts = paymentOptionsFor(input);
+  const methods: CheckoutPaymentMethod[] = [];
+  if (opts.online) methods.push("razorpay");
+  if (opts.offline) {
+    methods.push(input.fulfilment === "pickup" ? "pay_at_store" : "cod");
+  }
+  return methods;
+}
+
+/**
  * Is `method` allowed for this order? The server's question.
  *
  * Note `cod` and `pay_at_store` are the same DECISION expressed differently —
@@ -105,11 +125,7 @@ export function isPaymentMethodAllowed(
 export function defaultPaymentMethod(
   input: PaymentOptionsInput,
 ): CheckoutPaymentMethod | null {
-  const opts = paymentOptionsFor(input);
-  if (opts.online) return "razorpay";
-  if (opts.offline)
-    return input.fulfilment === "pickup" ? "pay_at_store" : "cod";
-  return null;
+  return paymentMethodsFor(input)[0] ?? null;
 }
 
 /**

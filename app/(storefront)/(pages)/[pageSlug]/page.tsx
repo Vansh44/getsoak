@@ -17,6 +17,7 @@ import {
 } from "@/app/(storefront)/components/sections/preview-bridge";
 import { BuilderOverlay } from "@/app/(storefront)/components/sections/builder-overlay";
 import type { PageSectionItem } from "@/lib/sections/registry";
+import { getStoreSetting } from "@/lib/settings/resolve";
 import "@/app/(storefront)/(pages)/shop/shop.css"; // .shop-card styles for product sections
 import "@/app/(storefront)/components/homepage/homepage.css";
 
@@ -93,16 +94,20 @@ async function renderSections(
   storeId: string,
   preview: boolean,
 ) {
+  const allowCustomCode = Boolean(await getStoreSetting("pages.customCode"));
+  const entitledSections = allowCustomCode
+    ? sections
+    : sections.filter((section) => section.type !== "custom_code");
   if (preview) {
     // Builder preview: sections render CLIENT-side (DraftCanvas) so builder
     // edits paint instantly via the `sm-draft` postMessage — ship the full
     // dataset snapshots so local re-resolution never lacks data.
-    const datasets = await fetchSectionDatasets(sections, storeId, {
+    const datasets = await fetchSectionDatasets(entitledSections, storeId, {
       all: true,
     });
     return (
       <main>
-        <DraftCanvas initialSections={sections} datasets={datasets} />
+        <DraftCanvas initialSections={entitledSections} datasets={datasets} />
         <PreviewBridge />
         <PreviewBadge />
         <BuilderOverlay />
@@ -110,12 +115,12 @@ async function renderSections(
     );
   }
   const resolved = await resolveSectionData(
-    sections.filter((s) => s.enabled),
+    entitledSections.filter((s) => s.enabled),
     storeId,
   );
   return (
     <main>
-      <PageSectionRenderer sections={sections} resolved={resolved} />
+      <PageSectionRenderer sections={entitledSections} resolved={resolved} />
     </main>
   );
 }

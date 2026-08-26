@@ -122,7 +122,17 @@
       "file": "sql/20260816_0004_ai_credit_invoice_paid_repair.sql",
       "transaction": true,
       "requires": ["20260816_0003_pos_pickup_prepared_at"],
-      "verify": {
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "paid AI-credit purchases have no collectible invoice",
+            "sql": "select count(*)::text from public.billing_invoices invoice join public.ai_credit_purchases purchase on purchase.invoice_id = invoice.id where purchase.status = 'paid' and invoice.kind = 'ai_credits' and invoice.status in ('draft', 'open', 'processing')",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
         "queries": [
           {
             "name": "paid AI-credit purchases have no collectible invoice",
@@ -188,11 +198,22 @@
           "platform_analytics_settings_id_check",
           "platform_analytics_settings_pkey"
         ],
-        "rlsTables": ["platform_analytics_settings"],
+        "rlsTables": ["platform_analytics_settings"]
+      },
+      "applyVerify": {
         "queries": [
           {
             "name": "the Analytics help overview is published",
             "sql": "select count(*)::text from public.help_articles where slug = 'understand-analytics-dashboard' and status = 'published'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Analytics help overview exists for the current Help Centre",
+            "sql": "select count(*)::text from public.help_articles where slug = 'understand-analytics-dashboard'",
             "equals": "1"
           }
         ]
@@ -204,7 +225,8 @@
       "file": "sql/20260820_0008_analytics_help_documents.sql",
       "transaction": true,
       "requires": ["20260820_0007_platform_analytics_controls"],
-      "verify": {
+      "verify": {},
+      "applyVerify": {
         "queries": [
           {
             "name": "eight shipped Analytics guides are published",
@@ -214,6 +236,20 @@
           {
             "name": "merchant pixel setup guides remain drafts",
             "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'draft'",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "eight shipped Analytics guides exist and remain published",
+            "sql": "select count(*)::text from public.help_articles where slug in ('understand-analytics-dashboard', 'analytics-terms-and-data-sources', 'analytics-sales-and-orders', 'analytics-customers-inventory-and-activity', 'understand-google-search-analytics', 'analytics-reports-and-csv', 'customize-analytics-dashboard', 'analytics-troubleshooting') and status = 'published'",
+            "equals": "8"
+          },
+          {
+            "name": "merchant pixel setup guides exist after their later publication migration",
+            "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel')",
             "equals": "2"
           }
         ]
@@ -242,7 +278,8 @@
       "file": "sql/20260820_0010_merchant_pixels.sql",
       "transaction": true,
       "requires": ["20260820_0009_help_article_indexability"],
-      "verify": {
+      "verify": {},
+      "applyVerify": {
         "queries": [
           {
             "name": "merchant pixel modules are globally available",
@@ -252,6 +289,15 @@
           {
             "name": "merchant pixel setup guides are published",
             "sql": "select count(*)::text from public.help_articles where slug in ('connect-google-analytics-4', 'connect-meta-pixel') and status = 'published'",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "merchant pixel guides contain the shipped consent-aware setup copy",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and body not like '%Upcoming Pro feature:%' and body not like '%After the integration is released:%' and ((slug = 'connect-google-analytics-4' and body like '%Connect your own Google Analytics 4 web stream%' and body like '%<p>To connect the web stream:</p>%') or (slug = 'connect-meta-pixel' and body like '%Connect your own Meta Pixel%' and body like '%<p>To connect the Pixel:</p>%'))",
             "equals": "2"
           }
         ]
@@ -279,11 +325,22 @@
           "storefront_daily",
           "storefront_events",
           "storefront_order_attribution"
-        ],
+        ]
+      },
+      "applyVerify": {
         "queries": [
           {
             "name": "storefront conversion is available and documented",
             "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.storefront_conversion = true and exists (select 1 from public.help_articles a where a.slug = 'understand-storefront-conversion-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "storefront conversion remains documented after operator flag changes",
+            "sql": "select count(*)::text from public.help_articles a where a.slug = 'understand-storefront-conversion-analytics' and a.status = 'published'",
             "equals": "1"
           }
         ]
@@ -305,11 +362,22 @@
           "order_items_unit_cost_nonnegative",
           "product_variants_cost_price_nonnegative",
           "products_cost_price_nonnegative"
-        ],
+        ]
+      },
+      "applyVerify": {
         "queries": [
           {
             "name": "gross margin is available and documented",
             "sql": "select count(*)::text from public.platform_analytics_settings s where s.id = true and s.gross_margin = true and exists (select 1 from public.help_articles a where a.slug = 'understand-gross-margin-analytics' and a.status = 'published')",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "gross margin remains documented after operator flag changes",
+            "sql": "select count(*)::text from public.help_articles a where a.slug = 'understand-gross-margin-analytics' and a.status = 'published'",
             "equals": "1"
           }
         ]
@@ -326,7 +394,25 @@
         "constraints": ["order_payments_shift_id_fkey"],
         "queries": [
           {
+            "name": "payment shift attribution index is present",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'order_payments' and indexname = 'order_payments_shift_captured_idx' and indexdef ~* '\\(shift_id, captured_at\\)'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
             "name": "legacy shifted payments are backfilled",
+            "sql": "select count(*)::text from public.order_payments p join public.orders o on o.id = p.order_id where o.shift_id is not null and p.shift_id is null",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "currently shifted payments have no missing legacy attribution",
             "sql": "select count(*)::text from public.order_payments p join public.orders o on o.id = p.order_id where o.shift_id is not null and p.shift_id is null",
             "equals": "0"
           }
@@ -348,9 +434,530 @@
         "functions": ["legal_acceptances_append_only()"],
         "queries": [
           {
+            "name": "the three repaired store foreign keys are table-bound validated cascades",
+            "sql": "select count(*)::text from pg_constraint c where c.connamespace = 'public'::regnamespace and c.contype = 'f' and c.convalidated and c.confrelid = 'public.stores'::regclass and c.confdeltype = 'c' and pg_get_constraintdef(c.oid, true) = 'FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE' and ((c.conname = 'billing_reconciliation_items_store_id_fkey' and c.conrelid = 'public.billing_reconciliation_items'::regclass) or (c.conname = 'legal_acceptances_store_id_fkey' and c.conrelid = 'public.legal_acceptances'::regclass) or (c.conname = 'platform_announcement_recipients_store_id_fkey' and c.conrelid = 'public.platform_announcement_recipients'::regclass))",
+            "equals": "3"
+          },
+          {
             "name": "every direct store foreign key cascades on deletion",
             "sql": "select count(*)::text from pg_constraint where contype = 'f' and confrelid = 'public.stores'::regclass and confdeltype <> 'c'",
             "equals": "0"
+          },
+          {
+            "name": "legal acceptance cascade deletes preserve direct-delete immutability",
+            "sql": "select count(*)::text from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = 'public.legal_acceptances_append_only()'::regprocedure and p.prorettype = 'pg_catalog.trigger'::regtype and l.lanname = 'plpgsql' and not p.prosecdef and position('TG_OP = ''DELETE''' in p.prosrc) > 0 and position('not exists' in p.prosrc) > 0 and position('from public.stores' in p.prosrc) > 0 and position('id = OLD.store_id' in p.prosrc) > 0 and position('return OLD' in p.prosrc) > 0 and position('legal_acceptances is append-only' in p.prosrc) > 0",
+            "equals": "1"
+          },
+          {
+            "name": "legal acceptance append-only trigger covers row updates and deletes",
+            "sql": "select count(*)::text from pg_trigger t where t.tgrelid = 'public.legal_acceptances'::regclass and t.tgname = 'legal_acceptances_append_only_trigger' and t.tgfoid = 'public.legal_acceptances_append_only()'::regprocedure and not t.tgisinternal and t.tgtype = 27",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260825_0015_pos_help_documents",
+      "description": "Publish a dedicated Point of Sale Help Centre category with complete plain-language operating guides",
+      "file": "sql/20260825_0015_pos_help_documents.sql",
+      "transaction": true,
+      "requires": ["20260823_0014_store_deletion_cascade"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Point of Sale Help category has the intended grid position and icon",
+            "sql": "select count(*)::text from public.help_categories where slug = 'point-of-sale' and title = 'Point of Sale' and position = 4 and icon = 'ScanLine'",
+            "equals": "1"
+          },
+          {
+            "name": "all Point of Sale Help guides are published in their canonical category",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'point-of-sale' and a.status = 'published' and a.slug in ('pos-overview-and-requirements', 'enable-pos-and-set-up-locations', 'set-up-pos-staff-and-pins', 'authorize-and-manage-pos-devices', 'configure-pos-register-settings', 'customize-register-and-scan-products', 'process-an-in-store-sale', 'take-payments-and-split-tenders', 'discounts-price-overrides-and-manager-approval', 'print-email-and-understand-pos-receipts', 'manage-pos-inventory-and-stock-transfers', 'open-close-and-reconcile-cash-shifts', 'prepare-and-hand-over-pickup-orders', 'take-returns-at-the-counter', 'refunds-store-credit-exchanges-and-credit-notes', 'view-pos-sales-shifts-money-and-analytics', 'troubleshoot-pos-and-internet-issues')",
+            "equals": "17"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Point of Sale Help category has the intended grid position and icon",
+            "sql": "select count(*)::text from public.help_categories where slug = 'point-of-sale' and title = 'Point of Sale' and position = 4 and icon = 'ScanLine'",
+            "equals": "1"
+          },
+          {
+            "name": "all Point of Sale Help guides are published in their canonical category",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'point-of-sale' and a.status = 'published' and a.slug in ('pos-overview-and-requirements', 'enable-pos-and-set-up-locations', 'set-up-pos-staff-and-pins', 'authorize-and-manage-pos-devices', 'configure-pos-register-settings', 'customize-register-and-scan-products', 'process-an-in-store-sale', 'take-payments-and-split-tenders', 'discounts-price-overrides-and-manager-approval', 'print-email-and-understand-pos-receipts', 'manage-pos-inventory-and-stock-transfers', 'open-close-and-reconcile-cash-shifts', 'prepare-and-hand-over-pickup-orders', 'take-returns-at-the-counter', 'refunds-store-credit-exchanges-and-credit-notes', 'view-pos-sales-shifts-money-and-analytics', 'troubleshoot-pos-and-internet-issues')",
+            "equals": "17"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260825_0016_help_assistant_guide",
+      "description": "Publish the plain-language guide for the grounded public Mink AI Help Assistant",
+      "file": "sql/20260825_0016_help_assistant_guide.sql",
+      "transaction": true,
+      "requires": ["20260825_0015_pos_help_documents"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink AI Help Assistant guide is published at its canonical category URL",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and a.status = 'published' and c.slug = 'getting-started'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink AI Help Assistant guide is published at its canonical category URL",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and a.status = 'published' and c.slug = 'getting-started'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260825_0017_help_article_embeddings",
+      "description": "Install pgvector, add published-parent-scoped Help article chunks for 768-dimensional semantic retrieval, and document Mink AI hybrid search",
+      "file": "sql/20260825_0017_help_article_embeddings.sql",
+      "transaction": true,
+      "requires": ["20260825_0016_help_assistant_guide"],
+      "verify": {
+        "tables": ["help_article_chunks"],
+        "columns": [
+          "help_article_chunks.article_id",
+          "help_article_chunks.chunk_index",
+          "help_article_chunks.heading",
+          "help_article_chunks.heading_anchor",
+          "help_article_chunks.heading_level",
+          "help_article_chunks.content",
+          "help_article_chunks.token_count",
+          "help_article_chunks.content_hash",
+          "help_article_chunks.source_updated_at",
+          "help_article_chunks.embedding",
+          "help_article_chunks.embedding_model",
+          "help_article_chunks.embedded_at"
+        ],
+        "constraints": [
+          "help_article_chunks_pkey",
+          "help_article_chunks_article_id_fkey",
+          "help_article_chunks_chunk_index_check",
+          "help_article_chunks_heading_check",
+          "help_article_chunks_content_check",
+          "help_article_chunks_token_count_check",
+          "help_article_chunks_content_hash_check",
+          "help_article_chunks_embedding_model_check",
+          "help_article_chunks_embedding_freshness_check"
+        ],
+        "rlsTables": ["help_article_chunks"],
+        "queries": [
+          {
+            "name": "pgvector is installed in the public schema",
+            "sql": "select count(*)::text from pg_extension extension join pg_namespace namespace on namespace.oid = extension.extnamespace where extension.extname = 'vector' and namespace.nspname = 'public'",
+            "equals": "1"
+          },
+          {
+            "name": "Help article embeddings use the configured 768 dimensions",
+            "sql": "select count(*)::text from pg_attribute attribute join pg_class relation on relation.oid = attribute.attrelid join pg_namespace namespace on namespace.oid = relation.relnamespace where namespace.nspname = 'public' and relation.relname = 'help_article_chunks' and attribute.attname = 'embedding' and not attribute.attisdropped and format_type(attribute.atttypid, attribute.atttypmod) = 'vector(768)'",
+            "equals": "1"
+          },
+          {
+            "name": "Help article chunks cascade with their source article",
+            "sql": "select count(*)::text from pg_constraint where connamespace = 'public'::regnamespace and conname = 'help_article_chunks_article_id_fkey' and conrelid = 'public.help_article_chunks'::regclass and confrelid = 'public.help_articles'::regclass and convalidated and confdeltype = 'c' and pg_get_constraintdef(oid, true) = 'FOREIGN KEY (article_id) REFERENCES help_articles(id) ON DELETE CASCADE'",
+            "equals": "1"
+          },
+          {
+            "name": "Help article chunks have only the exact public-read and operator-write policies",
+            "sql": "select count(*)::text from pg_policies where schemaname = 'public' and tablename = 'help_article_chunks' and ((policyname = 'Read help_article_chunks' and permissive = 'PERMISSIVE' and roles::text = '{public}' and cmd = 'SELECT' and md5(coalesce(qual, '<null>')) = 'fa57629718c1cd7b469b31e3bd284da5' and md5(coalesce(with_check, '<null>')) = '7df1074bd6f415369eb335bff3ad1781') or (policyname = 'Write help_article_chunks' and permissive = 'PERMISSIVE' and roles::text = '{public}' and cmd = 'ALL' and md5(coalesce(qual, '<null>')) = 'c6802c131aa9a09356d7059252473096' and md5(coalesce(with_check, '<null>')) = 'c6802c131aa9a09356d7059252473096')) and (select count(*) from pg_policies all_policies where all_policies.schemaname = 'public' and all_policies.tablename = 'help_article_chunks') = 2",
+            "equals": "2"
+          },
+          {
+            "name": "Help article chunks have the exact initial replacement and maintenance indexes",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'help_article_chunks' and ((indexname = 'help_article_chunks_article_chunk_key' and indexdef = 'CREATE UNIQUE INDEX help_article_chunks_article_chunk_key ON public.help_article_chunks USING btree (article_id, chunk_index)') or (indexname = 'help_article_chunks_content_hash_idx' and indexdef = 'CREATE INDEX help_article_chunks_content_hash_idx ON public.help_article_chunks USING btree (content_hash)') or (indexname = 'help_article_chunks_model_embedded_idx' and indexdef = 'CREATE INDEX help_article_chunks_model_embedded_idx ON public.help_article_chunks USING btree (embedding_model, embedded_at)'))",
+            "equals": "3"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink AI guide explains hybrid published-guide retrieval",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-storemink-help-assistant' and status = 'published' and body like '%<h2>How Mink AI finds the right guide</h2>%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink AI guide explains hybrid published-guide retrieval",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-storemink-help-assistant' and status = 'published' and body like '%<h2>How Mink AI finds the right guide</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0018_help_embedding_hardening",
+      "description": "Make Help embedding refreshes completeness- and parser-version-aware and restrict the Search Console rate-slot function to app_service",
+      "file": "sql/20260826_0018_help_embedding_hardening.sql",
+      "transaction": true,
+      "requires": ["20260825_0017_help_article_embeddings"],
+      "verify": {
+        "columns": [
+          "help_article_chunks.chunk_count",
+          "help_article_chunks.index_version"
+        ],
+        "constraints": [
+          "help_article_chunks_chunk_count_check",
+          "help_article_chunks_index_version_check"
+        ],
+        "queries": [
+          {
+            "name": "the singleton Analytics control row exists with operator-safe state",
+            "sql": "select count(*)::text from public.platform_analytics_settings where id = true",
+            "equals": "1"
+          },
+          {
+            "name": "Help chunk ordinals are bounded by a positive complete count",
+            "sql": "select count(*)::text from pg_constraint where connamespace = 'public'::regnamespace and conrelid = 'public.help_article_chunks'::regclass and conname = 'help_article_chunks_chunk_index_check' and convalidated and pg_get_constraintdef(oid, true) = 'CHECK (chunk_index >= 0 AND chunk_index < chunk_count)'",
+            "equals": "1"
+          },
+          {
+            "name": "Search Console rate-slot execution is restricted to app_service",
+            "sql": "select count(*)::text from pg_proc p join pg_language l on l.oid = p.prolang where p.oid = 'public.claim_store_search_rate_slot(text,integer)'::regprocedure and p.prosecdef and l.lanname = 'plpgsql' and coalesce(array_to_string(p.proconfig, ','), '') = 'search_path=\"\"' and not has_function_privilege('app_user', p.oid, 'EXECUTE') and not has_function_privilege('public', p.oid, 'EXECUTE') and has_function_privilege('app_service', p.oid, 'EXECUTE')",
+            "equals": "1"
+          },
+          {
+            "name": "application roles cannot read or mutate the migration ledger",
+            "sql": "select (not has_table_privilege('app_user', 'public.schema_migrations', 'SELECT') and not has_table_privilege('app_user', 'public.schema_migrations', 'INSERT') and not has_table_privilege('app_user', 'public.schema_migrations', 'UPDATE') and not has_table_privilege('app_user', 'public.schema_migrations', 'DELETE') and not has_table_privilege('app_service', 'public.schema_migrations', 'SELECT') and not has_table_privilege('app_service', 'public.schema_migrations', 'INSERT') and not has_table_privilege('app_service', 'public.schema_migrations', 'UPDATE') and not has_table_privilege('app_service', 'public.schema_migrations', 'DELETE'))::text",
+            "equals": "true"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0019_getting_started_account_help",
+      "description": "Publish complete Getting started and Account, staff and billing Help Centre foundations",
+      "file": "sql/20260826_0019_getting_started_account_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0018_help_embedding_hardening"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "all Getting started and Account foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'getting-started' and a.slug in ('create-your-storemink-store','complete-your-store-setup','understand-your-storemink-dashboard','add-your-first-product-and-check-the-storefront','prepare-your-store-for-the-first-order','troubleshoot-signup-login-and-store-access')) or (c.slug = 'account' and a.slug in ('manage-your-storemink-plan-and-subscription','view-and-pay-storemink-invoices','understand-ai-usage-and-credits','update-your-account-profile-and-security','invite-and-manage-dashboard-staff','create-roles-permissions-and-location-access','manage-store-and-personal-notifications','use-activity-email-sms-and-failure-logs')))",
+            "equals": "14"
+          },
+          {
+            "name": "empty operator test Help articles are removed",
+            "sql": "select count(*)::text from public.help_articles where slug in ('testing','testting')",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "all Getting started and Account foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'getting-started' and a.slug in ('create-your-storemink-store','complete-your-store-setup','understand-your-storemink-dashboard','add-your-first-product-and-check-the-storefront','prepare-your-store-for-the-first-order','troubleshoot-signup-login-and-store-access')) or (c.slug = 'account' and a.slug in ('manage-your-storemink-plan-and-subscription','view-and-pay-storemink-invoices','understand-ai-usage-and-credits','update-your-account-profile-and-security','invite-and-manage-dashboard-staff','create-roles-permissions-and-location-access','manage-store-and-personal-notifications','use-activity-email-sms-and-failure-logs')))",
+            "equals": "14"
+          },
+          {
+            "name": "empty operator test Help articles are removed",
+            "sql": "select count(*)::text from public.help_articles where slug in ('testing','testting')",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0020_storefront_domains_help",
+      "description": "Publish Website Builder, storefront setup, policy, media, newsletter and domain Help guides",
+      "file": "sql/20260826_0020_storefront_domains_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0019_getting_started_account_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "all Storefront and Domains foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'storefront' and a.slug in ('use-the-storemink-website-builder','create-edit-publish-or-delete-a-store-page','edit-your-storefront-homepage','add-and-arrange-storefront-sections','edit-your-header-footer-and-navigation','change-your-storefront-branding-and-layout','create-or-edit-your-brand-voice','understand-builder-autosave-undo-and-editing-conflicts','add-safe-custom-code-to-a-page','upload-and-manage-store-media','publish-store-terms-refund-shipping-and-privacy-policies','add-a-newsletter-sign-up-form')) or (c.slug = 'domains' and a.slug in ('use-your-free-storemink-subdomain','how-to-add-custom-domain','add-custom-domain-dns-records','troubleshoot-custom-domain-verification-and-https','change-or-disconnect-a-custom-domain')))",
+            "equals": "17"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "all Storefront and Domains foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'storefront' and a.slug in ('use-the-storemink-website-builder','create-edit-publish-or-delete-a-store-page','edit-your-storefront-homepage','add-and-arrange-storefront-sections','edit-your-header-footer-and-navigation','change-your-storefront-branding-and-layout','create-or-edit-your-brand-voice','understand-builder-autosave-undo-and-editing-conflicts','add-safe-custom-code-to-a-page','upload-and-manage-store-media','publish-store-terms-refund-shipping-and-privacy-policies','add-a-newsletter-sign-up-form')) or (c.slug = 'domains' and a.slug in ('use-your-free-storemink-subdomain','how-to-add-custom-domain','add-custom-domain-dns-records','troubleshoot-custom-domain-verification-and-https','change-or-disconnect-a-custom-domain')))",
+            "equals": "17"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0021_products_customers_help",
+      "description": "Publish Products, inventory, Customers and enquiries Help Centre foundations",
+      "file": "sql/20260826_0021_products_customers_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0020_storefront_domains_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Customers Help category uses the public icon catalogue",
+            "sql": "select count(*)::text from public.help_categories where slug = 'customers' and icon = 'Users'",
+            "equals": "1"
+          },
+          {
+            "name": "all Products and Customers foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'products' and a.slug in ('add-or-edit-a-product','add-product-images-and-variants','set-product-pricing-tax-and-shipping-details','publish-feature-and-improve-a-product-for-search','organize-products-with-categories-and-card-colours','understand-storemink-skus-and-barcodes','track-inventory-and-allow-backorders','adjust-stock-at-a-location','set-low-stock-defaults-and-read-stock-history','bulk-update-products-and-stock','import-and-export-products-categories-inventory-orders-and-coupons')) or (c.slug = 'customers' and a.slug in ('manage-customer-profiles-and-activity','understand-customer-order-and-content-history','create-and-manage-customer-groups','manage-storefront-enquiries','understand-customer-accounts-and-saved-addresses','customer-data-permissions-location-scope-and-privacy','protect-customer-data-and-understand-deletion-risk')))",
+            "equals": "18"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Customers Help category uses the public icon catalogue",
+            "sql": "select count(*)::text from public.help_categories where slug = 'customers' and icon = 'Users'",
+            "equals": "1"
+          },
+          {
+            "name": "all Products and Customers foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and ((c.slug = 'products' and a.slug in ('add-or-edit-a-product','add-product-images-and-variants','set-product-pricing-tax-and-shipping-details','publish-feature-and-improve-a-product-for-search','organize-products-with-categories-and-card-colours','understand-storemink-skus-and-barcodes','track-inventory-and-allow-backorders','adjust-stock-at-a-location','set-low-stock-defaults-and-read-stock-history','bulk-update-products-and-stock','import-and-export-products-categories-inventory-orders-and-coupons')) or (c.slug = 'customers' and a.slug in ('manage-customer-profiles-and-activity','understand-customer-order-and-content-history','create-and-manage-customer-groups','manage-storefront-enquiries','understand-customer-accounts-and-saved-addresses','customer-data-permissions-location-scope-and-privacy','protect-customer-data-and-understand-deletion-risk')))",
+            "equals": "18"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0022_payments_tax_help",
+      "description": "Publish Payments, Razorpay, COD, GST, invoice, refund and store-credit Help guides",
+      "file": "sql/20260826_0022_payments_tax_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0021_products_customers_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "all Payments foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'payments' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('connect-razorpay-and-accept-online-payments','choose-online-cod-and-pay-at-store-options','understand-pending-and-failed-online-payments','set-up-gst-and-tax-classes','create-and-share-customer-invoices','issue-full-and-partial-refunds-safely','use-and-understand-store-credit','troubleshoot-payments-tax-and-refunds')",
+            "equals": "8"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "all Payments foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'payments' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('connect-razorpay-and-accept-online-payments','choose-online-cod-and-pay-at-store-options','understand-pending-and-failed-online-payments','set-up-gst-and-tax-classes','create-and-share-customer-invoices','issue-full-and-partial-refunds-safely','use-and-understand-store-credit','troubleshoot-payments-tax-and-refunds')",
+            "equals": "8"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0023_orders_shipping_help",
+      "description": "Publish Orders, locations, fulfilment, pickup and shipping Help guides and repair stale POS and Analytics copy",
+      "file": "sql/20260826_0023_orders_shipping_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0022_payments_tax_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "all Orders and shipping foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'orders' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('manage-website-and-pos-orders','set-your-order-cancellation-policy','review-and-resolve-cancellation-requests','set-up-locations-and-capabilities','choose-online-fulfilment-priority','offer-and-manage-store-pickup','set-shipping-charges-and-delivery-estimates','connect-shiprocket-and-sync-warehouses','pack-book-and-manage-a-shipment','track-deliveries-and-handle-ndr-or-rto','refund-orders-and-understand-credit-notes','troubleshoot-orders-fulfilment-and-shipping')",
+            "equals": "12"
+          },
+          {
+            "name": "stale POS and Analytics Help statements are repaired",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'enable-pos-and-set-up-locations' and body like '%<strong>Receive stock</strong> allows inbound receiving at the location.%' and body like '%top-level dashboard navigation%') or (slug = 'authorize-and-manage-pos-devices' and body like '%five authorised devices per location%') or (slug = 'process-an-in-store-sale' and body like '%20 held sales%') or (slug = 'understand-analytics-dashboard' and body like '%Their setup guides are available to eligible merchants, and storefront tracking starts only after the visitor allows the matching consent category.%') or (slug = 'take-returns-at-the-counter' and body like '%the Returns settings group that controls the store-wide policy is not currently rendered in the merchant dashboard.%' and body like '%The POS return flow does not offer store credit as a refund destination.%' and body not like '%Turn on <strong>Accept returns</strong>, enable <strong>Accept online returns in your shops</strong>%') or (slug = 'refunds-store-credit-exchanges-and-credit-notes' and body like '%The Returns settings group that controls those store-wide options is not currently rendered in the merchant dashboard%' and body like '%The POS return flow does not offer store credit as a refund destination.%' and body like '%This is reinstatement of the original tender, not a new store-credit refund destination.%' and body not like '%cancelled or correctly refunded%'))",
+            "equals": "6"
+          },
+          {
+            "name": "every Shiprocket-dependent guide carries its controlled-live warning",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug in ('set-shipping-charges-and-delivery-estimates','connect-shiprocket-and-sync-warehouses','pack-book-and-manage-a-shipment','track-deliveries-and-handle-ndr-or-rto','troubleshoot-orders-fulfilment-and-shipping') and body like '%<strong>Controlled live verification required:</strong>%'",
+            "equals": "5"
+          },
+          {
+            "name": "order guides separate spent-credit cleanup from a new refund destination",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-your-order-cancellation-policy' and body like '%This is cancellation cleanup, not choosing store credit as a new refund destination.%') or (slug = 'refund-orders-and-understand-credit-notes' and body like '%A normal refund does not silently convert to or add store credit.%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "all Orders and shipping foundation guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'orders' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('manage-website-and-pos-orders','set-your-order-cancellation-policy','review-and-resolve-cancellation-requests','set-up-locations-and-capabilities','choose-online-fulfilment-priority','offer-and-manage-store-pickup','set-shipping-charges-and-delivery-estimates','connect-shiprocket-and-sync-warehouses','pack-book-and-manage-a-shipment','track-deliveries-and-handle-ndr-or-rto','refund-orders-and-understand-credit-notes','troubleshoot-orders-fulfilment-and-shipping')",
+            "equals": "12"
+          },
+          {
+            "name": "stale POS and Analytics Help statements are repaired",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'enable-pos-and-set-up-locations' and body like '%<strong>Receive stock</strong> allows inbound receiving at the location.%' and body like '%top-level dashboard navigation%') or (slug = 'authorize-and-manage-pos-devices' and body like '%five authorised devices per location%') or (slug = 'process-an-in-store-sale' and body like '%20 held sales%') or (slug = 'understand-analytics-dashboard' and body like '%Their setup guides are available to eligible merchants, and storefront tracking starts only after the visitor allows the matching consent category.%') or (slug = 'take-returns-at-the-counter' and body like '%the Returns settings group that controls the store-wide policy is not currently rendered in the merchant dashboard.%' and body like '%The POS return flow does not offer store credit as a refund destination.%' and body not like '%Turn on <strong>Accept returns</strong>, enable <strong>Accept online returns in your shops</strong>%') or (slug = 'refunds-store-credit-exchanges-and-credit-notes' and body like '%The Returns settings group that controls those store-wide options is not currently rendered in the merchant dashboard%' and body like '%The POS return flow does not offer store credit as a refund destination.%' and body like '%This is reinstatement of the original tender, not a new store-credit refund destination.%' and body not like '%cancelled or correctly refunded%'))",
+            "equals": "6"
+          },
+          {
+            "name": "every Shiprocket-dependent guide carries its controlled-live warning",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug in ('set-shipping-charges-and-delivery-estimates','connect-shiprocket-and-sync-warehouses','pack-book-and-manage-a-shipment','track-deliveries-and-handle-ndr-or-rto','troubleshoot-orders-fulfilment-and-shipping') and body like '%<strong>Controlled live verification required:</strong>%'",
+            "equals": "5"
+          },
+          {
+            "name": "order guides separate spent-credit cleanup from a new refund destination",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-your-order-cancellation-policy' and body like '%This is cancellation cleanup, not choosing store credit as a new refund destination.%') or (slug = 'refund-orders-and-understand-credit-notes' and body like '%A normal refund does not silently convert to or add store credit.%'))",
+            "equals": "2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0024_marketing_communications_help",
+      "description": "Publish Marketing, blogs and communication guides and establish the canonical Help category baseline",
+      "file": "sql/20260826_0024_marketing_communications_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0023_orders_shipping_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the 11 canonical Help categories have baseline positions and supported icons",
+            "sql": "select count(*)::text from public.help_categories where (slug,title,icon,position) in (('getting-started','Getting started','Rocket',1),('storefront','Setting up your store','LayoutTemplate',2),('products','Products & inventory','Package',3),('customers','Customers & enquiries','Users',4),('point-of-sale','Point of Sale','ScanLine',5),('payments','Payments, GST & COD','IndianRupee',6),('domains','Domains','Globe',7),('orders','Orders, locations & shipping','Truck',8),('marketing','Marketing, blogs & communication','Megaphone',9),('account','Account, staff & billing','CreditCard',10),('analytics','Analytics & reports','ChartNoAxesCombined',11))",
+            "equals": "11"
+          },
+          {
+            "name": "all Marketing, blogs and communication guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'marketing' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('create-and-manage-coupons','set-coupon-rules-validity-and-usage-limits','show-and-target-coupons','send-a-coupon-email-campaign','create-publish-and-feature-blog-posts','manage-blog-categories-and-tags','allow-and-review-customer-blog-submissions','understand-blog-comments-reactions-and-product-reviews','connect-and-manage-twilio-sms','set-up-dlt-approved-sms-templates','read-sms-send-attempt-logs','troubleshoot-coupons-blogs-email-and-sms')",
+            "equals": "12"
+          },
+          {
+            "name": "the misleading draft SMS delivery-log slug is absent",
+            "sql": "select count(*)::text from public.help_articles where slug = 'read-sms-delivery-logs'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the 11 canonical Help categories have baseline positions and supported icons",
+            "sql": "select count(*)::text from public.help_categories where (slug,title,icon,position) in (('getting-started','Getting started','Rocket',1),('storefront','Setting up your store','LayoutTemplate',2),('products','Products & inventory','Package',3),('customers','Customers & enquiries','Users',4),('point-of-sale','Point of Sale','ScanLine',5),('payments','Payments, GST & COD','IndianRupee',6),('domains','Domains','Globe',7),('orders','Orders, locations & shipping','Truck',8),('marketing','Marketing, blogs & communication','Megaphone',9),('account','Account, staff & billing','CreditCard',10),('analytics','Analytics & reports','ChartNoAxesCombined',11))",
+            "equals": "11"
+          },
+          {
+            "name": "all Marketing, blogs and communication guides are complete and published",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where c.slug = 'marketing' and a.status = 'published' and length(trim(a.title)) > 0 and length(trim(a.excerpt)) > 0 and a.body like '%<h2>%' and length(trim(a.seo_title)) > 0 and length(trim(a.seo_description)) > 0 and a.slug in ('create-and-manage-coupons','set-coupon-rules-validity-and-usage-limits','show-and-target-coupons','send-a-coupon-email-campaign','create-publish-and-feature-blog-posts','manage-blog-categories-and-tags','allow-and-review-customer-blog-submissions','understand-blog-comments-reactions-and-product-reviews','connect-and-manage-twilio-sms','set-up-dlt-approved-sms-templates','read-sms-send-attempt-logs','troubleshoot-coupons-blogs-email-and-sms')",
+            "equals": "12"
+          },
+          {
+            "name": "the misleading draft SMS delivery-log slug is absent",
+            "sql": "select count(*)::text from public.help_articles where slug = 'read-sms-delivery-logs'",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0025_mink_ai_fullscreen_help",
+      "description": "Document Mink AI answer-start positioning, full-screen controls, and non-clickable clarification guidance",
+      "file": "sql/20260826_0025_mink_ai_fullscreen_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0024_marketing_communications_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "published Mink AI guide explains answer positioning, full-screen controls, and clarification guidance",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and c.slug = 'getting-started' and a.status = 'published' and a.body like '%<strong>Maximize</strong> in the Mink AI header%' and a.body like '%<strong>Restore drawer</strong>%' and a.body like '%at the beginning of the new answer%' and a.body like '%non-clickable examples of details you can add%' and a.body like '%never submitted as your message%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "published Mink AI guide explains answer positioning, full-screen controls, and clarification guidance",
+            "sql": "select count(*)::text from public.help_articles a join public.help_categories c on c.id = a.category_id where a.slug = 'use-storemink-help-assistant' and c.slug = 'getting-started' and a.status = 'published' and a.body like '%<strong>Maximize</strong> in the Mink AI header%' and a.body like '%<strong>Restore drawer</strong>%' and a.body like '%at the beginning of the new answer%' and a.body like '%non-clickable examples of details you can add%' and a.body like '%never submitted as your message%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260826_0026_plan_entitlements_help",
+      "description": "Publish the complete plan matrix and soft-downgrade no-data-loss contract across Help Centre guides",
+      "file": "sql/20260826_0026_plan_entitlements_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0025_mink_ai_fullscreen_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "equals": "1"
+          },
+          {
+            "name": "feature guides contain current plan availability",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-or-edit-a-product' and body like '%<strong>Free:</strong> up to 5 products.%' and body like '%CSV imports%') or (slug = 'allow-and-review-customer-blog-submissions' and body like '%available on Basic and Pro%') or (slug = 'add-safe-custom-code-to-a-page' and body like '%available on Basic and Pro%') or (slug = 'create-and-manage-customer-groups' and body like '%available on Basic and Pro%') or (slug = 'connect-shiprocket-and-sync-warehouses' and body like '%available on Basic and Pro%') or (slug = 'understand-analytics-dashboard' and body like '%Dashboard customization, detailed reports, CSV exports, and Search Console analytics require Basic or Pro%') or (slug = 'understand-ai-usage-and-credits' and body like '%Top-ups are available on Free, Basic, and Pro.%'))",
+            "equals": "7"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "equals": "1"
+          },
+          {
+            "name": "feature guides contain current plan availability",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-or-edit-a-product' and body like '%<strong>Free:</strong> up to 5 products.%' and body like '%CSV imports%') or (slug = 'allow-and-review-customer-blog-submissions' and body like '%available on Basic and Pro%') or (slug = 'add-safe-custom-code-to-a-page' and body like '%available on Basic and Pro%') or (slug = 'create-and-manage-customer-groups' and body like '%available on Basic and Pro%') or (slug = 'connect-shiprocket-and-sync-warehouses' and body like '%available on Basic and Pro%') or (slug = 'understand-analytics-dashboard' and body like '%Dashboard customization, detailed reports, CSV exports, and Search Console analytics require Basic or Pro%') or (slug = 'understand-ai-usage-and-credits' and body like '%Top-ups are available on Free, Basic, and Pro.%'))",
+            "equals": "7"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260827_0027_plan_review_followups_help",
+      "description": "Clarify downgrade-safe cleanup, custom-code editing, and shopper-safe shipping fallback in Help Centre guides",
+      "file": "sql/20260827_0027_plan_review_followups_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0026_plan_entitlements_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "plan guide explains editable retained data and shopper-safe shipping fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%Existing customer groups and memberships remain editable below Basic%' and body like '%shoppers receive the retained manual or free shipping option%'",
+            "equals": "1"
+          },
+          {
+            "name": "custom-code and role guides explain downgrade-safe cleanup",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-safe-custom-code-to-a-page' and body like '%other page sections remain editable%') or (slug = 'create-roles-permissions-and-location-access' and body like '%unused custom role can still be deleted%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "plan guide explains editable retained data and shopper-safe shipping fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%Existing customer groups and memberships remain editable below Basic%' and body like '%shoppers receive the retained manual or free shipping option%'",
+            "equals": "1"
+          },
+          {
+            "name": "custom-code and role guides explain downgrade-safe cleanup",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'add-safe-custom-code-to-a-page' and body like '%other page sections remain editable%') or (slug = 'create-roles-permissions-and-location-access' and body like '%unused custom role can still be deleted%'))",
+            "equals": "2"
           }
         ]
       }

@@ -21,6 +21,9 @@ vi.mock("@/lib/ai/brand-voice", () => ({
 vi.mock("@/lib/ai/quota", () => ({
   consumeAiQuota: vi.fn(async () => ({ allowed: true })),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  storeAllowsPlanFeature: vi.fn(async () => true),
+}));
 vi.mock("@/lib/email/coupon-campaign", () => ({
   mergeTokens: vi.fn((t: string) => t),
   renderCouponEmail: vi.fn(() => "<html>"),
@@ -76,6 +79,7 @@ import {
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
 import { callGemini } from "@/lib/ai/gemini";
 import { consumeAiQuota } from "@/lib/ai/quota";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
 import { mergeTokens, renderCouponEmail } from "@/lib/email/coupon-campaign";
 
 const genInput = {
@@ -273,6 +277,13 @@ describe("renderCouponEmailPreview", () => {
 // sendCouponEmail — resolve audience (select), then ENQUEUE a campaign (insert
 // + returning) and recipient rows (chunked insert).
 describe("sendCouponEmail (enqueue)", () => {
+  it("blocks campaigns below Pro before creating any records", async () => {
+    vi.mocked(storeAllowsPlanFeature).mockResolvedValueOnce(false);
+    const result = await sendCouponEmail(sendInput);
+    expect(result.error).toMatch(/available on Pro/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
   beforeEach(() => {
     vi.stubEnv("RESEND_API_KEY", "re_realkey");
   });

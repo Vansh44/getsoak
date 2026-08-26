@@ -148,19 +148,149 @@ timezone and location options together. This does not remove the Mumbai network
 floor, but it stops paying several independent windows in sequence on every
 page render.
 
+### ★★ Re-measured 2026-08-24 — the machine was out of headroom before dev started
+
+Same M2 / 8 GB, after **84 days of uptime**, with the dev server **not running**:
+
+| Measurement              | Value                             |
+| ------------------------ | --------------------------------- |
+| Free RAM                 | **65 MB**                         |
+| Wired                    | 2.05 GB                           |
+| Compressor               | 3.22 GB                           |
+| **Swap used**            | **8.19 GB of 9.22 GB (89% full)** |
+| Total RSS, 556 processes | 4.08 GB                           |
+| Free disk (Data volume)  | 18 GB of 228 GB (**91% full**)    |
+
+So ~6.1 GB of the 8 GB was already committed **with nothing being developed**.
+The remaining ~2 GB is the entire budget a dev server has to fit in.
+
+Then `npm run dev` was started and eight routes were requested:
+
+| Point                             | Next.js RSS |
+| --------------------------------- | ----------- |
+| Freshly booted (`Ready in 337ms`) | **0.09 GB** |
+| after `/`                         | 0.44 GB     |
+| after `/dashboard`                | 1.12 GB     |
+| after `/dashboard/analytics`      | **1.77 GB** |
+
+**macOS grew the swap file by 2 GB during that** (9.22 GB → 11.26 GB total,
+8.19 GB → 10.64 GB used; free RAM 57 MB). Three of those eight routes returned
+404 and so never fully compiled — a real session touching the builder, POS and
+products climbs well past this.
+
+**That swap growth is the slowdown.** The dev server itself is not slow; every
+page it forces out of RAM has to be read back from the SSD when you next click
+Chrome, VS Code or Slack. That is the beachball, and it is why the machine feels
+bad _everywhere_ rather than just in the terminal.
+
+Two consequences worth internalising:
+
+- **Killing the dev server does not give the memory back.** Swap used stayed at
+  10.6 GB immediately after the process exited — macOS never shrinks swap files.
+  It only truly resets on **reboot**, which is what 84 days of uptime costs.
+- **The heap cap was never the thing bounding it.** `--max-old-space-size=2048`
+  was in force the whole way to 1.77 GB. Turbopack is Rust, so its module graph,
+  compiled output and source maps are native allocations _outside_ V8's old
+  space, as is every Node buffer. The cap is worth keeping — it stops V8 itself
+  ballooning — but it cannot keep the machine responsive. Restarting the dev
+  server is what actually reclaims memory.
+
+### Disk is not a separate problem from memory
+
+`.next` had grown to **4.7 GB**, of which **1.5 GB was `.next/cache/webpack`,
+last written ten days earlier**. Turbopack dev never reads that directory — it
+is `next build`'s cache — so it was pure dead weight on a volume that was 91%
+full and on which macOS was simultaneously trying to grow a swap file. The
+runner now reclaims it on every start once it passes 256 MB, which costs nothing
+in dev (the next `next build` rebuilds it).
+
+Note also that `.next/dev` sat at **2.96 GB against the runner's 3 GB rotation
+threshold** — so that guard had never once fired in the life of the machine.
+That is correct behaviour (the Turbopack cache is what keeps recompiles at
+13 ms) but worth knowing before assuming the cache is being managed for you.
+
+### Spotlight — checked, and it is NOT currently a cost
+
+Worth writing down because it is the obvious suspect (`.next` is 11,541 files
+that Turbopack rewrites continuously; `node_modules` is another 75,852) and the
+measurement says no.
+
+`mdutil -s` reports indexing enabled on both volumes, but nothing new is being
+ingested:
+
+- A brand-new file written into `~/Documents` — a directory with existing index
+  entries — was **still unindexed after 70 s**. That was the control, so the
+  result is not about this project.
+- `mds` and every `mdworker_shared` sat at **0.0% CPU** throughout.
+- `mdfind -onlyin "$HOME" -name package.json` returns **0**, while
+  `mdfind -onlyin /Applications -name Safari` returns 1 — so `mdfind` works and
+  the index holds old content, but has stopped taking new writes.
+
+⚠ **Do not over-read that into "Desktop is in the Spotlight Privacy list."** An
+equally good explanation is an index that stalled at some point: everything
+older than the stall is present, everything newer is absent, whatever the
+directory. Telling those apart needs `sudo` on
+`/System/Volumes/Data/.Spotlight-V100/VolumeConfiguration.plist`.
+
+**So Spotlight explains none of the slowdown today**, and any fix aimed at it
+would be measuring itself against zero.
+
+The runner writes `.metadata_never_index` into `.next`, `node_modules` and
+`coverage` anyway, for one specific reason: **the recommended fix above is a
+reboot**, and a reboot is exactly what would restart normal indexing — at which
+point those directories become the largest write-churn source on the volume. It
+is insurance placed before the cost arrives, not a fix for a measured problem.
+
+Two implementation notes:
+
+- It is rewritten on **every** start, not once. All three directories are
+  gitignored (so the marker can never be committed) and all three are wiped —
+  `.next` by `dev:reset` and by the 3 GB cache rotation, `node_modules` by
+  `npm ci`. A one-time marker disappears silently.
+- `.metadata_never_index` is a long-standing Spotlight convention rather than a
+  formally documented API, and **it could not be verified on this machine
+  because indexing is stalled**. It is inert if it does nothing. The
+  authoritative alternative is System Settings → Spotlight → Privacy, which
+  requires a human.
+
+### What is _not_ worth tuning
+
+Measured, so it does not get re-litigated:
+
+- Boot is **337 ms**. Not a problem.
+- The runner's recursive `.next/dev` size walk over 11,515 files: **42 ms**.
+  Not worth replacing with `du`.
+- Turbopack compile times are unchanged from §1.
+- Spotlight (see above) — currently ingesting nothing, 0.0% CPU.
+
 ---
 
 ## 4. If you have ten minutes and dev feels slow
 
-1. `npm run dev:reset` and restart the dev server. Reclaims the generated dev
-   cache without deleting production build output.
-2. Quit Electron apps you are not using (Claude, ChatGPT, Codex desktop apps
-   were ~1.9 GB combined here).
-3. `killall NotificationCenter` — a known macOS leak; it was holding 1.1 GB.
-   It restarts itself immediately and nothing is lost.
-4. Use normal `npm run dev:all`; it now selects the 2 GB heap automatically on
-   this 8 GB machine.
+**Check swap first** — `sysctl vm.swapusage`. The runner now prints a warning
+at startup when it is ≥60% full, because that single number decides whether any
+of the rest of this list will help.
+
+1. **Reboot, if uptime is measured in weeks.** This is first for a reason and it
+   is the one step that cannot be substituted: macOS never shrinks swap, so a
+   machine carrying 10 GB of it stays slow no matter what you close. `uptime`.
+2. Quit Electron apps you are not using. Measured 2026-08-24: VS Code 0.77 GB,
+   Claude 0.68 GB, Chrome 0.43 GB, ChatGPT/Codex 0.34 GB — **2.2 GB**, which is
+   more than the entire headroom the dev server has to fit into.
+3. **Free disk.** 18 GB of 228 GB was left, and swap grew 2 GB during a single
+   short dev session. Swap competes for the same volume as `.next`,
+   `node_modules` and Xcode/simulator data.
+4. `npm run dev:reset` and restart the dev server. Reclaims the generated dev
+   cache without deleting production build output. Restarting alone is worth it
+   — RSS only ever grows within a session.
 5. Turn off any VPN while developing — it taxes all 46 ms of every query.
+6. `killall NotificationCenter` — a known macOS leak; it was holding 1.1 GB.
+   It restarts itself immediately and nothing is lost.
+
+**The structural point:** an 8 GB machine running a browser, an Electron editor
+and two Electron AI apps does not have room for this dev server, and no flag in
+`scripts/dev-server.mjs` can create room that isn't there. The tuning above buys
+headroom at the margin; steps 1–3 are the ones that decide the outcome.
 
 If it is still slow after that, it is **§2**, and the answer is a local
 Postgres rather than anything you can tune.

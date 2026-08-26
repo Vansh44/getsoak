@@ -5,6 +5,7 @@ import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import { UsersManagementView } from "./users-management-view";
 import { getStoreLocations } from "@/lib/pos/locations";
 import { listAdminLocations } from "@/app/actions/location-actions";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 
 export interface RoleOption {
   slug: string;
@@ -27,6 +28,7 @@ export default async function UsersPage() {
   const access = await requireSectionAccess("admins", "view");
   const canManage = access.can("admins", "manage");
   const storeId = await getActingStoreId();
+  const planContext = await getStorePlanContext(storeId);
 
   // The admins (staff) table is RLS-scoped to own-row reads, so cross-row
   // listing goes through the service scope with an explicit store filter —
@@ -104,6 +106,12 @@ export default async function UsersPage() {
       canManage={canManage}
       locations={locations.map((l) => ({ id: l.id, name: l.name }))}
       bindings={bindings}
+      canInvite={
+        canManage &&
+        (planContext.limits.maxStaff === null ||
+          profiles.length < planContext.limits.maxStaff)
+      }
+      staffLimit={planContext.limits.maxStaff}
     />
   );
 }

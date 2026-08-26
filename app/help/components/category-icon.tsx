@@ -8,13 +8,15 @@ import {
   Megaphone,
   CreditCard,
   ChartNoAxesCombined,
+  ScanLine,
+  Users,
   BookOpen,
   type LucideIcon,
 } from "lucide-react";
 
 // Fixed catalog so a stored icon name resolves to a real component (no dynamic
-// import). Unknown names fall back to a book. Keep in sync with the seed in
-// supabase/help_centre.sql + the icon picker in the console category form.
+// import). Unknown names fall back to a book. Keep in sync with the category
+// seeds/migrations + the icon picker in the console category form.
 const ICONS: Record<string, LucideIcon> = {
   Rocket,
   LayoutTemplate,
@@ -25,6 +27,8 @@ const ICONS: Record<string, LucideIcon> = {
   Megaphone,
   CreditCard,
   ChartNoAxesCombined,
+  ScanLine,
+  Users,
   BookOpen,
 };
 
