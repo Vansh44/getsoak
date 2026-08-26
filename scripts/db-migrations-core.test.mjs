@@ -196,7 +196,7 @@ describe("database migration controls", () => {
       applyVerify: {
         queries: [
           expect.objectContaining({
-            name: expect.stringContaining("full-screen controls"),
+            name: expect.stringContaining("clarification guidance"),
             equals: "1",
           }),
         ],
@@ -204,7 +204,7 @@ describe("database migration controls", () => {
       adoptVerify: {
         queries: [
           expect.objectContaining({
-            name: expect.stringContaining("full-screen controls"),
+            name: expect.stringContaining("clarification guidance"),
             equals: "1",
           }),
         ],
@@ -213,6 +213,9 @@ describe("database migration controls", () => {
     expect(loaded.migrations[24].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[24].sql).toContain(
       "at the beginning of the new answer",
+    );
+    expect(loaded.migrations[24].sql).toContain(
+      "non-clickable examples of details you can add",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

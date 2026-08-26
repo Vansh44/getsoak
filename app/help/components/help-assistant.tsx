@@ -493,6 +493,19 @@ export function HelpAssistant() {
                             ))}
                           </div>
                         )}
+                        {(message.answer.clarificationPrompts ?? []).length >
+                          0 && (
+                          <div className="hc-assistant-clarifications">
+                            <strong>Include these details in your reply</strong>
+                            <ul>
+                              {(message.answer.clarificationPrompts ?? []).map(
+                                (prompt) => (
+                                  <li key={prompt}>{prompt}</li>
+                                ),
+                              )}
+                            </ul>
+                          </div>
+                        )}
                         {message.answer.followUps.length > 0 && (
                           <div className="hc-assistant-followups">
                             {message.answer.followUps.map((question) => (

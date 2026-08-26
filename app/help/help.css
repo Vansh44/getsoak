@@ -1042,6 +1042,42 @@
 .hc-assistant-sources svg {
   flex: 0 0 auto;
 }
+.hc-assistant-clarifications {
+  margin-top: 12px;
+  border-top: 1px solid var(--hc-line);
+  padding-top: 11px;
+}
+.hc-assistant-clarifications > strong {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--hc-ink-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.hc-assistant-clarifications ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hc-assistant-clarifications li {
+  position: relative;
+  border-radius: 9px;
+  padding: 8px 10px 8px 25px;
+  background: #f7f5ff;
+  color: #4f456e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.hc-assistant-clarifications li::before {
+  position: absolute;
+  top: 7px;
+  left: 10px;
+  color: #7356eb;
+  content: "•";
+}
 .hc-assistant-followups,
 .hc-assistant-starters {
   display: flex;

@@ -2684,7 +2684,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       restored without losing the current thread, while phones use a full-screen
       sheet by default. A submitted question scrolls to its pending state, but a
       completed response is positioned at the beginning of the new answer rather
-      than forcing the reader to its bottom. Its public,
+      than forcing the reader to its bottom. Clarification guidance is separate
+      from genuine suggested follow-up questions: a needs-context response shows
+      non-interactive details to include in a new reply, while the server strips
+      clickable follow-ups from every `needsHuman` result so an assistant prompt
+      can never be submitted as if the user wrote it. Its public,
       stateless server action is isolated in
       `app/actions/help-assistant-actions.ts`: shared validation in
       `lib/help/assistant-input.ts` rejects low-signal keyboard noise before it
@@ -2724,7 +2728,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       (including across Help-page navigation); it is not persisted server-side.
       The drawer includes focus trapping, keyboard/Escape handling, an ARIA
       dialog and live response region, ordered steps, privacy guidance,
-      suggested follow-ups, reset, backdrop close, and reduced-motion support.
+      clickable grounded follow-ups for complete answers, non-clickable reply
+      guidance for incomplete questions, reset, backdrop close, and
+      reduced-motion support.
       Migration `20260825_0016_help_assistant_guide` publishes the plain-language
       guide for using Mink AI. Migration
       `20260825_0017_help_article_embeddings` installs pgvector, adds the
@@ -2736,7 +2742,8 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       SECURITY DEFINER rate-slot function; it also restores a missing singleton
       Analytics control row with safe defaults. Migration
       `20260826_0025_mink_ai_fullscreen_help` keeps the public Mink AI guide
-      aligned with answer-start positioning and maximize/restore. Published
+      aligned with answer-start positioning, maximize/restore, and the
+      distinction between reply guidance and submitted messages. Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,

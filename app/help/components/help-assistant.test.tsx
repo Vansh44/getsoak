@@ -31,6 +31,7 @@ describe("HelpAssistant", () => {
             excerpt: "Complete a counter checkout.",
           },
         ],
+        clarificationPrompts: [],
         followUps: ["How do I split a payment?"],
         needsHuman: false,
       },
@@ -110,6 +111,42 @@ describe("HelpAssistant", () => {
     expect(
       screen.queryByText("Use the Sell screen to complete the checkout."),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders clarification guidance without turning it into a user message", async () => {
+    askHelpAssistant.mockResolvedValueOnce({
+      success: true,
+      data: {
+        answer: "Add more detail so I can find the right published guide.",
+        steps: [],
+        notes: [],
+        sources: [],
+        clarificationPrompts: [
+          "The StoreMink page or menu you are using",
+          "What happened after your last step",
+        ],
+        followUps: [],
+        needsHuman: true,
+      },
+    });
+    render(<HelpAssistant />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Mink AI" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "How do I process a POS sale?" }),
+    );
+
+    expect(
+      await screen.findByText("Include these details in your reply"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The StoreMink page or menu you are using"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "The StoreMink page or menu you are using",
+      }),
+    ).not.toBeInTheDocument();
+    expect(askHelpAssistant).toHaveBeenCalledTimes(1);
   });
 
   it("rejects keyboard noise instead of reusing an earlier topic", async () => {
