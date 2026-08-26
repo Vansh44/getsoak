@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(24);
+    expect(loaded.migrations).toHaveLength(25);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -155,7 +155,7 @@ describe("database migration controls", () => {
       /REVOKE ALL ON FUNCTION public\.claim_store_search_rate_slot\(text, integer\)[\s\S]*FROM app_user/,
     );
     expect(
-      loaded.migrations.slice(18).map((migration) => migration.id),
+      loaded.migrations.slice(18, 24).map((migration) => migration.id),
     ).toEqual([
       "20260826_0019_getting_started_account_help",
       "20260826_0020_storefront_domains_help",
@@ -165,7 +165,7 @@ describe("database migration controls", () => {
       "20260826_0024_marketing_communications_help",
     ]);
     expect(
-      loaded.migrations.slice(18).map((migration) => migration.requires),
+      loaded.migrations.slice(18, 24).map((migration) => migration.requires),
     ).toEqual([
       ["20260826_0018_help_embedding_hardening"],
       ["20260826_0019_getting_started_account_help"],
@@ -174,7 +174,7 @@ describe("database migration controls", () => {
       ["20260826_0022_payments_tax_help"],
       ["20260826_0023_orders_shipping_help"],
     ]);
-    for (const migration of loaded.migrations.slice(18)) {
+    for (const migration of loaded.migrations.slice(18, 24)) {
       expect(migration.transaction).toBe(true);
       expect(migration.verify).toEqual({});
       expect(migration.applyVerify?.queries).toEqual(expect.any(Array));
@@ -188,6 +188,32 @@ describe("database migration controls", () => {
         expect(articleCheck?.sql).toContain("length(trim(a.title)) > 0");
       }
     }
+    expect(loaded.migrations[24]).toMatchObject({
+      id: "20260826_0025_mink_ai_fullscreen_help",
+      transaction: true,
+      requires: ["20260826_0024_marketing_communications_help"],
+      verify: {},
+      applyVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("full-screen controls"),
+            equals: "1",
+          }),
+        ],
+      },
+      adoptVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("full-screen controls"),
+            equals: "1",
+          }),
+        ],
+      },
+    });
+    expect(loaded.migrations[24].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[24].sql).toContain(
+      "at the beginning of the new answer",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

@@ -1273,7 +1273,8 @@ wholesip/
 │                              # merchant Help baseline across Getting started/account, storefront/
 │                              # domains, products/customers, payments/tax, orders/shipping, and
 │                              # marketing/communications, while keeping every article editable in
-│                              # the operator Help console.
+│                              # the operator Help console; 0025 updates the Mink AI guide for
+│                              # answer-start positioning and the full-screen maximize control.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2679,7 +2680,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `components/help-assistant.tsx`. It opens as an accessible right-side
       drawer instead of a floating popup: desktop width is pointer- and
       keyboard-resizable (360–760 px, clamped to the viewport and remembered in
-      local storage), while phones use a full-screen sheet. Its public,
+      local storage), can be maximized into a full-viewport conversation and
+      restored without losing the current thread, while phones use a full-screen
+      sheet by default. A submitted question scrolls to its pending state, but a
+      completed response is positioned at the beginning of the new answer rather
+      than forcing the reader to its bottom. Its public,
       stateless server action is isolated in
       `app/actions/help-assistant-actions.ts`: shared validation in
       `lib/help/assistant-input.ts` rejects low-signal keyboard noise before it
@@ -2729,8 +2734,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       adds complete-set and parser-version metadata used by the reconciler and
       removes an inherited `app_user` EXECUTE grant from the Search Console
       SECURITY DEFINER rate-slot function; it also restores a missing singleton
-      Analytics control row with safe defaults. Published article
-      creates/edits/status changes refresh
+      Analytics control row with safe defaults. Migration
+      `20260826_0025_mink_ai_fullscreen_help` keeps the public Mink AI guide
+      aligned with answer-start positioning and maximize/restore. Published
+      article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,
       incomplete chunk sets, failed provider calls, embedding-model changes,

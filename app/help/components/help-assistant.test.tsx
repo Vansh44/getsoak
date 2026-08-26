@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HelpAssistant } from "./help-assistant";
 
 const askHelpAssistant = vi.fn();
+const scrollIntoView = vi.fn();
 
 vi.mock("@/app/actions/help-assistant-actions", () => ({
   askHelpAssistant: (...args: unknown[]) => askHelpAssistant(...args),
@@ -11,6 +12,11 @@ vi.mock("@/app/actions/help-assistant-actions", () => ({
 describe("HelpAssistant", () => {
   beforeEach(() => {
     localStorage.clear();
+    scrollIntoView.mockReset();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
     askHelpAssistant.mockReset();
     askHelpAssistant.mockResolvedValue({
       success: true,
@@ -58,6 +64,17 @@ describe("HelpAssistant", () => {
     expect(
       await screen.findByText("Use the Sell screen to complete the checkout."),
     ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(scrollIntoView).toHaveBeenLastCalledWith({
+        block: "start",
+        behavior: "smooth",
+      }),
+    );
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(
+      screen
+        .getByText("Use the Sell screen to complete the checkout.")
+        .closest("[data-message-id]"),
+    );
     expect(screen.getByText("Select Take payment.")).toBeInTheDocument();
     expect(screen.getByText("Verified guides")).toBeInTheDocument();
     expect(
@@ -120,5 +137,28 @@ describe("HelpAssistant", () => {
     fireEvent.keyDown(resizer, { key: "ArrowLeft" });
     expect(resizer).toHaveAttribute("aria-valuenow", "504");
     expect(localStorage.getItem("sm-help-mink-width")).toBe("504");
+  });
+
+  it("maximizes to the full viewport and restores the resizable drawer", () => {
+    render(<HelpAssistant />);
+    fireEvent.click(screen.getByRole("button", { name: "Ask Mink AI" }));
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Mink AI Help Assistant",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Maximize Mink AI" }));
+
+    expect(dialog).toHaveClass("is-maximized");
+    expect(
+      screen.queryByRole("separator", { name: "Resize Mink AI drawer" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore Mink AI drawer" }),
+    );
+    expect(dialog).not.toHaveClass("is-maximized");
+    expect(
+      screen.getByRole("separator", { name: "Resize Mink AI drawer" }),
+    ).toBeInTheDocument();
   });
 });
