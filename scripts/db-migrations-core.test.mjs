@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(25);
+    expect(loaded.migrations).toHaveLength(26);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -216,6 +216,16 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[24].sql).toContain(
       "non-clickable examples of details you can add",
+    );
+    expect(loaded.migrations[25]).toMatchObject({
+      id: "20260826_0026_plan_entitlements_help",
+      transaction: true,
+      requires: ["20260826_0025_mink_ai_fullscreen_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[25].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[25].sql).toContain(
+      "does not delete store data because a plan becomes lower",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

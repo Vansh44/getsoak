@@ -16,6 +16,13 @@ vi.mock("@/app/dashboard/lib/access", () => ({
 vi.mock("@/app/dashboard/lib/permissions", () => ({
   can: vi.fn(() => true),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  getStorePlanContext: vi.fn(async () => ({
+    plan: "basic",
+    limits: { shippingIntegration: true },
+  })),
+  storeAllowsPlanFeature: vi.fn(async () => true),
+}));
 vi.mock("@/lib/payments/crypto", () => ({
   encryptSecret: vi.fn((value: string) => `encrypted:${value}`),
 }));
@@ -128,6 +135,7 @@ describe("getShiprocketChannelState", () => {
       webhookUrl: null,
       mappedLocations: 0,
       eligibleLocations: 0,
+      availableOnPlan: false,
     });
     expect(dbHolder.current.calls.select).toHaveLength(0);
   });
@@ -169,6 +177,7 @@ describe("getShiprocketChannelState", () => {
         "https://staging.storemink.com/api/webhooks/logistics/connection-1",
       mappedLocations: 2,
       eligibleLocations: 1,
+      availableOnPlan: true,
     });
     for (const condition of dbHolder.current.calls.where) {
       expect(sqlParamValues(condition)).toContain("store-1");

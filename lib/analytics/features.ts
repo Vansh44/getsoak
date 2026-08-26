@@ -38,18 +38,21 @@ export const ANALYTICS_FEATURES: Record<
     id: "dashboardCustomization",
     label: "Dashboard customization",
     description: "Add, remove, resize and reorder analytics cards.",
+    minPlan: "basic",
     status: "available",
   },
   drilldownReports: {
     id: "drilldownReports",
     label: "Drill-down reports and CSV",
     description: "Detailed reports for sales, products and search data.",
+    minPlan: "basic",
     status: "available",
   },
   googleSearchConsole: {
     id: "googleSearchConsole",
     label: "Google Search Console",
     description: "Google clicks, impressions, search terms and landing pages.",
+    minPlan: "basic",
     status: "available",
   },
   googleAnalytics4: {

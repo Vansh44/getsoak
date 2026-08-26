@@ -38,7 +38,7 @@ function useStoreRow(storeRow: any) {
 describe("store-settings actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useStoreRow({ settings: {}, plan: "free", plan_expires_at: null });
+    useStoreRow({ settings: {}, plan: "basic", plan_expires_at: null });
     vi.mocked(getViewerContext).mockResolvedValue({
       userId: "user-1",
       userEmail: "a@b.c",
@@ -54,7 +54,7 @@ describe("store-settings actions", () => {
     it("returns the catalog with resolved values", async () => {
       useStoreRow({
         settings: { features: { "blogs.customerSubmissions": false } },
-        plan: "free",
+        plan: "basic",
         plan_expires_at: null,
       });
 
@@ -181,7 +181,7 @@ describe("store-settings actions", () => {
           brand: { name: "Acme" },
           features: { "blogs.requireApproval": false },
         },
-        plan: "free",
+        plan: "basic",
         plan_expires_at: null,
       });
 
@@ -203,6 +203,24 @@ describe("store-settings actions", () => {
       });
       const r = await saveStoreSettings({ "blogs.customerSubmissions": true });
       expect(r.error).toMatch(/could not load/i);
+    });
+
+    it("does not overwrite a paid setting while the store is downgraded", async () => {
+      useStoreRow({
+        settings: {
+          features: { "blogs.customerSubmissions": true },
+        },
+        plan: "free",
+        plan_expires_at: null,
+      });
+
+      await saveStoreSettings({ "blogs.customerSubmissions": false });
+
+      expect(
+        dbHolder.current.calls.set[0].settings.features[
+          "blogs.customerSubmissions"
+        ],
+      ).toBe(true);
     });
   });
 });

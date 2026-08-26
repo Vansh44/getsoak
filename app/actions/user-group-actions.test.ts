@@ -9,6 +9,9 @@ vi.mock("@/app/dashboard/lib/access", () => ({
   getManagerIdentity: vi.fn(),
   getActingStoreId: vi.fn(async () => "a0000000-0000-4000-8000-000000000001"),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  storeAllowsPlanFeature: vi.fn(async () => true),
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));

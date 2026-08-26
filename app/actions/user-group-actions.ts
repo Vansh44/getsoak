@@ -9,6 +9,13 @@ import {
   getManagerIdentity,
   getActingStoreId,
 } from "@/app/dashboard/lib/access";
+import { storeAllowsPlanFeature } from "@/lib/plans/entitlements";
+
+async function groupsPlanError(storeId: string): Promise<string | null> {
+  return (await storeAllowsPlanFeature(storeId, "customerGroups"))
+    ? null
+    : "Customer groups are available on Basic and Pro. Your existing groups and memberships remain safe until you upgrade.";
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -46,6 +53,8 @@ export async function createUserGroup(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
+  const planError = await groupsPlanError(storeId);
+  if (planError) return { error: planError };
 
   const name = form.name.trim();
   if (!name) return { error: "Group name is required." };
@@ -93,6 +102,8 @@ export async function updateUserGroup(
   // Scope by store_id (the service scope bypasses RLS) so a group can only be
   // edited by an admin of the store that owns it.
   const storeId = await getActingStoreId();
+  const planError = await groupsPlanError(storeId);
+  if (planError) return { error: planError };
   try {
     await withService((db) =>
       db
@@ -124,6 +135,8 @@ export async function deleteUserGroup(id: string): Promise<ActionResult> {
   if (!admin) return { error: "Not authenticated" };
 
   const storeId = await getActingStoreId();
+  const planError = await groupsPlanError(storeId);
+  if (planError) return { error: planError };
   try {
     await withService((db) =>
       db
@@ -152,6 +165,8 @@ export async function setGroupMembers(
   if (!admin) return { error: "Not authenticated" };
   const userId = admin.uid;
   const storeId = await getActingStoreId();
+  const planError = await groupsPlanError(storeId);
+  if (planError) return { error: planError };
 
   // De-dupe defensively; an empty selection just clears the group.
   const ids = Array.from(new Set(customerIds.filter(Boolean)));

@@ -597,6 +597,9 @@ wholesip/
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
+│   ├── plans/                 # ★ §15 server entitlement boundary: resolves effective
+│   │                          # plans and transaction-locks product/staff/active-coupon
+│   │                          # creation caps; soft downgrades never mutate existing data
 │   ├── shipping/              # ★ §35 checkout policy/types + pure rate translation +
 │   │                          # server-only origin-aware Shiprocket quotation
 │   ├── sms/                   # ★ §37 India DLT + BYO Twilio: pure template check,
@@ -1274,7 +1277,8 @@ wholesip/
 │                              # domains, products/customers, payments/tax, orders/shipping, and
 │                              # marketing/communications, while keeping every article editable in
 │                              # the operator Help console; 0025 updates the Mink AI guide for
-│                              # answer-start positioning and the full-screen maximize control.
+│                              # answer-start positioning and full-screen maximize; 0026 publishes
+│                              # the full plan matrix and soft-downgrade no-data-loss contract.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -1977,19 +1981,29 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
     changes, and no backfill is needed. Pinned by `lib/identifiers.test.ts`
     ("codes GROW past their pad width") and by a guard inside the migration.
 
-15. **Plans (free / basic ₹500 / pro ₹1500) + timed grants.** `lib/plans.ts` is
+15. **Plans (Free / Basic ₹1,500 / Pro ₹5,000) + timed grants.** `lib/plans.ts` is
     the single plan catalog (pure, tested): `PLAN_IDS`, `PLAN_RANK`,
     `normalizePlan`/`planAllows` (re-exported by `lib/settings/registry.ts`
     for its `minPlan` gates — the former "growth" AND "starter" ids are
     retired; `normalizePlan` aliases legacy `starter → basic`), display meta
     (`PLAN_META`: INR monthly/yearly pricing, taglines) and `PLAN_LIMITS`
-    (product/staff/AI/coupon caps + customDomain/onlinePayments/
-    emailCampaigns/removeBadge flags; `null` = unlimited; AI caps are
+    (product/staff/AI/coupon caps plus every boolean product entitlement;
+    `null` = unlimited). Product caps are **5 / 50 / unlimited**; custom
+    domains are **Pro only**; customer blog submissions, customer groups,
+    custom roles/code, Shiprocket and detailed/custom analytics are
+    **Basic+**; email campaigns, advanced analytics and POS are **Pro**;
+    and AI-credit top-ups are available on every plan. AI caps are
     **3 / 10 / 50 per month** — pro is metered too; enforce server-side in
-    the owning action, soft-on-downgrade: never delete data, only block NEW
-    rows past a cap). The platform landing page (`app/platform/page.tsx`)
-    derives its pricing cards from `PLAN_META`/`PLAN_LIMITS` so it can never
-    drift. `stores.plan` is CHECK-constrained to the three ids
+    the owning action). `lib/plans/entitlements.ts` resolves the effective plan
+    server-side and uses per-store advisory transaction locks for products,
+    staff and active coupons so simultaneous writes cannot overshoot a cap.
+    **Soft downgrade is the contract:** existing rows, settings, joins,
+    credentials, layouts and history are never deleted or reset; new over-cap
+    rows and paid runtime capabilities pause, then the same stored data becomes
+    available when an eligible plan returns. The platform landing page
+    (`app/platform/page.tsx`) derives both pricing cards and the complete
+    comparison table from `PLAN_META`/`PLAN_LIMITS`/`PLAN_FEATURE_MATRIX`, so
+    advertising and enforcement cannot drift. `stores.plan` is CHECK-constrained to the three ids
     (`plans_02_basic_and_expiry.sql` renamed starter→basic) and paired with
     `stores.plan_source` (`comp`/`paid`/`trial`); every change is recorded in
     the append-only `plan_events` audit table (service-role only, like
@@ -2123,8 +2137,8 @@ running subscription is how you get chargebacks.
       `lib/ai/credits.ts` (25/₹59, 60/₹129, 150/₹299 — the one place to
       reprice). Merchants see usage + balance + ledger and buy packs at
       **`/dashboard/ai`** (section `ai`, group Administration) —
-      `app/actions/ai-credit-actions.ts`: `startCreditPurchase` (plan-gated
-      basic+, server-side) → Razorpay modal on the **PLATFORM's own account**
+      `app/actions/ai-credit-actions.ts`: `startCreditPurchase` (available on
+      Free, Basic and Pro) → Razorpay modal on the **PLATFORM's own account**
       (env `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`; totally separate from a
       store's BYO gateway) → `confirmCreditPurchase` (HMAC verify → paid →
       `add_ai_credits`); dropped callbacks self-heal via reconcile-on-read on
@@ -2743,7 +2757,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       Analytics control row with safe defaults. Migration
       `20260826_0025_mink_ai_fullscreen_help` keeps the public Mink AI guide
       aligned with answer-start positioning, maximize/restore, and the
-      distinction between reply guidance and submitted messages. Published
+      distinction between reply guidance and submitted messages. Migration
+      `20260826_0026_plan_entitlements_help` publishes the complete Free/Basic/
+      Pro matrix and the no-data-loss downgrade contract, and repairs affected
+      product, AI, group, blog, custom-code, Shiprocket and Analytics guides. Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,

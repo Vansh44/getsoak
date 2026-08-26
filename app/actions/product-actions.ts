@@ -29,6 +29,10 @@ import { callGemini, brandSystemText } from "@/lib/ai/gemini";
 import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
 import { consumeAiQuota } from "@/lib/ai/quota";
 import { storeHasAnalyticsFeature } from "@/lib/analytics/store-entitlement";
+import {
+  assertCanCreateProduct,
+  PlanEntitlementError,
+} from "@/lib/plans/entitlements";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -551,17 +555,23 @@ export async function createProduct(
   for (let attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt++) {
     let inserted: Record<string, unknown>;
     try {
-      const [row0] = await withUser(admin, (db) =>
-        db
-          .insert(products)
-          // sku / sku_no are NOT NULL but owned by the BEFORE-INSERT trigger
-          // (identifiers_04_triggers.sql) — the app must never send them, so
-          // the insert type is asserted past those two columns.
-          .values(row(slug) as typeof products.$inferInsert)
-          .returning(),
-      );
+      const [row0] = await withUser(admin, async (db) => {
+        await assertCanCreateProduct(db, storeId);
+        return (
+          db
+            .insert(products)
+            // sku / sku_no are NOT NULL but owned by the BEFORE-INSERT trigger
+            // (identifiers_04_triggers.sql) — the app must never send them, so
+            // the insert type is asserted past those two columns.
+            .values(row(slug) as typeof products.$inferInsert)
+            .returning()
+        );
+      });
       inserted = row0 as Record<string, unknown>;
     } catch (err) {
+      if (err instanceof PlanEntitlementError) {
+        return { error: err.message };
+      }
       if (!isUniqueViolation(err)) {
         console.error("createProduct error:", err);
         return { error: dbErrorMessage(err, "Failed to create product.") };

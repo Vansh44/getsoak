@@ -13,6 +13,10 @@ import { slugify } from "@/lib/slug";
 import type { ProductDraft, VariantDraft } from "../parse";
 import type { RowIssue } from "../types";
 import {
+  assertCanCreateProduct,
+  PlanEntitlementError,
+} from "@/lib/plans/entitlements";
+import {
   failure,
   issue,
   present,
@@ -579,8 +583,9 @@ export async function importProducts(
         const status = (patch.status as string | undefined) ?? "draft";
         const initialStock = draft.values.stock;
 
-        const [inserted] = await withUser(ctx.admin, (db) =>
-          db
+        const [inserted] = await withUser(ctx.admin, async (db) => {
+          await assertCanCreateProduct(db, ctx.storeId);
+          return db
             .insert(products)
             .values({
               storeId: ctx.storeId,
@@ -627,8 +632,8 @@ export async function importProducts(
               updatedBy: ctx.admin.uid,
               // sku / sku_no are owned by the BEFORE-INSERT trigger.
             } as typeof products.$inferInsert)
-            .returning({ id: products.id }),
-        );
+            .returning({ id: products.id });
+        });
         productId = inserted.id;
         outcome = "created";
       }
@@ -659,13 +664,26 @@ export async function importProducts(
       // is in `issues` and shows up in the log.
       results.push({ lines: draft.lines, outcome, issues });
     } catch (error) {
-      const message = isUniqueViolation(error)
-        ? `A product with the handle "${handle}" already exists.`
-        : dbErrorMessage(error, "Couldn't save this product.");
+      const message =
+        error instanceof PlanEntitlementError
+          ? error.message
+          : isUniqueViolation(error)
+            ? `A product with the handle "${handle}" already exists.`
+            : dbErrorMessage(error, "Couldn't save this product.");
       results.push({
         lines: draft.lines,
         outcome: "failed",
-        issues: [...issues, issue(draft.line, null, "write_failed", message)],
+        issues: [
+          ...issues,
+          issue(
+            draft.line,
+            null,
+            error instanceof PlanEntitlementError
+              ? "plan_limit"
+              : "write_failed",
+            message,
+          ),
+        ],
       });
     }
   }

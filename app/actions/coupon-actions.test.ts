@@ -16,6 +16,11 @@ vi.mock("@/app/dashboard/lib/access", () => ({
   getViewerContext: vi.fn(),
   getActingStoreId: vi.fn(async () => "a0000000-0000-4000-8000-000000000001"),
 }));
+vi.mock("@/lib/plans/entitlements", () => ({
+  assertCanActivateCoupon: vi.fn(async () => undefined),
+  storeAllowsPlanFeature: vi.fn(async () => true),
+  PlanEntitlementError: class PlanEntitlementError extends Error {},
+}));
 
 // The ported data layer: with* runners invoke the callback with the mock db.
 const dbHolder = vi.hoisted(() => ({ current: null as any }));

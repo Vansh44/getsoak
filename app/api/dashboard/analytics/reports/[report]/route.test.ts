@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({
   allowed: true,
+  entitled: true,
   topProducts: vi.fn(),
 }));
 
@@ -39,12 +40,28 @@ vi.mock("@/lib/locations/scope", () => ({
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
 }));
+vi.mock("@/lib/analytics/platform-feature-store", () => ({
+  getPlatformAnalyticsFeatures: vi.fn(async () => ({
+    coreDashboard: true,
+    dashboardCustomization: true,
+    drilldownReports: true,
+    googleSearchConsole: true,
+    googleAnalytics4: false,
+    metaPixel: false,
+    storefrontConversion: false,
+    grossMargin: false,
+  })),
+}));
+vi.mock("@/lib/analytics/store-entitlement", () => ({
+  storeHasAnalyticsFeature: vi.fn(async () => holder.entitled),
+}));
 
 import { GET } from "./route";
 
 beforeEach(() => {
   vi.clearAllMocks();
   holder.allowed = true;
+  holder.entitled = true;
   holder.topProducts.mockResolvedValue([
     { id: "product-1", name: "=unsafe", units: 3, amount: 450 },
   ]);
@@ -76,6 +93,18 @@ describe("analytics report CSV", () => {
 
   it("rejects a viewer without analytics.view before reading report data", async () => {
     holder.allowed = false;
+    const response = await GET(
+      new Request(
+        "https://acme.storemink.com/api/dashboard/analytics/reports/top-products",
+      ),
+      { params: Promise.resolve({ report: "top-products" }) },
+    );
+    expect(response.status).toBe(403);
+    expect(holder.topProducts).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Free store before reading report data", async () => {
+    holder.entitled = false;
     const response = await GET(
       new Request(
         "https://acme.storemink.com/api/dashboard/analytics/reports/top-products",

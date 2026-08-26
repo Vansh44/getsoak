@@ -6,6 +6,7 @@ import { requireSectionAccess, getActingStoreId } from "../../../../lib/access";
 import { CouponForm } from "../../coupon-form";
 import { COUPON_COLUMNS } from "../../page";
 import type { Coupon, CouponGroup } from "../../page";
+import { getStorePlanContext } from "@/lib/plans/entitlements";
 
 export default async function EditCouponPage({
   params,
@@ -16,6 +17,7 @@ export default async function EditCouponPage({
   const { id } = await params;
 
   const storeId = await getActingStoreId();
+  const { limits } = await getStorePlanContext(storeId);
   const result = await withService(async (db) => {
     const couponRows = await db
       .select(COUPON_COLUMNS)
@@ -29,6 +31,7 @@ export default async function EditCouponPage({
         color: userGroups.color,
       })
       .from(userGroups)
+      .where(eq(userGroups.storeId, storeId))
       .orderBy(asc(userGroups.name));
     const linkRows = await db
       .select({ group_id: couponUserGroups.groupId })
@@ -53,5 +56,11 @@ export default async function EditCouponPage({
     restricted_group_ids: result.links.map((l) => l.group_id),
   };
 
-  return <CouponForm coupon={enriched} groups={result.groups} />;
+  return (
+    <CouponForm
+      coupon={enriched}
+      groups={result.groups}
+      allowsGroups={limits.customerGroups}
+    />
+  );
 }

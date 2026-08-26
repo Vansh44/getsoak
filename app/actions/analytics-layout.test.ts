@@ -15,6 +15,9 @@ vi.mock("@/lib/locations/scope", () => ({
 vi.mock("@/lib/analytics/platform-feature-store", () => ({
   getPlatformAnalyticsFeatures: vi.fn(),
 }));
+vi.mock("@/lib/analytics/store-entitlement", () => ({
+  storeHasAnalyticsFeature: vi.fn(async () => true),
+}));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
 }));
