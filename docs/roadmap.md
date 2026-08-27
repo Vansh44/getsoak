@@ -560,23 +560,25 @@ and removes delivery, shipment and fulfilment controls. The server actions also
 refuse to move a POS sale into a fulfilment state or create shipment work for
 it, so this is a channel invariant rather than presentation alone.
 
-That gap is now closed by the identity work below: the till can record a walk-in,
-and their later signup adopts the row.
+That gap is now closed by the identity work below: every new register checkout
+starts with a mobile number, and a later signup can adopt the till-created row.
 
 ### What Shopify does
 
-1. Cart → **Add customer** → search, or **create one inline** (name, email,
-   phone — all optional except a name).
-2. The sale completes with or without a customer. A walk-in is a first-class
-   outcome, never a blocked one.
-3. At payment → **receipt options**: print, email, text, none. Contact entered
-   _there_ attaches to the sale even with no customer record.
+1. Cart → **Charge** → type the shopper's 10-digit mobile number → **OK**.
+2. Only that submit performs an exact lookup. An existing customer's name,
+   email and store credit are loaded; a new number creates an unclaimed
+   customer automatically.
+3. The till advances straight to the payment methods. The resolved identity
+   stays visible and can be changed until the first tender is staged.
 
-**All three SHIPPED.** Search, inline create, a sale that completes with or
-without a customer, and the receipt-contact box on Checkout — see
-"SHIPPED — receipt contact" below. SMS as a receipt channel is Step 5, not this
-step: no POS receipt path sends over SMS today (there is no
-`lib/pos/receipt-delivery.ts`).
+**SHIPPED, corrected 2026-08-28.** The first version copied Shopify's broad
+search/create panel too literally and queried while the cashier typed. The
+register now uses the faster phone-first path above: digits only, exactly ten,
+one explicit database lookup, automatic create, and no second Continue click.
+Receipt email and GSTIN remain available behind one optional-details control on
+the Payment screen. SMS as a receipt channel is still Step 5; the OTP below is
+identity verification, not receipt delivery.
 
 ### Why creating is hard here
 
@@ -648,20 +650,22 @@ one account taking over another's.
 **★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
 history; a thrown one would cost the shopper their signup.
 
-**UI.** Customer capture is now a visible checkout step rather than a quiet row
-above the cart total. The Checkout screen shows the attached person or a clear
-**Add customer** action, explains why attaching helps, and keeps **Continue as
-walk-in** explicit so identity never gates a sale. Search and **Create new
-customer** share one screen, as they do in Shopify POS; the typed query seeds
-the matching name, mobile or email field. Exact phone duplicates still collapse
-to the existing customer at the server. `sell`, not a manager grant: recording
-who bought something is part of ringing up a sale.
+**UI.** Selecting **Charge** opens one focused mobile-number step. The input
+accepts digits only, stops at ten, and enables **OK** only for a valid Indian
+mobile number. Typing is entirely local; **OK** performs the first database
+request. An exact match loads the customer's name, email and store credit. A new
+number creates a phone-only unclaimed customer and attaches it in the same
+action; a concurrent duplicate insert falls back to the winning existing row.
+Both paths advance directly to Payment, where the attached identity remains
+visible and **Change** returns to the number step before money is staged.
+Recording who bought something is part of ringing up a sale, so this is `sell`,
+not a manager grant.
 
-**SHIPPED — receipt contact.** An optional email box in Checkout details
+**SHIPPED — receipt contact.** An optional email box behind **Add receipt email
+or GSTIN** on the Payment screen
 (`lib/email/pos-receipt.ts`). It deliberately does NOT feed the notification
-spine: that routes an EVENT to IDENTIFIED recipients honouring preferences and
-digests, and a walk-in has no identity — no `users` row, so no inbox, no
-preferences, no digest. It is still a `sendEmail` call, so it lands in
+spine: that routes an EVENT to an identified customer's saved address while the
+receipt box may contain a one-sale address. It is still a `sendEmail` call, so it lands in
 `email_logs` and the CI send-coverage guard stays satisfied.
 `shouldSendDirectReceipt` (pure) keeps it to exactly ONE receipt: it fires only
 where the fan-out will not — no attached customer, or one with no address on
@@ -669,11 +673,22 @@ file, read in the same query as the ownership check. A bad address is dropped
 rather than refused, because this runs after the money is taken. SMS waits for
 Step 5.
 
-**Acceptance:** PS-C.25–C.47 + PS-PAY.1–PAY.4 — **written.** The Checkout,
-customer and payment surfaces have been exercised in a local browser at desktop
-and 390px widths; nobody has yet rung up a walk-in on a real till. 120 focused
-unit tests cover the pure rules, the claim statement, the actions, the signup
-ordering, the receipt and the new checkout UI.
+**Pickup and return verification, shipped 2026-08-28.** Before a parcel leaves
+the shop or a return is committed, StoreMink sends an OTP to the mobile saved on
+that exact order. Six digits verify automatically. The proof is short-lived,
+HTTP-only and bound to the order, purpose, store, location and operator; the
+mutation checks it again and consumes it after success. Resend/attempt limits,
+expired or wrong codes, changed/invalid order state, missing phone, missing
+Firebase configuration and direct action calls all fail closed. Firebase may
+create a phone-only identity while transporting an OTP for a new number, so the
+server deletes only a just-created identity with no StoreMink profile after the
+proof is saved; this prevents the counter check from blocking that customer's
+future signup.
+
+**Acceptance:** PS-C.25–C.47 + PS-PAY.1–PAY.4 + PS-8.4a–8.4d +
+PS-11.2a–11.2d — **written.** Focused tests cover lookup/create races, input
+gating, the customer-to-payment transition, signed OTP proof scope, action
+enforcement, throttling and temporary Firebase identity cleanup.
 
 ---
 

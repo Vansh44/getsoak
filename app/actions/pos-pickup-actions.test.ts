@@ -19,6 +19,10 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/lib/pos/customer-verification", () => ({
+  hasCustomerVerification: vi.fn(async () => true),
+  clearCustomerVerification: vi.fn(async () => undefined),
+}));
 vi.mock("@/lib/notifications/record", () => ({
   emitEvent: vi.fn(),
   recordEvent: vi.fn().mockResolvedValue(null),
@@ -61,6 +65,7 @@ import {
 import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
 import { orderPayments } from "@/drizzle/schema";
+import { hasCustomerVerification } from "@/lib/pos/customer-verification";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -137,6 +142,7 @@ beforeEach(() => {
   // tender checks out; the RULE is tested in lib/payments/pos-gateway.test.ts,
   // these assert this counter's WIRING.
   vi.mocked(verifyGatewayTenders).mockResolvedValue(null);
+  vi.mocked(hasCustomerVerification).mockResolvedValue(true);
   vi.mocked(getCreditBalance).mockResolvedValue(1000);
   vi.mocked(spendCredit).mockResolvedValue(true);
   vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
@@ -152,6 +158,14 @@ describe("markCollected — the claim", () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(null);
     expect((await markCollected("ord-1")).error).toMatch(/signed in/i);
     expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("requires the server-bound customer OTP proof before reading or moving the order", async () => {
+    vi.mocked(hasCustomerVerification).mockResolvedValue(false);
+    const result = await markCollected("ord-1");
+    expect(result).toMatchObject({ verificationRequired: true });
+    expect(result.error).toMatch(/verify.*mobile/i);
+    expect(dbHolder.current.calls.select).toHaveLength(0);
   });
 
   it("refuses an empty order id before touching the database", async () => {

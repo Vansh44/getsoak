@@ -15,6 +15,7 @@ import {
   type ReturnableSale,
 } from "@/app/actions/pos-return-actions";
 import { refundBreakdown } from "@/lib/pos/returns";
+import { CustomerPhoneVerification } from "../../customer-phone-verification";
 
 const money = (n: number) =>
   `₹${n.toLocaleString("en-IN", {
@@ -39,6 +40,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
   const [method, setMethod] = useState<RefundMethod>(route.method);
   const [reason, setReason] = useState("");
   const [pending, start] = useTransition();
+  const [verificationOpen, setVerificationOpen] = useState(false);
 
   const preview = useMemo(
     () =>
@@ -75,6 +77,10 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
         method,
         reason,
       );
+      if (res.verificationRequired) {
+        setVerificationOpen(true);
+        return;
+      }
       if (res.error) {
         toast.error(res.error);
         return;
@@ -290,6 +296,18 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
           </>
         )}
       </div>
+
+      {verificationOpen && (
+        <CustomerPhoneVerification
+          orderId={sale.orderId}
+          purpose="return"
+          onCancel={() => setVerificationOpen(false)}
+          onVerified={() => {
+            setVerificationOpen(false);
+            submit();
+          }}
+        />
+      )}
     </div>
   );
 }

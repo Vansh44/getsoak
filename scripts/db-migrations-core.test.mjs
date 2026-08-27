@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(31);
+    expect(loaded.migrations).toHaveLength(32);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -293,6 +293,35 @@ describe("database migration controls", () => {
     expect(loaded.migrations[30].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[30].sql).toContain(
       "The Payment screen shows one plain list of methods",
+    );
+    expect(loaded.migrations[31]).toMatchObject({
+      id: "20260828_0032_pos_phone_checkout_and_verification_help",
+      transaction: true,
+      requires: ["20260827_0031_pos_checkout_clarity_help"],
+      verify: {},
+      applyVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("phone-first checkout"),
+            equals: "4",
+          }),
+        ],
+      },
+      adoptVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("phone-first checkout"),
+            equals: "4",
+          }),
+        ],
+      },
+    });
+    expect(loaded.migrations[31].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[31].sql).toContain(
+      "StoreMink does not search while you type",
+    );
+    expect(loaded.migrations[31].sql).toContain(
+      "Verify the customer before hand-over",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

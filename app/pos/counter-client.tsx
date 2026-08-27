@@ -72,6 +72,8 @@ import { PosScreen } from "./pos-screen";
 import { usePoll } from "@/lib/pos/use-poll";
 import { fetchPickupQueue } from "@/lib/pos/live";
 import { claimPickupBadge, publishPickupCount } from "@/lib/pos/pickup-badge";
+import { CustomerPhoneVerification } from "./customer-phone-verification";
+import type { PosCustomerVerificationPurpose } from "@/lib/pos/customer-verification";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -167,6 +169,11 @@ export function CounterClient({
   const [detailReload, setDetailReload] = useState(0);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
+  const verificationContinue = useRef<(() => void) | null>(null);
+  const [verification, setVerification] = useState<{
+    orderId: string;
+    purpose: PosCustomerVerificationPurpose;
+  } | null>(null);
 
   const trimmed = query.trim();
   const tooShort = trimmed.length > 0 && trimmed.length < 4;
@@ -205,7 +212,12 @@ export function CounterClient({
   // goods over. Searching pauses it too: the queue isn't on screen, so re-reading
   // it is a request for nothing.
   const idle =
-    !busy && !tendering && !confirmUnprepared && !searching && !pending;
+    !busy &&
+    !tendering &&
+    !confirmUnprepared &&
+    !verification &&
+    !searching &&
+    !pending;
 
   // ★ THE QUEUE ALREADY CARRIES THE COUNT, so publishing it stops the rail
   // making a second request for the same fact — and, more importantly, keeps
@@ -299,9 +311,18 @@ export function CounterClient({
     [canRefund],
   );
 
+  const verifyThen = (
+    orderId: string,
+    purpose: PosCustomerVerificationPurpose,
+    next: () => void,
+  ) => {
+    verificationContinue.current = next;
+    setVerification({ orderId, purpose });
+  };
+
   // Debounced so a scanner burst or a fast typist doesn't fire per keystroke.
-  // Nothing is set synchronously here — below the floor there is simply no
-  // search to schedule, and what shows is derived above.
+  // This lookup is unrelated to checkout customer capture: a counter search is
+  // intentionally live, while the customer mobile is explicitly submit-only.
   useEffect(() => {
     if (trimmed.length < 4) return;
     const handle = setTimeout(() => runSearch(trimmed), 300);
@@ -314,25 +335,6 @@ export function CounterClient({
     toast.success(message);
     setQueue((cur) => cur.filter((o) => o.id !== id));
     setResults((cur) => (cur ? cur.filter((r) => rowId(r) !== id) : cur));
-  };
-
-  /** A successful hand-over is the only generic action that removes a row. */
-  const act = async (
-    id: string,
-    fn: (id: string) => Promise<{ success?: boolean; error?: string }>,
-    message: string,
-  ): Promise<boolean> => {
-    setBusy(id);
-    const res = await fn(id);
-    setBusy(null);
-    if (res.error) {
-      toast.error(res.error);
-      // Refused means the list is stale — someone else got there first.
-      refreshQueue();
-      return false;
-    }
-    settle(id, message);
-    return true;
   };
 
   /**
@@ -380,11 +382,7 @@ export function CounterClient({
    * may genuinely be packing it while the customer waits, so this is a question,
    * not a refusal — but it must never be the thing a mis-tap does.
    */
-  const handOver = (o: PickupOrder, acked = false) => {
-    if (!acked && o.status !== "ready") {
-      setConfirmUnprepared(o);
-      return;
-    }
+  const continueHandOver = (o: PickupOrder, acked: boolean) => {
     if (o.amountDue > 0) {
       setTendering({ order: o, acked });
       // Fetched here rather than carried on the queue row: the queue is polled
@@ -396,15 +394,42 @@ export function CounterClient({
         .catch(() => setCollectionCredit(0));
       return;
     }
-    void act(
-      o.id,
-      (id) => markCollected(id, [], { acknowledgeUnprepared: acked }),
-      "Handed over.",
-    ).then((ok) => {
-      // The order has left the shelf, so the panel describing it has nothing
-      // left to offer. A no-op when the hand-over came from the row.
-      if (ok) setDetailFor(null);
-    });
+    setBusy(o.id);
+    void (async () => {
+      try {
+        const res = await markCollected(o.id, [], {
+          acknowledgeUnprepared: acked,
+        });
+        // A stale/cleared proof can happen after a long confirmation dialog.
+        // Re-open the same verification instead of reducing this to a toast
+        // that makes the cashier start the whole hand-over again.
+        if (res.verificationRequired) {
+          verifyThen(o.id, "pickup", () => continueHandOver(o, acked));
+          return;
+        }
+        if (res.error) {
+          toast.error(res.error);
+          refreshQueue();
+          return;
+        }
+        settle(o.id, "Handed over.");
+        // The order has left the shelf, so the panel describing it has nothing
+        // left to offer. A no-op when the hand-over came from the row.
+        setDetailFor(null);
+      } catch {
+        toast.error("Couldn't reach the server. Try the hand-over again.");
+      } finally {
+        setBusy(null);
+      }
+    })();
+  };
+
+  const handOver = (o: PickupOrder, acked = false) => {
+    if (!acked && o.status !== "ready") {
+      setConfirmUnprepared(o);
+      return;
+    }
+    verifyThen(o.id, "pickup", () => continueHandOver(o, acked));
   };
 
   const takePayment = async (tenders: PosTender[]) => {
@@ -413,6 +438,10 @@ export function CounterClient({
     const res = await markCollected(o.id, tenders, {
       acknowledgeUnprepared: acked,
     });
+    if (res.verificationRequired) {
+      verifyThen(o.id, "pickup", () => void takePayment(tenders));
+      return {};
+    }
     if (res.error) {
       // The panel stays open — the customer is standing there and the cashier
       // needs to see why, and to retry, without re-entering the tender. But the
@@ -900,6 +929,23 @@ export function CounterClient({
           // spends it atomically, so a stale figure costs a refusal, never an
           // overdraw.
           storeCredit={collectionCredit}
+        />
+      )}
+
+      {verification && (
+        <CustomerPhoneVerification
+          orderId={verification.orderId}
+          purpose={verification.purpose}
+          onCancel={() => {
+            verificationContinue.current = null;
+            setVerification(null);
+          }}
+          onVerified={() => {
+            const next = verificationContinue.current;
+            verificationContinue.current = null;
+            setVerification(null);
+            next?.();
+          }}
         />
       )}
 

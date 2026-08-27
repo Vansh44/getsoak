@@ -4,6 +4,10 @@ import { makeDbMock } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/lib/pos/customer-verification", () => ({
+  hasCustomerVerification: vi.fn(async () => true),
+  clearCustomerVerification: vi.fn(async () => undefined),
+}));
 vi.mock("./pos-shift-actions", () => ({
   currentShiftIdFor: vi.fn(async () => "shift-1"),
 }));
@@ -22,6 +26,7 @@ import { resolvePosOperator } from "@/lib/pos/operator";
 import { emitEvent } from "@/lib/notifications/record";
 import { issueRefund } from "@/lib/payments/issue-refund";
 import { getReturnableSale, processReturn } from "./pos-return-actions";
+import { hasCustomerVerification } from "@/lib/pos/customer-verification";
 
 const MANAGER = {
   role: "manager" as const,
@@ -104,6 +109,7 @@ function seedSale(
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
+  vi.mocked(hasCustomerVerification).mockResolvedValue(true);
   seedSale();
 });
 
@@ -140,6 +146,18 @@ describe("getReturnableSale", () => {
 });
 
 describe("processReturn", () => {
+  it("requires the server-bound customer OTP proof before loading refund details", async () => {
+    vi.mocked(hasCustomerVerification).mockResolvedValue(false);
+    const result = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(result).toMatchObject({ verificationRequired: true });
+    expect(result.error).toMatch(/verify.*mobile/i);
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
   it("refuses a cashier", async () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     const r = await processReturn(

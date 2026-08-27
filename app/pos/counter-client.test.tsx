@@ -15,6 +15,7 @@ const pickupActions = vi.hoisted(() => ({
   markReadyForPickup: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const customerVerification = vi.hoisted(() => vi.fn(() => null));
 
 vi.mock("@/app/actions/pos-pickup-actions", () => pickupActions);
 vi.mock("@/app/actions/pos-return-actions", () => ({
@@ -29,6 +30,9 @@ vi.mock("@/lib/pos/pickup-badge", () => ({
 vi.mock("sonner", () => ({ toast }));
 vi.mock("./collection-detail", () => ({ CollectionDetail: vi.fn(() => null) }));
 vi.mock("./sell/tender-panel", () => ({ TenderPanel: vi.fn(() => null) }));
+vi.mock("./customer-phone-verification", () => ({
+  CustomerPhoneVerification: customerVerification,
+}));
 
 const { CounterClient } = await import("./counter-client");
 
@@ -87,5 +91,25 @@ describe("pickup queue — marking an order ready", () => {
     // The confirmed action already supplies the only changed field. No manual
     // action refresh is needed; the ordinary poll can reconcile later changes.
     expect(pickupActions.getPickupQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("customer verification", () => {
+  it("opens customer OTP before a ready prepaid parcel can be handed over", () => {
+    render(
+      <CounterClient
+        mode="pickups"
+        initial={[{ ...ORDER, status: "ready", amountDue: 0 }]}
+        error={null}
+        canRefund={true}
+        canFulfilPickup={true}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /hand over/i }));
+    expect(customerVerification).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: ORDER.id, purpose: "pickup" }),
+      undefined,
+    );
+    expect(pickupActions.markCollected).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,6 @@ function setup(over: Partial<Parameters<typeof TenderPanel>[0]> = {}) {
       approvalToken?: string,
     ) => Promise<{ error?: string; needsApproval?: boolean }>
   >(async () => ({}));
-  const onEditCustomer = vi.fn();
   render(
     <TenderPanel
       total={500}
@@ -21,33 +20,71 @@ function setup(over: Partial<Parameters<typeof TenderPanel>[0]> = {}) {
       {...over}
     />,
   );
-  return { onComplete, onEditCustomer };
+  return { onComplete };
 }
 
 const button = (name: RegExp) => screen.getByRole("button", { name });
 
 describe("checkout customer details", () => {
-  it("prompts for a customer but keeps a walk-in sale one tap away", () => {
-    const onEditCustomer = vi.fn();
+  it("does not resolve while typing and submits one exact 10-digit mobile", async () => {
+    const onCustomer = vi.fn();
+    const onResolveCustomer = vi.fn(async () => ({
+      created: true,
+      customer: {
+        id: "pos_1",
+        name: "9876543210",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    }));
     setup({
       customer: null,
-      onEditCustomer,
+      onCustomer,
+      onResolveCustomer,
       receiptEmail: "",
       onReceiptEmail: vi.fn(),
     });
 
     expect(screen.getByRole("heading", { name: "Checkout" })).toBeVisible();
-    expect(screen.getByText("No customer added")).toBeVisible();
-    expect(button(/^add customer$/i)).toBeVisible();
-    expect(button(/continue as walk-in/i)).toBeVisible();
-    expect(screen.getByPlaceholderText("name@example.com")).toBeVisible();
-    expect(screen.queryByText("Choose a payment method")).toBeNull();
+    const mobile = screen.getByLabelText(/customer mobile number/i);
+    fireEvent.change(mobile, { target: { value: "9876543210123" } });
+    expect(mobile).toHaveValue("9876543210");
+    expect(onResolveCustomer).not.toHaveBeenCalled();
+    fireEvent.click(button(/^ok$/i));
 
-    fireEvent.click(button(/^add customer$/i));
-    expect(onEditCustomer).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(onResolveCustomer).toHaveBeenCalledWith("9876543210"),
+    );
+    expect(onResolveCustomer).toHaveBeenCalledTimes(1);
+    expect(onCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pos_1" }),
+    );
+    expect(screen.getByText("Choose a payment method")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /continue to payment/i }),
+    ).toBeNull();
   });
 
-  it("shows an attached customer's contact and continues to payment", () => {
+  it("accepts only ten digits and never shows payment before resolution", () => {
+    const onResolveCustomer = vi.fn();
+    setup({
+      customer: null,
+      onCustomer: vi.fn(),
+      onResolveCustomer,
+      receiptEmail: "",
+      onReceiptEmail: vi.fn(),
+    });
+
+    const mobile = screen.getByLabelText(/customer mobile number/i);
+    fireEvent.change(mobile, { target: { value: "98a76-54" } });
+    expect(mobile).toHaveValue("987654");
+    expect(button(/^ok$/i)).toBeDisabled();
+    expect(onResolveCustomer).not.toHaveBeenCalled();
+    expect(screen.queryByText("Choose a payment method")).toBeNull();
+  });
+
+  it("shows an already resolved customer's contact on payment", () => {
     const customer: PosCustomer = {
       id: "c1",
       name: "Asha Rao",
@@ -55,12 +92,39 @@ describe("checkout customer details", () => {
       email: "asha@example.com",
       storeCredit: 0,
     };
-    setup({ customer, onEditCustomer: vi.fn() });
+    setup({
+      customer,
+      onCustomer: vi.fn(),
+      onResolveCustomer: vi.fn(),
+    });
 
     expect(screen.getByText("Asha Rao")).toBeVisible();
     expect(screen.getByText(/9876543210.*asha@example.com/)).toBeVisible();
-    fireEvent.click(button(/continue to payment/i));
     expect(screen.getByText("Choose a payment method")).toBeVisible();
+  });
+
+  it("keeps optional receipt and GST fields out of the common path", () => {
+    setup({
+      customer: {
+        id: "c1",
+        name: "Asha",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+      onCustomer: vi.fn(),
+      onResolveCustomer: vi.fn(),
+      receiptEmail: "",
+      onReceiptEmail: vi.fn(),
+      gstEnabled: true,
+      gstin: "",
+      onGstin: vi.fn(),
+    });
+
+    expect(screen.queryByPlaceholderText("name@example.com")).toBeNull();
+    fireEvent.click(button(/add receipt email or gstin/i));
+    expect(screen.getByPlaceholderText("name@example.com")).toBeVisible();
+    expect(screen.getByPlaceholderText("22AAAAA0000A1Z5")).toBeVisible();
   });
 });
 
@@ -176,6 +240,10 @@ describe("one-method payments", () => {
       { method: "razorpay", amount: 500, reference: "pay_captured" },
     ]);
     expect(onTakeOnline).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: /remove razorpay payment/i }),
+    ).toBeNull();
+    expect(screen.getByText("Verified")).toBeVisible();
   });
 });
 

@@ -72,6 +72,7 @@ import {
   placePosSale,
   searchPosCustomers,
   createPosCustomer,
+  resolvePosCustomerByPhone,
   listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
@@ -1341,6 +1342,108 @@ describe("createPosCustomer", () => {
     expect(
       (await createPosCustomer({ name: "A", phone: "9876543210" })).error,
     ).toBeTruthy();
+  });
+});
+
+describe("resolvePosCustomerByPhone", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+  });
+
+  it("rejects malformed and placeholder mobiles without touching the database", async () => {
+    dbHolder.current = makeDbMock();
+    expect((await resolvePosCustomerByPhone("12345")).error).toMatch(
+      /10-digit/i,
+    );
+    expect((await resolvePosCustomerByPhone("8888888888")).error).toMatch(
+      /10-digit/i,
+    );
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("creates a claimable mobile-only customer in one submit", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[]],
+      returning: [{ id: "pos_mobile" }],
+    });
+    const result = await resolvePosCustomerByPhone("+91 98765 43210");
+    expect(result).toMatchObject({
+      created: true,
+      customer: {
+        id: "pos_mobile",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    });
+    expect(dbHolder.current.calls.values[0]).toMatchObject({
+      id: expect.stringMatching(/^pos_/),
+      storeId: CASHIER.storeId,
+      phone: "9876543210",
+      firstName: "",
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(1);
+  });
+
+  it("returns the existing customer's name, email, and credit after a conflict", async () => {
+    dbHolder.current = makeDbMock({
+      returning: [],
+      selectQueue: [
+        [
+          {
+            id: "cust-1",
+            phone: "9876543210",
+            email: "asha@example.com",
+            first_name: "Asha",
+            last_name: "Rao",
+            store_credit: 240,
+          },
+        ],
+      ],
+    });
+    const result = await resolvePosCustomerByPhone("9876543210");
+    expect(result).toEqual({
+      customer: {
+        id: "cust-1",
+        name: "Asha Rao",
+        phone: "9876543210",
+        email: "asha@example.com",
+        storeCredit: 240,
+      },
+    });
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("returns the unique-key winner when two tills create the same new phone", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [],
+        [
+          {
+            id: "pos_winner",
+            phone: "9876543210",
+            email: null,
+            first_name: "",
+            last_name: null,
+            store_credit: null,
+          },
+        ],
+      ],
+      returning: [],
+    });
+
+    const result = await resolvePosCustomerByPhone("9876543210");
+
+    expect(result).toEqual({
+      customer: {
+        id: "pos_winner",
+        name: "9876543210",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(2);
   });
 });
 

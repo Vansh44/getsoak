@@ -45,12 +45,14 @@ import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   newPosCustomerId,
+  normalizePhone,
   splitName,
   validatePosCustomer,
   type PosCustomerInput,
 } from "@/lib/pos/customer-claim";
 import {
   inventoryLevels,
+  customerCreditBalances,
   orderItems,
   orderPayments,
   orders,
@@ -718,6 +720,111 @@ export interface PosCustomer {
   /** Store-credit balance (§29). Rides along with the customer so attaching one
    *  brings their balance without a second round trip at the counter. */
   storeCredit: number;
+}
+
+/**
+ * Resolve the exact mobile entered at Checkout. This action is deliberately
+ * submit-only: typing in the till never runs a query. If the number is new, a
+ * claimable mobile-only customer is created immediately; a concurrent insert
+ * safely falls through to the existing row via the store/mobile unique key.
+ */
+export async function resolvePosCustomerByPhone(
+  mobile: string,
+): Promise<{ customer?: PosCustomer; created?: boolean; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+
+  const phone = normalizePhone(mobile);
+  if (!phone) {
+    return { error: "Enter a valid 10-digit Indian mobile number." };
+  }
+
+  const limited = await rateLimit(
+    `pos-customer-resolve:${op.storeId}:${op.staffId ?? op.locationId}`,
+    { max: 120, windowSeconds: 60 },
+  );
+  if (!limited.allowed) {
+    return { error: "Too many customer lookups. Wait a moment and retry." };
+  }
+
+  const id = newPosCustomerId(() => crypto.randomUUID());
+  try {
+    const result = await withService(async (db) => {
+      const find = () =>
+        db
+          .select({
+            id: users.id,
+            phone: users.phone,
+            email: users.email,
+            first_name: users.firstName,
+            last_name: users.lastName,
+            store_credit: customerCreditBalances.balance,
+          })
+          .from(users)
+          .leftJoin(
+            customerCreditBalances,
+            and(
+              eq(customerCreditBalances.storeId, users.storeId),
+              eq(customerCreditBalances.customerId, users.id),
+            ),
+          )
+          .where(and(eq(users.storeId, op.storeId), eq(users.phone, phone)))
+          .limit(1);
+
+      const existing = await find();
+      if (existing[0]) return { row: existing[0], created: false };
+
+      const inserted = await db
+        .insert(users)
+        .values({
+          id,
+          storeId: op.storeId,
+          phone,
+          firstName: "",
+          lastName: null,
+          email: null,
+        } as typeof users.$inferInsert)
+        .onConflictDoNothing()
+        .returning({ id: users.id });
+      if (inserted[0]) {
+        return { row: null, created: true, createdId: inserted[0].id };
+      }
+
+      // Another till inserted the same phone after our read. The unique key is
+      // the arbiter; read its winner instead of showing a duplicate error.
+      const raced = await find();
+      return { row: raced[0] ?? null, created: false };
+    });
+
+    if (result.created) {
+      return {
+        created: true,
+        customer: {
+          id: result.createdId ?? id,
+          name: phone,
+          phone,
+          email: null,
+          storeCredit: 0,
+        },
+      };
+    }
+    const row = result.row;
+    if (!row) return { error: "Couldn't resolve that customer. Try again." };
+    return {
+      customer: {
+        id: row.id,
+        name:
+          [row.first_name, row.last_name].filter(Boolean).join(" ").trim() ||
+          row.phone,
+        phone: row.phone,
+        email: row.email,
+        storeCredit: Number(row.store_credit) || 0,
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't resolve that customer.") };
+  }
 }
 
 /**

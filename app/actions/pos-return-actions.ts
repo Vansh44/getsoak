@@ -29,6 +29,10 @@ import {
   orders,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
+import {
+  clearCustomerVerification,
+  hasCustomerVerification,
+} from "@/lib/pos/customer-verification";
 import { posCan } from "@/lib/pos/permissions";
 import { posAudit } from "@/lib/pos/audit";
 import { currentShiftIdFor } from "./pos-shift-actions";
@@ -416,6 +420,7 @@ export interface ReturnResult {
    *  failed or hasn't confirmed. NOT an error: the return stands. */
   note?: string;
   error?: string;
+  verificationRequired?: boolean;
 }
 
 /**
@@ -441,6 +446,12 @@ export async function processReturn(
   }
   if (!Array.isArray(lines) || lines.length === 0) {
     return { error: "Choose what's coming back." };
+  }
+  if (!(await hasCustomerVerification("return", orderId, op))) {
+    return {
+      error: "Verify the customer's mobile number before taking this return.",
+      verificationRequired: true,
+    };
   }
 
   // getReturnableSale re-runs the BORIS gates, so a counter that may not take
@@ -786,5 +797,6 @@ export async function processReturn(
   });
 
   revalidatePath("/pos/sales");
+  await clearCustomerVerification();
   return { returnId, refunded: breakdown.total, note: gatewayNote };
 }

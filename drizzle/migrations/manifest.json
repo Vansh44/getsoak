@@ -1065,6 +1065,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260828_0032_pos_phone_checkout_and_verification_help",
+      "description": "Document submit-only mobile customer capture and mandatory pickup and return phone OTP verification",
+      "file": "sql/20260828_0032_pos_phone_checkout_and_verification_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0031_pos_checkout_clarity_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain phone-first checkout and pickup and return OTP verification",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%StoreMink does not search while you type.%' and body like '%go straight to Payment without another Continue step.%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Verify the customer before hand-over%' and body like '%there is no till override.%') or (slug = 'take-returns-at-the-counter' and body like '%Verify the customer before completing a return%' and body like '%does not move stock or money.%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%Add receipt email or GSTIN%' and body like '%does not create or change a customer profile.%'))",
+            "equals": "4"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain phone-first checkout and pickup and return OTP verification",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%StoreMink does not search while you type.%' and body like '%go straight to Payment without another Continue step.%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Verify the customer before hand-over%' and body like '%there is no till override.%') or (slug = 'take-returns-at-the-counter' and body like '%Verify the customer before completing a return%' and body like '%does not move stock or money.%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%Add receipt email or GSTIN%' and body like '%does not create or change a customer profile.%'))",
+            "equals": "4"
+          }
+        ]
+      }
     }
   ]
 }
