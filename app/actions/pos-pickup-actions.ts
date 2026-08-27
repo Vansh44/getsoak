@@ -57,6 +57,10 @@ import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
 import { currentShiftIdFor } from "./pos-shift-actions";
 import { getStoreSettings } from "@/lib/settings/resolve";
 import { handoverGate } from "@/lib/pos/collection-state";
+import {
+  clearCustomerVerification,
+  hasCustomerVerification,
+} from "@/lib/pos/customer-verification";
 
 /**
  * The shop an order is waiting at, returned alongside the claim itself.
@@ -414,7 +418,6 @@ export async function getPickupOrderDetail(
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid order." };
-
   try {
     const row = await withService(async (db) => {
       const found = await db
@@ -570,6 +573,7 @@ export async function markCollected(
 ): Promise<{
   success?: boolean;
   error?: string;
+  verificationRequired?: boolean;
   changeDue?: number;
   /** The order was never marked ready and needs an explicit confirmation. The
    *  counter turns this into a dialog rather than a dead error. */
@@ -583,6 +587,12 @@ export async function markCollected(
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid order." };
+  if (!(await hasCustomerVerification("pickup", orderId, op))) {
+    return {
+      error: "Verify the customer's mobile number before handover.",
+      verificationRequired: true,
+    };
+  }
 
   // ── What does this order still owe? ──────────────────────────────────────
   // Read BEFORE the claim. A tender that doesn't cover the total has to be
@@ -757,13 +767,15 @@ export async function markCollected(
       }
       // The drawer is resolved HERE too — a deposit is money in the till
       // exactly as a full payment is, and must join the same shift.
-      return takeDeposit({
+      const result = await takeDeposit({
         op,
         orderId,
         tenders,
         paid,
         shiftId,
       });
+      if (result.success) await clearCustomerVerification();
+      return result;
     }
 
     // ★ ONLY THE FULL PATH REACHES THIS. `settleTenders` refuses a short
@@ -1001,6 +1013,7 @@ export async function markCollected(
   });
 
   revalidatePath("/pos/pickups");
+  await clearCustomerVerification();
   return { success: true, changeDue: change };
 }
 

@@ -19,14 +19,13 @@ import {
   Camera,
   Package,
   Database,
-  UserPlus,
-  UserRound,
   LayoutGrid,
 } from "lucide-react";
 import {
   confirmPosGatewayPayment,
   lookupProducts,
   placePosSale,
+  resolvePosCustomerByPhone,
   startPosGatewayPayment,
   verifyManagerPin,
   type PosCatalogItem,
@@ -35,7 +34,6 @@ import {
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
-import { CustomerPanel } from "./customer-panel";
 // posLock/endSession moved to the rail (app/pos/pos-nav.tsx) — locking is the
 // same act on every screen, and it was hand-rolled identically in two places.
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
@@ -120,10 +118,9 @@ export function SellClient({
   // Disambiguation when one barcode maps to several variants.
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  // Customer attach (optional) + the B2B GSTIN that prints on the invoice.
+  // Customer is resolved once, by exact mobile, after Charge is selected.
   const [customer, setCustomer] = useState<PosCustomer | null>(null);
   const [gstin, setGstin] = useState("");
-  const [customerOpen, setCustomerOpen] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState("");
   const [parked, setParked] = useState<ParkedSale[]>([]);
   const [parkedOpen, setParkedOpen] = useState(false);
@@ -192,15 +189,10 @@ export function SellClient({
   );
   const scanRef = useRef<HTMLInputElement>(null);
   // Every overlay is listed: each one owns an input of its own (tender amount,
-  // customer search) and pulling focus out from under it 80 ms later would make
+  // customer mobile) and pulling focus out from under it 80 ms later would make
   // that field impossible to type in.
   const overlayOpen =
-    tendering ||
-    !!choices ||
-    cameraOpen ||
-    layoutOpen ||
-    customerOpen ||
-    !!saleId;
+    tendering || !!choices || cameraOpen || layoutOpen || !!saleId;
   const refocus = useCallback(() => {
     if (touchPrimary || overlayOpen) return;
     scanRef.current?.focus();
@@ -868,34 +860,6 @@ export function SellClient({
           </div>
 
           <div className="shrink-0 border-t border-[var(--pos-border)] p-3">
-            {/* Optional: a sale completes fine without a customer. */}
-            <button
-              type="button"
-              onClick={() => setCustomerOpen(true)}
-              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--pos-surface-2)]"
-            >
-              {customer ? (
-                <>
-                  <UserRound className="h-4 w-4 shrink-0 text-[var(--pos-ok)]" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {customer.name}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <UserPlus className="h-4 w-4 shrink-0 text-[var(--pos-ink-3)]" />
-                  <span className="flex-1 text-[var(--pos-ink-2)]">
-                    Add customer
-                  </span>
-                </>
-              )}
-              {gstin && (
-                <span className="shrink-0 rounded bg-[var(--pos-surface-2)] px-1.5 py-0.5 text-[10px] tracking-wide text-[var(--pos-ink-2)]">
-                  GST
-                </span>
-              )}
-            </button>
-
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="text-[var(--pos-ink-2)]">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>
@@ -1022,17 +986,6 @@ export function SellClient({
         />
       )}
 
-      {customerOpen && (
-        <CustomerPanel
-          customer={customer}
-          gstin={gstin}
-          gstEnabled={config.gstEnabled}
-          onPick={setCustomer}
-          onGstin={setGstin}
-          onClose={() => setCustomerOpen(false)}
-        />
-      )}
-
       {parkedOpen && (
         <ParkedPanel
           sales={parked}
@@ -1087,9 +1040,12 @@ export function SellClient({
           receiptEmail={receiptEmail}
           onReceiptEmail={setReceiptEmail}
           customer={customer}
-          onEditCustomer={() => setCustomerOpen(true)}
-          // Rides along with the attached customer — null for a walk-in, which
-          // is what hides the option entirely.
+          onCustomer={setCustomer}
+          onResolveCustomer={resolvePosCustomerByPhone}
+          gstin={gstin}
+          onGstin={setGstin}
+          gstEnabled={config.gstEnabled}
+          // Rides along with the resolved customer.
           storeCredit={customer?.storeCredit ?? null}
           // Passed only when the store has a live gateway, so the method never
           // renders as a control that would fail in front of a customer.

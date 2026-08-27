@@ -2297,14 +2297,18 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     instead of submitting an empty payment or charging twice. **★ Checked BEFORE
     the order insert and the stock reserve**, so a refused payment unwinds
     nothing. **★★ CHECKOUT NOW PRESENTS ONE DECISION AT A TIME.** The Sell
-    tender opens on Checkout details, where the attached customer is visible
-    and **Add customer** / **Continue as walk-in** are explicit. Payment is one
-    plain method list, with the unavailable gateway omitted; cash alone asks for
-    notes and previews change, while full card/UPI payments carry the full
-    amount into a method-specific confirmation. Split payment is a method →
-    amount → remaining-balance loop, then one review of every staged leg before
-    completion. Once a leg is staged the customer step is no longer reachable,
-    so store credit cannot be moved onto a different person's sale. The server
+    tender opens on a phone-first customer step: digits are capped at ten and
+    typing stays entirely client-side; **OK** performs one exact lookup through
+    `resolvePosCustomerByPhone`. An existing row returns its name, email and
+    store credit in that read. An absent number creates a phone-only unclaimed
+    customer, with a unique-key race falling back to the winner, and both paths
+    advance directly to Payment. The resolved identity stays visible and can be
+    changed only before a tender is staged. Payment is one plain method list,
+    with the unavailable gateway omitted; optional receipt email/GSTIN is
+    collapsed off the fast path, cash alone asks for notes and previews change,
+    while full card/UPI payments carry the full amount into a method-specific
+    confirmation. Split payment is a method → amount → remaining-balance
+    loop, then one review of every staged leg before completion. The server
     allowlists, paise settlement, gateway verification, replay protection and
     stock authority below are unchanged. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
@@ -2806,7 +2810,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `20260827_0030_locations_sidebar_visibility_help` records full child-label
       visibility in narrow and resized panels;
       `20260827_0031_pos_checkout_clarity_help` updates the POS customer,
-      payment, split-tender and receipt instructions for the staged checkout.
+      payment, split-tender and receipt instructions for the staged checkout;
+      `20260828_0032_pos_phone_checkout_and_verification_help` corrects that
+      guide to the submit-only mobile flow and documents mandatory pickup and
+      return OTP verification.
       Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
@@ -3490,11 +3497,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           not change, only the time. ⚠ Swapping `Promise.all` for a sequential
           loop does NOT serialise them — the array literal has already invoked
           every batch — so a mutation of that shape proves nothing.
-      - **Customer attach + GSTIN + line discounts.** `searchPosCustomers`
-        finds an EXISTING customer of the store (phone/name/email, 2-char
-        floor, store-scoped) to attach to a sale, and **`createPosCustomer`
-        records a walk-in who isn't on file** (§22b — that was blocked until
-        `pos_13` gave it a claim story). `placePosSale` **verifies the
+      - **Phone-first customer attach + GSTIN + line discounts.**
+        `resolvePosCustomerByPhone` accepts one normalised 10-digit mobile after
+        the cashier submits it — no action runs per keystroke. Its first exact,
+        store-scoped read returns the existing customer's name, email and credit
+        balance in one database request. If absent it creates the claimable
+        `pos_` row; if two tills race, the unique-key loser reads and attaches
+        the winner. The legacy `searchPosCustomers` / `createPosCustomer`
+        actions remain server-compatible but have no register UI caller.
+        `placePosSale` **verifies the
         customer belongs to this store** before writing (without it a sale
         could be filed against another store's customer, who holds RLS SELECT
         on their own orders and would see a foreign order in their history)
@@ -3526,8 +3537,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         Website rows keep
         delivery/pickup fulfilment; POS rows show receipt, attached customer,
         register location and cashier. The register customer is joined from
-        `users` — a POS shipping address is deliberately null — so both a
-        searched customer and one created inline remain visible after the sale.
+        `users` — a POS shipping address is deliberately null — so both an
+        existing phone match and a phone-only customer created at Charge remain
+        visible after the sale.
         The POS drawer/invoice say **Sold at**, render a truthful Walk-in when
         nobody was attached, and expose neither delivery address/phone,
         ShipmentPanel nor the fulfilment selector. That is enforced below the
@@ -4231,6 +4243,22 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `/api/cron/expire-pending-payments`. Config:
       `fulfilment.offerPickup` + `fulfilment.pickupHoldDays` (section
       `locations`, rendered on Locations → Online fulfilment).
+      - **★★ HAND-OVER REQUIRES THE ORDER PHONE'S OTP.**
+        `app/pos/customer-phone-verification.tsx` asks
+        `app/actions/pos-customer-verification-actions.ts` for the server-owned
+        target, then uses Firebase Phone Auth with a fresh invisible reCAPTCHA
+        for every send/resend. The browser shows only the masked number and
+        verifies automatically on the sixth digit. `markCollected` independently
+        requires the HTTP-only proof before it can touch payment, stock or
+        status. `lib/pos/customer-verification.ts` signs that 30-minute proof to
+        one purpose, order, store, location and operator and consumes it after a
+        successful mutation; pickup and return proofs cannot cross. Missing or
+        invalid order phone, stale/wrong OTP, rate limits, missing Firebase
+        configuration and a direct action call all fail closed. Firebase Phone
+        Auth may create an identity for a never-seen number: after saving the
+        proof the server deletes only a just-created, phone-only identity with no
+        StoreMink `users` row, so counter verification cannot reserve the phone
+        and break the shopper's later signup.
       - **A pickup HOLDS, it does not sell** — `placeOrder` calls `holdStock`
         instead of `reserve_stock_at`. Selling would empty the shelf on screen
         while the box is still physically on it, and the shop would reorder
@@ -5322,6 +5350,15 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         so once the lifecycle landed, a customer whose online return had been
         REJECTED could not bring the goods in either — the dead request still
         counted against them.
+      - **★★ A TILL RETURN REQUIRES THE SAVED ORDER PHONE'S OTP AT FINAL
+        SUBMIT.** The return route preserves the prepared quantities, restock
+        flags and refund method while the shared phone verifier runs; a sixth
+        digit verifies and retries that exact prepared submission automatically.
+        `processReturn` itself checks the purpose/order/store/location/operator-
+        bound HTTP-only proof before its transaction, so deep links and forged
+        client calls cannot bypass it. A failed or cancelled OTP changes no
+        goods, money, drawer or audit state; success consumes the proof only
+        after the return commits.
       - **★★ THE QUANTITY CLAMP WAS PER-ENTRY, NOT PER-LINE** (found
         2026-08-04). `refundBreakdown` iterated the client's `request` array
         and clamped EACH entry against `remainingQty` independently, so
@@ -6937,21 +6974,17 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       somebody's orders) but orphaned money is still money.
       `notification_preferences` is deliberately absent — the customer audience
       has no preference layer (§24), so a `pos_` customer can never have a row.
-    - **★ A RECORDED WALK-IN ALREADY GETS AN EMAILED RECEIPT.** `placePosSale`
-      emits `order.placed`, and the fan-out resolves a customer's address from
-      their `users` row — so recording a walk-in WITH an email gets them an
-      in-store order confirmation through the existing machinery, with no new
-      code.
-    - **★★ AND ONE WITH NO RECORD AT ALL GETS ONE TOO** (`lib/email/pos-receipt.ts`,
-      Shopify's receipt options). An optional email box in Checkout details,
-      before payment methods; its copy explicitly says that a receipt contact
-      does not create a customer profile.
+    - **★ AN EXISTING CUSTOMER ALREADY GETS AN EMAILED RECEIPT.**
+      `placePosSale` emits `order.placed`, and the fan-out resolves the attached
+      customer's saved address from `users`.
+    - **★★ A PHONE-ONLY CUSTOMER CAN GET ONE TOO**
+      (`lib/email/pos-receipt.ts`, Shopify's receipt-option idea). The optional
+      box is collapsed behind **Add receipt email or GSTIN** on Payment, and its
+      copy explicitly says that a receipt contact does not create or modify a
+      customer profile.
       **It does NOT go through the notification spine**, deliberately: the spine
-      routes an EVENT to IDENTIFIED recipients honouring preferences and
-      digests, and a walk-in has no identity — no `users` row, so no inbox for
-      an in-app row, no preferences, no digest. Forcing it through would mean
-      inventing a recipient id for someone who can never read the notification
-      it creates. It is still a `sendEmail` call, so it lands in `email_logs`
+      routes an EVENT to an identified customer's saved destination and cannot
+      represent a one-sale address. It is still a `sendEmail` call, so it lands in `email_logs`
       like everything else and `send-coverage.test.ts` stays satisfied.
       - **★ ONE RECEIPT, NEVER TWO.** `shouldSendDirectReceipt` (pure) fires
         only where the fan-out will not — no attached customer, or an attached
@@ -6985,16 +7018,14 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       already knows this person; what is new is the ACCOUNT.
     - **★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
       history; a thrown one would cost the shopper their signup.
-    - **★ A DUPLICATE PHONE ATTACHES, IT DOES NOT FAIL.** The commonest route to
-      `createPosCustomer` is a cashier who searched, mistyped, and typed the
-      number by hand — answering "that customer already exists" leaves them
-      re-searching with a queue behind them. It leaks nothing: it is the same row
-      the search would have returned.
-    - **★ `sell`, NOT A MANAGER GRANT.** Checkout visibly prompts for an
-      attached customer but keeps **Continue as walk-in** explicit. Search and
-      **Create new customer** share one screen; a typed name, mobile or email is
-      carried into the matching field, and the duplicate-phone rule above is the
-      backstop that prevents a second customer row.
+    - **★ A DUPLICATE PHONE ATTACHES, IT DOES NOT FAIL.** The submit-only action
+      reads an exact match before insert and catches a concurrent unique-key race
+      by re-reading its winner. The cashier never sees a duplicate error or has
+      to repeat a search.
+    - **★ `sell`, NOT A MANAGER GRANT.** Charge requires a submitted 10-digit
+      mobile and automatically resolves or creates the attached customer before
+      Payment. That identity is the basis for receipt history and store credit;
+      recording it is part of ringing up a sale.
     - **Backfill: none.** Every existing row came from a real signup and is
       claimed by definition, but `claimed_at` stays NULL rather than being
       invented — nothing reads it to decide who may log in; the id shape does.

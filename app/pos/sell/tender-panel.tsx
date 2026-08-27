@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeft,
   Banknote,
@@ -8,7 +8,6 @@ import {
   Loader2,
   QrCode,
   ShieldCheck,
-  UserPlus,
   UserRound,
   WalletCards,
   X,
@@ -105,7 +104,11 @@ export function TenderPanel({
   receiptEmail,
   onReceiptEmail,
   customer,
-  onEditCustomer,
+  onCustomer,
+  onResolveCustomer,
+  gstin,
+  onGstin,
+  gstEnabled,
   storeCredit,
   onTakeOnline,
 }: {
@@ -120,19 +123,26 @@ export function TenderPanel({
   onVerifyManager?: (
     pin: string,
   ) => Promise<{ approved?: boolean; token?: string; error?: string }>;
-  /** Receipt contact is offered in checkout details, before payment choices. */
+  /** Receipt contact is optional and collapsed below the customer summary. */
   receiptEmail?: string;
   onReceiptEmail?: (value: string) => void;
   /** Present only on the Sell checkout. Collection payments skip this step. */
   customer?: PosCustomer | null;
-  onEditCustomer?: () => void;
+  onCustomer?: (customer: PosCustomer | null) => void;
+  /** One explicit server round-trip after a complete number, never per key. */
+  onResolveCustomer?: (
+    mobile: string,
+  ) => Promise<{ customer?: PosCustomer; created?: boolean; error?: string }>;
+  gstin?: string;
+  onGstin?: (value: string) => void;
+  gstEnabled?: boolean;
   storeCredit?: number | null;
   onTakeOnline?: (
     amount: number,
   ) => Promise<{ reference?: string; error?: string }>;
 }) {
   const [screen, setScreen] = useState<Screen>(
-    onEditCustomer ? "customer" : "methods",
+    onResolveCustomer && !customer ? "customer" : "methods",
   );
   const [method, setMethod] = useState<PosTenderMethod>("cash");
   const [amount, setAmount] = useState("");
@@ -143,6 +153,12 @@ export function TenderPanel({
   const [error, setError] = useState<string | null>(null);
   const [managerPin, setManagerPin] = useState<string | null>(null);
   const [pin, setPin] = useState("");
+  const [mobile, setMobile] = useState(customer?.phone ?? "");
+  const [customerWasCreated, setCustomerWasCreated] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(
+    Boolean((gstin ?? "").trim() || (receiptEmail ?? "").trim()),
+  );
+  const resolvingCustomer = useRef(false);
 
   const paid = taken.reduce((sum, tender) => sum + tender.amount, 0);
   const remaining = changeDue(total, paid);
@@ -154,6 +170,39 @@ export function TenderPanel({
     .filter((tender) => tender.method === "store_credit")
     .reduce((sum, tender) => sum + tender.amount, 0);
   const creditLeft = Math.max(0, creditAvailable - creditStaged);
+
+  const resolveCustomer = async () => {
+    if (
+      !onResolveCustomer ||
+      !onCustomer ||
+      mobile.length !== 10 ||
+      resolvingCustomer.current
+    ) {
+      return;
+    }
+    resolvingCustomer.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await onResolveCustomer(mobile);
+      if (result.error || !result.customer) {
+        setError(result.error ?? "Couldn't resolve that customer.");
+        return;
+      }
+      onCustomer(result.customer);
+      setCustomerWasCreated(result.created === true);
+      // The identity remains visible on Payment, so making the cashier confirm
+      // it with a second button buys no safety and adds a click to every sale.
+      setScreen("methods");
+    } catch {
+      setError(
+        "Couldn't resolve that customer. Check the connection and retry.",
+      );
+    } finally {
+      resolvingCustomer.current = false;
+      setBusy(false);
+    }
+  };
 
   const methods: TenderOption[] = [
     ...METHODS,
@@ -297,6 +346,14 @@ export function TenderPanel({
   };
 
   const removeTender = (index: number) => {
+    // A captured Razorpay payment cannot be "removed" from reality. Keeping it
+    // staged is what prevents a retry from charging the customer twice.
+    if (taken[index]?.method === "razorpay") {
+      setError(
+        "That Razorpay payment is already captured. Complete the sale without charging it again.",
+      );
+      return;
+    }
     setTaken((current) => current.filter((_, item) => item !== index));
     setSplit(true);
     setError(null);
@@ -309,6 +366,19 @@ export function TenderPanel({
     (method === "cash" || paise(activeValue) <= paise(remaining));
   const displayTitle =
     screen === "customer" ? "Checkout" : split ? "Split payment" : title;
+  const hasCapturedOnline = taken.some(
+    (tender) => tender.method === "razorpay",
+  );
+
+  const closePanel = () => {
+    if (hasCapturedOnline) {
+      setError(
+        "This Razorpay payment is already captured. Complete the sale before closing.",
+      );
+      return;
+    }
+    onCancel();
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -319,24 +389,7 @@ export function TenderPanel({
         className="max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-5 shadow-2xl"
       >
         <div className="mb-4 flex items-center gap-2">
-          {managerPin === null &&
-            screen !== "customer" &&
-            onEditCustomer &&
-            (screen === "amount" || taken.length === 0) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setScreen(screen === "amount" ? "methods" : "customer");
-                  setError(null);
-                }}
-                disabled={busy}
-                className="rounded-lg p-1.5 text-[var(--pos-ink-2)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)] disabled:opacity-40"
-                aria-label="Back"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </button>
-            )}
-          {managerPin === null && screen === "amount" && !onEditCustomer && (
+          {managerPin === null && screen === "amount" && (
             <button
               type="button"
               onClick={() => {
@@ -355,7 +408,7 @@ export function TenderPanel({
           </h2>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={closePanel}
             disabled={busy}
             className="rounded-lg p-1.5 text-[var(--pos-ink-2)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)] disabled:opacity-40"
             aria-label="Close"
@@ -419,97 +472,94 @@ export function TenderPanel({
 
             <div className="mb-4">
               <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-semibold">Customer</p>
+                <p className="text-sm font-semibold">Customer mobile</p>
                 {customer && (
                   <button
                     type="button"
-                    onClick={onEditCustomer}
+                    onClick={() => {
+                      onCustomer?.(null);
+                      setMobile("");
+                      setCustomerWasCreated(false);
+                      setError(null);
+                    }}
                     className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--pos-ink-2)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink)]"
                   >
-                    Change
+                    Change number
                   </button>
                 )}
               </div>
               {customer ? (
-                <button
-                  type="button"
-                  onClick={onEditCustomer}
-                  className="flex w-full items-center gap-3 rounded-xl border border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] p-3 text-left"
-                >
+                <div className="flex w-full items-center gap-3 rounded-xl border border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] p-3 text-left">
                   <span className="rounded-full bg-[var(--pos-surface)] p-2 text-[var(--pos-ok)]">
                     <UserRound className="h-5 w-5" />
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-semibold">
-                      {customer.name}
+                      {customerWasCreated
+                        ? "New customer created"
+                        : customer.name}
                     </span>
                     <span className="block truncate text-xs text-[var(--pos-ink-2)]">
-                      {customer.phone}
+                      +91 {customer.phone}
                       {customer.email ? ` · ${customer.email}` : ""}
                     </span>
                   </span>
-                </button>
-              ) : (
-                <div className="rounded-xl border border-dashed border-[var(--pos-border-strong)] p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="rounded-full bg-[var(--pos-surface-2)] p-2 text-[var(--pos-ink-2)]">
-                      <UserPlus className="h-5 w-5" />
-                    </span>
-                    <div>
-                      <p className="text-sm font-semibold">No customer added</p>
-                      <p className="mt-0.5 text-xs text-[var(--pos-ink-2)]">
-                        Add one to save purchase history and use store credit.
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onEditCustomer}
-                    className="mt-3 w-full rounded-lg bg-[var(--pos-surface-2)] py-2.5 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)]"
-                  >
-                    Add customer
-                  </button>
                 </div>
+              ) : (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void resolveCustomer();
+                  }}
+                >
+                  <div className="flex items-stretch gap-2">
+                    <label className="flex min-w-0 flex-1 items-center rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] focus-within:border-[var(--pos-border-strong)]">
+                      <span className="border-r border-[var(--pos-border)] px-3 text-sm font-medium text-[var(--pos-ink-2)]">
+                        +91
+                      </span>
+                      <input
+                        autoFocus
+                        aria-label="Customer mobile number"
+                        autoComplete="off"
+                        inputMode="numeric"
+                        pattern="[0-9]{10}"
+                        maxLength={10}
+                        value={mobile}
+                        placeholder="10-digit mobile"
+                        onChange={(event) => {
+                          const digits = event.target.value.replace(/\D/g, "");
+                          const national =
+                            digits.length > 10 && digits.startsWith("91")
+                              ? digits.slice(2, 12)
+                              : digits.slice(0, 10);
+                          setMobile(national);
+                          setError(null);
+                        }}
+                        className="min-w-0 flex-1 bg-transparent px-3 py-3 text-base outline-none"
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={busy || mobile.length !== 10}
+                      className="inline-flex min-w-20 items-center justify-center gap-2 rounded-xl bg-[var(--pos-accent)] px-4 text-sm font-semibold text-[var(--pos-on-accent)] hover:opacity-90 disabled:opacity-40"
+                    >
+                      {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                      OK
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-xs text-[var(--pos-ink-3)]">
+                    We check only after OK. A new number creates the customer
+                    automatically.
+                  </p>
+                </form>
               )}
             </div>
 
-            {onReceiptEmail && (!customer || !customer.email) && (
-              <label className="mb-4 block">
-                <span className="mb-1 block text-sm font-semibold">
-                  Receipt email{" "}
-                  <span className="font-normal text-[var(--pos-ink-3)]">
-                    (optional)
-                  </span>
-                </span>
-                <input
-                  value={receiptEmail ?? ""}
-                  inputMode="email"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  placeholder="name@example.com"
-                  onChange={(event) =>
-                    onReceiptEmail(event.target.value.slice(0, 160))
-                  }
-                  className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
-                />
-                <span className="mt-1 block text-xs text-[var(--pos-ink-3)]">
-                  Sends this receipt only. It does not create a customer
-                  profile.
-                </span>
-              </label>
+            {error && (
+              <p role="alert" className="mb-3 text-sm text-[var(--pos-danger)]">
+                {error}
+              </p>
             )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setScreen("methods");
-                setError(null);
-              }}
-              className="w-full rounded-xl bg-[var(--pos-accent)] py-3 font-semibold text-[var(--pos-on-accent)] transition-opacity hover:opacity-90"
-            >
-              {customer ? "Continue to payment" : "Continue as walk-in"}
-            </button>
           </>
         ) : (
           <>
@@ -527,6 +577,99 @@ export function TenderPanel({
               )}
             </div>
 
+            {onResolveCustomer && customer && taken.length === 0 && (
+              <div className="mb-4 rounded-xl border border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] p-3">
+                <div className="flex items-center gap-3">
+                  <span className="rounded-full bg-[var(--pos-surface)] p-2 text-[var(--pos-ok)]">
+                    <UserRound className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">
+                      {customerWasCreated ? "New customer" : customer.name}
+                    </span>
+                    <span className="block truncate text-xs text-[var(--pos-ink-2)]">
+                      +91 {customer.phone}
+                      {customer.email ? ` · ${customer.email}` : ""}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      onCustomer?.(null);
+                      setMobile("");
+                      setCustomerWasCreated(false);
+                      setScreen("customer");
+                      setError(null);
+                    }}
+                    className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface)] disabled:opacity-40"
+                  >
+                    Change
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {onResolveCustomer &&
+              ((gstEnabled && onGstin) ||
+                (onReceiptEmail && (!customer || !customer.email))) && (
+                <div className="mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen((open) => !open)}
+                    className="w-full rounded-lg py-1.5 text-left text-xs font-medium text-[var(--pos-ink-2)] hover:text-[var(--pos-ink)]"
+                    aria-expanded={detailsOpen}
+                  >
+                    {detailsOpen ? "Hide" : "Add"} receipt email or GSTIN
+                  </button>
+                  {detailsOpen && (
+                    <div className="mt-2 space-y-3 rounded-xl border border-[var(--pos-border)] p-3">
+                      {onReceiptEmail && (!customer || !customer.email) && (
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-[var(--pos-ink-2)]">
+                            Receipt email (optional)
+                          </span>
+                          <input
+                            value={receiptEmail ?? ""}
+                            inputMode="email"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            placeholder="name@example.com"
+                            onChange={(event) =>
+                              onReceiptEmail(event.target.value.slice(0, 160))
+                            }
+                            className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
+                          />
+                          <span className="mt-1 block text-[11px] text-[var(--pos-ink-3)]">
+                            Sends this receipt only; it does not change the
+                            customer profile.
+                          </span>
+                        </label>
+                      )}
+                      {gstEnabled && onGstin && (
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-medium text-[var(--pos-ink-2)]">
+                            Customer GSTIN (optional)
+                          </span>
+                          <input
+                            value={gstin ?? ""}
+                            autoCapitalize="characters"
+                            placeholder="22AAAAA0000A1Z5"
+                            onChange={(event) =>
+                              onGstin(
+                                event.target.value.toUpperCase().slice(0, 15),
+                              )
+                            }
+                            className="w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
+                          />
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
             {taken.length > 0 && (
               <div className="mb-4 space-y-2" aria-label="Payments added">
                 {taken.map((tender, index) => (
@@ -537,15 +680,21 @@ export function TenderPanel({
                     <span>{labelFor(tender.method)}</span>
                     <span className="flex items-center gap-2 font-medium">
                       {money(tender.amount)}
-                      <button
-                        type="button"
-                        onClick={() => removeTender(index)}
-                        disabled={busy}
-                        className="rounded p-0.5 text-[var(--pos-ink-3)] hover:text-[var(--pos-ink)] disabled:opacity-40"
-                        aria-label={`Remove ${labelFor(tender.method)} payment`}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      {tender.method === "razorpay" ? (
+                        <span className="text-[11px] font-normal text-[var(--pos-ok)]">
+                          Verified
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => removeTender(index)}
+                          disabled={busy}
+                          className="rounded p-0.5 text-[var(--pos-ink-3)] hover:text-[var(--pos-ink)] disabled:opacity-40"
+                          aria-label={`Remove ${labelFor(tender.method)} payment`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </span>
                   </div>
                 ))}
