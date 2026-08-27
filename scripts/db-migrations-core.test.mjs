@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(30);
+    expect(loaded.migrations).toHaveLength(31);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -267,6 +267,32 @@ describe("database migration controls", () => {
     expect(loaded.migrations[29].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[29].sql).toContain(
       "full destination name wraps onto another line instead of being hidden",
+    );
+    expect(loaded.migrations[30]).toMatchObject({
+      id: "20260827_0031_pos_checkout_clarity_help",
+      transaction: true,
+      requires: ["20260827_0030_locations_sidebar_visibility_help"],
+      verify: {},
+      applyVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("POS checkout guides"),
+            equals: "3",
+          }),
+        ],
+      },
+      adoptVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("POS checkout guides"),
+            equals: "3",
+          }),
+        ],
+      },
+    });
+    expect(loaded.migrations[30].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[30].sql).toContain(
+      "The Payment screen shows one plain list of methods",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

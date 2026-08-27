@@ -2296,7 +2296,17 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     reuse the same tender, including the same captured gateway reference,
     instead of submitting an empty payment or charging twice. **★ Checked BEFORE
     the order insert and the stock reserve**, so a refused payment unwinds
-    nothing. **★ THE SHELF IS CHECKED
+    nothing. **★★ CHECKOUT NOW PRESENTS ONE DECISION AT A TIME.** The Sell
+    tender opens on Checkout details, where the attached customer is visible
+    and **Add customer** / **Continue as walk-in** are explicit. Payment is one
+    plain method list, with the unavailable gateway omitted; cash alone asks for
+    notes and previews change, while full card/UPI payments carry the full
+    amount into a method-specific confirmation. Split payment is a method →
+    amount → remaining-balance loop, then one review of every staged leg before
+    completion. Once a leg is staged the customer step is no longer reachable,
+    so store credit cannot be moved onto a different person's sale. The server
+    allowlists, paise settlement, gateway verification, replay protection and
+    stock authority below are unchanged. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
     runs `shortLinesAt`, refusing before the Razorpay order exists, which
     catches the commoner stale-IndexedDB-cache case for free. That courtesy read
@@ -2794,7 +2804,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `20260827_0029_locations_fulfilment_navigation_help` documents the
       Locations child panel and aligned routing/pickup workspace;
       `20260827_0030_locations_sidebar_visibility_help` records full child-label
-      visibility in narrow and resized panels. Published
+      visibility in narrow and resized panels;
+      `20260827_0031_pos_checkout_clarity_help` updates the POS customer,
+      payment, split-tender and receipt instructions for the staged checkout.
+      Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,
@@ -6930,7 +6943,9 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       in-store order confirmation through the existing machinery, with no new
       code.
     - **★★ AND ONE WITH NO RECORD AT ALL GETS ONE TOO** (`lib/email/pos-receipt.ts`,
-      Shopify's receipt options). An optional email box on the tender panel.
+      Shopify's receipt options). An optional email box in Checkout details,
+      before payment methods; its copy explicitly says that a receipt contact
+      does not create a customer profile.
       **It does NOT go through the notification spine**, deliberately: the spine
       routes an EVENT to IDENTIFIED recipients honouring preferences and
       digests, and a walk-in has no identity — no `users` row, so no inbox for
@@ -6975,9 +6990,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       number by hand — answering "that customer already exists" leaves them
       re-searching with a queue behind them. It leaks nothing: it is the same row
       the search would have returned.
-    - **★ `sell`, NOT A MANAGER GRANT**, and the form opens from the empty search
-      result rather than a second button — "Add customer" beside the search box
-      invites a duplicate of someone already on file.
+    - **★ `sell`, NOT A MANAGER GRANT.** Checkout visibly prompts for an
+      attached customer but keeps **Continue as walk-in** explicit. Search and
+      **Create new customer** share one screen; a typed name, mobile or email is
+      carried into the matching field, and the duplicate-phone rule above is the
+      backstop that prevents a second customer row.
     - **Backfill: none.** Every existing row came from a real signup and is
       claimed by definition, but `claimed_at` stays NULL rather than being
       invented — nothing reads it to decide who may log in; the id shape does.

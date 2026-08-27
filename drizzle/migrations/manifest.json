@@ -1039,6 +1039,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260827_0031_pos_checkout_clarity_help",
+      "description": "Document customer capture, simplified payment methods, and the linear split-payment flow at POS checkout",
+      "file": "sql/20260827_0031_pos_checkout_clarity_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0030_locations_sidebar_visibility_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS checkout guides explain customer, payment, split, and receipt flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%select <strong>Continue as walk-in</strong>%' and body like '%Search and <strong>Create new customer</strong> are on the same screen%') or (slug = 'take-payments-and-split-tenders' and body like '%The Payment screen shows one plain list of methods%' and body like '%Choose the first payment method%' and body like '%automatically follows this split flow%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%On the Checkout details screen%' and body like '%does not create a customer profile%'))",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS checkout guides explain customer, payment, split, and receipt flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%select <strong>Continue as walk-in</strong>%' and body like '%Search and <strong>Create new customer</strong> are on the same screen%') or (slug = 'take-payments-and-split-tenders' and body like '%The Payment screen shows one plain list of methods%' and body like '%Choose the first payment method%' and body like '%automatically follows this split flow%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%On the Checkout details screen%' and body like '%does not create a customer profile%'))",
+            "equals": "3"
+          }
+        ]
+      }
     }
   ]
 }

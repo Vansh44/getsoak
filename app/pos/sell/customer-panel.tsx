@@ -7,11 +7,11 @@
 // and is ADOPTED by that person's later online signup rather than colliding
 // with it (lib/pos/claim-customer.ts).
 //
-// ★ THE FORM OPENS FROM THE EMPTY STATE, NOT FROM A SECOND BUTTON. "Add
-// customer" sitting beside the search box invites a cashier to create a
-// duplicate of someone already on file; reaching it only after a search came
-// back empty means the search has happened by construction. The typed query is
-// carried into the form, so nothing is retyped.
+// Existing-customer search and new-customer creation intentionally share this
+// one screen, matching the checkout decision the cashier is making. Creating is
+// a clear action rather than a reward for producing an empty search result; the
+// server still collapses duplicate phone numbers back to the existing customer.
+// Any typed query is carried into the form so nothing is retyped.
 //
 // The GSTIN is independent of the attach: a business buyer can get their GSTIN
 // on the invoice without having an account at all.
@@ -62,21 +62,44 @@ export function CustomerPanel({
     if (q.length < 2) return;
     // Debounced, and it still round-trips: a customer list is personal data
     // and has no business being cached on a shared till.
+    let cancelled = false;
     const t = setTimeout(async () => {
       setSearching(true);
       const res = await searchPosCustomers(q);
+      if (cancelled) return;
       setSearching(false);
       setError(res.error ?? null);
       setResults(res.customers);
     }, 250);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, [q]);
 
+  const startCreating = () => {
+    const looksLikeEmail = q.includes("@");
+    const asPhone = normalizePhone(q);
+    setError(null);
+    setDraft({
+      name: !asPhone && !looksLikeEmail ? q : "",
+      phone: asPhone || "",
+      email: looksLikeEmail ? q : "",
+    });
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 pt-16">
-      <div className="w-full max-w-md rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-bg)] p-4 shadow-2xl">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="customer-panel-title"
+        className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-bg)] p-4 shadow-2xl"
+      >
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">Customer</h2>
+          <h2 id="customer-panel-title" className="font-semibold">
+            {customer ? "Customer details" : "Add customer"}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -95,6 +118,7 @@ export function CustomerPanel({
               </div>
               <div className="truncate text-xs text-[var(--pos-ink-2)]">
                 {customer.phone}
+                {customer.email ? ` · ${customer.email}` : ""}
               </div>
             </div>
             <button
@@ -107,6 +131,9 @@ export function CustomerPanel({
           </div>
         ) : (
           <>
+            <p className="mb-2 text-xs text-[var(--pos-ink-2)]">
+              Search by name, mobile number or email.
+            </p>
             <div className="relative mb-2">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
               <input
@@ -116,7 +143,7 @@ export function CustomerPanel({
                 placeholder="Phone, name or email…"
                 className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-2.5 pl-9 pr-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
               />
-              {searching && (
+              {q.length >= 2 && searching && (
                 <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
               )}
             </div>
@@ -151,38 +178,29 @@ export function CustomerPanel({
                   <p className="text-sm text-[var(--pos-ink-3)]">
                     No customer found.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Seed whichever field the query looks like, so the
-                      // cashier types each detail exactly once.
-                      const asPhone = normalizePhone(q);
-                      setError(null);
-                      setDraft({
-                        name: asPhone ? "" : q,
-                        phone: asPhone ? asPhone : "",
-                        email: "",
-                      });
-                    }}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[var(--pos-surface-2)] px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
-                  >
-                    <UserPlus className="h-4 w-4" />
-                    Add as a new customer
-                  </button>
-                  <p className="mt-2 text-xs text-[var(--pos-ink-3)]">
-                    Or leave it — the sale can go through without one.
-                  </p>
                 </div>
               )}
             </div>
+
+            {!draft && (
+              <button
+                type="button"
+                onClick={startCreating}
+                className="mb-4 inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-[var(--pos-surface-2)] px-3 py-2.5 text-sm font-semibold transition-colors hover:bg-[var(--pos-surface-3)]"
+              >
+                <UserPlus className="h-4 w-4" />
+                Create new customer
+              </button>
+            )}
           </>
         )}
 
         {draft && !customer && (
           <div className="mb-4 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3">
-            <div className="mb-2 text-xs font-medium text-[var(--pos-ink-2)]">
-              New customer
-            </div>
+            <div className="mb-1 text-sm font-semibold">New customer</div>
+            <p className="mb-2 text-xs text-[var(--pos-ink-2)]">
+              Name and mobile are required. Email is optional.
+            </p>
             <div className="grid gap-2">
               <input
                 value={draft.name}
