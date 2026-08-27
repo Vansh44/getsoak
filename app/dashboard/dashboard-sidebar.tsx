@@ -219,22 +219,24 @@ export function DashboardSidebar({
                           <Link
                             key={c.href}
                             href={c.href}
-                            className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-[13.5px] font-medium transition-colors ${
+                            className={`flex items-start gap-2.5 px-2.5 py-2 rounded-md text-[13.5px] font-medium transition-colors ${
                               active
                                 ? "bg-white text-[#1a1a1a] shadow-[0_1px_3px_rgba(0,0,0,0.05)]"
                                 : "text-[#4a4a4a] hover:bg-[#e3e3e3] hover:text-[#1a1a1a]"
                             }`}
                           >
-                            <span className="dash-nav-icon" aria-hidden>
+                            <span className="dash-nav-icon mt-0.5" aria-hidden>
                               <Icon
                                 className="h-[17px] w-[17px]"
                                 strokeWidth={2}
                               />
                             </span>
-                            <span className="truncate">{c.label}</span>
+                            <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">
+                              {c.label}
+                            </span>
                             {c.badge ? (
                               <span
-                                className={`dash-nav-badge ${c.badgeTone ?? "accent"}`}
+                                className={`dash-nav-badge mt-0.5 shrink-0 ${c.badgeTone ?? "accent"}`}
                               >
                                 {c.badge}
                               </span>

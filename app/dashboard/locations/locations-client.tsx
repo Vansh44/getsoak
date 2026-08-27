@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MapPin, Plus, Pencil, Trash2, Loader2, X, Truck } from "lucide-react";
+import { MapPin, Plus, Pencil, Trash2, Loader2, X, Boxes } from "lucide-react";
 import {
   createLocation,
   updateLocation,
@@ -111,8 +111,8 @@ export function LocationsClient({
         <div>
           <h1>Locations</h1>
           <p>
-            Physical stores and warehouses. Each holds its own stock and prints
-            receipts with its own GST details.
+            Set up the places that hold stock. Open a location&apos;s inventory
+            to count or adjust what is physically there.
           </p>
         </div>
         {canManage && (
@@ -133,18 +133,15 @@ export function LocationsClient({
         )}
       </header>
 
-      {/* Shown for ANY number of locations: a single-shop merchant can offer
-          collection too, and gating this on 2+ locations made the pickup
-          switch unreachable for them. Named for everything the page holds —
-          "Online fulfilment order" read as the ORDER locations are used in, so
-          nobody would look there for a checkout setting. */}
-      <Link
-        href="/dashboard/locations/fulfilment"
-        className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#e5e5e5] px-3 py-2 text-sm font-medium text-[#111827] transition-colors hover:bg-[#111827]/[0.03]"
-      >
-        <Truck className="h-4 w-4" strokeWidth={2} />
-        Online fulfilment &amp; pickup
-      </Link>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Link
+          href="/dashboard/inventory"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#111827] px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+        >
+          <Boxes className="h-4 w-4" strokeWidth={2} />
+          Open inventory
+        </Link>
+      </div>
 
       {/* The count and the buy/release controls live together in one card —
           the line that used to sit here said "coming soon", which was the only
@@ -161,9 +158,9 @@ export function LocationsClient({
         {initialLocations.map((l) => (
           <div
             key={l.id}
-            className="flex items-center justify-between rounded-xl border border-[#e5e5e5] bg-white p-4"
+            className="flex flex-col gap-3 rounded-xl border border-[#e5e5e5] bg-white p-4 sm:flex-row sm:items-center sm:justify-between"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#111827]/5 text-[#111827]">
                 <MapPin className="h-5 w-5" strokeWidth={1.75} />
               </div>
@@ -207,27 +204,37 @@ export function LocationsClient({
                 </div>
               </div>
             </div>
-            {canManage && (
-              <div className="flex items-center gap-1">
-                <Link
-                  href={`/dashboard/locations/${l.id}`}
-                  title="Edit location and capabilities"
-                  className="rounded-lg p-2 text-[#5b6472] transition-colors hover:bg-[#111827]/5 hover:text-[#111827]"
-                >
-                  <Pencil className="h-4 w-4" strokeWidth={2} />
-                </Link>
-                {!l.isDefault && (
-                  <button
-                    type="button"
-                    onClick={() => remove(l)}
-                    className="rounded-md p-2 text-[#b42318] transition-colors hover:bg-[#fef3f2]"
-                    aria-label="Delete"
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+              <Link
+                href={`/dashboard/inventory?location=${l.id}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#e5e5e5] px-2.5 py-2 text-xs font-medium text-[#111827] transition-colors hover:bg-[#111827]/[0.03]"
+              >
+                <Boxes className="h-3.5 w-3.5" strokeWidth={2} />
+                View inventory
+              </Link>
+              {canManage && (
+                <>
+                  <Link
+                    href={`/dashboard/locations/${l.id}`}
+                    title="Edit location and capabilities"
+                    className="inline-flex items-center gap-1.5 rounded-lg p-2 text-xs font-medium text-[#5b6472] transition-colors hover:bg-[#111827]/5 hover:text-[#111827]"
                   >
-                    <Trash2 className="h-4 w-4" strokeWidth={2} />
-                  </button>
-                )}
-              </div>
-            )}
+                    <Pencil className="h-3.5 w-3.5" strokeWidth={2} />
+                    <span className="hidden sm:inline">Edit setup</span>
+                  </Link>
+                  {!l.isDefault && (
+                    <button
+                      type="button"
+                      onClick={() => remove(l)}
+                      className="rounded-md p-2 text-[#b42318] transition-colors hover:bg-[#fef3f2]"
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" strokeWidth={2} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         ))}
       </div>

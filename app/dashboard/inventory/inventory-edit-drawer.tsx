@@ -42,6 +42,7 @@ export function InventoryEditDrawer({
   onSave,
   onViewHistory,
   isPending,
+  locationName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -49,6 +50,7 @@ export function InventoryEditDrawer({
   onSave: (sku: SkuRow, newStock: number, reason: string) => void;
   onViewHistory: (sku: SkuRow) => void;
   isPending: boolean;
+  locationName: string;
 }) {
   const router = useRouter();
   // The parent remounts this drawer for each opened SKU, so seeding state from
@@ -79,9 +81,9 @@ export function InventoryEditDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full gap-0 p-0 sm:max-w-md">
         <SheetHeader className="border-b border-border px-5 py-4">
-          <SheetTitle>Manage stock</SheetTitle>
+          <SheetTitle>Manage stock at {locationName}</SheetTitle>
           <SheetDescription>
-            Set a new quantity or adjust it, then save.
+            This change affects only {locationName}.
           </SheetDescription>
         </SheetHeader>
 
@@ -130,7 +132,7 @@ export function InventoryEditDrawer({
                   one control instead of buttons flung to the edges. */}
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-foreground">
-                  Stock level
+                  Stock at {locationName}
                 </label>
                 <div className="flex items-stretch overflow-hidden rounded-lg border border-border bg-card shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
                   <button

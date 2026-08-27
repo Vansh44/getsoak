@@ -34,7 +34,7 @@ export default async function InventoryPage({
   const pageSize = DASHBOARD_PAGE_SIZE;
 
   const storeId = await getActingStoreId();
-  const locationParam = pickParam(sp.location) || "all";
+  const requestedLocation = pickParam(sp.location);
 
   // Which shops this viewer may pick from. A location-bound admin (Phase B2)
   // sees only theirs; everyone else sees all of the store's.
@@ -44,6 +44,17 @@ export default async function InventoryPage({
     scope === null
       ? allLocations
       : allLocations.filter((l) => scope.includes(l.id));
+
+  // A merchant normally comes here to change a real shelf, so a multi-location
+  // store opens on its default/first accessible location. The aggregate stays
+  // available through the explicit `?location=all` view, but is never the
+  // accidental landing state.
+  const locationParam =
+    scope !== null
+      ? requestedLocation && requestedLocation !== "all"
+        ? requestedLocation
+        : (locations[0]?.id ?? "all")
+      : requestedLocation || (locations.length > 1 ? locations[0].id : "all");
 
   const [inventoryRes, categoryList] = await Promise.all([
     getInventory({
@@ -93,6 +104,7 @@ export default async function InventoryPage({
         storeLowStockThreshold={inventoryRes.lowStockThreshold}
         locations={locations.map((l) => ({ id: l.id, name: l.name }))}
         locationId={inventoryRes.locationId}
+        canViewAggregate={scope === null}
       />
     </>
   );

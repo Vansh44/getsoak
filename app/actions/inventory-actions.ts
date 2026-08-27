@@ -49,6 +49,8 @@ export interface StockMovementRow {
   created_by: string | null;
   created_at: string;
   order_id: string | null;
+  location_id: string | null;
+  location_name: string | null;
 }
 
 /**
@@ -63,9 +65,21 @@ async function resolveInventoryLocation(
   storeId: string,
   requested: string | null | undefined,
 ): Promise<{ locationId: string | null; error?: string }> {
-  if (!requested || requested === "all") return { locationId: null };
-
   const scope = await getViewerLocations();
+  if (!requested || requested === "all") {
+    // The aggregate columns on products/variants cover the entire store, not
+    // just an admin's assigned shelves. Restricted viewers must choose one of
+    // their concrete locations rather than gaining a store-wide read through
+    // an omitted or `all` query parameter.
+    if (scope !== null) {
+      return {
+        locationId: null,
+        error: "Choose one of your assigned locations.",
+      };
+    }
+    return { locationId: null };
+  }
+
   if (scope !== null && !scope.includes(requested)) {
     return {
       locationId: null,
@@ -90,9 +104,10 @@ async function resolveInventoryLocation(
       return { locationId: null, error: "Unknown location." };
     return { locationId: requested };
   } catch {
-    // A lookup failure falls back to the aggregate rather than editing the
-    // wrong shelf.
-    return { locationId: null };
+    // Location lookup is an authorization boundary. Never turn an unverifiable
+    // location into the default shelf, because a retry could write stock to the
+    // wrong place.
+    return { locationId: null, error: "Could not verify that location." };
   }
 }
 
@@ -160,6 +175,15 @@ export async function getInventory({
   // A specific shop shows ITS shelf; "all locations" keeps products.stock,
   // which the sync trigger maintains as the sum across every location.
   const resolved = await resolveInventoryLocation(storeId, locationId);
+  if (resolved.error) {
+    return {
+      rows: [],
+      total: 0,
+      lowStockThreshold: defaultLowThreshold,
+      locationId: null,
+      error: resolved.error,
+    };
+  }
   const atLocation = resolved.locationId;
 
   const prodConds = [eq(products.storeId, storeId)];
@@ -651,11 +675,24 @@ export async function getMovements(
   productId: string,
   variantId?: string | null,
   page: number = 1,
+  locationId?: string | null,
 ): Promise<{ movements: StockMovementRow[]; total: number; error?: string }> {
   const userId = await getManagerUserId("inventory");
   if (!userId) return { movements: [], total: 0, error: "Not authenticated" };
 
   const storeId = await getActingStoreId();
+
+  // A drawer normally supplies one concrete location. Preserve the same
+  // authorization boundary for older/direct callers that omit it: a bound
+  // admin may see history only from their assigned shelves, never the whole
+  // store ledger.
+  const viewerScope = locationId ? null : await getViewerLocations();
+  const resolved = locationId
+    ? await resolveInventoryLocation(storeId, locationId)
+    : { locationId: null };
+  if (resolved.error) {
+    return { movements: [], total: 0, error: resolved.error };
+  }
 
   const conds = [
     eq(stockMovements.storeId, storeId),
@@ -665,6 +702,12 @@ export async function getMovements(
     conds.push(eq(stockMovements.variantId, variantId));
   } else if (variantId === null) {
     conds.push(isNull(stockMovements.variantId));
+  }
+  if (resolved.locationId) {
+    conds.push(eq(stockMovements.locationId, resolved.locationId));
+  } else if (viewerScope !== null) {
+    if (viewerScope.length === 0) return { movements: [], total: 0 };
+    conds.push(inArray(stockMovements.locationId, viewerScope));
   }
   const whereExpr = and(...conds);
 
@@ -684,8 +727,17 @@ export async function getMovements(
           created_by: stockMovements.createdBy,
           created_at: stockMovements.createdAt,
           order_id: stockMovements.orderId,
+          location_id: stockMovements.locationId,
+          location_name: storeLocations.name,
         })
         .from(stockMovements)
+        .leftJoin(
+          storeLocations,
+          and(
+            eq(storeLocations.id, stockMovements.locationId),
+            eq(storeLocations.storeId, storeId),
+          ),
+        )
         .where(whereExpr)
         .orderBy(desc(stockMovements.createdAt))
         .limit(pageSize)

@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { resolveActiveSection } from "./dashboard-sidebar";
+import { render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { DashboardSidebar, resolveActiveSection } from "./dashboard-sidebar";
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/dashboard/locations/fulfilment",
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 // ---------------------------------------------------------------------------
 // The sub-nav panel is chosen by this function, so getting it wrong swaps the
@@ -30,6 +36,17 @@ const NAV = [
       { href: "/dashboard/billing", label: "Billing" },
     ],
   },
+  {
+    href: "/dashboard/locations",
+    label: "Locations",
+    children: [
+      { href: "/dashboard/locations", label: "All locations" },
+      {
+        href: "/dashboard/locations/fulfilment",
+        label: "Online fulfilment & pickup",
+      },
+    ],
+  },
   { href: "/dashboard/orders", label: "Orders" },
 ];
 
@@ -50,6 +67,15 @@ describe("resolveActiveSection", () => {
     expect(resolveActiveSection(NAV, "/dashboard/admins/new")?.label).toBe(
       "Settings",
     );
+  });
+
+  it("keeps fulfilment inside the Locations sub-navigation", () => {
+    expect(resolveActiveSection(NAV, "/dashboard/locations")?.label).toBe(
+      "Locations",
+    );
+    expect(
+      resolveActiveSection(NAV, "/dashboard/locations/fulfilment")?.label,
+    ).toBe("Locations");
   });
 
   it("★ prefers a DIRECT match over a parent that lists the same child", () => {
@@ -94,5 +120,46 @@ describe("resolveActiveSection", () => {
       "Customers",
     );
     expect(resolveActiveSection([], "/dashboard")).toBeUndefined();
+  });
+});
+
+describe("DashboardSidebar child labels", () => {
+  it("wraps long destination names instead of hiding them behind an ellipsis", () => {
+    render(
+      <DashboardSidebar
+        groups={[
+          {
+            group: "Sell in person",
+            items: [
+              {
+                href: "/dashboard/locations",
+                label: "Locations",
+                icon: "location",
+                children: [
+                  {
+                    href: "/dashboard/locations",
+                    label: "All locations",
+                    icon: "location",
+                  },
+                  {
+                    href: "/dashboard/locations/fulfilment",
+                    label: "Online fulfilment & pickup",
+                    icon: "shipping",
+                  },
+                ],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const link = screen.getByRole("link", {
+      name: "Online fulfilment & pickup",
+    });
+    const label = within(link).getByText("Online fulfilment & pickup");
+    expect(link).toHaveClass("items-start");
+    expect(label).toHaveClass("whitespace-normal", "break-words");
+    expect(label).not.toHaveClass("truncate");
   });
 });

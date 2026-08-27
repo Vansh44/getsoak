@@ -39,6 +39,8 @@ sequence AND the spec for everything still to build.
 | —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
 | —      | Plan matrix + transactional soft-downgrade entitlements         | M    | ✅ done |
 | —      | Post-review order, entitlement and Help compatibility hardening | M    | ✅ done |
+| —      | Location-first inventory and product stock workflow             | S    | ✅ done |
+| —      | Locations fulfilment navigation and aligned routing workspace   | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
 | **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |

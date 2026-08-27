@@ -1282,7 +1282,9 @@ wholesip/
 │                              # answer-start positioning and full-screen maximize; 0026 publishes
 │                              # the full plan matrix and soft-downgrade no-data-loss contract;
 │                              # 0027 clarifies downgrade-safe cleanup/editing and shopper-safe
-│                              # shipping fallback after the entitlement review.
+│                              # shipping fallback after the entitlement review; 0028 documents
+│                              # the location-first inventory workspace, location-filtered history,
+│                              # and the product-editor handoff to physical shelf quantities.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -1932,6 +1934,18 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       isn't retyped each order.
 
 13. **Inventory System**. Per-store stock tracking. Products and variants have `track_inventory` (bool), `stock` (int), `low_stock_threshold` (int), `allow_backorder` (bool), and `sku` (text, products only). Stock edits go through `supabase/inventory_rpc.sql` (`reserve_stock`, `release_stock`, `adjust_stock`) to ensure atomic correctness and generate an append-only ledger in the `stock_movements` table. `lib/inventory/status.ts` is the SINGLE source of truth for turning stock fields into a display status (`isSoldOut`/`lowStockLeft`/`inventoryStatus` + product-level aggregation) — shared by the dashboard list, its optimistic UI, and the storefront so the per-SKU threshold override and the store-wide default (`inventory.lowStockThreshold`) resolve identically everywhere. The storefront reads these fields to display 'Sold Out' or 'Only X left!' badges on product cards and detail pages (the store default is resolved per request in the shop/product pages + section resolver and threaded down as `storeLowStockThreshold`), and the quick-add button disables itself for out-of-stock items. Checkout (`checkout-actions.ts`) creates the order row **before** calling `reserve_stock` per line (the `stock_movements.order_id` FK requires the order to exist first), and rolls back stock→order→coupon in reverse on any failure. Each order carries a `stock_status` (`none`/`reserved`/`released`) tracking its reservation lifecycle: checkout sets `reserved`; `order-actions.ts` restocks on cancellation by atomically claiming the `reserved`→`released` transition (a single conditional UPDATE), so cancellation restocks **exactly once** and never touches legacy orders (`none`) — reinstating a cancelled order does NOT auto re-reserve. Store admins manage inventory at `/dashboard/inventory` (list view, history drawer, bulk adjustments) and settings at `/dashboard/inventory/settings`. **Cart-side enforcement (layered defense above the DB guarantee).** `reserve_stock` makes overselling impossible at order time, but the cart must not let a shopper pile quantity past stock in the first place. `lib/inventory/status.ts` adds `cartLineMax(snapshot, ceiling=99)` — the camelCase cart counterpart of `maxPurchasable` — and a `CartStockSnapshot` shape. Every `CartItem` (`CartProvider`) carries an optional `{trackInventory, stock, allowBackorder}` snapshot captured at add time (all optional, so older persisted carts parse as untracked/unlimited); `addItem` and `setQuantity` clamp centrally to `cartLineMax`, so ONE choke-point caps every surface: the quick-add button (`quick-add-button.tsx`, toasts at the cap), the PDP quantity selector + Buy Now (`product-detail-client.tsx`), and all three cart steppers (`CartDrawer.tsx`, classic `cart-client.tsx`, `grocery-cart.tsx`) — each disables "+" and shows a "Max available: N" hint at the cap. **Stale carts are reconciled at checkout**: `getCartStock(lines)` (`checkout-actions.ts`, service-role, store-scoped, uncached) re-reads live per-line stock and marks vanished products/variants `exists:false`; `CartProvider.reconcileStock(updates)` refreshes each line's snapshot, clamps over-stock quantities, drops sold-out/vanished lines, and returns a `{removed, reduced}` summary the `/checkout` page toasts on mount. If a reserve still fails at order time, `placeOrder` re-reads the SKU and returns the exact shortfall ("only N left" / "just sold out"), not a generic error.
+
+    **Location-first inventory workspace.** A multi-location store now lands on
+    its default/first accessible shelf; every edit and bulk confirmation names
+    that location. Explicit `location=all` is a labelled view-only aggregate
+    whose rows cannot open an editor; location-bound staff cannot request that
+    store-wide aggregate and land on an assigned shelf instead. Location cards
+    and editors deep-link to their shelf. Movement history is server-authorized and filtered to the
+    selected location, displays its location name, and fails closed if that
+    location cannot be verified. Product editing has a dedicated Inventory tab
+    and a handoff to location stock; existing variant totals are read-only there
+    because post-create quantities change only through inventory RPCs, while a
+    new variant may seed opening stock at the main location.
 
 14. **Human-readable identifiers (store_no / order_no / SKU).** Layered ON TOP
     of the internal UUID keys — the UUIDs stay the primary keys, foreign keys,
@@ -2775,7 +2789,12 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       product, AI, group, blog, custom-code, Shiprocket and Analytics guides.
       `20260827_0027_plan_review_followups_help` documents editable retained
       groups, role cleanup, locked-code page editing and the shopper-safe
-      shipping fallback. Published
+      shipping fallback. `20260827_0028_inventory_location_workflow_help`
+      documents the location-first inventory and product-stock handoff;
+      `20260827_0029_locations_fulfilment_navigation_help` documents the
+      Locations child panel and aligned routing/pickup workspace;
+      `20260827_0030_locations_sidebar_visibility_help` records full child-label
+      visibility in narrow and resized panels. Published
       article creates/edits/status changes refresh
       their derived index after commit. `/api/cron/help-embeddings` is the
       hourly durable reconciler for initial backfill, stale source timestamps,
@@ -2950,17 +2969,19 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       in order). `products.stock` / `product_variants.stock` become a
       **trigger-maintained AGGREGATE** = `SUM(on_hand)` across locations
       (`sync_stock_aggregate` trigger), so the storefront, `lib/inventory/status.ts`,
-      shop pages and the current inventory dashboard read them UNCHANGED. New
+      shop pages and aggregate inventory reads consume the same totals. New
       products/variants get a default-location level row via seed triggers; a
       migration guard FAILS if the aggregate ever drifts after backfill.
     - **RPCs gain a location.** `reserve_stock_at` / `release_stock_at` /
       `adjust_stock_at(p_location, …)` operate on `inventory_levels`; the OLD
       signatures (`reserve_stock`/`release_stock`/`adjust_stock`) are REPLACED with
       thin wrappers delegating to the store's default location
-      (`pos_ensure_default_location`) — so `checkout-actions`, `order-actions` and
-      `inventory-actions` keep working with NO code change. `stock_movements`
-      gained `location_id`. This works because post-create stock writes ALREADY
-      flow only through those RPCs (the product editor never writes stock).
+      (`pos_ensure_default_location`) — so legacy checkout and order paths retain
+      default-location compatibility. Dashboard inventory resolves and authorizes
+      an explicit shelf before calling the `_at` RPCs. `stock_movements` gained
+      `location_id`; its dashboard history read now joins the location name and
+      filters to the selected shelf. Post-create stock writes flow only through
+      those RPCs (the product editor never writes existing stock).
     - **Plan + settings + enable flow.** `PLAN_LIMITS.posEnabled` (pro) +
       `posLocationsIncluded` (2) in `lib/plans.ts`. Setting `pos.enabled`
       (registry, section `pos`, `minPlan: pro`, `hidden` so it's driven by a
@@ -4009,6 +4030,19 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     redirects to it, and `pos-location-actions.ts` became
     `location-actions.ts`. Full design: `docs/locations-ia.md`; the phased
     build: `docs/inventory-fulfilment-roadmap.md`.
+    **The dashboard navigation preserves that ownership.** Opening Locations
+    replaces the main rail with a Locations panel containing **All locations**
+    and **Online fulfilment & pickup**; the fulfilment route stays highlighted
+    inside that panel instead of behaving like an unrelated deep link. The
+    locations list keeps only the cross-workspace Inventory handoff, so there
+    is one canonical way to reach fulfilment settings. On the fulfilment page,
+    routing method and location priority share one responsive card, while that
+    card and Checkout use the same `max-w-5xl` workspace boundary. The routing
+    footer owns both the inactive-location rule and **Save routing**, preventing
+    controls from floating at unrelated widths. Child destinations wrap instead
+    of truncating at the sidebar's supported minimum width, so the full
+    **Online fulfilment & pickup** label remains visible in a resized desktop
+    panel and in the mobile drawer.
     - **★ `lib/locations/address.ts` — TWO address shapes, and they are not
       the same.** A customer address (`customer_addresses`,
       `orders.shipping_address`) uses `addressLine1`/`addressLine2`/`country`/

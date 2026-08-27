@@ -119,24 +119,30 @@ delete (refused while stock or open orders exist).
 
 ### 3.3 `/dashboard/locations/fulfilment` — where online orders come from
 
-Only meaningful with 2+ locations; collapses to an explainer with one.
+The Locations left panel keeps this store-wide workflow next to **All
+locations**, so it remains discoverable for a single-location shop that wants
+pickup as well as for a multi-location routing setup.
 
 ```
-Strategy:  ( • ) Priority order      ( ) Nearest to customer   [later]
-                                     ( ) Most stock            [later]
+Website order routing
+┌ Routing method ──────────┬ Location priority ─────────────────┐
+│ ✓ Priority order         │  1  Warehouse                 ↑  ↓ │
+│   First location with    │  2  Delhi Store               ↑  ↓ │
+│   enough stock wins.     │                                     │
+│                          │ Not fulfilling online orders        │
+│ More methods later.      │ Mumbai Store   [Enable in location] │
+├──────────────────────────┴─────────────────────────────────────┤
+│ ☑ Skip deactivated locations                    [Save routing] │
+└────────────────────────────────────────────────────────────────┘
 
-Drag to reorder — the first location with stock wins:
-
-  ⠿  1.  Warehouse          online ✅
-  ⠿  2.  Delhi Store        online ✅
-      —  Mumbai Store       online ❌  (not a fulfilment location)
-
-☑  Skip locations that are closed or deactivated
-☐  Split an order across locations           [later]
+Checkout
+┌ Pickup availability, hold window and payment policy ──────────┐
+└────────────────────────────────────────────────────────────────┘
 ```
 
 Mumbai appears greyed with the reason, rather than being absent — otherwise a
-merchant wonders why their shop is missing.
+merchant wonders why their shop is missing. Routing and Checkout share one
+responsive width; the two routing columns stack on a narrow screen.
 
 ### 3.4 `/dashboard/inventory` — gains a location selector
 
@@ -182,28 +188,22 @@ pickup ends up Pro-only — see §6.
 
 ## 4. Navigation
 
-`app/dashboard/lib/permissions.ts`, group **Workspace**:
+`app/dashboard/lib/permissions.ts`, group **Sell in person**:
 
 ```
-Home
-Orders
-Products
-Categories
-Colours
-Inventory
-Locations        ★ new — sits directly above Point of Sale
+Locations        ★ opens its own panel
+  ├ All locations
+  └ Online fulfilment & pickup
 Point of Sale
   ├ Overview
   ├ Staff
   ├ Devices
   └ Settings
-Users
-Analytics
-Enquiries
 ```
 
 `Locations` above `Point of Sale` reads as "places, then what you do there",
-and puts it next to Inventory, which is what it's really about.
+while its child panel keeps location-wide routing next to the place records it
+orders.
 
 **A store with one location should not see a new section it doesn't need.**
 Show `Locations` when the store has 2+ locations, or POS is enabled, or the

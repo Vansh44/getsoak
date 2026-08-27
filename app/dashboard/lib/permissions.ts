@@ -195,6 +195,18 @@ export const SECTIONS: DashboardSection[] = [
     icon: "location",
     group: "Sell in person",
     actions: ["view", "manage"],
+    children: [
+      {
+        label: "All locations",
+        href: "/dashboard/locations",
+        icon: "location",
+      },
+      {
+        label: "Online fulfilment & pickup",
+        href: "/dashboard/locations/fulfilment",
+        icon: "shipping",
+      },
+    ],
   },
   {
     // Point of Sale. Plan-gated (Pro): the sidebar shows an "Included in Pro"

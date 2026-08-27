@@ -287,7 +287,7 @@ getInventory({ page, pageSize, filter: 'all'|'low'|'out', q, categoryId })
 setStock(productId, variantId, quantity, note?)    // adjust_stock, reason 'correction'
 adjustStock(productId, variantId, delta, reason, note?)   // restock / manual
 bulkAdjust(items: { productId, variantId, delta|set }[])  // one round‑trip
-getMovements(productId, variantId, page)           // ledger for the history drawer
+getMovements(productId, variantId, page, locationId) // authorized, location-filtered drawer ledger
 ```
 
 - `SkuRow`: id, product name, variant name, sku, stock, track_inventory,
