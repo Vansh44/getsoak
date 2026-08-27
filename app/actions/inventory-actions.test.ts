@@ -49,6 +49,7 @@ describe("inventory-actions", () => {
     vi.clearAllMocks();
     dbHolder.current = makeDbMock();
     vi.mocked(getManagerUserId).mockResolvedValue("user-1");
+    vi.mocked(getViewerLocations).mockResolvedValue(null);
   });
 
   describe("getInventory", () => {
@@ -141,6 +142,17 @@ describe("inventory-actions", () => {
       expect(res.rows.map((r) => r.name)).toEqual([
         "Fresh Orange Juice (1 L) (Sample)",
       ]);
+    });
+
+    it("refuses a store-wide aggregate for location-bound staff", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+      dbHolder.current = makeDbMock({ selectQueue: [[storeSettingsRow]] });
+
+      const res = await getInventory({ locationId: "all" });
+      expect(res.error).toMatch(/assigned location/i);
+      expect(res.rows).toEqual([]);
+      // Only the harmless store-settings read occurs; SKU totals are never read.
+      expect(dbHolder.current.calls.select).toHaveLength(1);
     });
   });
 
@@ -255,14 +267,52 @@ describe("inventory-actions", () => {
       expect(dbHolder.current.calls.limit[0]).toBe(50);
       expect(dbHolder.current.calls.offset[0]).toBe(0);
     });
+
+    it("filters history to an authorized location and returns its name", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [
+          [{ id: "loc-2" }],
+          [
+            {
+              id: "m1",
+              location_id: "loc-2",
+              location_name: "Mumbai Warehouse",
+            },
+          ],
+          [{ n: 1 }],
+        ],
+      });
+
+      const res = await getMovements("p1", null, 1, "loc-2");
+      expect(res.error).toBeUndefined();
+      expect(res.movements[0]).toMatchObject({
+        location_id: "loc-2",
+        location_name: "Mumbai Warehouse",
+      });
+      expect(dbHolder.current.calls.leftJoin).toHaveLength(1);
+    });
+
+    it("refuses history outside the viewer's location scope", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+      const res = await getMovements("p1", null, 1, "loc-9");
+      expect(res.error).toMatch(/don't have access/i);
+      expect(dbHolder.current.calls.select).toHaveLength(0);
+    });
+
+    it("keeps legacy history callers inside the viewer's assigned shelves", async () => {
+      vi.mocked(getViewerLocations).mockResolvedValue(["loc-1"]);
+      dbHolder.current = makeDbMock({
+        selectQueue: [[{ id: "m1" }], [{ n: 1 }]],
+      });
+
+      await getMovements("p1", null, 1);
+      const whereValues = dbHolder.current.calls.where.flatMap(sqlParamValues);
+      expect(whereValues).toContain("loc-1");
+    });
   });
 
   // Phase C — the desk view can target a specific shop.
   describe("location-scoped inventory", () => {
-    beforeEach(() => {
-      vi.mocked(getViewerLocations).mockResolvedValue(null);
-    });
-
     describe("adjustStock", () => {
       it("uses the default-location wrapper when no shop is given", async () => {
         dbHolder.current = makeDbMock({ executeQueue: [[{ new_stock: 7 }]] });
@@ -310,6 +360,22 @@ describe("inventory-actions", () => {
           "loc-x",
         );
         expect(r.error).toMatch(/unknown location/i);
+        expect(dbHolder.current.calls.execute).toHaveLength(0);
+      });
+
+      it("fails closed when the location cannot be verified", async () => {
+        dbHolder.current = makeDbMock({
+          selectQueue: [new Error("database unavailable")],
+        });
+        const r = await adjustStock(
+          "p1",
+          null,
+          2,
+          "adjustment",
+          undefined,
+          "loc-2",
+        );
+        expect(r.error).toMatch(/could not verify/i);
         expect(dbHolder.current.calls.execute).toHaveLength(0);
       });
     });

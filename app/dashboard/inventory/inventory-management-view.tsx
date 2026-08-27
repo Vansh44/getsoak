@@ -2,9 +2,18 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import Image from "next/image";
-import { ImageIcon, Search, PackageMinus, Edit2 } from "lucide-react";
+import {
+  ImageIcon,
+  Search,
+  PackageMinus,
+  Edit2,
+  MapPin,
+  Eye,
+  Settings,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +57,8 @@ type Props = {
   locations: { id: string; name: string }[];
   /** The shop being shown, or null for the cross-location total. */
   locationId: string | null;
+  /** Store-wide totals are unavailable to location-bound staff. */
+  canViewAggregate: boolean;
 };
 
 export function InventoryManagementView({
@@ -63,6 +74,7 @@ export function InventoryManagementView({
   storeLowStockThreshold,
   locations,
   locationId,
+  canViewAggregate,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -71,8 +83,17 @@ export function InventoryManagementView({
   // adjust, so editing is off until a specific location is chosen. Single-
   // location stores are unaffected: they have nothing to choose and locationId
   // stays null, which the compatibility wrapper resolves to their one shelf.
-  const isAggregate = locations.length > 1 && locationId === null;
+  const isAggregate =
+    canViewAggregate && locations.length > 1 && locationId === null;
   const canEdit = canManage && !isAggregate;
+  const selectedLocation =
+    locations.find((location) => location.id === locationId) ?? locations[0];
+  const locationName = isAggregate
+    ? "all locations"
+    : (selectedLocation?.name ?? "the main location");
+  const locationHeading = isAggregate
+    ? "All locations"
+    : (selectedLocation?.name ?? "Main location");
   const [isPending, startTransition] = useTransition();
   const [navigating, startNavigation] = useTransition();
   const [search, setSearch] = useState(query);
@@ -97,7 +118,8 @@ export function InventoryManagementView({
     const q = (next.q ?? query).trim();
     const f = next.filter ?? filter;
     const cat = next.category ?? categoryFilter;
-    const loc = next.location ?? locationId ?? "all";
+    const loc =
+      locations.length > 1 ? (next.location ?? locationId ?? "all") : null;
     const changedFacet =
       next.q !== undefined ||
       next.filter !== undefined ||
@@ -109,7 +131,9 @@ export function InventoryManagementView({
     if (q) params.set("q", q);
     if (f !== "all") params.set("filter", f);
     if (cat !== "all") params.set("category", cat);
-    if (loc !== "all") params.set("location", loc);
+    // `location=all` must remain explicit: an absent location now opens the
+    // first real shelf for multi-location stores.
+    if (loc) params.set("location", loc);
     if (p > 1) params.set("page", String(p));
     const qs = params.toString();
     return qs ? `${pathname}?${qs}` : pathname;
@@ -232,17 +256,94 @@ export function InventoryManagementView({
       <header className="dash-page-header row">
         <div>
           <h1>Inventory</h1>
-          <p>Track and manage product stock levels</p>
+          <p>Count and adjust stock at one physical location at a time.</p>
         </div>
         {/* Export the shop currently being shown, so a stocktake sheet counts
             the shelf the merchant is standing in front of. */}
         <ImportExportMenu
           resource="inventory"
-          canImport={canManage}
+          canImport={canEdit}
           filters={{ location: locationId ?? undefined }}
           locations={locations}
         />
       </header>
+
+      <section
+        className={`mb-4 rounded-xl border p-4 ${
+          isAggregate
+            ? "border-slate-200 bg-slate-50"
+            : "border-indigo-100 bg-indigo-50/60"
+        }`}
+        aria-label="Inventory location"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                isAggregate
+                  ? "bg-slate-200 text-slate-600"
+                  : "bg-indigo-100 text-indigo-600"
+              }`}
+            >
+              {isAggregate ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <MapPin className="h-4 w-4" />
+              )}
+            </span>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[#6b7280]">
+                Stock location
+              </div>
+              <div className="mt-0.5 font-semibold text-[#111827]">
+                {locationHeading}
+              </div>
+              <p className="mt-0.5 text-xs text-[#6b7280]">
+                {isAggregate
+                  ? "Store-wide totals for comparison. Choose a location before changing stock."
+                  : `Every change on this page affects only ${locationName}.`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {locations.length > 1 && (
+              <label className="flex items-center gap-2 text-xs font-medium text-[#4b5563]">
+                View
+                <select
+                  aria-label="Stock location"
+                  value={locationId ?? "all"}
+                  onChange={(e) => go({ location: e.target.value })}
+                  className="min-w-44 rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-sm font-medium text-[#111827] outline-none focus:border-[#4f46e5] focus:ring-2 focus:ring-[#4f46e5]/15"
+                >
+                  {locations.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                  {canViewAggregate && (
+                    <option value="all">All locations (view only)</option>
+                  )}
+                </select>
+              </label>
+            )}
+            <Link
+              href="/dashboard/locations"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-xs font-medium text-[#374151] hover:bg-[#f9fafb]"
+            >
+              <MapPin className="h-3.5 w-3.5" />
+              Manage locations
+            </Link>
+            <Link
+              href="/dashboard/inventory/settings"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#d1d5db] bg-white px-3 py-2 text-xs font-medium text-[#374151] hover:bg-[#f9fafb]"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Settings
+            </Link>
+          </div>
+        </div>
+      </section>
 
       <div className="dash-card flex flex-col" style={{ flex: "1 1 auto" }}>
         <div className="dash-toolbar px-5 pt-4 pb-2 border-b border-[var(--dash-border)] mb-0 flex flex-col gap-4">
@@ -272,22 +373,6 @@ export function InventoryManagementView({
                   </option>
                 ))}
               </select>
-
-              {/* Only worth showing once there is a choice to make. */}
-              {locations.length > 1 && (
-                <select
-                  value={locationId ?? "all"}
-                  onChange={(e) => go({ location: e.target.value })}
-                  className="rounded-md border border-[var(--dash-border)] bg-[var(--dash-surface)] px-3 py-[7px] text-[13px] text-[var(--dash-text)] outline-none"
-                >
-                  <option value="all">All locations</option>
-                  {locations.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.name}
-                    </option>
-                  ))}
-                </select>
-              )}
             </div>
 
             <label className="dash-search-bar">
@@ -301,6 +386,13 @@ export function InventoryManagementView({
             </label>
           </div>
         </div>
+
+        {isAggregate && (
+          <div className="border-b border-slate-200 bg-slate-50 px-5 py-3 text-sm text-slate-700">
+            <span className="font-semibold">View only:</span> these are totals
+            across all locations. Choose a location above to edit a shelf.
+          </div>
+        )}
 
         {rows.length === 0 ? (
           <div className="dash-empty">
@@ -329,7 +421,9 @@ export function InventoryManagementView({
                 <th>Product / Variant</th>
                 <th>SKU</th>
                 <th>Status</th>
-                <th>Stock</th>
+                <th>
+                  {isAggregate ? "Total stock" : `Stock at ${locationHeading}`}
+                </th>
                 {canEdit && <th className="dash-col-actions">Actions</th>}
               </tr>
             </thead>
@@ -337,8 +431,8 @@ export function InventoryManagementView({
               {rows.map((r) => (
                 <tr
                   key={r.id}
-                  onClick={() => setEditSku(r)}
-                  className={`cursor-pointer ${selection.isSelected(r.id) ? " is-selected" : ""} ${r.status === "low" ? "bg-amber-50/50 dark:bg-amber-900/10" : ""}`}
+                  onClick={canEdit ? () => setEditSku(r) : undefined}
+                  className={`${canEdit ? "cursor-pointer" : ""} ${selection.isSelected(r.id) ? " is-selected" : ""} ${r.status === "low" ? "bg-amber-50/50 dark:bg-amber-900/10" : ""}`}
                 >
                   {canEdit && (
                     <td
@@ -470,8 +564,8 @@ export function InventoryManagementView({
           <DialogHeader>
             <DialogTitle>Set stock for {selection.count} items</DialogTitle>
             <DialogDescription>
-              This will overwrite the stock level for all selected tracked
-              items.
+              This will overwrite the stock level for all selected tracked items
+              at {locationName}.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
@@ -510,6 +604,7 @@ export function InventoryManagementView({
             setActiveHistory(s);
           }}
           isPending={isPending}
+          locationName={locationHeading}
         />
       )}
 
@@ -518,6 +613,8 @@ export function InventoryManagementView({
           open={!!activeHistory}
           onOpenChange={(open) => !open && setActiveHistory(null)}
           sku={activeHistory}
+          locationId={locationId}
+          locationName={locationHeading}
         />
       )}
     </div>

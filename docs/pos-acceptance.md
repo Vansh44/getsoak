@@ -316,6 +316,13 @@ GST state code and receipt prefix are all editable on the same card and save
 together — the location editor is the full page, matching the products
 convention (edit is a page, only "New" is a dialog).
 
+**PS-2.10 — A location leads directly to its stock**
+Open `/dashboard/locations` and select **View inventory** on Mumbai. Repeat from
+Mumbai's location editor.
+**Expect:** both open `/dashboard/inventory?location=<mumbai-id>` and the stock
+location panel says Mumbai. The merchant does not have to rediscover the same
+location in another selector.
+
 **PS-2.8 ★ — Saving details doesn't blank the rest**
 Change only the name and save.
 **Expect:** type, address and tax fields are unchanged. `updateLocation`
@@ -325,6 +332,32 @@ would silently turn a warehouse into a shop.
 **PS-2.6 — Pickup and returns are Pro-only**
 On a Basic store (if you can reach the page).
 **Expect:** a padlock on Customer pickup and Accept returns.
+
+**PS-2.11 — Fulfilment stays inside the Locations navigation**
+Open `/dashboard/locations`, then use the left Locations panel to select
+**Online fulfilment & pickup**. Deep-link directly to
+`/dashboard/locations/fulfilment` and reload once.
+**Expect:** the left panel contains **All locations** and **Online fulfilment &
+pickup** in both cases, the current child is highlighted, and the page does not
+fall back to the main dashboard rail. The locations list does not repeat a
+second fulfilment button above its cards.
+
+**PS-2.12 — Routing and pickup settings form one aligned workspace**
+Open **Locations → Online fulfilment & pickup** at desktop, tablet, and phone
+widths.
+**Expect:** Website order routing and Checkout share the same left edge and
+maximum width. Routing method and Location priority sit side by side when
+space permits and stack cleanly on a narrow screen. Eligible locations have
+aligned priority controls; ineligible locations remain visible with an
+**Enable in location** link. **Skip deactivated locations** and **Save routing**
+share the routing footer instead of floating in separate whitespace.
+
+**PS-2.13 — A narrow Locations panel still names every destination**
+Resize the desktop sidebar to its minimum width, then open the mobile drawer.
+**Expect:** **Online fulfilment & pickup** wraps onto a second line when needed;
+no part of the label is replaced by an ellipsis. The icon remains aligned with
+the first line, the active background contains both lines, and short labels
+such as **All locations** remain compact.
 
 ---
 
@@ -338,7 +371,8 @@ restriction.**
 **PS-3.2 ★ — A bound admin sees only their shop**
 Bind an admin to Mumbai only. Sign in as them.
 **Expect:** `/dashboard/orders` shows only orders routed to Mumbai;
-`/dashboard/inventory`'s location selector offers only Mumbai.
+`/dashboard/inventory` opens on Mumbai, names it in the stock-location panel,
+and does not offer a store-wide aggregate.
 
 **PS-3.3 ★ — Naming another location in the URL is refused**
 As that Mumbai-bound admin, hit `/dashboard/inventory?location=<pune-id>`.
@@ -348,12 +382,21 @@ As that Mumbai-bound admin, hit `/dashboard/inventory?location=<pune-id>`.
 
 ## 4. Inventory — the dashboard
 
+**PS-4.0 — Multi-location inventory opens on a real shelf**
+Open `/dashboard/inventory` with two or more accessible locations and no
+`location` query parameter.
+**Expect:** the default/first accessible location is selected, its name is
+prominent, and the page says every change affects only that location. A bound
+admin lands on their first accessible location, never another store shelf.
+
 **PS-4.1 — A single-location store sees no selector**
 **Expect:** `/dashboard/inventory` looks exactly as it did before multi-location.
 
 **PS-4.2 — "All locations" is read-only**
 Multi-location store → select **All locations**.
-**Expect:** totals shown, editing disabled. You cannot adjust a sum.
+**Expect:** totals shown under an explicit **All locations (view only)** state.
+Editing and bulk selection are disabled, and clicking a row does not open the
+stock drawer. You cannot adjust a sum.
 
 **PS-4.3 ★ — A correction is computed against THAT shelf**
 Product with 10 in Mumbai and 5 in Pune (total 15). Select Mumbai, set stock to 8.
@@ -367,7 +410,18 @@ opening a new shop.
 
 **PS-4.5 — Ledger**
 Any adjustment → open the history drawer.
-**Expect:** an append-only row with quantity, reason, actor and location.
+**Expect:** the read is server-authorized and filtered to the selected location;
+the drawer and each current entry name that location. The append-only row stores
+quantity, reason, actor and location. The current drawer does not display the
+operator identifier.
+
+**PS-4.6 — Product editing hands stock off without a fake input**
+Open an existing simple product and then a product with existing variants.
+**Expect:** both expose a dedicated **Inventory** tab with the store-wide total
+and **Manage stock by location**. Existing variant quantities are read-only in
+the product form and link to Inventory; a new variant alone accepts opening
+stock for the main location. Saving an existing variant never appears to accept
+an inventory edit that the server ignores.
 
 ---
 

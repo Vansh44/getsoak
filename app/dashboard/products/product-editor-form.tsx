@@ -213,11 +213,19 @@ const TINTS: Record<Tint, { card: string; badge: string }> = {
 // settings at a time instead of one long scroll. Each field-Section below lives
 // under exactly one tab; `validationTab` (in handleSave) maps a save error back
 // to the tab that owns the offending field so we can jump there.
-type TabId = "basics" | "media" | "pricing" | "variants" | "visibility" | "seo";
+type TabId =
+  | "basics"
+  | "media"
+  | "pricing"
+  | "inventory"
+  | "variants"
+  | "visibility"
+  | "seo";
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: "basics", label: "Basics", icon: Package },
   { id: "media", label: "Media", icon: ImageIcon },
   { id: "pricing", label: "Pricing", icon: Tag },
+  { id: "inventory", label: "Inventory", icon: Boxes },
   { id: "variants", label: "Variants", icon: Layers },
   { id: "visibility", label: "Visibility", icon: Eye },
   { id: "seo", label: "SEO", icon: Search },
@@ -594,6 +602,11 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
             ((form.base_price - form.selling_price) / form.base_price) * 100,
           )
         : 0;
+    const totalStock = product
+      ? form.variants.length > 0
+        ? form.variants.reduce((sum, variant) => sum + variant.stock, 0)
+        : product.stock
+      : null;
 
     // Expose the validated save to a parent-rendered Save button (sticky header
     // on the full page) and keep that button's spinner in sync. Route through a
@@ -1014,116 +1027,138 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </p>
               </div>
             </Section>
+          </div>
 
-            {/* Inventory — simple product (only shown when there are no variants) */}
-            {form.variants.length === 0 && (
-              <Section
-                title="Inventory"
-                description="Track stock levels and manage the auto-generated SKU."
-                icon={Boxes}
-                tint="amber"
-              >
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className={labelClass}>SKU</label>
-                      <input
-                        className={`${fieldClass} cursor-not-allowed bg-[#f3f4f6] font-mono text-[#6b7280]`}
-                        value={form.sku || "Auto-generated on save"}
-                        readOnly
-                        title="SKUs are generated automatically and cannot be edited"
-                      />
-                      <p className={hintClass}>Auto-generated &amp; locked.</p>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Barcode</label>
-                      <input
-                        className={`${fieldClass} font-mono`}
-                        value={form.barcode ?? ""}
-                        placeholder="Scan or type the barcode"
-                        onChange={(e) => set("barcode", e.target.value)}
-                        // A USB/Bluetooth scanner is a keyboard: focus this
-                        // field, scan the item, and it fills — no typing.
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") e.preventDefault();
-                        }}
-                      />
-                      <p className={hintClass}>
-                        The supplier barcode on the packaging — what the
-                        register scans. Leave blank for products you don&apos;t
-                        scan.
-                      </p>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Stock</label>
-                      <div className="flex min-h-[38px] items-center gap-2 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] px-3 text-sm">
-                        {product ? (
-                          <>
-                            <span className="font-semibold text-[#111827]">
-                              {product.stock}
-                            </span>
-                            <span className="text-[#6b7280]">in stock</span>
-                            <Link
-                              href={`/dashboard/inventory?q=${encodeURIComponent(product.name)}`}
-                              className="ml-auto text-xs font-medium text-[#4f46e5] hover:underline"
-                              target="_blank"
-                            >
-                              Manage →
-                            </Link>
-                          </>
-                        ) : (
-                          <span className="italic text-[#9ca3af]">
-                            Save product first to set stock.
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1f2937]">
-                    <input
-                      type="checkbox"
-                      checked={form.track_inventory}
-                      onChange={(e) => set("track_inventory", e.target.checked)}
-                      className="h-4 w-4 accent-[#4f46e5]"
-                    />
-                    Track quantity for this product
-                  </label>
-
-                  {form.track_inventory && (
-                    <div className="ml-6 space-y-3 border-l-2 border-[#e0e7ff] pl-4">
-                      <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1f2937]">
-                        <input
-                          type="checkbox"
-                          checked={form.allow_backorder}
-                          onChange={(e) =>
-                            set("allow_backorder", e.target.checked)
-                          }
-                          className="h-4 w-4 accent-[#4f46e5]"
-                        />
-                        Continue selling when out of stock (backorder)
-                      </label>
+          <div className={tab === "inventory" ? "space-y-4" : "hidden"}>
+            <Section
+              title="Inventory"
+              description="Choose whether to track this item here, then manage physical quantities by location."
+              icon={Boxes}
+              tint="amber"
+            >
+              <div className="space-y-5">
+                <div className="rounded-xl border border-amber-200 bg-white p-4">
+                  {product ? (
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <label className={labelClass}>
-                          Low stock alert threshold
-                        </label>
-                        <NumberField
-                          className={`${fieldClass} max-w-[120px]`}
-                          value={form.low_stock_threshold ?? 0}
-                          onValueChange={(n) =>
-                            set("low_stock_threshold", n > 0 ? n : null)
-                          }
-                        />
-                        <p className={hintClass}>
-                          Warn when stock drops to this level. Leave 0 to use
-                          the store default.
+                        <div className="text-xs font-semibold uppercase tracking-wide text-[#92400e]">
+                          Total across all locations
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold text-[#111827]">
+                          {totalStock} units
+                        </div>
+                        <p className="mt-1 text-xs text-[#6b7280]">
+                          Open Inventory to see and change each location&apos;s
+                          shelf separately.
                         </p>
                       </div>
+                      <Link
+                        href={`/dashboard/inventory?q=${encodeURIComponent(product.name)}`}
+                        className="inline-flex shrink-0 items-center justify-center rounded-lg bg-[#111827] px-3.5 py-2 text-sm font-medium text-white hover:opacity-90"
+                      >
+                        Manage stock by location
+                      </Link>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="font-semibold text-[#111827]">
+                        Create the product before stocking a location
+                      </div>
+                      <p className="mt-1 text-xs text-[#6b7280]">
+                        Save this product, then Inventory will let you add the
+                        counted quantity to the right shop or warehouse.
+                      </p>
                     </div>
                   )}
                 </div>
-              </Section>
-            )}
+
+                {form.variants.length === 0 ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>SKU</label>
+                        <input
+                          className={`${fieldClass} cursor-not-allowed bg-[#f3f4f6] font-mono text-[#6b7280]`}
+                          value={form.sku || "Auto-generated on save"}
+                          readOnly
+                          title="SKUs are generated automatically and cannot be edited"
+                        />
+                        <p className={hintClass}>
+                          Auto-generated &amp; locked.
+                        </p>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Barcode</label>
+                        <input
+                          className={`${fieldClass} font-mono`}
+                          value={form.barcode ?? ""}
+                          placeholder="Scan or type the barcode"
+                          onChange={(e) => set("barcode", e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") e.preventDefault();
+                          }}
+                        />
+                        <p className={hintClass}>
+                          The supplier barcode on the packaging — what the
+                          register scans.
+                        </p>
+                      </div>
+                    </div>
+
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1f2937]">
+                      <input
+                        type="checkbox"
+                        checked={form.track_inventory}
+                        onChange={(e) =>
+                          set("track_inventory", e.target.checked)
+                        }
+                        className="h-4 w-4 accent-[#4f46e5]"
+                      />
+                      Track quantity for this product
+                    </label>
+
+                    {form.track_inventory && (
+                      <div className="ml-6 space-y-3 border-l-2 border-[#e0e7ff] pl-4">
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-[#1f2937]">
+                          <input
+                            type="checkbox"
+                            checked={form.allow_backorder}
+                            onChange={(e) =>
+                              set("allow_backorder", e.target.checked)
+                            }
+                            className="h-4 w-4 accent-[#4f46e5]"
+                          />
+                          Continue selling when out of stock (backorder)
+                        </label>
+                        <div>
+                          <label className={labelClass}>
+                            Low stock alert threshold
+                          </label>
+                          <NumberField
+                            className={`${fieldClass} max-w-[120px]`}
+                            value={form.low_stock_threshold ?? 0}
+                            onValueChange={(n) =>
+                              set("low_stock_threshold", n > 0 ? n : null)
+                            }
+                          />
+                          <p className={hintClass}>
+                            Warn when stock drops to this level. Leave 0 to use
+                            the store default.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/50 px-4 py-3 text-sm text-[#78350f]">
+                    Each variant is a separate stock item. Add names, prices,
+                    barcodes, and opening stock under <strong>Variants</strong>;
+                    after saving, change quantities in Inventory at the correct
+                    location.
+                  </div>
+                )}
+              </div>
+            </Section>
           </div>
 
           <div className={tab === "variants" ? "space-y-4" : "hidden"}>
@@ -1150,6 +1185,20 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                 </p>
               ) : (
                 <div className="overflow-x-auto sm:overflow-visible">
+                  {product && (
+                    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5 text-xs text-indigo-900 sm:flex-row sm:items-center sm:justify-between">
+                      <span>
+                        Existing stock is shown as a store-wide total here and
+                        cannot be edited in the product form.
+                      </span>
+                      <Link
+                        href={`/dashboard/inventory?q=${encodeURIComponent(product.name)}`}
+                        className="shrink-0 font-semibold text-[#4f46e5] hover:underline"
+                      >
+                        Manage by location →
+                      </Link>
+                    </div>
+                  )}
                   <div className="min-w-[500px] space-y-2 sm:min-w-0">
                     <div className="grid grid-cols-[1fr_72px_72px_60px_110px_120px_72px] gap-2 px-1 text-[10px] uppercase tracking-wide text-[#9ca3af]">
                       <span>Name</span>
@@ -1188,12 +1237,24 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                               updateVariant(i, "selling_price", n)
                             }
                           />
-                          <NumberField
-                            className={fieldClass}
-                            value={v.stock}
-                            onValueChange={(n) => updateVariant(i, "stock", n)}
-                            allowDecimal={false}
-                          />
+                          {v.id ? (
+                            <div
+                              className={`${fieldClass} cursor-not-allowed bg-[#f3f4f6] text-center font-mono text-[#6b7280]`}
+                              title="Store-wide total. Manage stock by location in Inventory."
+                            >
+                              {v.stock}
+                            </div>
+                          ) : (
+                            <NumberField
+                              className={fieldClass}
+                              value={v.stock}
+                              onValueChange={(n) =>
+                                updateVariant(i, "stock", n)
+                              }
+                              allowDecimal={false}
+                              aria-label={`Opening stock for ${v.name || `variant ${i + 1}`}`}
+                            />
+                          )}
                           <input
                             className={`${fieldClass} cursor-not-allowed bg-[#f3f4f6] font-mono text-[11px] text-[#6b7280]`}
                             value={v.sku || "on save"}
@@ -1303,7 +1364,8 @@ export const ProductEditorForm = forwardRef<ProductEditorFormHandle, Props>(
                     ))}
                     <p className={hintClass}>
                       The top variant is selected by default on the product page
-                      — use the arrows to reorder.
+                      — use the arrows to reorder. Stock entered for a new
+                      variant is opening stock at the main location.
                     </p>
                   </div>
                 </div>

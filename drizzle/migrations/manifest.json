@@ -961,6 +961,84 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260827_0028_inventory_location_workflow_help",
+      "description": "Document the location-first inventory workspace, product stock handoff, and location-filtered history",
+      "file": "sql/20260827_0028_inventory_location_workflow_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0027_plan_review_followups_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "inventory guides explain the location-first editable and aggregate flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'track-inventory-and-allow-backorders' and body like '%Existing variant stock is a read-only store-wide total%') or (slug = 'adjust-stock-at-a-location' and body like '%All locations (view only)%' and body like '%rows do not open the stock editor%') or (slug = 'set-low-stock-defaults-and-read-stock-history' and body like '%drawer is filtered to that location%') or (slug = 'add-product-images-and-variants' and body like '%opening stock for a new variant at the main location%'))",
+            "equals": "4"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "inventory guides explain the location-first editable and aggregate flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'track-inventory-and-allow-backorders' and body like '%Existing variant stock is a read-only store-wide total%') or (slug = 'adjust-stock-at-a-location' and body like '%All locations (view only)%' and body like '%rows do not open the stock editor%') or (slug = 'set-low-stock-defaults-and-read-stock-history' and body like '%drawer is filtered to that location%') or (slug = 'add-product-images-and-variants' and body like '%opening stock for a new variant at the main location%'))",
+            "equals": "4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260827_0029_locations_fulfilment_navigation_help",
+      "description": "Document the Locations child navigation and aligned fulfilment and pickup workspace",
+      "file": "sql/20260827_0029_locations_fulfilment_navigation_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0028_inventory_location_workflow_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "fulfilment guides explain the Locations panel and aligned workspace",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'choose-online-fulfilment-priority' and body like '%left panel contains <strong>All locations</strong>%' and body like '%Routing method and Location priority appear side by side%') or (slug = 'offer-and-manage-store-pickup' and body like '%in the left Locations panel%' and body like '%aligned in the same workspace%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "fulfilment guides explain the Locations panel and aligned workspace",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'choose-online-fulfilment-priority' and body like '%left panel contains <strong>All locations</strong>%' and body like '%Routing method and Location priority appear side by side%') or (slug = 'offer-and-manage-store-pickup' and body like '%in the left Locations panel%' and body like '%aligned in the same workspace%'))",
+            "equals": "2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260827_0030_locations_sidebar_visibility_help",
+      "description": "Document full destination visibility in narrow and resized Locations panels",
+      "file": "sql/20260827_0030_locations_sidebar_visibility_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0029_locations_fulfilment_navigation_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the fulfilment guide explains narrow Locations panel label wrapping",
+            "sql": "select count(*)::text from public.help_articles where slug = 'choose-online-fulfilment-priority' and status = 'published' and body like '%full destination name wraps onto another line instead of being hidden%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the fulfilment guide explains narrow Locations panel label wrapping",
+            "sql": "select count(*)::text from public.help_articles where slug = 'choose-online-fulfilment-priority' and status = 'published' and body like '%full destination name wraps onto another line instead of being hidden%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -19,10 +19,14 @@ export function InventoryHistoryDrawer({
   open,
   onOpenChange,
   sku,
+  locationId,
+  locationName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sku: SkuRow;
+  locationId: string | null;
+  locationName: string;
 }) {
   const [movements, setMovements] = useState<StockMovementRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -36,7 +40,12 @@ export function InventoryHistoryDrawer({
     async function fetchMovements() {
       setLoading(true);
       setError(null);
-      const res = await getMovements(sku.productId, sku.variantId, 1);
+      const res = await getMovements(
+        sku.productId,
+        sku.variantId,
+        1,
+        locationId,
+      );
       if (!mounted) return;
       setLoading(false);
       if (res.error) {
@@ -51,19 +60,22 @@ export function InventoryHistoryDrawer({
     return () => {
       mounted = false;
     };
-  }, [open, sku.productId, sku.variantId]);
+  }, [locationId, open, sku.productId, sku.variantId]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-md overflow-y-auto">
         <SheetHeader className="mb-6">
-          <SheetTitle>Stock History</SheetTitle>
+          <SheetTitle>Stock history</SheetTitle>
           <SheetDescription className="mt-2 flex flex-col items-start gap-2">
             <span className="text-sm font-medium text-foreground">
               {sku.name} {sku.variantName ? `(${sku.variantName})` : ""}
             </span>
             <span className="font-mono text-[11px] bg-muted text-muted-foreground px-2 py-1 rounded-md font-semibold tracking-wider">
               {sku.sku || "NO-SKU"}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Changes at {locationName}
             </span>
           </SheetDescription>
         </SheetHeader>
@@ -106,6 +118,11 @@ export function InventoryHistoryDrawer({
                         minute: "2-digit",
                       }).format(new Date(m.created_at))}
                     </span>
+                    {m.location_name && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {m.location_name}
+                      </span>
+                    )}
                   </div>
                   <span
                     className={`font-mono text-xs font-bold px-2 py-1 rounded-md shrink-0 ${

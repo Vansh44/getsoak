@@ -105,6 +105,12 @@ describe("getSection", () => {
   it("returns undefined for an unknown key", () => {
     expect(getSection("nope")).toBeUndefined();
   });
+
+  it("keeps fulfilment reachable from the Locations panel", () => {
+    expect(
+      getSection("locations")?.children?.map((child) => child.href),
+    ).toEqual(["/dashboard/locations", "/dashboard/locations/fulfilment"]);
+  });
 });
 
 // The sidebar nests some sections under others (`parent`) so it can be

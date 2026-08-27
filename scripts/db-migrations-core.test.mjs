@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(27);
+    expect(loaded.migrations).toHaveLength(30);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -236,6 +236,37 @@ describe("database migration controls", () => {
     expect(loaded.migrations[26].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[26].sql).toContain(
       "shoppers receive the retained manual or free shipping option",
+    );
+    expect(loaded.migrations[27]).toMatchObject({
+      id: "20260827_0028_inventory_location_workflow_help",
+      transaction: true,
+      requires: ["20260827_0027_plan_review_followups_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[27].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[27].sql).toContain("All locations (view only)");
+    expect(loaded.migrations[27].sql).toContain(
+      "drawer is filtered to that location",
+    );
+    expect(loaded.migrations[28]).toMatchObject({
+      id: "20260827_0029_locations_fulfilment_navigation_help",
+      transaction: true,
+      requires: ["20260827_0028_inventory_location_workflow_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[28].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[28].sql).toContain(
+      "select <strong>Online fulfilment &amp; pickup</strong> in the left Locations panel",
+    );
+    expect(loaded.migrations[29]).toMatchObject({
+      id: "20260827_0030_locations_sidebar_visibility_help",
+      transaction: true,
+      requires: ["20260827_0029_locations_fulfilment_navigation_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[29].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[29].sql).toContain(
+      "full destination name wraps onto another line instead of being hidden",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

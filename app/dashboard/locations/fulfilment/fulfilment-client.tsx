@@ -10,7 +10,15 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowDown, ArrowUp, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp,
+  CheckCircle2,
+  Loader2,
+  MapPin,
+  Route,
+} from "lucide-react";
 import {
   saveFulfilmentRules,
   type FulfilmentRules,
@@ -95,150 +103,199 @@ export function FulfilmentClient({
         </p>
       </header>
 
-      <section className="mt-5 max-w-2xl rounded-xl border border-[#e5e5e5] bg-white p-5">
-        <h2 className="font-semibold text-[#111827]">Strategy</h2>
-        <div className="mt-3 space-y-2">
-          {FULFILMENT_STRATEGIES.map((s) => {
-            const locked = s.minPlan && !planAllows(plan, s.minPlan);
-            return (
-              <label key={s.id} className="flex gap-3 text-sm">
-                <input
-                  type="radio"
-                  checked={rules.strategy === s.id}
-                  disabled
-                  className="mt-0.5 accent-[#111827]"
-                />
-                <span>
-                  <span className="block font-medium text-[#111827]">
-                    {s.label}
-                  </span>
-                  <span className="block text-xs text-[#5b6472]">
-                    {s.description}
-                  </span>
-                  {locked && (
-                    <span className="text-xs text-[#9aa1ab]">
-                      Available on {s.minPlan}.
-                    </span>
-                  )}
-                </span>
-              </label>
-            );
-          })}
-          <p className="text-xs text-[#9aa1ab]">
-            Nearest, most stock and cheapest shipping are planned — each slots
-            in here without changing how orders are placed.
-          </p>
-        </div>
-
-        <h2 className="mt-6 font-semibold text-[#111827]">Order</h2>
-        <p className="mt-1 text-sm text-[#5b6472]">
-          The first location with enough stock fulfils the order.
-        </p>
-
-        <ol className="mt-3 space-y-2">
-          {order.map((id, i) => {
-            const l = byId.get(id);
-            if (!l) return null;
-            return (
-              <li
-                key={id}
-                className="flex items-center gap-3 rounded-lg border border-[#e5e5e5] p-3"
-              >
-                <span className="w-5 text-sm font-semibold text-[#9aa1ab]">
-                  {i + 1}
-                </span>
-                <span className="flex-1 text-sm font-medium text-[#111827]">
-                  {l.name}
-                  {!l.active && (
-                    <span className="ml-2 text-xs font-normal text-[#9aa1ab]">
-                      Inactive
-                    </span>
-                  )}
-                </span>
-                {canManage && (
-                  <span className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={() => move(i, -1)}
-                      disabled={i === 0}
-                      aria-label={`Move ${l.name} up`}
-                      className="rounded p-1.5 text-[#5b6472] hover:bg-[#111827]/5 disabled:opacity-30"
-                    >
-                      <ArrowUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => move(i, 1)}
-                      disabled={i === order.length - 1}
-                      aria-label={`Move ${l.name} down`}
-                      className="rounded p-1.5 text-[#5b6472] hover:bg-[#111827]/5 disabled:opacity-30"
-                    >
-                      <ArrowDown className="h-4 w-4" />
-                    </button>
-                  </span>
-                )}
-              </li>
-            );
-          })}
-          {order.length === 0 && (
-            <li className="rounded-lg border border-dashed border-[#e5e5e5] p-4 text-sm text-[#9aa1ab]">
-              No location fulfils online orders. Enable it on a location first —
-              until then, orders use your main location.
-            </li>
-          )}
-        </ol>
-
-        {/* Shown rather than hidden: a merchant hunting for their shop needs to
-            know WHY it isn't in the list. */}
-        {ineligible.length > 0 && (
-          <div className="mt-4 border-t border-[#e5e5e5] pt-3">
-            <p className="text-xs font-medium text-[#9aa1ab]">
-              Not fulfilling online orders
-            </p>
-            <ul className="mt-1.5 space-y-1">
-              {ineligible.map((l) => (
-                <li key={l.id} className="text-sm text-[#9aa1ab]">
-                  {l.name} ·{" "}
-                  <Link
-                    href={`/dashboard/locations/${l.id}`}
-                    className="underline underline-offset-2 hover:text-[#111827]"
-                  >
-                    enable it
-                  </Link>
-                </li>
-              ))}
-            </ul>
+      <div
+        className="mt-5 max-w-5xl space-y-5"
+        data-testid="fulfilment-workspace"
+      >
+        <section className="overflow-hidden rounded-xl border border-[#e5e5e5] bg-white">
+          <div className="flex items-start gap-3 border-b border-[#e5e5e5] px-5 py-4 sm:px-6">
+            <span className="mt-0.5 rounded-lg bg-[#f3f4f6] p-2 text-[#111827]">
+              <Route className="h-4 w-4" strokeWidth={2} />
+            </span>
+            <div>
+              <h2 className="font-semibold text-[#111827]">
+                Website order routing
+              </h2>
+              <p className="mt-0.5 text-sm text-[#5b6472]">
+                Choose how StoreMink selects a location and which one it tries
+                first.
+              </p>
+            </div>
           </div>
-        )}
 
-        {canManage && (
-          <>
-            <label className="mt-5 flex items-center gap-2 text-sm text-[#111827]">
-              <input
-                type="checkbox"
-                checked={skipInactive}
-                onChange={(e) => setSkipInactive(e.target.checked)}
-                className="h-4 w-4 accent-[#111827]"
-              />
-              Skip locations that are deactivated
-            </label>
+          <div className="grid lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)]">
+            <div className="border-b border-[#e5e5e5] p-5 sm:p-6 lg:border-r lg:border-b-0">
+              <p className="text-xs font-semibold tracking-wide text-[#6b7280] uppercase">
+                Routing method
+              </p>
+              <div className="mt-3 space-y-2">
+                {FULFILMENT_STRATEGIES.map((strategy) => {
+                  const selected = rules.strategy === strategy.id;
+                  const locked =
+                    strategy.minPlan && !planAllows(plan, strategy.minPlan);
+                  return (
+                    <div
+                      key={strategy.id}
+                      className={`rounded-lg border p-3.5 ${
+                        selected
+                          ? "border-[#111827] bg-[#f8f8f8]"
+                          : "border-[#e5e5e5]"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <CheckCircle2
+                          className={`mt-0.5 h-4 w-4 shrink-0 ${
+                            selected ? "text-[#111827]" : "text-[#c4c8ce]"
+                          }`}
+                          strokeWidth={2}
+                        />
+                        <div>
+                          <p className="text-sm font-medium text-[#111827]">
+                            {strategy.label}
+                          </p>
+                          <p className="mt-0.5 text-xs leading-5 text-[#5b6472]">
+                            {strategy.description}
+                          </p>
+                          {locked && (
+                            <p className="mt-1 text-xs text-[#9aa1ab]">
+                              Available on {strategy.minPlan}.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-3 text-xs leading-5 text-[#9aa1ab]">
+                Additional routing methods will appear here when available.
+              </p>
+            </div>
 
-            <div className="mt-5 flex justify-end">
+            <div className="p-5 sm:p-6">
+              <div>
+                <p className="text-xs font-semibold tracking-wide text-[#6b7280] uppercase">
+                  Location priority
+                </p>
+                <p className="mt-1 text-sm text-[#5b6472]">
+                  The first eligible location with enough stock fulfils the
+                  whole order.
+                </p>
+              </div>
+
+              <ol className="mt-4 space-y-2">
+                {order.map((id, index) => {
+                  const location = byId.get(id);
+                  if (!location) return null;
+                  return (
+                    <li
+                      key={id}
+                      className="flex min-h-14 items-center gap-3 rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5"
+                    >
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[#f3f4f6] text-xs font-semibold text-[#5b6472]">
+                        {index + 1}
+                      </span>
+                      <MapPin
+                        className="h-4 w-4 shrink-0 text-[#9aa1ab]"
+                        strokeWidth={2}
+                      />
+                      <span className="min-w-0 flex-1 text-sm font-medium text-[#111827]">
+                        {location.name}
+                        {!location.active && (
+                          <span className="ml-2 rounded-full bg-[#f3f4f6] px-2 py-0.5 text-[11px] font-medium text-[#6b7280]">
+                            Inactive
+                          </span>
+                        )}
+                      </span>
+                      {canManage && (
+                        <span className="flex shrink-0 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => move(index, -1)}
+                            disabled={index === 0}
+                            aria-label={`Move ${location.name} up`}
+                            className="rounded-md border border-transparent p-1.5 text-[#5b6472] transition-colors hover:border-[#e5e5e5] hover:bg-[#f8f8f8] disabled:pointer-events-none disabled:opacity-25"
+                          >
+                            <ArrowUp className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => move(index, 1)}
+                            disabled={index === order.length - 1}
+                            aria-label={`Move ${location.name} down`}
+                            className="rounded-md border border-transparent p-1.5 text-[#5b6472] transition-colors hover:border-[#e5e5e5] hover:bg-[#f8f8f8] disabled:pointer-events-none disabled:opacity-25"
+                          >
+                            <ArrowDown className="h-4 w-4" />
+                          </button>
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+                {order.length === 0 && (
+                  <li className="rounded-lg border border-dashed border-[#d8dadd] bg-[#fafafa] p-4 text-sm leading-5 text-[#6b7280]">
+                    No location fulfils online orders. Enable it on a location
+                    first; until then, orders use your main location.
+                  </li>
+                )}
+              </ol>
+
+              {/* Shown rather than hidden: a merchant hunting for their shop
+                  needs to know why it is not in the routing list. */}
+              {ineligible.length > 0 && (
+                <div className="mt-4 rounded-lg bg-[#f8f8f8] p-3.5">
+                  <p className="text-xs font-semibold text-[#6b7280]">
+                    Not fulfilling online orders
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {ineligible.map((location) => (
+                      <li
+                        key={location.id}
+                        className="flex items-center justify-between gap-3 text-sm"
+                      >
+                        <span className="min-w-0 truncate text-[#6b7280]">
+                          {location.name}
+                        </span>
+                        <Link
+                          href={`/dashboard/locations/${location.id}`}
+                          className="shrink-0 font-medium text-[#111827] underline decoration-[#c4c8ce] underline-offset-2 hover:decoration-[#111827]"
+                        >
+                          Enable in location
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {canManage && (
+            <div className="flex flex-col gap-3 border-t border-[#e5e5e5] bg-[#fafafa] px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <label className="flex items-center gap-2.5 text-sm text-[#111827]">
+                <input
+                  type="checkbox"
+                  checked={skipInactive}
+                  onChange={(event) => setSkipInactive(event.target.checked)}
+                  className="h-4 w-4 rounded border-[#c4c8ce] accent-[#111827]"
+                />
+                Skip deactivated locations
+              </label>
               <button
                 type="button"
                 disabled={pending}
                 onClick={save}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#111827] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#111827] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-                Save
+                Save routing
               </button>
             </div>
-          </>
-        )}
-      </section>
+          )}
+        </section>
 
-      {children}
+        {children}
+      </div>
     </div>
   );
 }

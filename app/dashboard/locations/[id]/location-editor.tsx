@@ -16,7 +16,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Lock } from "lucide-react";
+import { ArrowLeft, Boxes, Loader2, Lock } from "lucide-react";
 import {
   saveLocationCapabilities,
   updateLocation,
@@ -174,6 +174,13 @@ export function LocationEditor({
             {location.isDefault && " · Main location"}
           </p>
         </div>
+        <Link
+          href={`/dashboard/inventory?location=${location.id}`}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#111827] px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+        >
+          <Boxes className="h-4 w-4" />
+          View inventory
+        </Link>
       </header>
 
       <section className="mt-5 max-w-2xl rounded-xl border border-[#e5e5e5] bg-white p-5">
