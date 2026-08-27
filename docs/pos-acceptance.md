@@ -802,7 +802,7 @@ Tap the search box and type a product name.
 out of the way whenever an editable element has focus.
 
 **PS-7.23 — Overlays keep their own focus**
-Open "Add customer" (or the tender panel) and type.
+Open **Add customer** (or Checkout details) and type.
 **Expect:** the field keeps focus. The register never pulls focus back to the
 scan box while an overlay owns the screen.
 
@@ -1018,17 +1018,17 @@ orders must still reach everyone — `order.placed` is deliberately not narrowed
 ## 7e. Till-created customers & the signup claim (roadmap Step 4)
 
 ⚠ Needs `supabase/pos_13_customer_claim.sql` applied (staging: ✅ 2026-08-14).
-**None of these has been exercised in a browser yet** — 96 unit tests cover the
-rules, the claim statement, the action and the signup ordering, but nobody has
-rung up a walk-in on a real till.
+The Checkout, customer and payment surfaces have been visually exercised in a
+local browser at desktop and 390px widths. The full flow has not been completed
+against a real till yet; focused unit tests cover the rules, claim statement,
+actions, signup ordering and checkout UI.
 
 **PS-C.25 — A cashier can record a walk-in**
-Register → Customer → search "Asha". Nothing found.
-**Expect:** an **Add as a new customer** button under "No customer found", and
-below it "Or leave it — the sale can go through without one."
-**Not** a button beside the search box: reaching it only after an empty search
-means the search has happened by construction, so a cashier can't create a
-duplicate of someone already on file.
+Register → Charge → **Add customer**.
+**Expect:** existing-customer search and **Create new customer** on the same
+screen. Search "Asha" and see matches update; creating remains available without
+first manufacturing an empty result. **Continue as walk-in** stays on Checkout,
+so the customer screen can focus on finding or creating a profile.
 
 **PS-C.26 — The typed query seeds the form**
 Search "Asha" → Add. Then separately search "9876543210" → Add.
@@ -1162,9 +1162,9 @@ Record a walk-in WITH an email, attach them, ring up a sale.
 **Expect:** an order confirmation arrives. No new code — `placePosSale` emits
 `order.placed` and the fan-out resolves the address from their `users` row.
 
-**PS-C.36 — Receipt contact at the tender panel**
-Ring up a sale with NO customer attached. At **Take payment**, fill
-**Email a receipt (optional)** and complete the sale.
+**PS-C.36 — Receipt contact in Checkout details**
+Ring up a sale with NO customer attached. At **Checkout**, fill
+**Receipt email (optional)** and continue to payment.
 **Expect:** a receipt arrives — items, what they paid with, change given, the
 order reference — from the store's own sending domain, and a row appears in
 Logs → Email logs with mailer **POS receipt**.
@@ -1191,6 +1191,58 @@ customer's receipt to the previous one.
 Open **Take payment** from `/pos/pickups` on a pay-at-store collection.
 **Expect:** no receipt field. That order was placed online and already carries
 an address; asking again at hand-over is a field with no job.
+
+**PS-C.44 — Checkout asks who is buying without blocking a walk-in**
+Ring a cart with no customer and select **Charge**.
+**Expect:** Checkout shows **No customer added**, explains that attaching saves
+purchase history and enables store credit, and offers both **Add customer** and
+**Continue as walk-in**. Payment methods are not mixed into this decision.
+
+**PS-C.45 — Search and create share one customer screen**
+From Checkout, select **Add customer**. Repeat with a name, mobile number and
+email already typed in search.
+**Expect:** existing-customer search and **Create new customer** are visible on
+the same screen. Creating does not require manufacturing an empty search result.
+The query seeds the matching field, and a duplicate mobile attaches the existing
+customer instead of creating a duplicate.
+
+**PS-C.46 — Checkout shows who was attached**
+Attach a customer with a mobile and email, return to Checkout, then change them.
+**Expect:** the name and contact details are visible before payment, **Change**
+reopens the customer screen, and the final sale belongs only to the person shown.
+
+**PS-C.47 — Receipt contact is not disguised as a customer**
+Continue as a walk-in and enter **Receipt email (optional)** on Checkout.
+**Expect:** the copy says it sends this receipt only and does not create a
+customer profile. A customer that already has an email does not get a redundant
+receipt field.
+
+**PS-PAY.1 — Payment methods are one decision, not system architecture**
+Continue from Checkout to Payment with and without a connected Razorpay gateway.
+**Expect:** one plain-language list shows Cash, Card terminal, UPI / QR and,
+when available, Razorpay. Each row says the next physical action. There are no
+"take now" / "record already taken" groups and no disabled gateway tile.
+
+**PS-PAY.2 — A full payment asks only what its method needs**
+Pay the full sale once by cash, card terminal, UPI / QR and Razorpay.
+**Expect:** cash asks what was received and previews change. Card and UPI use the
+full amount due and ask for confirmation after the external device succeeds;
+there is no editable amount that can accidentally turn the sale into a split.
+Razorpay opens and verifies the full amount. Each path has one clear final
+action.
+
+**PS-PAY.3 — Split payment is a linear loop**
+Select **Split payment**, take ₹300 cash on a ₹500 sale, then ₹200 by UPI / QR.
+**Expect:** the flow asks for the first method, then that part's amount, shows
+₹200 still due, and returns to the same method list. After the second part it
+shows both payment rows and requires one final **Complete sale** review. It never
+shows method selection and an unexplained global amount field at the same time.
+
+**PS-PAY.4 — Short store credit becomes an understandable split**
+Attach a customer with ₹120 credit to a ₹500 sale and choose Store credit.
+**Expect:** Checkout says ₹380 will remain, applies the ₹120 leg, and returns to
+the payment list for the remainder. The cashier does not have to discover or
+enable a separate split mode first.
 
 ---
 
@@ -2491,7 +2543,8 @@ rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 ⚠ Needs a customer with a balance — refund an order to store credit first.
 
 **PS-CR.1 — The option appears only when there is something to spend**
-Ring up a sale with no customer attached, open **Take payment**.
+Ring up a sale with no customer attached, select **Charge**, continue as a
+walk-in and open Payment.
 **Expect:** no Store credit button. Attach a customer with a ₹0 balance:
 still absent. Attach one with a balance: it appears.
 **Why:** a greyed-out button on every walk-in sale is a control that never
@@ -2623,30 +2676,30 @@ accepted tender with no gateway call behind it anywhere, so it settled sales
 and entered shift reconciliation as money nobody had checked was taken.
 
 **PS-GW.1 — The method appears only when it can work**
-Open the tender pad with the gateway connected, then pause it in Channels and
-reopen.
-**Expect:** Online is offered, then gone. A control that always fails in front
+Open Payment with the gateway connected, then pause it in Channels and reopen.
+**Expect:** Razorpay is offered, then gone. A control that always fails in front
 of a customer is worse than no control.
 
-**PS-GW.2 ★ — The pad says which methods are real**
-Select Card, then Online.
-**Expect:** Card reads "Recorded from your own terminal"; Online reads "Charged
-and verified with the gateway". Three identical buttons is why nobody noticed
-only one of them proved anything.
+**PS-GW.2 ★ — Payment says which methods are real**
+Select Card terminal, then Razorpay.
+**Expect:** Card says to record it after the external terminal approves and its
+confirmation repeats that StoreMink cannot verify the terminal. Razorpay says
+StoreMink opens and verifies the payment. Similar-looking methods must not imply
+the same verification guarantee.
 
-**PS-GW.3 ★★ — A split settles: ₹300 cash + ₹200 online**
-On a ₹500 sale, add ₹300 cash, then charge ₹200 online.
+**PS-GW.3 ★★ — A split settles: ₹300 cash + ₹200 Razorpay**
+On a ₹500 sale, add ₹300 cash, then charge ₹200 with Razorpay.
 **Expect:** the pad shows paid in full; the sale completes; `order_payments`
 holds two rows and the razorpay one carries the gateway's payment id.
 
 **PS-GW.4 ★★ — The tender is staged only AFTER confirmation**
-Charge online, then watch the staged list while the modal is open.
+Charge with Razorpay, then watch the staged list while the modal is open.
 **Expect:** nothing is staged until the payment confirms. Staging optimistically
 would let a cashier complete a sale on a payment that never captured.
 
 **PS-GW.5 ★ — Dismissing the modal is not an error state**
-Start a ₹200 online leg on a sale that already has ₹300 cash staged, then close
-the modal.
+Start a ₹200 Razorpay leg on a sale that already has ₹300 cash staged, then
+close the modal.
 **Expect:** "Payment cancelled", the ₹300 cash is still staged, and the cart is
 intact. The cashier takes the ₹200 another way.
 
@@ -3209,8 +3262,8 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**No tender at the till is gateway-verified**~~                       | **FIXED** (PS-GW.1–GW.12). `razorpay` sat in `TENDER_METHODS` with no gateway call anywhere; `placePosSale` now reads the payment back from Razorpay and refuses anything that is not a CAPTURED INR payment for the exact tender amount. Card/UPI remain external-terminal records BY DESIGN, and the pad now says so                                                                                         |
 | ~~**A collection can't take a gateway payment**~~                       | **FIXED** (PS-GW.13–GW.15). `markCollected` runs the same `verifyGatewayTenders` as the sell counter, before its claim, so `razorpay` rejoined `COUNTER_TENDER_METHODS`                                                                                                                                                                                                                                        |
 | ~~**A dashboard-received return restocks the DEFAULT location**~~       | **FIXED** (PS-RL.1–RL.7). `order_returns.location_id` was never written from `return-actions.ts`, so `receiveReturn` fell to the bare `adjust_stock` wrapper and a parcel that arrived in Mumbai credited Delhi. Now asked for, validated before the claim, and named in the toast                                                                                                                             |
-| **A walk-in with NO record can't get an emailed receipt**               | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt                                                                                                                                                         |
-| **The customer claim has never been run in a browser**                  | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                                                                                                                     |
+| **A walk-in with NO record can't get an emailed receipt**               | **FIXED** (PS-C.36, C.40–C.43, C.47). An optional email box in Checkout details, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt                                                                                                                                                   |
+| **The customer claim has never been run on a real till**                | PS-C.25–C.47. The Checkout/customer surfaces have local desktop and mobile visual coverage, but no real till has exercised the claim. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
 | ~~**Store credit can't be spent at a COLLECTION**~~                     | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                                                                                                           |
 | ~~**A held sale has no auto-expiry**~~                                  | **FIXED** (PS-PK.13). `pos_parked_sales` joined the §32 retention sweep at 7 days. The CAP was the problem, not the disk: abandoned carts filled the 20-slot list and eventually stopped a counter parking a real one                                                                                                                                                                                          |
 | ~~**Analytics has no owner-selectable location filter**~~               | **FIXED (PS-AN.1–AN.4).** Staff scope remains the authority; owners and eligible staff can select one accessible physical location through the URL-owned global filter, and an exact shop view excludes online/unassigned orders                                                                                                                                                                               |

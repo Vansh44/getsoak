@@ -573,7 +573,7 @@ and their later signup adopts the row.
    _there_ attaches to the sale even with no customer record.
 
 **All three SHIPPED.** Search, inline create, a sale that completes with or
-without a customer, and the receipt-contact box on the tender panel — see
+without a customer, and the receipt-contact box on Checkout — see
 "SHIPPED — receipt contact" below. SMS as a receipt channel is Step 5, not this
 step: no POS receipt path sends over SMS today (there is no
 `lib/pos/receipt-delivery.ts`).
@@ -648,12 +648,16 @@ one account taking over another's.
 **★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
 history; a thrown one would cost the shopper their signup.
 
-**UI.** The create form opens from the EMPTY search result, not a second button —
-"Add customer" beside the search box invites a duplicate of someone already on
-file. The typed query seeds whichever field it looks like. `sell`, not a manager
-grant: recording who bought something is part of ringing up a sale.
+**UI.** Customer capture is now a visible checkout step rather than a quiet row
+above the cart total. The Checkout screen shows the attached person or a clear
+**Add customer** action, explains why attaching helps, and keeps **Continue as
+walk-in** explicit so identity never gates a sale. Search and **Create new
+customer** share one screen, as they do in Shopify POS; the typed query seeds
+the matching name, mobile or email field. Exact phone duplicates still collapse
+to the existing customer at the server. `sell`, not a manager grant: recording
+who bought something is part of ringing up a sale.
 
-**SHIPPED — receipt contact.** An optional email box on the tender panel
+**SHIPPED — receipt contact.** An optional email box in Checkout details
 (`lib/email/pos-receipt.ts`). It deliberately does NOT feed the notification
 spine: that routes an EVENT to IDENTIFIED recipients honouring preferences and
 digests, and a walk-in has no identity — no `users` row, so no inbox, no
@@ -665,10 +669,11 @@ file, read in the same query as the ownership check. A bad address is dropped
 rather than refused, because this runs after the money is taken. SMS waits for
 Step 5.
 
-**Acceptance:** PS-C.25–C.43 — **written, not yet exercised in a browser.**
-117 unit tests cover the pure rules, the claim statement, the actions, the
-signup ordering and the receipt; nobody has yet rung up a walk-in on a real
-till.
+**Acceptance:** PS-C.25–C.47 + PS-PAY.1–PAY.4 — **written.** The Checkout,
+customer and payment surfaces have been exercised in a local browser at desktop
+and 390px widths; nobody has yet rung up a walk-in on a real till. 120 focused
+unit tests cover the pure rules, the claim statement, the actions, the signup
+ordering, the receipt and the new checkout UI.
 
 ---
 
@@ -1472,13 +1477,24 @@ already post `card`, so nothing new is reachable. The damage is to TRUTHFULNESS
   — Razorpay Standard Checkout on the till, then confirmation before the sale
   completes. The merchant keeps 0% surcharge; the money settles directly to
   them, exactly as online checkout does.
-- The tender panel gains the method, gated on a live gateway — a control that
+- The payment list gains the method, gated on a live gateway — a control that
   always fails in front of a customer is worse than no control (the
   `RegisterConfig.canDiscount` rule).
 - Card/UPI stay external-terminal records and the panel now SAYS so
   ("Recorded from your own terminal"); Online says "Charged and verified with
   the gateway". Three buttons that looked equally trustworthy were the reason
   nobody noticed only one of them proved anything.
+
+**✅ CHECKOUT CLARITY FOLLOW-UP (2026-08-27).** The tender grid and its
+"take now" / "record already taken" grouping still made cashiers parse payment
+architecture at the counter. Payment is now a short, single-column list with
+method-specific next screens: cash asks for notes and shows change; card
+terminal and UPI / QR ask for an explicit external-device confirmation; Razorpay
+opens and verifies its own payment. An unavailable gateway is omitted from the
+till instead of becoming a disabled explanation tile. Split payment follows the
+Shopify sequence directly — choose a method, enter that part, review the amount
+left, then choose the next method — and completes only after all legs are shown
+together. No tender, settlement, gateway or inventory rule changed underneath.
 
 **★★ NO QR-CODE API, DELIBERATELY.** A UPI QR is the natural Indian counter
 flow and Razorpay has an API for it — but it is provider surface this codebase
