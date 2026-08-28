@@ -33,8 +33,9 @@ import {
   stockReservations,
   storeLocations,
 } from "@/drizzle/schema";
-import { resolvePosOperator } from "@/lib/pos/operator";
+import { resolvePosOperator, type PosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
+import { posAudit } from "@/lib/pos/audit";
 import { commitHold } from "@/lib/inventory/reservations";
 import { emitEvent } from "@/lib/notifications/record";
 import { formatAddressLine } from "@/lib/locations/address";
@@ -59,7 +60,7 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { handoverGate } from "@/lib/pos/collection-state";
 import {
   clearCustomerVerification,
-  hasCustomerVerification,
+  gateCustomerVerification,
 } from "@/lib/pos/customer-verification";
 
 /**
@@ -98,6 +99,35 @@ export interface PickupOrder {
 
 function fail(msg: string) {
   return { orders: [] as PickupOrder[], error: msg };
+}
+
+/**
+ * Record that money moved, or goods left, WITHOUT the customer OTP.
+ *
+ * A no-op for the ordinary verified case, so the trail stays readable — the
+ * `pos_audit_log` rule that what belongs in it is a DISCRETIONARY act. Nothing
+ * else on the order records that the identity check was skipped: afterwards it
+ * looks exactly like every other collection.
+ *
+ * Best-effort, like every audit write: losing a log line is bad, refusing to
+ * serve a customer standing at the counter is worse.
+ */
+async function auditIdentityOverride(
+  op: PosOperator,
+  orderId: string,
+  overridden: boolean,
+  what: "deposit" | "hand-over",
+): Promise<void> {
+  if (!overridden) return;
+  await posAudit({
+    storeId: op.storeId,
+    event: "identity_override",
+    locationId: op.locationId,
+    staffId: op.staffId,
+    actor: op.name,
+    orderId,
+    detail: `Pickup ${what} without customer verification — no mobile on the order`,
+  });
 }
 
 /**
@@ -568,12 +598,22 @@ export async function markCollected(
   /** What the customer handed over at the counter. Empty for an order already
    *  paid online, which is most of them. */
   tenders: PosTender[] = [],
-  /** The cashier's attestation that an unprepared order is actually packed. */
-  opts: { acknowledgeUnprepared?: boolean } = {},
+  opts: {
+    /** The cashier's attestation that an unprepared order is actually packed. */
+    acknowledgeUnprepared?: boolean;
+    /** A manager's attestation that they are handing over an order the OTP
+     *  cannot reach. Only ever honoured once the SERVER has confirmed the
+     *  order carries no textable mobile — see `gateCustomerVerification`. */
+    acknowledgeUnverifiedCustomer?: boolean;
+  } = {},
 ): Promise<{
   success?: boolean;
   error?: string;
   verificationRequired?: boolean;
+  /** The OTP cannot run on this order at all. The counter offers the override
+   *  when `canOverrideVerification`, and explains when it does not. */
+  verificationUnavailable?: boolean;
+  canOverrideVerification?: boolean;
   changeDue?: number;
   /** The order was never marked ready and needs an explicit confirmation. The
    *  counter turns this into a dialog rather than a dead error. */
@@ -587,11 +627,22 @@ export async function markCollected(
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid order." };
-  if (!(await hasCustomerVerification("pickup", orderId, op))) {
-    return {
-      error: "Verify the customer's mobile number before handover.",
-      verificationRequired: true,
-    };
+  const verified = await gateCustomerVerification({
+    op,
+    orderId,
+    purpose: "pickup",
+    acknowledged: opts.acknowledgeUnverifiedCustomer === true,
+    mayOverride: posCan(op.role, "override_verification"),
+    requiredCopy: "Verify the customer's mobile number before handover.",
+  });
+  if (!verified.ok) {
+    return "verificationRequired" in verified
+      ? { error: verified.error, verificationRequired: true }
+      : {
+          error: verified.error,
+          verificationUnavailable: true,
+          canOverrideVerification: verified.canOverride,
+        };
   }
 
   // ── What does this order still owe? ──────────────────────────────────────
@@ -774,7 +825,15 @@ export async function markCollected(
         paid,
         shiftId,
       });
-      if (result.success) await clearCustomerVerification();
+      if (result.success) {
+        await auditIdentityOverride(
+          op,
+          orderId,
+          verified.overridden,
+          "deposit",
+        );
+        await clearCustomerVerification();
+      }
       return result;
     }
 
@@ -1013,6 +1072,10 @@ export async function markCollected(
   });
 
   revalidatePath("/pos/pickups");
+  // ★ AFTER the claim, deliberately — the money-audit rule. An override logged
+  // before the hand-over could describe one that then failed on payment, and a
+  // trail with entries for things that did not happen is a trail nobody trusts.
+  await auditIdentityOverride(op, orderId, verified.overridden, "hand-over");
   await clearCustomerVerification();
   return { success: true, changeDue: change };
 }

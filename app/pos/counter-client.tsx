@@ -167,6 +167,9 @@ export function CounterClient({
   const [tendering, setTendering] = useState<{
     order: PickupOrder;
     acked: boolean;
+    /** Carried on the row so a retry after an error re-sends the same
+     *  acknowledgement instead of re-opening the dialog for it. */
+    ackUnverified?: boolean;
   } | null>(null);
   /** The attached customer's spendable credit, or null while it loads. */
   const [collectionCredit, setCollectionCredit] = useState<number | null>(null);
@@ -180,7 +183,11 @@ export function CounterClient({
   const [detailReload, setDetailReload] = useState(0);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
-  const verificationContinue = useRef<(() => void) | null>(null);
+  // Takes the acknowledgement, so "proceed without a code" travels to the
+  // server as its own flag rather than being remembered as ambient state.
+  const verificationContinue = useRef<
+    ((ackUnverified: boolean) => void) | null
+  >(null);
   const [verification, setVerification] = useState<{
     orderId: string;
     purpose: PosCustomerVerificationPurpose;
@@ -325,7 +332,7 @@ export function CounterClient({
   const verifyThen = (
     orderId: string,
     purpose: PosCustomerVerificationPurpose,
-    next: () => void,
+    next: (ackUnverified: boolean) => void,
   ) => {
     verificationContinue.current = next;
     setVerification({ orderId, purpose });
@@ -393,9 +400,13 @@ export function CounterClient({
    * may genuinely be packing it while the customer waits, so this is a question,
    * not a refusal — but it must never be the thing a mis-tap does.
    */
-  const continueHandOver = (o: PickupOrder, acked: boolean) => {
+  const continueHandOver = (
+    o: PickupOrder,
+    acked: boolean,
+    ackUnverified = false,
+  ) => {
     if (o.amountDue > 0) {
-      setTendering({ order: o, acked });
+      setTendering({ order: o, acked, ackUnverified });
       // Fetched here rather than carried on the queue row: the queue is polled
       // every 30s and is deliberately one cheap indexed read (§22). Starts at
       // null so the option stays hidden until we actually know.
@@ -410,12 +421,13 @@ export function CounterClient({
       try {
         const res = await markCollected(o.id, [], {
           acknowledgeUnprepared: acked,
+          acknowledgeUnverifiedCustomer: ackUnverified,
         });
         // A stale/cleared proof can happen after a long confirmation dialog.
         // Re-open the same verification instead of reducing this to a toast
         // that makes the cashier start the whole hand-over again.
-        if (res.verificationRequired) {
-          verifyThen(o.id, "pickup", () => continueHandOver(o, acked));
+        if (res.verificationRequired || res.verificationUnavailable) {
+          verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
           return;
         }
         if (res.error) {
@@ -440,17 +452,23 @@ export function CounterClient({
       setConfirmUnprepared(o);
       return;
     }
-    verifyThen(o.id, "pickup", () => continueHandOver(o, acked));
+    verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
   };
 
   const takePayment = async (tenders: PosTender[]) => {
     if (!tendering) return {};
-    const { order: o, acked } = tendering;
+    const { order: o, acked, ackUnverified } = tendering;
     const res = await markCollected(o.id, tenders, {
       acknowledgeUnprepared: acked,
+      acknowledgeUnverifiedCustomer: ackUnverified === true,
     });
-    if (res.verificationRequired) {
-      verifyThen(o.id, "pickup", () => void takePayment(tenders));
+    if (res.verificationRequired || res.verificationUnavailable) {
+      // Re-open on the SAME tendering row, then retry with whatever the dialog
+      // answered — a proof, or an acknowledged override.
+      verifyThen(o.id, "pickup", (ack) => {
+        setTendering((cur) => (cur ? { ...cur, ackUnverified: ack } : cur));
+        void takePayment(tenders);
+      });
       return {};
     }
     if (res.error) {
@@ -998,7 +1016,13 @@ export function CounterClient({
             const next = verificationContinue.current;
             verificationContinue.current = null;
             setVerification(null);
-            next?.();
+            next?.(false);
+          }}
+          onOverride={() => {
+            const next = verificationContinue.current;
+            verificationContinue.current = null;
+            setVerification(null);
+            next?.(true);
           }}
         />
       )}

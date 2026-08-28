@@ -1,14 +1,15 @@
 "use server";
 
-import { and, eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
-import { orders, users } from "@/drizzle/schema";
+import { users } from "@/drizzle/schema";
 import { getFirebaseAdminAuth } from "@/lib/auth/firebase-admin";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { resolvePosOperator, type PosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import {
   hasCustomerVerification,
+  loadVerificationTarget,
   saveCustomerVerification,
   signCustomerVerification,
   type PosCustomerVerificationPurpose,
@@ -20,65 +21,17 @@ import {
 } from "@/lib/pos/session";
 import { logError } from "@/lib/observability/logger";
 
-interface VerificationTarget {
-  phone: string;
-}
-
 function canVerify(op: PosOperator, purpose: PosCustomerVerificationPurpose) {
   return posCan(op.role, purpose === "pickup" ? "sell" : "refund");
-}
-
-function mobileFromAddress(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const address = value as Record<string, unknown>;
-  return normalizeIndianMobile(address.phone ?? address.mobile);
-}
-
-async function loadTarget(
-  op: PosOperator,
-  orderId: string,
-  purpose: PosCustomerVerificationPurpose,
-): Promise<VerificationTarget | null> {
-  const rows = await withService((db) =>
-    db
-      .select({
-        shippingAddress: orders.shippingAddress,
-        customerPhone: users.phone,
-      })
-      .from(orders)
-      .leftJoin(
-        users,
-        and(eq(users.id, orders.customerId), eq(users.storeId, orders.storeId)),
-      )
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.storeId, op.storeId),
-          purpose === "pickup"
-            ? and(
-                eq(orders.fulfilmentType, "pickup"),
-                eq(orders.pickupLocationId, op.locationId),
-                or(
-                  eq(orders.pickupStatus, "awaiting"),
-                  eq(orders.pickupStatus, "ready"),
-                ),
-              )
-            : undefined,
-        ),
-      )
-      .limit(1),
-  );
-  const row = rows[0];
-  if (!row) return null;
-  const phone =
-    mobileFromAddress(row.shippingAddress) ??
-    normalizeIndianMobile(row.customerPhone);
-  return phone ? { phone } : null;
 }
 
 function validPurpose(value: unknown): value is PosCustomerVerificationPurpose {
   return value === "pickup" || value === "return";
 }
+
+/** What the counter is told when an order carries no textable mobile. */
+const UNVERIFIABLE_COPY =
+  "This order has no mobile number that can be texted, so the customer can't be verified by code.";
 
 /**
  * `signInWithPhoneNumber` creates a Firebase identity when the number has never
@@ -128,6 +81,12 @@ export async function beginCustomerPhoneVerification(
   phone?: string;
   maskedPhone?: string;
   alreadyVerified?: boolean;
+  /** The order exists here but carries no textable mobile, so the OTP cannot
+   *  run at all. Distinct from `error`, which means the counter should stop. */
+  unverifiable?: boolean;
+  /** Whether THIS operator may proceed without a code (`override_verification`
+   *  — manager and above). A cashier gets the explanation and no button. */
+  canOverride?: boolean;
   error?: string;
 }> {
   const op = await resolvePosOperator();
@@ -151,11 +110,24 @@ export async function beginCustomerPhoneVerification(
     return { error: "Too many codes were requested. Please wait 15 minutes." };
   }
 
-  const target = await loadTarget(op, orderId, purpose).catch(() => null);
-  if (!target) {
+  const target = await loadVerificationTarget(op, orderId, purpose).catch(
+    () => null,
+  );
+  // A read failure is NOT "no phone" — reporting it as unverifiable would hand
+  // a manager an override button because the database blinked. Fails closed.
+  if (!target) return { error: "Couldn't read the order. Please try again." };
+  if (!target.found) {
+    return { error: "That order isn't waiting at this counter." };
+  }
+  if (!target.phone) {
+    // ★ Not an error: the counter has to be able to finish. See
+    // `override_verification` — the goods are paid for and the customer is
+    // standing there, so the answer is a deliberate, recorded decision by
+    // someone senior, not a permanent refusal.
     return {
-      error:
-        "This order has no valid customer mobile number. It can't be verified at the till.",
+      unverifiable: true,
+      canOverride: posCan(op.role, "override_verification"),
+      error: UNVERIFIABLE_COPY,
     };
   }
   if (!getFirebaseAdminAuth()) {
@@ -193,10 +165,14 @@ export async function confirmCustomerPhoneVerification(input: {
     return { error: "Too many verification attempts. Please wait 15 minutes." };
   }
 
-  const target = await loadTarget(op, input.orderId, input.purpose).catch(
-    () => null,
-  );
-  if (!target) {
+  const target = await loadVerificationTarget(
+    op,
+    input.orderId,
+    input.purpose,
+  ).catch(() => null);
+  // No phone means no proof can be MINTED here either — the override path is
+  // the only way through, and it is markCollected/processReturn's decision.
+  if (!target?.found || !target.phone) {
     return {
       error:
         "This order has no valid customer mobile number. It can't be verified at the till.",

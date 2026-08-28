@@ -5,13 +5,17 @@ import { makeDbMock } from "./_test-helpers";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
 vi.mock("@/lib/pos/customer-verification", () => ({
-  hasCustomerVerification: vi.fn(async () => true),
+  gateCustomerVerification: vi.fn(async () => ({
+    ok: true,
+    overridden: false,
+  })),
   clearCustomerVerification: vi.fn(async () => undefined),
 }));
 vi.mock("./pos-shift-actions", () => ({
   currentShiftIdFor: vi.fn(async () => "shift-1"),
 }));
 vi.mock("@/lib/notifications/record", () => ({ emitEvent: vi.fn() }));
+vi.mock("@/lib/pos/audit", () => ({ posAudit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
 vi.mock("@/lib/payments/issue-refund", () => ({
   issueRefund: vi.fn(async () => ({ refundId: "rf-1", status: "completed" })),
@@ -33,7 +37,8 @@ import {
   getReturnableSale,
   processReturn,
 } from "./pos-return-actions";
-import { hasCustomerVerification } from "@/lib/pos/customer-verification";
+import { gateCustomerVerification } from "@/lib/pos/customer-verification";
+import { posAudit } from "@/lib/pos/audit";
 import { getCounterReturnPolicy } from "@/lib/returns/counter-policy";
 
 const MANAGER = {
@@ -61,6 +66,10 @@ function seedSale(
       reference: string | null;
     }>;
     productReturnable?: boolean;
+    /** Anything other than a `pos` sale rung at `loc-1` is BORIS. */
+    salesChannel?: string;
+    locationId?: string | null;
+    paymentMethod?: string;
   } = {},
 ) {
   const order = {
@@ -71,12 +80,12 @@ function seedSale(
     total: 262.5,
     discount: 0,
     store_credit_used: opts.storeCreditUsed ?? 0,
-    payment_method: "cash",
+    payment_method: opts.paymentMethod ?? "cash",
     payment_status: "paid",
-    // Rung at THIS register — it avoids the additional BORIS gates, but still
-    // follows the store's master returns policy.
-    location_id: "loc-1",
-    sales_channel: "pos",
+    // Rung at THIS register — the grandfathered path that skips the BORIS
+    // gates and, when the store has never switched returns on, the policy too.
+    location_id: opts.locationId === undefined ? "loc-1" : opts.locationId,
+    sales_channel: opts.salesChannel ?? "pos",
     status: "completed",
     delivered_at: null,
     collected_at: null,
@@ -132,7 +141,10 @@ function seedSale(
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
-  vi.mocked(hasCustomerVerification).mockResolvedValue(true);
+  vi.mocked(gateCustomerVerification).mockResolvedValue({
+    ok: true,
+    overridden: false,
+  });
   vi.mocked(getCounterReturnPolicy).mockResolvedValue({
     enabled: true,
     allowInStore: true,
@@ -176,8 +188,12 @@ describe("getReturnableSale", () => {
     expect(dbHolder.current.calls.where.length).toBeGreaterThan(0);
   });
 
-  it("applies the merchant master switch to a sale rung at this counter", async () => {
-    vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+  // ★★ `returns.enabled` DEFAULTS OFF and the till has taken returns of its own
+  // sales since pos_12, so the master switch must not reach them: gating it
+  // there removes a working capability from every existing POS merchant on
+  // deploy, with no migration to restore it (roadmap invariant 1).
+  describe("★ the master switch governs BORIS, never a sale rung here", () => {
+    const OFF = {
       enabled: false,
       allowInStore: false,
       allowExchanges: false,
@@ -185,10 +201,64 @@ describe("getReturnableSale", () => {
       windowDays: 7,
       restockingFeePercent: 0,
       locationAccepts: false,
+    };
+
+    it("still takes back a sale rung at this counter", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      const { sale, error } = await getReturnableSale("o1");
+      expect(error).toBeUndefined();
+      expect(sale?.lines.map((l) => l.remaining)).toEqual([2, 1]);
     });
-    expect((await getReturnableSale("o1")).error).toMatch(
-      /returns are switched off/i,
-    );
+
+    it("runs it under LEGACY semantics, not the registry defaults", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+        ...OFF,
+        // Values a merchant never chose. None of them may apply.
+        requireReason: true,
+        restockingFeePercent: 20,
+        allowExchanges: true,
+        windowDays: 7,
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale).toMatchObject({
+        requireReason: false,
+        restockingFeePercent: 0,
+        allowExchanges: false,
+      });
+    });
+
+    it("★ a 7-day default window can't expire a till return it used to accept", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      // The seeded sale is from 2026-07-30 — well outside 7 days.
+      vi.setSystemTime(new Date("2026-09-30T10:00:00Z"));
+      const { sale } = await getReturnableSale("o1");
+      vi.useRealTimers();
+      expect(sale?.lines.every((l) => l.eligible)).toBe(true);
+    });
+
+    it("★ but still refuses a BROUGHT-IN order — that capability IS new", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      seedSale({ salesChannel: "online", locationId: null });
+      expect((await getReturnableSale("o1")).error).toMatch(
+        /returns are switched off/i,
+      );
+    });
+
+    it("★ and the switch still applies in full once it is ON", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+        ...OFF,
+        enabled: true,
+        allowInStore: true,
+        locationAccepts: true,
+        requireReason: true,
+        restockingFeePercent: 20,
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale).toMatchObject({
+        requireReason: true,
+        restockingFeePercent: 20,
+      });
+    });
   });
 
   it("marks a final-sale product ineligible at the till", async () => {
@@ -255,7 +325,11 @@ describe("findOrderForReturn", () => {
 
 describe("processReturn", () => {
   it("requires the server-bound customer OTP proof before loading refund details", async () => {
-    vi.mocked(hasCustomerVerification).mockResolvedValue(false);
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: false,
+      verificationRequired: true,
+      error: "Verify the customer's mobile number before handover.",
+    });
     const result = await processReturn(
       "o1",
       [{ orderItemId: "li-a", quantity: 1 }],
@@ -330,6 +404,55 @@ describe("processReturn", () => {
         .mocked(issueRefund)
         .mock.calls.reduce((sum, [input]) => sum + Number(input.amount), 0),
     ).toBe(105);
+  });
+
+  // The same dead end the hand-over counter had — a return on an order with no
+  // textable mobile could not be taken at all.
+  it("★ reports an unreachable OTP as unavailable, not as a refusal", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: false,
+      verificationUnavailable: true,
+      canOverride: true,
+      error: "This order has no mobile number that can be texted.",
+    });
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(res).toMatchObject({
+      verificationUnavailable: true,
+      canOverrideVerification: true,
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
+  it("★ forwards the acknowledgement for the server to judge", async () => {
+    await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+      undefined,
+      { acknowledgeUnverifiedCustomer: true },
+    );
+    expect(vi.mocked(gateCustomerVerification).mock.calls[0][0]).toMatchObject({
+      acknowledged: true,
+      purpose: "return",
+    });
+  });
+
+  it("★ audits an overridden return separately from the refund itself", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: true,
+      overridden: true,
+    });
+    await processReturn("o1", [{ orderItemId: "li-a", quantity: 1 }], "cash");
+    const events = vi.mocked(posAudit).mock.calls.map(([e]) => e.event);
+    // BOTH — "who gave money back" and "and nobody checked who they were" are
+    // different questions, and folding the second into the first's detail
+    // hides it from the only query that would ever ask for it.
+    expect(events).toContain("refund_issued");
+    expect(events).toContain("identity_override");
   });
 
   it("★ recomputes the amount server-side — a line quantity beyond what remains is clamped", async () => {
@@ -624,6 +747,79 @@ describe("★ the drawer is capped, not just the goods", () => {
       "cash",
     );
     expect(r.error).toMatch(/at most ₹62\.50/);
+  });
+
+  // ★★ A SPLIT HAS TWO CEILINGS. refundableAmount caps a MONEY method at what
+  // money actually paid, so measuring the WHOLE split against that ceiling
+  // refuses the credit leg for being money it never was.
+  describe("★ a split is capped per destination, not all as cash", () => {
+    /** ₹262.50 of goods: ₹200 on store credit, ₹62.50 in cash. */
+    const CREDIT_SPLIT = {
+      storeCreditUsed: 200,
+      paymentRows: [
+        {
+          method: "store_credit",
+          amount: 200,
+          change_due: null,
+          reference: null,
+        },
+        { method: "cash", amount: 62.5, change_due: 0, reference: null },
+      ],
+    };
+
+    it("★ takes back the WHOLE sale that was part-paid with credit", async () => {
+      seedSale(CREDIT_SPLIT);
+      const r = await processReturn(
+        "o1",
+        [
+          { orderItemId: "li-a", quantity: 2 },
+          { orderItemId: "li-b", quantity: 1 },
+        ],
+        "original",
+      );
+      // The old cap measured all ₹262.50 against the ₹62.50 money ceiling and
+      // refused a legitimate full return outright.
+      expect(r.error).toBeUndefined();
+      expect(r.refunded).toBe(262.5);
+    });
+
+    it("sends each leg to the instrument that actually paid it", async () => {
+      seedSale(CREDIT_SPLIT);
+      await processReturn(
+        "o1",
+        [
+          { orderItemId: "li-a", quantity: 2 },
+          { orderItemId: "li-b", quantity: 1 },
+        ],
+        "original",
+      );
+      expect(
+        vi.mocked(issueRefund).mock.calls.map(([i]) => [i.method, i.amount]),
+      ).toEqual([
+        ["store_credit", 200],
+        ["cash", 62.5],
+      ]);
+    });
+
+    it("★ still refuses when the MONEY legs exceed what money paid", async () => {
+      // The cash already went back, so only the credit share is left. Asking
+      // for it as an all-money split must not pass the overall cap alone.
+      seedSale({
+        storeCreditUsed: 200,
+        paymentRows: [
+          { method: "cash", amount: 62.5, change_due: 0, reference: null },
+        ],
+        existingRefunds: [
+          { amount: 62.5, status: "completed", method: "cash" },
+        ],
+      });
+      const r = await processReturn(
+        "o1",
+        [{ orderItemId: "li-a", quantity: 2 }],
+        "cash",
+      );
+      expect(r.error).toMatch(/at most ₹0\.00|fully refunded/i);
+    });
   });
 
   it("★ can't be multiplied by naming the same line twice", async () => {

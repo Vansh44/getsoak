@@ -25,7 +25,12 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: true })),
 }));
 vi.mock("@/lib/observability/logger", () => ({ logError: vi.fn() }));
-vi.mock("@/lib/pos/customer-verification", () => ({
+// PARTIAL, deliberately: only the cookie helpers are stubbed. The order lookup
+// stays REAL so these tests keep exercising the actual phone resolution against
+// the seeded rows — stubbing it would leave the "which number gets texted"
+// rules covered by nothing.
+vi.mock("@/lib/pos/customer-verification", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/pos/customer-verification")>()),
   hasCustomerVerification: (...args: unknown[]) => proof.has(...args),
   saveCustomerVerification: (...args: unknown[]) => proof.save(...args),
   signCustomerVerification: proof.sign,
@@ -82,12 +87,61 @@ describe("beginCustomerPhoneVerification", () => {
     expect(dbHolder.current.calls.select).toHaveLength(0);
   });
 
-  it("refuses legacy orders that have no valid mobile", async () => {
-    dbHolder.current = makeDbMock({
-      selectQueue: [[{ shippingAddress: {}, customerPhone: "123" }]],
+  // ★★ A legacy order with no textable mobile used to be a DEAD END: the OTP
+  // could not run, markCollected refused without it, and there was no way to
+  // release goods the customer had already paid for. It is now a distinct
+  // state the counter can act on, not a bare error string.
+  describe("★ an order the OTP cannot reach", () => {
+    const noMobile = () =>
+      makeDbMock({
+        selectQueue: [[{ shippingAddress: {}, customerPhone: "123" }]],
+      });
+
+    it("reports it as unverifiable rather than as a failure", async () => {
+      dbHolder.current = noMobile();
+      const result = await beginCustomerPhoneVerification("order-1", "return");
+      expect(result).toMatchObject({ unverifiable: true, canOverride: true });
+      expect(result.error).toMatch(/no mobile number that can be texted/i);
     });
-    const result = await beginCustomerPhoneVerification("order-1", "return");
-    expect(result.error).toMatch(/no valid customer mobile/i);
+
+    it("★ offers no override to a cashier", async () => {
+      dbHolder.current = noMobile();
+      vi.mocked(resolvePosOperator).mockResolvedValue({
+        ...OP,
+        role: "cashier",
+      });
+      const result = await beginCustomerPhoneVerification("order-1", "pickup");
+      expect(result).toMatchObject({ unverifiable: true, canOverride: false });
+    });
+
+    it("★ an order that isn't here is NOT unverifiable — it's the wrong order", async () => {
+      // Conflating the two would offer an override for anything a mis-scan
+      // turned up, which is the opposite of a narrow escape hatch.
+      dbHolder.current = makeDbMock({ selectQueue: [[]] });
+      const result = await beginCustomerPhoneVerification("order-1", "pickup");
+      expect(result.unverifiable).toBeUndefined();
+      expect(result.error).toMatch(/isn't waiting at this counter/i);
+    });
+
+    it("★ a read failure is not unverifiable either — it fails closed", async () => {
+      dbHolder.current = makeDbMock({
+        selectQueue: [new Error("connection reset")],
+      });
+      const result = await beginCustomerPhoneVerification("order-1", "pickup");
+      expect(result.unverifiable).toBeUndefined();
+      expect(result.error).toMatch(/couldn't read the order/i);
+    });
+
+    it("★ and no proof can be MINTED for one", async () => {
+      dbHolder.current = noMobile();
+      const result = await confirmCustomerPhoneVerification({
+        orderId: "order-1",
+        purpose: "return",
+        idToken: "tok",
+      });
+      expect(result.error).toMatch(/no valid customer mobile/i);
+      expect(proof.save).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -81,7 +81,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
     preview.total <= 0 || (sale.requireReason && reason === "");
   const anythingLeft = sale.lines.some((l) => l.remaining > 0 && l.eligible);
 
-  const submit = () =>
+  const submit = (ackUnverified = false) =>
     start(async () => {
       const res = await processReturn(
         sale.orderId,
@@ -96,8 +96,9 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
           })),
         method,
         reason || undefined,
+        { acknowledgeUnverifiedCustomer: ackUnverified },
       );
-      if (res.verificationRequired) {
+      if (res.verificationRequired || res.verificationUnavailable) {
         setVerificationOpen(true);
         return;
       }
@@ -375,7 +376,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                 <button
                   type="button"
                   disabled={nothingChosen || pending}
-                  onClick={submit}
+                  onClick={() => submit()}
                   className="ml-auto inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3.5 font-semibold hover:bg-emerald-500 disabled:opacity-40 text-white"
                 >
                   {pending ? (
@@ -403,6 +404,10 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
           onVerified={() => {
             setVerificationOpen(false);
             submit();
+          }}
+          onOverride={() => {
+            setVerificationOpen(false);
+            submit(true);
           }}
         />
       )}

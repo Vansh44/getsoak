@@ -30,7 +30,7 @@ import {
 import { resolvePosOperator } from "@/lib/pos/operator";
 import {
   clearCustomerVerification,
-  hasCustomerVerification,
+  gateCustomerVerification,
 } from "@/lib/pos/customer-verification";
 import { posCan } from "@/lib/pos/permissions";
 import { posAudit } from "@/lib/pos/audit";
@@ -381,13 +381,10 @@ export async function getReturnableSale(
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid sale." };
 
+  // ★ READ HERE, DECIDE BELOW. The master switch cannot be applied before the
+  // order is loaded, because whether it applies AT ALL depends on where the
+  // sale was rung — see the grandfather rule at the `broughtIn` check.
   const policy = await getCounterReturnPolicy(op.storeId, op.locationId);
-  if (!policy.enabled) {
-    return {
-      error:
-        "Returns are switched off for this store. An owner can enable them in Orders settings.",
-    };
-  }
 
   try {
     const data = await withService(async (db) => {
@@ -494,12 +491,30 @@ export async function getReturnableSale(
     );
 
     // ── May this counter take it? ────────────────────────────────────────
-    // The master switch governs every counter return. An order bought online
-    // or at another branch additionally needs BORIS plus this location's
-    // explicit returns capability.
+    // An order bought online or at another branch is BORIS: it needs the store
+    // switch plus this location's explicit `returns` capability.
+    //
+    // ★★ BUT A SALE RUNG HERE IS STILL ALWAYS RETURNABLE HERE (invariant 1).
+    // `returns.enabled` DEFAULTS OFF, and the till has taken returns of its own
+    // sales since pos_12 — so gating that on the master switch would silently
+    // remove a working capability from every existing POS merchant the moment
+    // this deploys, with no migration to turn it back on. A default that
+    // changes what a live shop can do is a migration bug wearing a config hat.
+    //
+    // So the switch governs the NEW capability (returns of orders this counter
+    // did not sell) and the POLICY layer (window, reason, fees, exchanges).
+    // The pre-existing own-sale path is grandfathered and runs with the legacy
+    // semantics it always had: no window, no required reason, no fee, no
+    // exchange — see `policyApplies` below.
     const broughtIn =
       order.sales_channel !== "pos" || order.location_id !== op.locationId;
     if (broughtIn) {
+      if (!policy.enabled) {
+        return {
+          error:
+            "Returns are switched off for this store. An owner can enable them in Orders settings.",
+        };
+      }
       const verdict = canTakeReturnHere({
         soldHere: false,
         storeAllows: policy.allowInStore,
@@ -507,6 +522,13 @@ export async function getReturnableSale(
       });
       if (!verdict.allowed) return { error: verdict.reason };
     }
+
+    // Whether the merchant's configured return POLICY applies to this sale.
+    // False only for the grandfathered own-sale path above, where every policy
+    // value has to read as "unset" rather than as the registry default — a
+    // 7-day `returns.windowDays` a merchant never chose must not start
+    // refusing till returns it has always accepted.
+    const policyApplies = policy.enabled;
 
     const routing = refundRouting(
       {
@@ -529,9 +551,9 @@ export async function getReturnableSale(
         broughtIn,
         refundRoute: routing.route,
         refundTenders: routing.tenders,
-        allowExchanges: policy.allowExchanges,
-        requireReason: policy.requireReason,
-        restockingFeePercent: policy.restockingFeePercent,
+        allowExchanges: policyApplies && policy.allowExchanges,
+        requireReason: policyApplies && policy.requireReason,
+        restockingFeePercent: policyApplies ? policy.restockingFeePercent : 0,
         receiptNo: order.receipt_no ?? "",
         orderRef: order.order_ref ?? "",
         createdAt: order.created_at,
@@ -540,14 +562,21 @@ export async function getReturnableSale(
         paymentMethod: order.payment_method ?? "",
         lines: items.map((i) => {
           const returned = prior.get(i.id) ?? 0;
-          const eligibility = returnEligibility(
-            orderInfo,
-            {
-              returnable: i.product_returnable,
-              returnWindowDays: i.product_window,
-            },
-            { enabled: policy.enabled, windowDays: policy.windowDays },
-          );
+          // Grandfathered own-sale returns skip eligibility entirely rather
+          // than passing `enabled: true` with a default window: `final_sale`
+          // and the per-product window override are part of the same feature
+          // the merchant has not switched on, and applying half of it would
+          // block returns this till used to take.
+          const eligibility = policyApplies
+            ? returnEligibility(
+                orderInfo,
+                {
+                  returnable: i.product_returnable,
+                  returnWindowDays: i.product_window,
+                },
+                { enabled: true, windowDays: policy.windowDays },
+              )
+            : { eligible: true as const, reason: undefined, until: null };
           return {
             id: i.id,
             productId: i.product_id,
@@ -594,6 +623,9 @@ export interface ReturnResult {
   note?: string;
   error?: string;
   verificationRequired?: boolean;
+  /** The OTP cannot run on this order at all — see `override_verification`. */
+  verificationUnavailable?: boolean;
+  canOverrideVerification?: boolean;
 }
 
 export interface PosExchangeContext {
@@ -697,6 +729,11 @@ export async function processReturn(
   lines: ReturnLineInput[],
   method: RefundMethod,
   reason?: ReturnReason,
+  opts: {
+    /** A manager's attestation that the customer cannot be verified by code.
+     *  Honoured only after the server confirms the order has no mobile. */
+    acknowledgeUnverifiedCustomer?: boolean;
+  } = {},
 ): Promise<ReturnResult> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
@@ -709,11 +746,28 @@ export async function processReturn(
   if (!Array.isArray(lines) || lines.length === 0) {
     return { error: "Choose what's coming back." };
   }
-  if (!(await hasCustomerVerification("return", orderId, op))) {
-    return {
-      error: "Verify the customer's mobile number before taking this return.",
-      verificationRequired: true,
-    };
+  // The same dead end the hand-over counter had: an order carrying no textable
+  // mobile could never be taken back at all. `refund` is already manager-and-
+  // above, so the operator standing here is the one `override_verification`
+  // names — but it is still a separate, recorded decision, and the server
+  // re-derives that no mobile exists before the acknowledgement counts.
+  const verified = await gateCustomerVerification({
+    op,
+    orderId,
+    purpose: "return",
+    acknowledged: opts.acknowledgeUnverifiedCustomer === true,
+    mayOverride: posCan(op.role, "override_verification"),
+    requiredCopy:
+      "Verify the customer's mobile number before taking this return.",
+  });
+  if (!verified.ok) {
+    return "verificationRequired" in verified
+      ? { error: verified.error, verificationRequired: true }
+      : {
+          error: verified.error,
+          verificationUnavailable: true,
+          canOverrideVerification: verified.canOverride,
+        };
   }
 
   // getReturnableSale re-runs the BORIS gates, so a counter that may not take
@@ -882,7 +936,7 @@ export async function processReturn(
           })
           .from(orderRefunds)
           .where(eq(orderRefunds.orderId, orderId));
-        const cap = refundableAmount({
+        const capInput = {
           orderTotal: Number(locked[0]!.total ?? 0),
           refunds: existing.map((r) => ({
             amount: Number(r.amount ?? 0),
@@ -890,15 +944,56 @@ export async function processReturn(
             method: r.method,
           })),
           storeCreditUsed: Number(locked[0]!.store_credit_used ?? 0),
-          method: method === "original" ? "cash" : method,
-        });
-        if (payable > cap) {
-          return {
-            error:
-              cap > 0
-                ? `You can refund at most ₹${cap.toFixed(2)} on this sale.`
-                : "This sale has already been fully refunded.",
-          };
+        };
+
+        if (method === "original") {
+          // ★★ A SPLIT HAS TWO CEILINGS, AND ONLY ONE OF THEM IS THE MONEY ONE.
+          //
+          // refundableAmount caps a MONEY method at what money actually paid,
+          // because the store-credit share of the total was never received by
+          // any instrument (§29). Passing a stand-in "cash" for the whole
+          // split therefore measured the credit leg against the money ceiling:
+          // a ₹500 sale settled ₹200 credit + ₹300 cash could never be fully
+          // returned, because ₹500 > the ₹300 money cap — even though the
+          // allocation sends exactly ₹200 back to credit and ₹300 to cash, and
+          // each leg passes its own cap inside issueRefund.
+          //
+          // So check the two ceilings the allocation actually spends against:
+          // the overall cap for the whole refund, and the money cap for only
+          // the legs that move money. With no store credit on the order the
+          // two are equal and this is byte-for-byte the old behaviour.
+          const planned = allocateRefund(payable, route, sale.refundTenders);
+          const moneyPart =
+            Math.round(
+              planned
+                .filter((a) => a.method !== "store_credit")
+                .reduce((sum, a) => sum + a.amount, 0) * 100,
+            ) / 100;
+          const overallCap = refundableAmount({ ...capInput, method: null });
+          const moneyCap = refundableAmount({ ...capInput, method: "cash" });
+          if (payable > overallCap) {
+            return {
+              error:
+                overallCap > 0
+                  ? `You can refund at most ₹${overallCap.toFixed(2)} on this sale.`
+                  : "This sale has already been fully refunded.",
+            };
+          }
+          if (moneyPart > moneyCap) {
+            return {
+              error: `Only ₹${moneyCap.toFixed(2)} of this sale was paid with money that can go back; the rest was settled with store credit.`,
+            };
+          }
+        } else {
+          const cap = refundableAmount({ ...capInput, method });
+          if (payable > cap) {
+            return {
+              error:
+                cap > 0
+                  ? `You can refund at most ₹${cap.toFixed(2)} on this sale.`
+                  : "This sale has already been fully refunded.",
+            };
+          }
         }
       }
 
@@ -1088,6 +1183,22 @@ export async function processReturn(
     orderId,
     detail: `${sale.receiptNo || sale.orderRef || orderId.slice(0, 8)} · ${method} · ${breakdown.lines.reduce((a, l) => a + l.quantity, 0)} item(s)`,
   });
+
+  // A SEPARATE row from `refund_issued` above, deliberately: that one answers
+  // "who gave money back", this one answers "and nobody checked who they were".
+  // Folding the second fact into the first's `detail` would hide it from the
+  // only question it can ever be asked by — "show me the overrides".
+  if (verified.overridden) {
+    posAudit({
+      storeId: op.storeId,
+      event: "identity_override",
+      locationId: op.locationId,
+      staffId: op.staffId,
+      actor: op.name,
+      orderId,
+      detail: `Return taken without customer verification — no mobile on the order`,
+    });
+  }
 
   revalidatePath("/pos/sales");
   await clearCustomerVerification();

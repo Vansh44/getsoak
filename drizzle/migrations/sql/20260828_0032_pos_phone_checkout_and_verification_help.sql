@@ -56,7 +56,7 @@ UPDATE public.help_articles
 SET body = body || $append$
 <h2>Verify the customer before hand-over</h2>
 <p>Before StoreMink opens payment or releases a parcel, it sends a six-digit OTP to the mobile saved on that order. Confirm the masked number with the customer and enter the code; verification continues automatically after the sixth digit. The same recent verification covers payment and hand-over for that order, but cannot be used for another order, shop, operator, or return.</p>
-<p>A wrong or expired code leaves the parcel and payment unchanged. Use <strong>Resend code</strong> for a fresh code. If the order has no valid mobile, too many codes were requested, or phone verification is not configured, StoreMink blocks hand-over and explains the issue; there is no till override.</p>$append$,
+<p>A wrong or expired code leaves the parcel and payment unchanged. Use <strong>Resend code</strong> for a fresh code. If too many codes were requested, or phone verification is not configured, StoreMink blocks hand-over and explains the issue; there is no till override. The one exception is an order that carries no mobile number at all - usually an older order - where no code can be sent. A manager or owner can then confirm who the customer is another way and hand over without a code; that decision is recorded against their name in POS security activity. A cashier sees the reason and has to fetch a manager.</p>$append$,
     updated_at = now()
 WHERE slug = 'prepare-and-hand-over-pickup-orders'
   AND status = 'published'
@@ -66,7 +66,7 @@ UPDATE public.help_articles
 SET body = body || $append$
 <h2>Verify the customer before completing a return</h2>
 <p>After choosing items, restock decisions and the refund method, select the final refund action. StoreMink sends a six-digit OTP to the mobile saved on that order. Entering the sixth digit verifies automatically and submits the prepared return; you do not need to select Refund again.</p>
-<p>A wrong, expired or cancelled code leaves the prepared return on screen and does not move stock or money. Use <strong>Resend code</strong> for a fresh code. If the order has no valid mobile, too many attempts were made, or phone verification is unavailable, the return cannot be completed at the till.</p>$append$,
+<p>A wrong, expired or cancelled code leaves the prepared return on screen and does not move stock or money. Use <strong>Resend code</strong> for a fresh code. If too many attempts were made, or phone verification is unavailable, the return cannot be completed at the till. An order carrying no mobile number at all can still be completed: no code can be sent, so a manager confirms who the customer is another way and continues without one, and that decision is recorded against their name.</p>$append$,
     updated_at = now()
 WHERE slug = 'take-returns-at-the-counter'
   AND status = 'published'

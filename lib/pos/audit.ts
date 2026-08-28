@@ -31,6 +31,17 @@ export type PosAuditEvent =
   | "operator_login"
   | "operator_login_failed"
   | "credential_reset"
+  /**
+   * A collection handed over, or a return taken, WITHOUT the customer OTP —
+   * because the order carries no mobile that could be texted.
+   *
+   * ★ NOT a money event: nothing here says how much, and the amounts live on
+   * the order and its refunds as usual. What it records is the same thing the
+   * money events record — ATTRIBUTION for a discretionary act — and it is the
+   * ONLY trace that an identity control was bypassed, since the order looks
+   * ordinary afterwards.
+   */
+  | "identity_override"
   // ── Money (Step 14) ──────────────────────────────────────────────────────
   | "sale_discount"
   | "price_override"

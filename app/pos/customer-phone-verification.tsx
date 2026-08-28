@@ -27,14 +27,29 @@ export function CustomerPhoneVerification({
   orderId,
   purpose,
   onVerified,
+  onOverride,
   onCancel,
 }: {
   orderId: string;
   purpose: PosCustomerVerificationPurpose;
   onVerified: () => void;
+  /**
+   * Proceed WITHOUT a code, because the order carries no mobile to text.
+   *
+   * Separate from `onVerified` so the caller cannot confuse "the customer
+   * answered a code" with "a manager decided to go ahead anyway" — the second
+   * has to travel to the server as its own acknowledgement and be audited.
+   */
+  onOverride: () => void;
   onCancel: () => void;
 }) {
   const [maskedPhone, setMaskedPhone] = useState("");
+  // Set only when the SERVER says no textable mobile exists on the order. The
+  // dialog never decides this for itself.
+  const [unverifiable, setUnverifiable] = useState<{
+    canOverride: boolean;
+    reason: string;
+  } | null>(null);
   const [otp, setOtp] = useState("");
   const [sending, setSending] = useState(true);
   const [verifying, setVerifying] = useState(false);
@@ -106,6 +121,13 @@ export function CustomerPhoneVerification({
         // phone in the browser must not become a way around the server limit or
         // keep sending to an order number that changed in the meantime.
         const begun = await beginCustomerPhoneVerification(orderId, purpose);
+        if (begun.unverifiable) {
+          setUnverifiable({
+            canOverride: begun.canOverride === true,
+            reason: begun.error ?? "This order can't be verified by code.",
+          });
+          return;
+        }
         if (begun.error) {
           setError(begun.error);
           return;
@@ -229,9 +251,11 @@ export function CustomerPhoneVerification({
               {title}
             </h2>
             <p className="text-sm text-[var(--pos-ink-2)]">
-              {maskedPhone
-                ? `Code sent to +91 ${maskedPhone}`
-                : "Checking the order's mobile number…"}
+              {unverifiable
+                ? "No mobile number on this order"
+                : maskedPhone
+                  ? `Code sent to +91 ${maskedPhone}`
+                  : "Checking the order's mobile number…"}
             </p>
           </div>
           <button
@@ -245,7 +269,44 @@ export function CustomerPhoneVerification({
           </button>
         </div>
 
-        {sending && !maskedPhone ? (
+        {unverifiable ? (
+          <div className="mt-5">
+            <p className="rounded-xl bg-[var(--pos-warn-soft)] px-3 py-2.5 text-sm text-[var(--pos-warn)]">
+              {unverifiable.reason}
+            </p>
+            {unverifiable.canOverride ? (
+              <>
+                <p className="mt-3 text-sm text-[var(--pos-ink-2)]">
+                  Check who the customer is another way — the order reference,
+                  their name, or the email on the order — then continue. This is
+                  recorded against your name.
+                </p>
+                <button
+                  type="button"
+                  onClick={onOverride}
+                  className="mt-4 w-full rounded-xl bg-[var(--pos-accent)] py-2.5 text-sm font-semibold text-[var(--pos-on-accent)] hover:opacity-90"
+                >
+                  {purpose === "pickup"
+                    ? "Hand over without a code"
+                    : "Take the return without a code"}
+                </button>
+              </>
+            ) : (
+              // A cashier sees the reason and no button. A control that always
+              // fails, in front of a customer, is worse than no control.
+              <p className="mt-3 text-sm text-[var(--pos-ink-2)]">
+                A manager has to complete this one.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={onCancel}
+              className="mt-2 w-full rounded-xl bg-[var(--pos-surface-2)] py-2.5 text-sm font-medium hover:bg-[var(--pos-surface-3)]"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : sending && !maskedPhone ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-[var(--pos-ink-2)]">
             <Loader2 className="h-5 w-5 animate-spin" /> Sending code…
           </div>

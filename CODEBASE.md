@@ -4300,6 +4300,41 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         proof the server deletes only a just-created, phone-only identity with no
         StoreMink `users` row, so counter verification cannot reserve the phone
         and break the shopper's later signup.
+      - **★★ AN ORDER THE OTP CANNOT REACH IS NOT A DEAD END** (`override_verification`,
+        `gateCustomerVerification`). "Missing order phone fails closed" was true
+        and, on its own, unrecoverable: an order whose stored phone yields no
+        Indian mobile — a legacy row, a landline, a guest with no profile
+        phone — could never be handed over OR taken back, because the OTP was
+        impossible and nothing overrode it. The customer's paid goods were
+        stuck behind a control that could not run, fixable only by editing the
+        database. Four rules make the escape hatch narrow:
+        (1) **The server re-derives unverifiability; the client never asserts
+        it.** `acknowledgeUnverifiedCustomer` only ever chooses between refuse
+        and proceed AFTER `loadVerificationTarget` confirms from the order row
+        that there is no mobile to text. Trusting the flag alone would turn
+        this into a universal OTP bypass any caller could set — the
+        `managerApproved` boolean mistake `lib/pos/approval.ts` exists to undo.
+        Pinned by a test that sets the flag on an order WITH a phone and
+        expects the OTP anyway.
+        (2) **It fails closed.** A read failure, or an order that isn't at this
+        counter, reports `verificationRequired`, never `verificationUnavailable`
+        — otherwise a database blip hands out override buttons for orders that
+        have a perfectly good number, and a mis-scan offers one for anything.
+        (3) **Manager and above**, following the counter's own precedent for
+        legacy data with no automatic answer (an ambiguous tender record asks a
+        MANAGER to choose the refund route). NOT superadmin-only: SUPERADMIN_ONLY
+        is for acts that leave no physical trace, and this one leaves several.
+        A cashier sees the reason and no button — §23's rule that a control
+        which always fails in front of a customer is worse than no control.
+        (4) **Recorded.** `identity_override` in `pos_audit_log` is the ONLY
+        trace it happened, since the order looks ordinary afterwards; it is a
+        SEPARATE row from `refund_issued` on a return, because "who gave money
+        back" and "and nobody checked who they were" are different questions.
+        Not a money event, so it lands on the security feed at
+        `/dashboard/pos/devices`.
+        ⚠ This covers the OTP being IMPOSSIBLE, never merely inconvenient. An
+        order that HAS a mobile has no override at any role — a customer whose
+        phone is flat still has to be verified, which is the deliberate design.
       - **A pickup HOLDS, it does not sell** — `placeOrder` calls `holdStock`
         instead of `reserve_stock_at`. Selling would empty the shelf on screen
         while the box is still physically on it, and the shop would reorder
@@ -5164,6 +5199,19 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       refund may exist). On `unknown` the action returns `pendingReconcile` with
       **no error**, and the UI says "we're checking — don't send it again".
       Reporting it as a failure is precisely how a customer gets paid twice.
+    - **★★ THE GATEWAY GUARD ASKS "WAS IT EVER PAID?", NOT "IS IT STILL FULLY
+      PAID?"** (`PAID_FOR_REFUND` in `issue-refund.ts`). `partially_refunded`
+      and `refunded` are DERIVED by `syncOrderRefundState` from refunds that
+      actually settled, so both PROVE the order was captured — they are the one
+      pair of statuses that can never mean "never paid". Comparing against
+      `paid` alone killed the gateway leg of a SPLIT counter return: the till
+      settles the cash leg, `syncOrderRefundState` writes `partially_refunded`,
+      and the Razorpay leg of the SAME return is refused with "This order was
+      never paid" — goods restocked, card never credited, and the failure
+      reported to the cashier as a note rather than an error. It also blocked
+      every second partial gateway refund on one order. **The cap below is the
+      real ceiling**, so a fully-refunded order now fails there with an accurate
+      message instead of a false one here.
     - **THE CAP COUNTS PENDING REFUNDS.** `refundableAmount`
       (`lib/payments/refunds.ts`, pure + tested) excludes only `failed` rows. A
       refund in flight has not settled but might; ignoring it lets a second
@@ -5182,6 +5230,17 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       `storeCreditUsed` + `method` and applies a second cap to money methods,
       less what money has already gone back. Refunding AS CREDIT stays uncapped
       by this rule: a balance for a balance costs nothing that wasn't owed.
+      **★★ SO A SPLIT REFUND HAS TWO CEILINGS, AND ONE STAND-IN METHOD CANNOT
+      EXPRESS BOTH.** `processReturn`'s `original` route measured the WHOLE
+      refund against the money cap by passing a made-up `"cash"` — which
+      measures the credit leg as money it never was, so a ₹500 sale settled ₹200
+      credit + ₹300 cash could never be fully returned ("You can refund at most
+      ₹300.00") even though the allocation sends exactly ₹200 back to credit and
+      ₹300 to cash, and each leg passes its own cap inside `issueRefund`. It now
+      checks the two ceilings the allocation actually spends against: the
+      OVERALL cap for the whole refund, and the MONEY cap for only the legs that
+      move money. With no store credit on the order the two are equal, so this
+      is byte-for-byte the old behaviour everywhere else.
       Both arguments are optional and default to the old behaviour.
     - **MATCHED BY KEY, NEVER BY AMOUNT.** Two legitimate ₹500 refunds on one
       order are indistinguishable by amount, and settling the wrong row is
@@ -5491,12 +5550,27 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         STORE-scoped, and the location question splits into the two it always
         was — whose shelf gains the stock (the shop they walked into) and
         whether this counter may accept it (`canTakeReturnHere`).
-      - **★ THE MASTER SWITCH GOVERNS EVERY COUNTER RETURN.** A sale rung here
-        avoids only the additional BORIS gates; it still follows the merchant's
-        enabled/window/final-sale/reason/fee policy. Every website order counts
-        as brought in — including a pickup collected at this same shop — and
-        additionally needs `returns.allowInStore` plus this location's Returns
-        capability.
+      - **★★ THE MASTER SWITCH GOVERNS BORIS, NOT A SALE RUNG HERE.** Every
+        website order counts as brought in — including a pickup collected at
+        this same shop — and needs `returns.enabled` plus `returns.allowInStore`
+        plus this location's Returns capability. It then follows the merchant's
+        full window/final-sale/reason/fee policy.
+        **A sale rung at THIS register is grandfathered** (`policyApplies` in
+        `getReturnableSale`): it is returnable here even while the switch is
+        off, under the LEGACY semantics it has had since pos_12 — no window, no
+        required reason, no restocking fee, no exchange, and no eligibility
+        check at all. ⚠ It briefly did not, and that was a live regression:
+        **`returns.enabled` DEFAULTS OFF** (registry.ts — "new behaviour on a
+        live store is the merchant's decision"), so routing own-sale returns
+        through it silently removed a working capability from every existing POS
+        merchant on deploy, with no migration to turn it back on. A default that
+        changes what a live shop can DO is a migration bug wearing a config hat,
+        and the same trap is one line away any time a new gate reads a
+        default-off setting. The legacy path also has to skip `returnEligibility`
+        outright rather than pass `enabled: true` with `policy.windowDays` — the
+        registry's 7-day default is a number the merchant never chose, and
+        `final_sale`/`return_window_days` belong to the same unswitched feature.
+        Pinned in both directions by `pos-return-actions.test.ts`.
       - **★ THE ORIGINAL TENDER DECIDES WHERE THE MONEY GOES.** `order_payments`
         is the source: cash returns to the drawer, external card/UPI is recorded
         back to that rail, store credit returns to its owner, and Razorpay goes
