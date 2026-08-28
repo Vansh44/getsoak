@@ -168,16 +168,38 @@ function refundRouting(
     "razorpay",
     "store_credit",
   ]);
+  // ★★ CHANGE IS ONE FIGURE PER SALE, NOT ONE PER TENDER ROW. `placePosSale`
+  // computes the sale's change once and stamps it on EVERY cash tender, so
+  // subtracting it row by row deducts it once per row: a ₹500 sale settled
+  // ₹200 + ₹400 cash carries change ₹100 on both rows, and the naive read
+  // scores the cash contribution as ₹100 + ₹300 = ₹400 against the ₹500 that
+  // actually stayed in the drawer. A later split return then allocates over a
+  // total that is short, and every leg is off.
+  //
+  // `lib/pos/shifts.ts` already guards exactly this shape — `netCashFromSales`
+  // groups by order and takes the MAX rather than summing. Same rule here,
+  // within the one order: take the change ONCE and spend it across the cash
+  // rows in order. With a single cash row (all but a rare split) this is
+  // byte-for-byte what it did before.
+  let changeLeft = rows.reduce(
+    (most, row) =>
+      row.method === "cash"
+        ? Math.max(most, Number(row.change_due ?? 0) || 0)
+        : most,
+    0,
+  );
   const tenders = rows.flatMap((row) => {
     if (!allowed.has(row.method as Exclude<RefundMethod, "original">)) {
       return [];
     }
     // Cash handed over can exceed the sale; change was never payment and must
     // not increase the share that later comes out of the drawer.
-    const contribution = Math.max(
-      0,
-      Number(row.amount) - Number(row.change_due ?? 0),
-    );
+    let contribution = Math.max(0, Number(row.amount) || 0);
+    if (row.method === "cash" && changeLeft > 0) {
+      const taken = Math.min(changeLeft, contribution);
+      contribution = Math.round((contribution - taken) * 100) / 100;
+      changeLeft = Math.round((changeLeft - taken) * 100) / 100;
+    }
     if (contribution <= 0) return [];
     return [
       {

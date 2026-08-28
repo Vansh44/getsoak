@@ -1117,6 +1117,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0034_pos_sales_refund_state_help",
+      "description": "Document the POS Sales refunded/partly-refunded labels and when Return items is offered",
+      "file": "sql/20260829_0034_pos_sales_refund_state_help.sql",
+      "transaction": true,
+      "requires": ["20260829_0033_pos_customer_sales_returns_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS Sales explains refunded and partly refunded states",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%<h2>See what has already been refunded</h2>%' and body like '%Partly refunded%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS Sales explains refunded and partly refunded states",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%<h2>See what has already been refunded</h2>%' and body like '%Partly refunded%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

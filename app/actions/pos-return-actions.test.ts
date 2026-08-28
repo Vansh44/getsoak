@@ -270,6 +270,53 @@ describe("getReturnableSale", () => {
     });
   });
 
+  // ★★ placePosSale stamps the SALE's change on every cash tender row, so
+  // subtracting it per row deducts it once per row — the double-count
+  // lib/pos/shifts.ts already guards with its group-by-order max.
+  describe("★ change is deducted once per sale, not once per cash row", () => {
+    it("scores two cash legs against the cash that actually stayed", async () => {
+      // ₹500 of cash across two legs, ₹100 change: ₹400 stayed in the drawer.
+      seedSale({
+        paymentRows: [
+          { method: "cash", amount: 200, change_due: 100, reference: null },
+          { method: "cash", amount: 400, change_due: 100, reference: null },
+          { method: "card", amount: 62.5, change_due: null, reference: "T-1" },
+        ],
+      });
+      const { sale } = await getReturnableSale("o1");
+      const cash = (sale?.refundTenders ?? []).filter(
+        (t) => t.method === "cash",
+      );
+      expect(cash.reduce((sum, t) => sum + t.amount, 0)).toBe(500);
+    });
+
+    it("★ still deducts it for the ordinary single cash tender", async () => {
+      seedSale({
+        paymentRows: [
+          { method: "cash", amount: 300, change_due: 37.5, reference: null },
+        ],
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale?.refundTenders).toEqual([
+        { method: "cash", amount: 262.5, reference: null },
+      ]);
+    });
+
+    it("★ never lets change on a cash row reach a card one", async () => {
+      seedSale({
+        paymentRows: [
+          { method: "card", amount: 200, change_due: 50, reference: "T-1" },
+          { method: "cash", amount: 112.5, change_due: 50, reference: null },
+        ],
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale?.refundTenders).toEqual([
+        { method: "card", amount: 200, reference: "T-1" },
+        { method: "cash", amount: 62.5, reference: null },
+      ]);
+    });
+  });
+
   it("reads split tender rows instead of offering an arbitrary cash refund", async () => {
     seedSale({
       paymentRows: [

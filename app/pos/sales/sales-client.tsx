@@ -172,9 +172,18 @@ export function SalesClient({
                       Store pickup
                     </span>
                   )}
-                  {s.refunded && (
+                  {/* Three different facts, three different words. One pill
+                      reading "Cancelled" for all of them told a cashier a
+                      refunded sale had been voided, and said nothing at all
+                      about a partial refund. */}
+                  {s.cancelled && (
                     <span className="rounded-full bg-[var(--pos-danger-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--pos-danger)]">
                       Cancelled
+                    </span>
+                  )}
+                  {!s.cancelled && s.refund !== "none" && (
+                    <span className="rounded-full bg-[var(--pos-danger-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--pos-danger)]">
+                      {s.refund === "full" ? "Refunded" : "Partly refunded"}
                     </span>
                   )}
                 </span>
@@ -189,7 +198,10 @@ export function SalesClient({
                 {money(s.total)}
               </span>
             </button>
-            {canRefund && !s.refunded && (
+            {/* A PARTIAL refund still has goods on the sale, so the link
+                stays — hiding it would refuse the rest of a return the server
+                would happily take. */}
+            {canRefund && !s.cancelled && s.refund !== "full" && (
               <Link
                 href={`/pos/returns/${s.id}`}
                 className="mt-1 ml-11 inline-flex items-center gap-1.5 text-xs font-medium text-[var(--pos-ink-2)] transition-colors hover:text-[var(--pos-ink)]"

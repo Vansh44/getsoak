@@ -1687,8 +1687,63 @@ describe("listPosSales", () => {
       total: 240.5,
       customerName: "Ravi Kumar",
       itemCount: 3,
-      refunded: true,
+      cancelled: true,
+      refund: "none",
     });
+  });
+
+  // ★★ The badge used to read `orders.status === "refunded"`, which only ever
+  // became true because the till WROTE it — and once counter refunds moved
+  // onto the shared money core that write went away, so a fully refunded sale
+  // rendered as untouched. payment_status is the DERIVED answer
+  // (syncOrderRefundState), and it can move back when a refund fails.
+  it("★ reports a refunded sale from payment_status, not orders.status", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o1",
+            receipt_no: "POS-000007",
+            order_ref: "ORD10011027",
+            total: "240.50",
+            created_at: "2026-07-30T10:00:00Z",
+            cashier_name: "Priya",
+            shipping_address: null,
+            payment_method: "cash",
+            // What a fully returned till sale actually looks like now.
+            status: "completed",
+            payment_status: "refunded",
+          },
+        ],
+        [{ order_id: "o1", n: 3 }],
+      ],
+    });
+    const { sales } = await listPosSales();
+    expect(sales[0]).toMatchObject({ cancelled: false, refund: "full" });
+  });
+
+  it("★ tells a PARTIAL refund apart — goods are still returnable on it", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o1",
+            receipt_no: "POS-000007",
+            order_ref: "ORD10011027",
+            total: "240.50",
+            created_at: "2026-07-30T10:00:00Z",
+            cashier_name: "Priya",
+            shipping_address: null,
+            payment_method: "cash",
+            status: "completed",
+            payment_status: "partially_refunded",
+          },
+        ],
+        [{ order_id: "o1", n: 3 }],
+      ],
+    });
+    const { sales } = await listPosSales();
+    expect(sales[0]).toMatchObject({ cancelled: false, refund: "partial" });
   });
 
   it("leaves a walk-in's name null rather than inventing one", async () => {
@@ -1712,7 +1767,7 @@ describe("listPosSales", () => {
     });
     const { sales } = await listPosSales();
     expect(sales[0].customerName).toBeNull();
-    expect(sales[0].refunded).toBe(false);
+    expect(sales[0]).toMatchObject({ cancelled: false, refund: "none" });
   });
 
   it("shows a customer attached through POS lookup/create", async () => {
