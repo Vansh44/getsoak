@@ -56,7 +56,7 @@ WHERE slug = 'take-returns-at-the-counter'
 UPDATE public.help_articles
 SET body = replace(
       body,
-      '<ul><li>A StoreMink online card payment goes back through the original gateway. The till does not offer cash for it.</li><li>A COD or counter-paid order may offer the allowed counter methods.</li><li>Store credit is offered only when a customer account is attached.</li><li>A cash refund reduces the current drawer''s expected cash.</li></ul>',
+      '<ul><li>A StoreMink online card payment goes back through the original gateway. The till does not offer cash for it.</li><li>A COD or counter-paid order may offer only the supported counter refund methods shown by the till.</li><li>The POS return flow does not offer store credit as a refund destination.</li><li>A cash refund reduces the current drawer''s expected cash.</li></ul>',
       '<ul><li>Cash returns to cash and reduces the current drawer''s expected cash.</li><li>Card terminal and UPI / QR payments are recorded back to the same external method.</li><li>Razorpay returns through the original gateway; the till never offers cash for it.</li><li>Store credit returns to the attached customer''s balance.</li><li>A split payment is refunded across its original tenders in proportion to what each one settled. The cashier cannot convert a card or credit leg into cash.</li><li>Only a legacy order with no usable tender record asks the manager to choose a supported counter refund method.</li></ul>'
     ),
     updated_at = now()
@@ -68,7 +68,7 @@ WHERE slug = 'take-returns-at-the-counter'
 UPDATE public.help_articles
 SET body = replace(
       body,
-      '<p>Turn on <strong>Accept returns</strong>, enable <strong>Accept online returns in your shops</strong>, and give this location the <strong>Accept returns</strong> capability. The manager can then search an eligible online order. It appears as <strong>Bought elsewhere</strong> so the source is clear.</p>',
+      '<p>Online returns at a shop work only when the store''s existing in-store-return policy is already active and the location has the <strong>Accept returns</strong> capability. The location capability is available under <strong>Locations</strong>, but the Returns settings group that controls the store-wide policy is not currently rendered in the merchant dashboard. If the workflow is unavailable, do not promise a counter return or look for a hidden switch; contact StoreMink support to confirm the account''s current configuration. When the prerequisites are already active, a manager can search an eligible online order. It appears as <strong>Bought elsewhere</strong> so the source is clear.</p>',
       '<p>Turn on <strong>Accept returns</strong>, enable <strong>Accept online returns in your shops</strong>, and give this location the <strong>Accept returns</strong> capability. These additional gates apply to every website order, including one collected from this same shop. The manager can search by its order reference or attached customer contact; it appears as <strong>Bought elsewhere</strong> so the source is clear.</p>'
     ),
     updated_at = now()
@@ -169,10 +169,10 @@ BEGIN
        '<li>Choose each item and quantity being returned.</li>'),
       ('take-returns-at-the-counter',
        'split payment is refunded across its original tenders',
-       'A StoreMink online card payment goes back through the original gateway'),
+       'The POS return flow does not offer store credit as a refund destination.'),
       ('take-returns-at-the-counter',
        'These additional gates apply to every website order',
-       'The manager can then search an eligible online order.'),
+       'the Returns settings group that controls the store-wide policy is not currently rendered'),
       ('take-returns-at-the-counter',
        '<h2>Exchange at the counter</h2>', NULL),
       ('refunds-store-credit-exchanges-and-credit-notes',
