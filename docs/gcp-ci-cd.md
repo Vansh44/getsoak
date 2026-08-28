@@ -1,14 +1,49 @@
 # CI/CD — Cloud Build → Cloud Run (per environment)
 
-Push-to-deploy for both environments, driven by [`cloudbuild.yaml`](../cloudbuild.yaml):
+Push-to-deploy for all three environments, driven by
+[`cloudbuild.yaml`](../cloudbuild.yaml):
 
-| Branch    | Builds & deploys to         | Firebase / DB / bucket                                          |
-| --------- | --------------------------- | --------------------------------------------------------------- |
-| `staging` | `storemink-web` (staging)   | `storemink-staging` / `storemink-staging` / `storemink-media`   |
-| `main`    | `storemink-web-prod` (prod) | `storemink-prod` / `storemink-prod-db` / `storemink-media-prod` |
+| Branch    | Builds & deploys to         | Firebase / DB / bucket                                        |
+| --------- | --------------------------- | ------------------------------------------------------------- |
+| `dev`     | `storemink-web-dev` (dev)   | `storemink-staging` / `storemink_staging` / `storemink-media` |
+| `staging` | `storemink-web` (staging)   | `storemink-staging` / `storemink_staging` / `storemink-media` |
+| `main`    | `storemink-web-prod` (prod) | `storemink-prod` / `storemink` / `storemink-media-prod`       |
 
-Flow going forward: `f1` → merge to `staging` (auto-deploys staging, verify) →
+Flow going forward: feature branch → merge to `dev` (auto-deploys
+`dev.storemink.com`) → merge to `staging` (auto-deploys staging, verify) →
 merge `staging` to `main` (auto-deploys prod).
+
+> ### ⚠ dev is NOT an isolated environment
+>
+> **`dev` shares staging's database (`storemink_staging`), its Identity
+> Platform project (`storemink-staging`), its media bucket
+> (`storemink-media`) and every one of its per-env secrets.** It is a second
+> Cloud Run service and hostname in front of staging's data — chosen
+> deliberately (owner, 2026-08-29) for speed of setup, not by oversight.
+>
+> The consequences, so nobody discovers them the hard way:
+>
+> - A migration applied while testing on dev **is applied to staging**. There
+>   is no separate database to roll back.
+> - Destructive test data created on dev shows up on staging, and vice versa.
+> - The `sm_session` cookie is scoped to `.storemink.com`, so a login on
+>   staging is already a login on dev. That is a convenience, not a bug — but
+>   it also means the two cannot be tested as separate tenancies.
+> - Every POS device authorised on staging is authorised on dev (`pos_devices`
+>   is one shared table, and `POS_SESSION_SECRET` is deliberately the same).
+> - **The shared secrets are not laziness.** `PAYMENT_CRED_KEY` decrypts the
+>   BYO-gateway credentials stored in that one shared database, so a
+>   dev-specific key physically could not read rows staging wrote. If dev is
+>   ever split onto its own database, that key must be split in the same
+>   change — and the existing encrypted rows are not portable between them.
+>
+> Splitting dev onto its own `storemink_dev` database later is a contained
+> change: create the database, run the migration ledger against it, and flip
+> `_DB_NAME` on the dev trigger. Splitting the **Firebase project** is not
+> contained — `admins.id` / `users.id` ARE the Firebase uid, so a new project
+> means every existing row in that database references uids the new project
+> has never heard of (CODEBASE §7). Split the database first, the project only
+> with a user-import plan.
 
 ## Release gate: schema before application
 
@@ -123,6 +158,49 @@ The repo uses a 1st-gen GitHub App connection (`Vansh44/storemink`), so plain
 > Identity Toolkit + Token Service + the Firebase APIs you use. That, not
 > secrecy, is what protects a public web key.
 
+### Dev (`dev` → `storemink-web-dev`)
+
+Every value here is staging's **except** the four that define the environment:
+service name, image tag, root domain, and the two capacity dials. It inherits
+all six per-env secret NAMES from the `cloudbuild.yaml` defaults, which target
+staging — that is correct for dev and is the one place dev deliberately does
+_not_ follow the "override every secret" rule the prod trigger must.
+
+```bash
+gcloud builds triggers create github \
+  --project=storemink-prod --region=global \
+  --name=storemink-web-dev \
+  --repo-owner=Vansh44 --repo-name=storemink \
+  --branch-pattern='^dev$' \
+  --build-config=cloudbuild.yaml \
+  --service-account=projects/storemink-prod/serviceAccounts/705863961054-compute@developer.gserviceaccount.com \
+  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:dev,_SERVICE=storemink-web-dev,_MIN_INSTANCES=0,_MAX_INSTANCES=2,_DB_POOL_MAX=3,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink_staging,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media,_FIREBASE_PROJECT_ID=storemink-staging,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<STAGING_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-staging.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-staging,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-staging.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=68037646295,_NEXT_PUBLIC_FIREBASE_APP_ID=1:68037646295:web:388ef47d32e39c822b1d92,_NEXT_PUBLIC_ROOT_DOMAIN=dev.storemink.com,_NEXT_PUBLIC_APP_URL=https://dev.storemink.com'
+```
+
+**`_MAX_INSTANCES=2` and `_DB_POOL_MAX=3` are not arbitrary.** The Cloud SQL
+instance is `db-f1-micro` with `max_connections` ≈ 25, and all three services
+share it. At staging's 4 × 5 a third environment would add another 20
+connections to a ceiling already exceeded on paper; 2 × 3 = 6 adds far less.
+dev is a proving ground with one or two people on it, so the capacity it gives
+up costs nothing.
+
+**dev needs no Cloud Scheduler jobs.** Every job in
+[`cron-jobs.md`](cron-jobs.md) targets `https://storemink.com`; staging has
+none either, and pointing a scheduler at dev would run billing, plan-expiry and
+the log-retention sweep against the **staging database** dev shares. If you
+need to exercise a cron on dev, invoke its endpoint by hand with the
+`CRON_SECRET` bearer token, and know what it will touch first.
+
+**dev is never indexed and never provisions certificates**, with nothing to
+configure: `SEARCH_INDEXABLE` and `IS_PRODUCTION_PLATFORM`
+(`lib/store/host.ts`) both test `ROOT_DOMAIN === "storemink.com"`, so
+`dev.storemink.com` gets `Disallow: /`, an empty sitemap, no IndexNow ping, and
+`reconcileDomainForStore` refuses to touch Certificate Manager. That last gate
+is what keeps a third environment from writing entries into the shared
+`prod-cert-map` (CODEBASE §30) — `_DOMAIN_ENV` is therefore left at its `stg`
+default, since `domainEnv()` normalises anything non-prod to `stg` anyway and
+dev can never reach the code that reads it.
+
 ### Staging (`staging` → `storemink-web`)
 
 Only the 6 Firebase values differ from the `cloudbuild.yaml` defaults, but we
@@ -177,33 +255,38 @@ gcloud builds triggers delete rmgpgab-storemink-web-asia-south1-Vansh44-storemin
 
 ---
 
-## Substitution reference (staging vs prod)
+## Substitution reference (dev vs staging vs prod)
 
-| Substitution                                | Staging                                                             | Production                                                       |
-| ------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `_SERVICE`                                  | `storemink-web`                                                     | `storemink-web-prod`                                             |
-| `_IMAGE` (tag)                              | `…/storemink/web:staging`                                           | `…/storemink/web:prod`                                           |
-| `_MIN_INSTANCES`                            | `0`                                                                 | `0` (was `1` — see below)                                        |
-| `_DB_POOL_MAX`                              | `5`                                                                 | `5`                                                              |
-| `_DB_CONN`                                  | `storemink-prod:asia-south1:storemink-prod-db`                      | `storemink-prod:asia-south1:storemink-prod-db`                   |
-| `_DB_NAME`                                  | `storemink_staging`                                                 | `storemink`                                                      |
-| `_DB_PASSWORD_SECRET`                       | `CLOUDSQL_PROD_APP_PW`                                              | `CLOUDSQL_PROD_APP_PW`                                           |
-| `_GCS_BUCKET`                               | `storemink-media`                                                   | `storemink-media-prod`                                           |
-| `_FIREBASE_PROJECT_ID`                      | `storemink-staging`                                                 | `storemink-prod`                                                 |
-| `_FIREBASE_SA_ID` (custom-token signer)     | `firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com` | `firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com` |
-| `_NEXT_PUBLIC_FIREBASE_API_KEY`             | `<STAGING_WEB_API_KEY>`                                             | `<PROD_WEB_API_KEY>`                                             |
-| `_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`         | `storemink-staging.firebaseapp.com`                                 | `storemink-prod.firebaseapp.com`                                 |
-| `_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`      | `storemink-staging.firebasestorage.app`                             | `storemink-prod.firebasestorage.app`                             |
-| `_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `68037646295`                                                       | `705863961054`                                                   |
-| `_NEXT_PUBLIC_FIREBASE_APP_ID`              | `1:68037646295:web:388ef47d32e39c822b1d92`                          | `1:705863961054:web:e326046a5f9f7b7de9f54f`                      |
-| `_NEXT_PUBLIC_ROOT_DOMAIN`                  | `staging.storemink.com`                                             | `storemink.com`                                                  |
-| `_DOMAIN_ENV`                               | `stg` (default)                                                     | **`prod` — must be set explicitly**                              |
-| `_DOMAIN_CERT_MAP`                          | `prod-cert-map`                                                     | `prod-cert-map`                                                  |
-| `_DOMAIN_LB_IP`                             | `136.69.75.127`                                                     | `136.69.75.127`                                                  |
-| `_NEXT_PUBLIC_APP_URL`                      | `https://staging.storemink.com`                                     | `https://storemink.com`                                          |
-| `_GOOGLE_SEARCH_CONSOLE_PROPERTY`           | _(empty — staging is never indexed)_                                | `sc-domain:storemink.com`                                        |
-| `_POS_SESSION_SECRET_SECRET`                | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_PROD`                                        |
-| `_RESEND_WEBHOOK_SECRET_SECRET`             | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_PROD`                                     |
+Anything not listed as differing is **identical across all three** — dev
+inherits staging's database, Firebase project, bucket and every secret name.
+**←** marks a value dev sets for itself.
+
+| Substitution                                | Dev                                                                 | Staging                                                             | Production                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `_SERVICE`                                  | `storemink-web-dev` **←**                                           | `storemink-web`                                                     | `storemink-web-prod`                                             |
+| `_IMAGE` (tag)                              | `…/storemink/web:dev` **←**                                         | `…/storemink/web:staging`                                           | `…/storemink/web:prod`                                           |
+| `_MIN_INSTANCES`                            | `0`                                                                 | `0`                                                                 | `0` (was `1` — see below)                                        |
+| `_MAX_INSTANCES`                            | `2` **←**                                                           | `4`                                                                 | `4`                                                              |
+| `_DB_POOL_MAX`                              | `3` **←**                                                           | `5`                                                                 | `5`                                                              |
+| `_DB_CONN`                                  | `storemink-prod:asia-south1:storemink-prod-db`                      | `storemink-prod:asia-south1:storemink-prod-db`                      | `storemink-prod:asia-south1:storemink-prod-db`                   |
+| `_DB_NAME`                                  | `storemink_staging`                                                 | `storemink_staging`                                                 | `storemink`                                                      |
+| `_DB_PASSWORD_SECRET`                       | `CLOUDSQL_PROD_APP_PW`                                              | `CLOUDSQL_PROD_APP_PW`                                              | `CLOUDSQL_PROD_APP_PW`                                           |
+| `_GCS_BUCKET`                               | `storemink-media`                                                   | `storemink-media`                                                   | `storemink-media-prod`                                           |
+| `_FIREBASE_PROJECT_ID`                      | `storemink-staging`                                                 | `storemink-staging`                                                 | `storemink-prod`                                                 |
+| `_FIREBASE_SA_ID` (custom-token signer)     | `firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com` | `firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com` | `firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com` |
+| `_NEXT_PUBLIC_FIREBASE_API_KEY`             | `<STAGING_WEB_API_KEY>`                                             | `<STAGING_WEB_API_KEY>`                                             | `<PROD_WEB_API_KEY>`                                             |
+| `_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`         | `storemink-staging.firebaseapp.com`                                 | `storemink-staging.firebaseapp.com`                                 | `storemink-prod.firebaseapp.com`                                 |
+| `_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`      | `storemink-staging.firebasestorage.app`                             | `storemink-staging.firebasestorage.app`                             | `storemink-prod.firebasestorage.app`                             |
+| `_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | `68037646295`                                                       | `68037646295`                                                       | `705863961054`                                                   |
+| `_NEXT_PUBLIC_FIREBASE_APP_ID`              | `1:68037646295:web:388ef47d32e39c822b1d92`                          | `1:68037646295:web:388ef47d32e39c822b1d92`                          | `1:705863961054:web:e326046a5f9f7b7de9f54f`                      |
+| `_NEXT_PUBLIC_ROOT_DOMAIN`                  | `dev.storemink.com` **←**                                           | `staging.storemink.com`                                             | `storemink.com`                                                  |
+| `_DOMAIN_ENV`                               | `stg` (default)                                                     | `stg` (default)                                                     | **`prod` — must be set explicitly**                              |
+| `_DOMAIN_CERT_MAP`                          | `prod-cert-map`                                                     | `prod-cert-map`                                                     | `prod-cert-map`                                                  |
+| `_DOMAIN_LB_IP`                             | `136.69.75.127`                                                     | `136.69.75.127`                                                     | `136.69.75.127`                                                  |
+| `_NEXT_PUBLIC_APP_URL`                      | `https://dev.storemink.com` **←**                                   | `https://staging.storemink.com`                                     | `https://storemink.com`                                          |
+| `_GOOGLE_SEARCH_CONSOLE_PROPERTY`           | _(empty — never indexed)_                                           | _(empty — never indexed)_                                           | `sc-domain:storemink.com`                                        |
+| `_POS_SESSION_SECRET_SECRET`                | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_PROD`                                        |
+| `_RESEND_WEBHOOK_SECRET_SECRET`             | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_PROD`                                     |
 
 > **⚠ COST CUTS OF 2026-08-10 — three values here are now tuned for spend, not
 > for headroom.** Monthly GCP was tracking to ~₹6,400 and had to come down.

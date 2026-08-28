@@ -89,7 +89,27 @@ permission sections, which read the database. Pinned by `proxy.test.ts`.
 ### Tenant resolution — `lib/store/`
 
 - `host.ts` — pure host classification (`parseHost`, `isPlatformHost`, `isHelpHost`, `isPosHost`, `isThemesHost`, `cookieDomainForHost`). No Node imports; safe on edge. `ROOT_DOMAIN` from `NEXT_PUBLIC_ROOT_DOMAIN` (default `storemink.com`). Cookies are scoped to `.storemink.com` so a session spans platform + all store subdomains.
-- `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). **Only positive host resolutions are cached**: an unknown/ineligible store host is an internal rejected cache read and becomes an uncached `null`, so a slug claimed moments later is visible on the next request even when that request reaches a different Cloud Run instance. Caching negative resolutions made a successful signup land on the legacy WholeSip fallback for up to five minutes, producing both a WholeSip tab title and a false "No access" screen. Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome). Use `updateTag(STORE_TAG)` after a user-facing Server Action that must immediately read its own store mutation (notably signup); use `revalidateTag(STORE_TAG, "max")` only where stale-while-revalidate is acceptable.
+- `resolve.ts` — DB-backed store lookup, cached with `unstable_cache` (tag `STORE_TAG = "stores"`, 300 s revalidate). **Only positive host resolutions are cached**: an unknown/ineligible store host is an internal rejected cache read and becomes an uncached `null`, so a slug claimed moments later is visible on the next request even when that request reaches a different Cloud Run instance. Caching negative resolutions made a successful signup land on the legacy WholeSip fallback for up to five minutes, producing both a WholeSip tab title and a false "No access" screen. Three resolvers: `getCurrentStoreOrNull()` (honest — null when the host maps to no active store); `getCurrentStore()`/`getCurrentStoreId()` (never-null — fall back to WholeSip; for dashboard/actions/internal callers that must always have a store id); **`requireStorefrontStore()`/`requireStorefrontStoreId()`** (render-only — `notFound()` on an unknown host). **Storefront PAGES must use the `require…` variants** (the `(storefront)` layout guards too, but a layout `notFound()` does NOT abort concurrently-rendering child pages, so each content page guards itself — otherwise an unclaimed subdomain streams the WholeSip fallback content into its HTML). Unknown store host → root `app/not-found.tsx` ("store doesn't exist"); missing page within a real store → `app/(storefront)/not-found.tsx` ("page not found", with store chrome).
+  **★★ AND THOSE 404s WERE ALL SOFT 404s UNTIL 2026-08-29.** `app/loading.tsx`
+  existed at the ROOT, so one Suspense boundary wrapped the entire app; Next
+  flushes the shell — with the HTTP status already committed as **200** — before
+  the layout beneath it runs, and the later `notFound()` then renders the right
+  page into a response that has already said "200 OK". Measured on all three
+  deployed environments: an unclaimed store subdomain, a missing custom page, a
+  missing product AND a missing help article every one returned **200** with
+  "Page not found" in the body. Invisible in a browser, because the page LOOKS
+  like a 404 — which is why it survived so long — and exactly the soft-404
+  Google penalises. `x-robots-tag: noindex` limited the damage but is not the
+  contract: `lib/seo/disallow.ts` and `app/sitemap.ts` both assume a real 404.
+  The boundary is now **opt-in per area** (`app/dashboard`, `app/platform`,
+  `app/pos` — all auth-gated and noindex, so no crawler observes their status
+  and they keep the navigation feedback they had). **The rule: NEVER add a
+  `loading.tsx` above a publicly indexable route.** Pinned by
+  `app/loading-boundary-coverage.test.ts`, which fails in both directions — a
+  new boundary over a public area, and the three allowed ones going missing —
+  and which carries one documented exception (`/help/search`, safe only because
+  it is `index: false` and never calls `notFound()`; the test re-asserts that
+  noindex, so making it indexable fails rather than silently regressing). Use `updateTag(STORE_TAG)` after a user-facing Server Action that must immediately read its own store mutation (notably signup); use `revalidateTag(STORE_TAG, "max")` only where stale-while-revalidate is acceptable.
 - `brand.ts` — per-store branding (colors/logo) consumed by `app/(storefront)/components/brand-provider.tsx`.
 
 **Rule: every DB read/write for store data must be scoped by `store_id`** (RLS also enforces this — see `supabase/multitenant_03_rls.sql`).
@@ -7439,6 +7459,7 @@ npm run format      # prettier --write
     | ---------- | -------------------- | ------------------- | ----------- |
     | local dev | `storemink_staging` | **staging** project | staging |
     | staging | `storemink_staging` | **staging** project | staging |
+    | dev (deployed) | `storemink_staging` | **staging** project | staging |
     | production | `storemink` | **prod** project | prod |
     Local dev uses the STAGING project (its database holds staging-project uids).
     The web `apiKey` is NOT a secret — it's a public project id; separate projects
