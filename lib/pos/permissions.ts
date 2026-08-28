@@ -57,7 +57,29 @@ export type PosCapability =
    * delegate) is exactly the kind of thing that should be able to sell without
    * it. Deleting the vocabulary would mean re-inventing it.
    */
-  | "fulfil_pickup";
+  | "fulfil_pickup"
+  /**
+   * Hand over a collection, or take a return, on an order whose customer
+   * CANNOT be verified by OTP — because nothing on it normalizes to an Indian
+   * mobile (a legacy row, a landline, a guest with no profile phone).
+   *
+   * ★ NOT "skip the OTP". The server re-derives that the order has no usable
+   * mobile before this is consulted at all, so it can never reach an order the
+   * customer could have been texted. It is the answer to "the control cannot
+   * run", never to "the control is inconvenient".
+   *
+   * ★ MANAGER AND ABOVE, not a cashier. It follows the precedent the counter
+   * already sets for legacy data with no automatic answer — an order with no
+   * usable tender record asks a MANAGER to choose the refund route rather than
+   * guessing. Releasing paid goods to someone whose identity nothing checked is
+   * the same shape of call. Withheld from `cashier` by OMISSION, so a role
+   * added later cannot inherit it by resembling a manager.
+   *
+   * ★ NOT superadmin-only: SUPERADMIN_ONLY is for acts that leave NO physical
+   * trace to count afterwards. This one leaves several — the goods go, the
+   * order is marked collected, and `identity_override` names who did it.
+   */
+  | "override_verification";
 
 /**
  * ★ Reserved to the superadmin: not a cashier, not a manager, and **not a
@@ -95,6 +117,7 @@ const CAPS: Record<PosRole, PosCapability[]> = {
     "cash_drop",
     "edit_layout",
     "fulfil_pickup",
+    "override_verification",
   ],
 };
 

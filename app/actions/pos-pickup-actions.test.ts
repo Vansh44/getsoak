@@ -19,6 +19,14 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/lib/pos/audit", () => ({ posAudit: vi.fn(async () => undefined) }));
+vi.mock("@/lib/pos/customer-verification", () => ({
+  gateCustomerVerification: vi.fn(async () => ({
+    ok: true,
+    overridden: false,
+  })),
+  clearCustomerVerification: vi.fn(async () => undefined),
+}));
 vi.mock("@/lib/notifications/record", () => ({
   emitEvent: vi.fn(),
   recordEvent: vi.fn().mockResolvedValue(null),
@@ -61,6 +69,8 @@ import {
 import { verifyGatewayTenders } from "@/lib/payments/pos-gateway";
 import { getCreditBalance, spendCredit } from "@/lib/credit/store-credit";
 import { orderPayments } from "@/drizzle/schema";
+import { gateCustomerVerification } from "@/lib/pos/customer-verification";
+import { posAudit } from "@/lib/pos/audit";
 
 const CASHIER = {
   role: "cashier" as const,
@@ -137,6 +147,10 @@ beforeEach(() => {
   // tender checks out; the RULE is tested in lib/payments/pos-gateway.test.ts,
   // these assert this counter's WIRING.
   vi.mocked(verifyGatewayTenders).mockResolvedValue(null);
+  vi.mocked(gateCustomerVerification).mockResolvedValue({
+    ok: true,
+    overridden: false,
+  });
   vi.mocked(getCreditBalance).mockResolvedValue(1000);
   vi.mocked(spendCredit).mockResolvedValue(true);
   vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
@@ -152,6 +166,66 @@ describe("markCollected — the claim", () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(null);
     expect((await markCollected("ord-1")).error).toMatch(/signed in/i);
     expect(dbHolder.current.calls.update).toHaveLength(0);
+  });
+
+  it("requires the server-bound customer OTP proof before reading or moving the order", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: false,
+      verificationRequired: true,
+      error: "Verify the customer's mobile number before handover.",
+    });
+    const result = await markCollected("ord-1");
+    expect(result).toMatchObject({ verificationRequired: true });
+    expect(result.error).toMatch(/verify.*mobile/i);
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
+  // ★★ Before this, an order whose stored phone yielded no Indian mobile could
+  // NEVER be handed over: the OTP could not run, markCollected refused without
+  // it, and nothing overrode either. The customer's paid goods were stuck.
+  describe("★ an order the OTP cannot reach", () => {
+    it("reports it as unavailable, with whether this operator may proceed", async () => {
+      vi.mocked(gateCustomerVerification).mockResolvedValue({
+        ok: false,
+        verificationUnavailable: true,
+        canOverride: true,
+        error: "This order has no mobile number that can be texted.",
+      });
+      const result = await markCollected("ord-1");
+      expect(result).toMatchObject({
+        verificationUnavailable: true,
+        canOverrideVerification: true,
+      });
+      expect(result.verificationRequired).toBeUndefined();
+      expect(dbHolder.current.calls.select).toHaveLength(0);
+    });
+
+    it("★ forwards the acknowledgement for the SERVER to judge, never acting on it here", async () => {
+      await markCollected("ord-1", [], {
+        acknowledgeUnverifiedCustomer: true,
+      });
+      expect(
+        vi.mocked(gateCustomerVerification).mock.calls[0][0],
+      ).toMatchObject({ acknowledged: true, purpose: "pickup" });
+    });
+
+    it("★ audits an overridden hand-over — the only trace it happened", async () => {
+      vi.mocked(gateCustomerVerification).mockResolvedValue({
+        ok: true,
+        overridden: true,
+      });
+      await markCollected("ord-1");
+      expect(vi.mocked(posAudit).mock.calls.map(([e]) => e.event)).toContain(
+        "identity_override",
+      );
+    });
+
+    it("★ and writes NOTHING for an ordinary verified hand-over", async () => {
+      await markCollected("ord-1");
+      expect(
+        vi.mocked(posAudit).mock.calls.map(([e]) => e.event),
+      ).not.toContain("identity_override");
+    });
   });
 
   it("refuses an empty order id before touching the database", async () => {

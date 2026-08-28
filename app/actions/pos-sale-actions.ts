@@ -45,14 +45,17 @@ import { withService } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   newPosCustomerId,
+  normalizePhone,
   splitName,
   validatePosCustomer,
   type PosCustomerInput,
 } from "@/lib/pos/customer-claim";
 import {
   inventoryLevels,
+  customerCreditBalances,
   orderItems,
   orderPayments,
+  orderReturns,
   orders,
   posShifts,
   productVariants,
@@ -104,6 +107,7 @@ import { getStoreSettings } from "@/lib/settings/resolve";
 import { rateLimit } from "@/lib/rate-limit";
 import { buildReceiptModel, type ReceiptModel } from "@/lib/pos/receipt";
 import { getStoreBrandById } from "@/lib/store/brand";
+import { logError } from "@/lib/observability/logger";
 
 // Bounds on client-supplied cart data (mirrors checkout-actions).
 const MAX_LINE_ITEMS = 200;
@@ -721,6 +725,111 @@ export interface PosCustomer {
 }
 
 /**
+ * Resolve the exact mobile entered at Checkout. This action is deliberately
+ * submit-only: typing in the till never runs a query. If the number is new, a
+ * claimable mobile-only customer is created immediately; a concurrent insert
+ * safely falls through to the existing row via the store/mobile unique key.
+ */
+export async function resolvePosCustomerByPhone(
+  mobile: string,
+): Promise<{ customer?: PosCustomer; created?: boolean; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+
+  const phone = normalizePhone(mobile);
+  if (!phone) {
+    return { error: "Enter a valid 10-digit Indian mobile number." };
+  }
+
+  const limited = await rateLimit(
+    `pos-customer-resolve:${op.storeId}:${op.staffId ?? op.locationId}`,
+    { max: 120, windowSeconds: 60 },
+  );
+  if (!limited.allowed) {
+    return { error: "Too many customer lookups. Wait a moment and retry." };
+  }
+
+  const id = newPosCustomerId(() => crypto.randomUUID());
+  try {
+    const result = await withService(async (db) => {
+      const find = () =>
+        db
+          .select({
+            id: users.id,
+            phone: users.phone,
+            email: users.email,
+            first_name: users.firstName,
+            last_name: users.lastName,
+            store_credit: customerCreditBalances.balance,
+          })
+          .from(users)
+          .leftJoin(
+            customerCreditBalances,
+            and(
+              eq(customerCreditBalances.storeId, users.storeId),
+              eq(customerCreditBalances.customerId, users.id),
+            ),
+          )
+          .where(and(eq(users.storeId, op.storeId), eq(users.phone, phone)))
+          .limit(1);
+
+      const existing = await find();
+      if (existing[0]) return { row: existing[0], created: false };
+
+      const inserted = await db
+        .insert(users)
+        .values({
+          id,
+          storeId: op.storeId,
+          phone,
+          firstName: "",
+          lastName: null,
+          email: null,
+        } as typeof users.$inferInsert)
+        .onConflictDoNothing()
+        .returning({ id: users.id });
+      if (inserted[0]) {
+        return { row: null, created: true, createdId: inserted[0].id };
+      }
+
+      // Another till inserted the same phone after our read. The unique key is
+      // the arbiter; read its winner instead of showing a duplicate error.
+      const raced = await find();
+      return { row: raced[0] ?? null, created: false };
+    });
+
+    if (result.created) {
+      return {
+        created: true,
+        customer: {
+          id: result.createdId ?? id,
+          name: phone,
+          phone,
+          email: null,
+          storeCredit: 0,
+        },
+      };
+    }
+    const row = result.row;
+    if (!row) return { error: "Couldn't resolve that customer. Try again." };
+    return {
+      customer: {
+        id: row.id,
+        name:
+          [row.first_name, row.last_name].filter(Boolean).join(" ").trim() ||
+          row.phone,
+        phone: row.phone,
+        email: row.email,
+        storeCredit: Number(row.store_credit) || 0,
+      },
+    };
+  } catch (err) {
+    return { error: dbErrorMessage(err, "Couldn't resolve that customer.") };
+  }
+}
+
+/**
  * Find an existing customer of THIS store to attach to a sale — by phone, name
  * or email. Store-scoped, so one store's register can never surface another
  * store's customer list.
@@ -795,7 +904,8 @@ export async function searchPosCustomers(
 }
 
 /**
- * Record a walk-in the till has never seen before.
+ * Record a customer the till has never seen before (legacy named-customer
+ * endpoint; phone-first checkout uses resolvePosCustomerByPhone).
  *
  * ── ★ THE ID IS `pos_<uuid>`, AND THAT IS THE WHOLE MECHANISM ──────────────
  * `users.id` IS the Firebase uid, so a row invented here has no natural key. A
@@ -992,8 +1102,8 @@ export async function placePosSale(
   tenders: PosTender[],
   opts: {
     customerId?: string | null;
-    /** Where to email a copy of the receipt. Optional — a walk-in who wants
-     *  nothing is the normal case, and asking must never gate a sale. */
+    /** Where to email a copy of the receipt. Optional — a phone-only customer
+     *  may want paper only, and asking must never gate a sale. */
     receiptEmail?: string | null;
     customerGstin?: string | null;
     orderDiscount?: number;
@@ -1001,6 +1111,8 @@ export async function placePosSale(
      *  Never a boolean: a flag from the client is a flag the client can set. */
     approvalToken?: string | null;
     note?: string | null;
+    /** Completed counter return this replacement sale closes out. */
+    exchangeReturnId?: string | null;
   } = {},
 ): Promise<PosSaleResult> {
   // 1. Operator — server-resolved, device-bound, DB-revalidated.
@@ -1078,6 +1190,18 @@ export async function placePosSale(
     typeof opts.customerId === "string" && opts.customerId.trim()
       ? opts.customerId.trim()
       : null;
+  // A POS order without an owner cannot later be found by mobile, verified for
+  // a pickup/return, or receive store credit. Checkout resolves (and, for a
+  // new number, creates) the customer in one explicit submit; keep the same
+  // invariant at the trust boundary so a stale client or alternate caller
+  // cannot re-introduce anonymous "Walk-in" sales.
+  if (!wantedCustomerId) {
+    return { error: "Add the customer's mobile number before taking payment." };
+  }
+  const exchangeReturnId =
+    typeof opts.exchangeReturnId === "string" && opts.exchangeReturnId.trim()
+      ? opts.exchangeReturnId.trim()
+      : null;
 
   const productIds = Array.from(new Set(lines.map((l) => l.productId)));
   const variantIds = Array.from(
@@ -1113,7 +1237,27 @@ export async function placePosSale(
                 )
                 .limit(1)
             : [];
-          return { owner };
+          const exchange = exchangeReturnId
+            ? await db
+                .select({
+                  id: orderReturns.id,
+                  exchange_order_id: orderReturns.exchangeOrderId,
+                  original_customer_id: orders.customerId,
+                  original_order_ref: orders.orderRef,
+                })
+                .from(orderReturns)
+                .innerJoin(orders, eq(orders.id, orderReturns.orderId))
+                .where(
+                  and(
+                    eq(orderReturns.id, exchangeReturnId),
+                    eq(orderReturns.storeId, op.storeId),
+                    eq(orderReturns.locationId, op.locationId),
+                    eq(orderReturns.status, "completed"),
+                  ),
+                )
+                .limit(1)
+            : [];
+          return { owner, exchange };
         }),
       ),
       // The catalogue: prices are RE-READ here — the client's are a display hint.
@@ -1226,6 +1370,21 @@ export async function placePosSale(
       return { error: "That customer isn't in this store." };
     customerId = owned[0].id;
     customerEmail = owned[0].email ?? null;
+  }
+  const exchangeRow = counterRead.value.exchange[0] ?? null;
+  if (exchangeReturnId) {
+    if (!exchangeRow || exchangeRow.exchange_order_id) {
+      return { error: "That exchange is no longer available." };
+    }
+    if (exchangeRow.original_customer_id !== customerId) {
+      return { error: "The replacement must stay with the original customer." };
+    }
+    if (
+      settings["returns.enabled"] !== true ||
+      settings["returns.allowExchanges"] !== true
+    ) {
+      return { error: "Exchanges are switched off for this store." };
+    }
   }
 
   if (!tillRead.ok) return { error: tillRead.error };
@@ -1434,7 +1593,7 @@ export async function placePosSale(
   // 6. Tax + GST split.
   const tax = totals.tax;
 
-  // A walk-in's place of supply is the selling location's state.
+  // An in-person sale's place of supply is the selling location's state.
   const placeOfSupply = supplierState;
   const intra = isIntraState(supplierState, placeOfSupply);
 
@@ -1528,7 +1687,11 @@ export async function placePosSale(
           discount,
           total,
           currency: "INR",
-          notes: opts.note ?? null,
+          notes:
+            opts.note ??
+            (exchangeRow
+              ? `Exchange replacement for ${exchangeRow.original_order_ref}`
+              : null),
           // ★ CREDIT IS A PAYMENT, NOT A DISCOUNT (§29). `total` stays the full
           // goods value and this records what was settled from the balance —
           // netting it off would understate the sale on the receipt, compute
@@ -1702,6 +1865,25 @@ export async function placePosSale(
     // transaction. Logged loudly for reconciliation.
   }
 
+  if (exchangeReturnId) {
+    await withService((db) =>
+      db
+        .update(orderReturns)
+        .set({ exchangeOrderId: orderId })
+        .where(
+          and(
+            eq(orderReturns.id, exchangeReturnId),
+            eq(orderReturns.storeId, op.storeId),
+            isNull(orderReturns.exchangeOrderId),
+          ),
+        ),
+    ).catch((error) =>
+      // The sale and payment are already real. Losing the relationship must
+      // not void them; the return and replacement remain recoverable by refs.
+      logError("pos.exchange_link", error, { exchangeReturnId, orderId }),
+    );
+  }
+
   // ── The money audit (Step 14) ─────────────────────────────────────────────
   // ★ AFTER THE SALE IS RECORDED, deliberately. A refused sale gave nothing
   // away, so auditing earlier would log discounts that never happened — and
@@ -1765,8 +1947,8 @@ export async function placePosSale(
     locationId: op.locationId,
     actor: { type: "admin", id: op.staffId ?? null, label: op.name },
     subject: { type: "order", id: orderId, label: orderRef },
-    // Null for a walk-in, which emitEvent reads as "no customer audience" —
-    // correct, since a POS shopper leaves with a printed receipt in hand.
+    // New POS sales always carry this customer. The schema remains nullable
+    // for historical anonymous rows and other order channels.
     customerId,
     payload: {
       total,
@@ -1866,9 +2048,19 @@ export async function placePosSale(
  * the operator's store AND location, so a register can only reprint sales rung
  * at its own counter. Everything is read from the order's snapshot.
  */
-export async function getPosReceipt(
-  orderId: string,
-): Promise<{ receipt?: ReceiptModel; error?: string }> {
+export async function getPosReceipt(orderId: string): Promise<{
+  receipt?: ReceiptModel;
+  detail?: {
+    kind: "register" | "pickup";
+    status: string;
+    paymentStatus: string;
+    customerName: string | null;
+    customerPhone: string | null;
+    customerEmail: string | null;
+    completedAt: string;
+  };
+  error?: string;
+}> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
   if (typeof orderId !== "string" || !orderId)
@@ -1891,13 +2083,40 @@ export async function getPosReceipt(
           supplier_state: orders.supplierState,
           place_of_supply_state: orders.placeOfSupplyState,
           location_id: orders.locationId,
+          pickup_location_id: orders.pickupLocationId,
+          fulfilment_type: orders.fulfilmentType,
+          pickup_status: orders.pickupStatus,
+          collected_at: orders.collectedAt,
+          collected_by: orders.collectedBy,
+          status: orders.status,
+          payment_method: orders.paymentMethod,
+          payment_status: orders.paymentStatus,
+          shipping_address: orders.shippingAddress,
+          customer_first_name: users.firstName,
+          customer_last_name: users.lastName,
+          customer_phone: users.phone,
+          customer_email: users.email,
         })
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, op.storeId)),
+        )
         .where(
           and(
             eq(orders.id, orderId),
             eq(orders.storeId, op.storeId),
-            eq(orders.locationId, op.locationId),
+            or(
+              and(
+                eq(orders.locationId, op.locationId),
+                isNotNull(orders.receiptNo),
+              ),
+              and(
+                eq(orders.fulfilmentType, "pickup"),
+                eq(orders.pickupLocationId, op.locationId),
+                eq(orders.pickupStatus, "collected"),
+              ),
+            ),
           ),
         )
         .limit(1);
@@ -1968,6 +2187,34 @@ export async function getPosReceipt(
     if (!data) return { error: "That sale isn't available on this register." };
 
     const brand = await getStoreBrandById(op.storeId).catch(() => null);
+    const payments =
+      data.payments.length > 0
+        ? data.payments
+        : data.order.payment_status === "paid"
+          ? [
+              {
+                method: data.order.payment_method,
+                amount: Number(data.order.total) || 0,
+                tendered: null,
+                change_due: null,
+                reference: null,
+              },
+            ]
+          : [];
+    const addr = (data.order.shipping_address ?? {}) as Record<string, unknown>;
+    const customerName =
+      [data.order.customer_first_name, data.order.customer_last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim() ||
+      [addr.firstName, addr.lastName].filter(Boolean).join(" ").trim() ||
+      null;
+    const kind =
+      data.order.fulfilment_type === "pickup" &&
+      data.order.pickup_status === "collected"
+        ? "pickup"
+        : "register";
+
     return {
       receipt: buildReceiptModel({
         store: {
@@ -1978,10 +2225,26 @@ export async function getPosReceipt(
         location: data.loc,
         order: data.order,
         items: data.items,
-        payments: data.payments,
+        payments,
         gstEnabled: !!data.b?.gst_enabled,
         footerNote: data.b?.footer_note ?? null,
       }),
+      detail: {
+        kind,
+        status: data.order.status,
+        paymentStatus: data.order.payment_status,
+        customerName,
+        customerPhone:
+          data.order.customer_phone ??
+          (typeof addr.phone === "string" ? addr.phone : null),
+        customerEmail:
+          data.order.customer_email ??
+          (typeof addr.email === "string" ? addr.email : null),
+        completedAt:
+          kind === "pickup"
+            ? (data.order.collected_at ?? data.order.created_at)
+            : data.order.created_at,
+      },
     };
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't load the receipt.") };
@@ -2006,6 +2269,7 @@ export interface PosSaleRow {
   itemCount: number;
   paymentMethod: string;
   refunded: boolean;
+  kind: "register" | "pickup";
 }
 
 /**
@@ -2015,10 +2279,10 @@ export interface PosSaleRow {
  * is a customer standing at the counter asking for their bill again. Making
  * that a manager's job stops the queue.
  *
- * Scoped to the operator's own location, never a location from the client —
- * and to sales with a `receipt_no`, which is what distinguishes a till sale
- * from an online order that merely routed to this shop. Someone else's online
- * order is not a receipt this till ever printed.
+ * Scoped to the operator's own location, never a location from the client.
+ * A sale is either rung at this register, or an in-store pickup actually
+ * handed over here. Merely routing an open online order to this shop does not
+ * make it a completed counter sale.
  */
 export async function listPosSales(
   query?: string,
@@ -2051,6 +2315,9 @@ export async function listPosSales(
           customer_last_name: users.lastName,
           payment_method: orders.paymentMethod,
           status: orders.status,
+          fulfilment_type: orders.fulfilmentType,
+          pickup_status: orders.pickupStatus,
+          completed_at: sql<string>`coalesce(${orders.collectedAt}, ${orders.createdAt})`,
         })
         .from(orders)
         .leftJoin(
@@ -2060,8 +2327,17 @@ export async function listPosSales(
         .where(
           and(
             eq(orders.storeId, op.storeId),
-            eq(orders.locationId, op.locationId),
-            isNotNull(orders.receiptNo),
+            or(
+              and(
+                eq(orders.locationId, op.locationId),
+                isNotNull(orders.receiptNo),
+              ),
+              and(
+                eq(orders.fulfilmentType, "pickup"),
+                eq(orders.pickupLocationId, op.locationId),
+                eq(orders.pickupStatus, "collected"),
+              ),
+            ),
             q
               ? or(
                   ilike(orders.receiptNo, like),
@@ -2076,12 +2352,22 @@ export async function listPosSales(
             // Half-open [from, to): `yesterday` ends exactly where `today`
             // begins, so a sale lands in one window or the other, never both.
             window
-              ? gte(orders.createdAt, window.from.toISOString())
+              ? gte(
+                  sql`coalesce(${orders.collectedAt}, ${orders.createdAt})`,
+                  window.from.toISOString(),
+                )
               : undefined,
-            window ? lt(orders.createdAt, window.to.toISOString()) : undefined,
+            window
+              ? lt(
+                  sql`coalesce(${orders.collectedAt}, ${orders.createdAt})`,
+                  window.to.toISOString(),
+                )
+              : undefined,
           ),
         )
-        .orderBy(desc(orders.createdAt))
+        .orderBy(
+          desc(sql`coalesce(${orders.collectedAt}, ${orders.createdAt})`),
+        )
         .limit(60),
     );
 
@@ -2122,15 +2408,19 @@ export async function listPosSales(
           null;
         return {
           id: r.id,
-          receiptNo: r.receipt_no ?? "",
+          receiptNo: r.receipt_no ?? r.order_ref ?? "",
           orderRef: r.order_ref ?? "",
           total: Number(r.total) || 0,
-          createdAt: r.created_at,
+          createdAt: r.completed_at ?? r.created_at,
           cashierName: personLabel(r.cashier_name),
           customerName: name,
           itemCount: counts.get(r.id) ?? 0,
           paymentMethod: r.payment_method ?? "",
           refunded: r.status === "cancelled" || r.status === "refunded",
+          kind:
+            r.fulfilment_type === "pickup" && r.pickup_status === "collected"
+              ? "pickup"
+              : "register",
         };
       }),
     };

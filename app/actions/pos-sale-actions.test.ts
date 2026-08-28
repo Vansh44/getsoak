@@ -69,9 +69,10 @@ import {
 import { sendPosReceipt } from "@/lib/email/pos-receipt";
 import {
   getCatalogSnapshot,
-  placePosSale,
+  placePosSale as placePosSaleAction,
   searchPosCustomers,
   createPosCustomer,
+  resolvePosCustomerByPhone,
   listPosSales,
 } from "./pos-sale-actions";
 import { saleFingerprint, signApprovalToken } from "@/lib/pos/approval";
@@ -155,6 +156,7 @@ const TAX_CLASS = { id: "tc1", name: "GST 18%", rate: 18, sort_order: 0 };
 function seedHappyPath(over: { productRows?: any[]; shiftRows?: any[] } = {}) {
   dbHolder.current = makeDbMock({
     selectQueue: [
+      [{ id: "cust-1", email: null }], // customer ownership
       over.productRows ?? [PRODUCT], // products
       [BILLING], // billing (variants skipped: no variantIds)
       // ★ The receipt prefix rides on the location row now — it was a second
@@ -173,6 +175,18 @@ function seedHappyPath(over: { productRows?: any[]; shiftRows?: any[] } = {}) {
 
 const line = { productId: "p1", variantId: null, quantity: 1 };
 const cash = [{ method: "cash" as const, amount: 118, tendered: 200 }];
+
+/** Checkout attaches a customer before every ordinary sale. Boundary tests
+ *  that deliberately omit one call the real action directly. */
+const placePosSale = (
+  lines: Parameters<typeof placePosSaleAction>[0],
+  tenders: Parameters<typeof placePosSaleAction>[1],
+  opts: Parameters<typeof placePosSaleAction>[2] = {},
+) =>
+  placePosSaleAction(lines, tenders, {
+    customerId: "cust-1",
+    ...opts,
+  });
 
 /**
  * A genuine manager approval for a given cart, as verifyManagerPin would mint
@@ -233,10 +247,10 @@ describe("placePosSale — gates", () => {
   // the cashier needs to know the sale is short rather than find out at the
   // drawer.
   it("★ refuses store credit with no customer attached", async () => {
-    const res = await placePosSale([line], [
+    const res = await placePosSaleAction([line], [
       { method: "store_credit", amount: 118 },
     ] as never);
-    expect(res.error).toMatch(/attach a customer/i);
+    expect(res.error).toMatch(/customer.*mobile/i);
   });
 
   it("rejects invalid quantities and unknown tender methods", async () => {
@@ -274,8 +288,7 @@ describe("placePosSale — pricing is server-authoritative", () => {
     expect(order.salesChannel).toBe("pos");
     expect(order.status).toBe("completed");
     expect(order.paymentStatus).toBe("paid");
-    // A walk-in has no account and no delivery address.
-    expect(order.customerId).toBeNull();
+    expect(order.customerId).toBe("cust-1");
     expect(order.shippingAddress).toBeNull();
     // Sale context for the receipt + reporting.
     expect(order.locationId).toBe("loc-1");
@@ -681,11 +694,12 @@ describe("placePosSale — the cap, when staff may discount", () => {
     const other = { productId: "p0", variantId: null, quantity: 1 };
     dbHolder.current = makeDbMock({
       selectQueue: [
+        [{ id: "cust-1", email: null }],
         [PRODUCT, { ...PRODUCT, id: "p0", selling_price: 0 }],
         [BILLING],
+        [{ state_code: "07", receipt_prefix: "DEL" }],
         [TAX_CLASS],
-        [{ state_code: "07" }],
-        [{ prefix: "DEL" }],
+        [],
       ],
       executeQueue: [[{ seq: 42 }], [{ reserved: true }], [{ reserved: true }]],
       returning: [{ id: "o1", order_ref: "ORD100110006" }],
@@ -763,11 +777,12 @@ describe("placePosSale — stock", () => {
   it("rolls the order back when stock is short", async () => {
     dbHolder.current = makeDbMock({
       selectQueue: [
+        [{ id: "cust-1", email: null }],
         [PRODUCT],
         [BILLING],
+        [{ state_code: "07", receipt_prefix: "DEL" }],
         [TAX_CLASS],
-        [{ state_code: "07" }],
-        [{ prefix: "DEL" }],
+        [],
       ],
       executeQueue: [[{ seq: 43 }], [{ reserved: false }]],
       returning: [{ id: "o1", order_ref: "ORD1" }],
@@ -922,9 +937,9 @@ describe("placePosSale — customer attach", () => {
         owner, // 0 users (ownership check)
         [PRODUCT],
         [BILLING],
+        [{ state_code: "07", receipt_prefix: "DEL" }],
         [TAX_CLASS],
-        [{ state_code: "07" }],
-        [{ prefix: "DEL" }],
+        [],
       ],
       executeQueue: [[{ seq: 42 }], [{ reserved: true }]],
       returning: [{ id: "o1", order_ref: "ORD100110006" }],
@@ -947,10 +962,10 @@ describe("placePosSale — customer attach", () => {
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 
-  it("treats a blank customer id as a walk-in", async () => {
-    const r = await placePosSale([line], cash, { customerId: "   " });
-    expect(r.success).toBe(true);
-    expect(dbHolder.current.calls.values[0].customerId).toBeNull();
+  it("refuses a blank customer id instead of recording a walk-in", async () => {
+    const r = await placePosSaleAction([line], cash, { customerId: "   " });
+    expect(r.error).toMatch(/customer.*mobile/i);
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
 });
 
@@ -1344,6 +1359,108 @@ describe("createPosCustomer", () => {
   });
 });
 
+describe("resolvePosCustomerByPhone", () => {
+  beforeEach(() => {
+    vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
+  });
+
+  it("rejects malformed and placeholder mobiles without touching the database", async () => {
+    dbHolder.current = makeDbMock();
+    expect((await resolvePosCustomerByPhone("12345")).error).toMatch(
+      /10-digit/i,
+    );
+    expect((await resolvePosCustomerByPhone("8888888888")).error).toMatch(
+      /10-digit/i,
+    );
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("creates a claimable mobile-only customer in one submit", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[]],
+      returning: [{ id: "pos_mobile" }],
+    });
+    const result = await resolvePosCustomerByPhone("+91 98765 43210");
+    expect(result).toMatchObject({
+      created: true,
+      customer: {
+        id: "pos_mobile",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    });
+    expect(dbHolder.current.calls.values[0]).toMatchObject({
+      id: expect.stringMatching(/^pos_/),
+      storeId: CASHIER.storeId,
+      phone: "9876543210",
+      firstName: "",
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(1);
+  });
+
+  it("returns the existing customer's name, email, and credit after a conflict", async () => {
+    dbHolder.current = makeDbMock({
+      returning: [],
+      selectQueue: [
+        [
+          {
+            id: "cust-1",
+            phone: "9876543210",
+            email: "asha@example.com",
+            first_name: "Asha",
+            last_name: "Rao",
+            store_credit: 240,
+          },
+        ],
+      ],
+    });
+    const result = await resolvePosCustomerByPhone("9876543210");
+    expect(result).toEqual({
+      customer: {
+        id: "cust-1",
+        name: "Asha Rao",
+        phone: "9876543210",
+        email: "asha@example.com",
+        storeCredit: 240,
+      },
+    });
+    expect(dbHolder.current.calls.insert).toHaveLength(0);
+  });
+
+  it("returns the unique-key winner when two tills create the same new phone", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [],
+        [
+          {
+            id: "pos_winner",
+            phone: "9876543210",
+            email: null,
+            first_name: "",
+            last_name: null,
+            store_credit: null,
+          },
+        ],
+      ],
+      returning: [],
+    });
+
+    const result = await resolvePosCustomerByPhone("9876543210");
+
+    expect(result).toEqual({
+      customer: {
+        id: "pos_winner",
+        name: "9876543210",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(2);
+  });
+});
+
 describe("searchPosCustomers", () => {
   it("refuses when signed out", async () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(null);
@@ -1498,7 +1615,12 @@ describe("placePosSale — shift attribution", () => {
       // Round 0 is catalogue(products) · tax(billing) · till(location). It is
       // the TILL read that must fail — that is the batch carrying the shift, so
       // it is the one whose failure could be mistaken for "no drawer open".
-      selectQueue: [[PRODUCT], [BILLING], new Error("connection reset")],
+      selectQueue: [
+        [{ id: "cust-1", email: null }],
+        [PRODUCT],
+        [BILLING],
+        new Error("connection reset"),
+      ],
     });
     const r = await placePosSale([line], cash);
     expect(r.success).toBeUndefined();
@@ -1527,7 +1649,7 @@ describe("listPosSales", () => {
 
   // sqlText renders operators without column names, so this asserts the SHAPE:
   // store =, location =, and `is not null` (the receipt-no filter) AND-ed.
-  it("★ scopes to the operator's own shop and to TILL sales only", async () => {
+  it("★ scopes to this shop's register sales and completed pickups", async () => {
     dbHolder.current = makeDbMock({ selectQueue: [[]] });
     await listPosSales();
     const where = sqlText(dbHolder.current.calls.where[0]);
@@ -1618,6 +1740,38 @@ describe("listPosSales", () => {
     const { sales } = await listPosSales();
     expect(sales[0].customerName).toBe("Asha Rao");
   });
+
+  it("records an in-store pickup in Sales at its collection time", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "pickup-1",
+            receipt_no: null,
+            order_ref: "ORD10011030",
+            total: 450,
+            created_at: "2026-08-20T10:00:00Z",
+            completed_at: "2026-08-29T10:00:00Z",
+            cashier_name: null,
+            shipping_address: { firstName: "Asha" },
+            payment_method: "razorpay",
+            status: "completed",
+            fulfilment_type: "pickup",
+            pickup_status: "collected",
+          },
+        ],
+        [{ order_id: "pickup-1", n: 2 }],
+      ],
+    });
+
+    const { sales } = await listPosSales();
+    expect(sales[0]).toMatchObject({
+      receiptNo: "ORD10011030",
+      createdAt: "2026-08-29T10:00:00Z",
+      kind: "pickup",
+      itemCount: 2,
+    });
+  });
 });
 
 // ── Gateway tenders (roadmap Step 12) ───────────────────────────────────────
@@ -1692,6 +1846,7 @@ describe("placePosSale — the gateway replay CONSTRAINT firing", () => {
       selectQueue: [
         // Read wave (see seedHappyPath), then the gateway replay check, which
         // runs AFTER it — a refused payment must cost nothing.
+        [{ id: "cust-1", email: null }],
         [PRODUCT],
         [BILLING],
         [{ state_code: "07", receipt_prefix: "DEL" }],

@@ -1039,6 +1039,84 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260827_0031_pos_checkout_clarity_help",
+      "description": "Document customer capture, simplified payment methods, and the linear split-payment flow at POS checkout",
+      "file": "sql/20260827_0031_pos_checkout_clarity_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0030_locations_sidebar_visibility_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS checkout guides explain customer, payment, split, and receipt flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%select <strong>Continue as walk-in</strong>%' and body like '%Search and <strong>Create new customer</strong> are on the same screen%') or (slug = 'take-payments-and-split-tenders' and body like '%The Payment screen shows one plain list of methods%' and body like '%Choose the first payment method%' and body like '%automatically follows this split flow%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%On the Checkout details screen%' and body like '%does not create a customer profile%'))",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS checkout guides explain customer, payment, split, and receipt flows",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%select <strong>Continue as walk-in</strong>%' and body like '%Search and <strong>Create new customer</strong> are on the same screen%') or (slug = 'take-payments-and-split-tenders' and body like '%The Payment screen shows one plain list of methods%' and body like '%Choose the first payment method%' and body like '%automatically follows this split flow%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%On the Checkout details screen%' and body like '%does not create a customer profile%'))",
+            "equals": "3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260828_0032_pos_phone_checkout_and_verification_help",
+      "description": "Document submit-only mobile customer capture and mandatory pickup and return phone OTP verification",
+      "file": "sql/20260828_0032_pos_phone_checkout_and_verification_help.sql",
+      "transaction": true,
+      "requires": ["20260827_0031_pos_checkout_clarity_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain phone-first checkout and pickup and return OTP verification",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%StoreMink does not search while you type.%' and body like '%go straight to Payment without another Continue step.%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Verify the customer before hand-over%' and body like '%there is no till override.%') or (slug = 'take-returns-at-the-counter' and body like '%Verify the customer before completing a return%' and body like '%does not move stock or money.%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%Add receipt email or GSTIN%' and body like '%does not create or change a customer profile.%'))",
+            "equals": "4"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain phone-first checkout and pickup and return OTP verification",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%StoreMink does not search while you type.%' and body like '%go straight to Payment without another Continue step.%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Verify the customer before hand-over%' and body like '%there is no till override.%') or (slug = 'take-returns-at-the-counter' and body like '%Verify the customer before completing a return%' and body like '%does not move stock or money.%') or (slug = 'print-email-and-understand-pos-receipts' and body like '%Add receipt email or GSTIN%' and body like '%does not create or change a customer profile.%'))",
+            "equals": "4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0033_pos_customer_sales_returns_help",
+      "description": "Document mandatory POS customers, cart images, pickup Razorpay, unified Sales, and policy-driven counter returns and exchanges",
+      "file": "sql/20260829_0033_pos_customer_sales_returns_help.sql",
+      "transaction": true,
+      "requires": ["20260828_0032_pos_phone_checkout_and_verification_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain cart images, pickup Razorpay, unified Sales, and policy-driven returns and exchanges",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%Recognise items in the cart%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Use Razorpay at collection%' and body like '%verified Razorpay payment window%') or (slug = 'take-returns-at-the-counter' and body like '%split payment is refunded across its original tenders%' and body like '%Exchange at the counter%') or (slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%completed in-store pickup orders%' and body like '%Understand collected pickups in Sales%'))",
+            "equals": "4"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain cart images, pickup Razorpay, unified Sales, and policy-driven returns and exchanges",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%Recognise items in the cart%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Use Razorpay at collection%' and body like '%verified Razorpay payment window%') or (slug = 'take-returns-at-the-counter' and body like '%split payment is refunded across its original tenders%' and body like '%Exchange at the counter%') or (slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%completed in-store pickup orders%' and body like '%Understand collected pickups in Sales%'))",
+            "equals": "4"
+          }
+        ]
+      }
     }
   ]
 }

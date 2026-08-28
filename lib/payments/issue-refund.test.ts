@@ -234,6 +234,51 @@ describe("★ reserving the amount", () => {
     expect((await issueRefund(input())).error).toContain("never paid");
   });
 
+  // ★★ That guard asks "was it EVER paid?", not "is it STILL fully paid?".
+  // `partially_refunded` and `refunded` are DERIVED by syncOrderRefundState
+  // from refunds that settled, so both PROVE capture. Comparing against `paid`
+  // alone killed the gateway leg of a split counter return: the till settles
+  // the cash leg, the status moves, and the card leg of the SAME return is
+  // then refused as "never paid" — goods restocked, customer never credited.
+  describe("★ a partly-refunded order was still paid", () => {
+    it("allows a gateway refund after an earlier leg settled", async () => {
+      seed(
+        [order({ payment_status: "partially_refunded" })],
+        [{ amount: 200, status: "completed", method: "cash" }],
+      );
+      const res = await issueRefund(input({ amount: 300 }));
+      expect(res.error).toBeUndefined();
+      expect(res.amount).toBe(300);
+    });
+
+    it("lets a second partial gateway refund through", async () => {
+      seed(
+        [order({ payment_status: "partially_refunded" })],
+        [{ amount: 100, status: "completed", method: "razorpay" }],
+      );
+      expect((await issueRefund(input({ amount: 50 }))).error).toBeUndefined();
+    });
+
+    it("★ a fully-refunded order fails on the CAP, with the true reason", async () => {
+      // Not "never paid" — which is a lie that sends a merchant to check a
+      // payment that did happen. The cap is the honest boundary.
+      seed(
+        [order({ payment_status: "refunded" })],
+        [{ amount: 500, status: "completed", method: "razorpay" }],
+      );
+      const res = await issueRefund(input({ amount: 50 }));
+      expect(res.error).toContain("already been fully refunded");
+      expect(res.error).not.toContain("never paid");
+    });
+
+    it("still refuses a status that never meant capture", async () => {
+      for (const payment_status of ["pending", "failed", "cancelled", null]) {
+        seed([order({ payment_status })]);
+        expect((await issueRefund(input())).error).toContain("never paid");
+      }
+    });
+  });
+
   it("lets a MANUAL refund proceed on an unpaid order", async () => {
     // Those two guards are gateway-specific: a merchant recording money they
     // moved themselves is not constrained by what Razorpay holds.

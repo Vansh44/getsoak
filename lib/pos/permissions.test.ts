@@ -82,3 +82,23 @@ describe("pos permissions", () => {
     expect(isPosRole(42)).toBe(false);
   });
 });
+
+// ★ Releasing paid goods with no identity check follows the counter's own
+// precedent for legacy data with no automatic answer (an ambiguous tender
+// record asks a MANAGER to choose the refund route). Never a cashier.
+describe("★ override_verification", () => {
+  it("is held by manager and above, never by a cashier", () => {
+    expect(posCan("cashier", "override_verification")).toBe(false);
+    expect(posCan("manager", "override_verification")).toBe(true);
+    expect(posCan("owner", "override_verification")).toBe(true);
+    expect(posCan("superadmin", "override_verification")).toBe(true);
+  });
+
+  it("★ is NOT superadmin-only — it leaves a physical trace to count", () => {
+    // SUPERADMIN_ONLY is for acts with nothing missing from the shelf
+    // afterwards. Here the goods go, the order is marked collected, and
+    // `identity_override` names who did it.
+    expect(posCan("owner", "discount")).toBe(false);
+    expect(posCan("owner", "override_verification")).toBe(true);
+  });
+});

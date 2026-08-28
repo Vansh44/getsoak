@@ -1,15 +1,9 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { TenderPanel } from "./tender-panel";
-import type { PosTender } from "@/app/actions/pos-sale-actions";
+import type { PosCustomer, PosTender } from "@/app/actions/pos-sale-actions";
 
-// The pad is where a cashier decides what physically happened to the money, so
-// these assert the WORDS and the ROUTE through it, not just that it renders.
-// The store owner tapped "UPI" expecting a gateway QR and completed a ₹99 sale
-// as two unverified records, then asked for a "split payment option" days after
-// unknowingly performing one — so naming and discoverability ARE the feature.
 function setup(over: Partial<Parameters<typeof TenderPanel>[0]> = {}) {
-  // Typed, so the call assertions below can read the tenders it was given.
   const onComplete = vi.fn<
     (
       tenders: PosTender[],
@@ -28,75 +22,176 @@ function setup(over: Partial<Parameters<typeof TenderPanel>[0]> = {}) {
   );
   return { onComplete };
 }
-const tile = (name: RegExp) => screen.getByRole("button", { name });
 
-describe("tender pad — the options screen", () => {
-  it("opens on a choice, not an amount box", () => {
-    setup();
-    expect(tile(/split payment/i)).toBeVisible();
-    // Nothing to type into until a method has been chosen.
-    expect(screen.queryByPlaceholderText(/amount/i)).toBeNull();
+const button = (name: RegExp) => screen.getByRole("button", { name });
+
+describe("checkout customer details", () => {
+  it("does not resolve while typing and submits one exact 10-digit mobile", async () => {
+    const onCustomer = vi.fn();
+    const onResolveCustomer = vi.fn(async () => ({
+      created: true,
+      customer: {
+        id: "pos_1",
+        name: "9876543210",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+    }));
+    setup({
+      customer: null,
+      onCustomer,
+      onResolveCustomer,
+      receiptEmail: "",
+      onReceiptEmail: vi.fn(),
+    });
+
+    expect(screen.getByRole("heading", { name: "Checkout" })).toBeVisible();
+    const mobile = screen.getByLabelText(/customer mobile number/i);
+    fireEvent.change(mobile, { target: { value: "9876543210123" } });
+    expect(mobile).toHaveValue("9876543210");
+    expect(onResolveCustomer).not.toHaveBeenCalled();
+    fireEvent.click(button(/^ok$/i));
+
+    await waitFor(() =>
+      expect(onResolveCustomer).toHaveBeenCalledWith("9876543210"),
+    );
+    expect(onResolveCustomer).toHaveBeenCalledTimes(1);
+    expect(onCustomer).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "pos_1" }),
+    );
+    expect(screen.getByText("Choose a payment method")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /continue to payment/i }),
+    ).toBeNull();
   });
 
-  it("names the merchant's own devices, not the payment rail", () => {
-    setup();
-    expect(tile(/card machine/i)).toBeVisible();
-    expect(tile(/upi app/i)).toBeVisible();
-    expect(screen.getAllByText(/can't verify this/i).length).toBe(2);
+  it("accepts only ten digits and never shows payment before resolution", () => {
+    const onResolveCustomer = vi.fn();
+    setup({
+      customer: null,
+      onCustomer: vi.fn(),
+      onResolveCustomer,
+      receiptEmail: "",
+      onReceiptEmail: vi.fn(),
+    });
+
+    const mobile = screen.getByLabelText(/customer mobile number/i);
+    fireEvent.change(mobile, { target: { value: "98a76-54" } });
+    expect(mobile).toHaveValue("987654");
+    expect(button(/^ok$/i)).toBeDisabled();
+    expect(onResolveCustomer).not.toHaveBeenCalled();
+    expect(screen.queryByText("Choose a payment method")).toBeNull();
   });
 
-  it("gives the gateway method a verb and a verified badge", () => {
-    setup();
-    expect(tile(/charge online/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /^online$/i })).toBeNull();
-    expect(screen.getByText(/verified with razorpay/i)).toBeVisible();
+  it("shows an already resolved customer's contact on payment", () => {
+    const customer: PosCustomer = {
+      id: "c1",
+      name: "Asha Rao",
+      phone: "9876543210",
+      email: "asha@example.com",
+      storeCredit: 0,
+    };
+    setup({
+      customer,
+      onCustomer: vi.fn(),
+      onResolveCustomer: vi.fn(),
+    });
+
+    expect(screen.getByText("Asha Rao")).toBeVisible();
+    expect(screen.getByText(/9876543210.*asha@example.com/)).toBeVisible();
+    expect(screen.getByText("Choose a payment method")).toBeVisible();
   });
 
-  it("shows the gateway tile DISABLED, with a reason, when none is connected", () => {
-    setup({ onTakeOnline: undefined });
-    // Hidden entirely, a merchant never learns from the till that it exists.
-    expect(screen.queryByRole("button", { name: /charge online/i })).toBeNull();
-    expect(screen.getByText(/charge online/i)).toBeVisible();
-    expect(screen.getByText(/connect a payment gateway/i)).toBeVisible();
+  it("keeps optional receipt and GST fields out of the common path", () => {
+    setup({
+      customer: {
+        id: "c1",
+        name: "Asha",
+        phone: "9876543210",
+        email: null,
+        storeCredit: 0,
+      },
+      onCustomer: vi.fn(),
+      onResolveCustomer: vi.fn(),
+      receiptEmail: "",
+      onReceiptEmail: vi.fn(),
+      gstEnabled: true,
+      gstin: "",
+      onGstin: vi.fn(),
+    });
+
+    expect(screen.queryByPlaceholderText("name@example.com")).toBeNull();
+    fireEvent.click(button(/add receipt email or gstin/i));
+    expect(screen.getByPlaceholderText("name@example.com")).toBeVisible();
+    expect(screen.getByPlaceholderText("22AAAAA0000A1Z5")).toBeVisible();
   });
 });
 
-describe("tender pad — paying in one method", () => {
-  it("★ offers NO amount box — the figure is not in question", () => {
+describe("payment method selection", () => {
+  it("shows a short, plain-language list and keeps split secondary", () => {
     setup();
-    fireEvent.click(tile(/card machine/i));
-    // An editable amount here is how a full payment silently becomes a part
-    // one: a single keystroke turned a ₹599 charge into ₹59 on a real till,
-    // with a part-payment banner as the only warning.
-    expect(screen.queryByPlaceholderText(/amount/i)).toBeNull();
-    // The action carries the figure AND says the sale ends here.
-    expect(tile(/complete sale · ₹500/i)).toBeVisible();
+    expect(button(/^cash/i)).toBeVisible();
+    expect(button(/^card terminal/i)).toBeVisible();
+    expect(button(/^upi \/ qr/i)).toBeVisible();
+    expect(button(/^razorpay/i)).toBeVisible();
+    expect(screen.getByText(/after your terminal approves/i)).toBeVisible();
+    expect(button(/^split payment/i)).toBeVisible();
+    expect(screen.queryByText(/record a payment already taken/i)).toBeNull();
   });
 
-  it("★ shows ONE action, not a charge plus a dead confirm", async () => {
+  it("omits Razorpay when no gateway is connected", () => {
+    setup({ onTakeOnline: undefined });
+    expect(screen.queryByRole("button", { name: /^razorpay/i })).toBeNull();
+    expect(screen.queryByText(/connect a payment gateway/i)).toBeNull();
+  });
+});
+
+describe("one-method payments", () => {
+  it("asks for an explicit terminal confirmation without an amount field", async () => {
     const { onComplete } = setup();
-    fireEvent.click(tile(/card machine/i));
-    // Previously: "Add ₹500" plus a disabled "Complete sale" underneath — two
-    // buttons for a sale with one remaining action.
-    expect(
-      screen.queryByRole("button", { name: /^complete sale$/i }),
-    ).toBeNull();
-    fireEvent.click(tile(/complete sale · ₹500/i));
-    await waitFor(() => expect(onComplete).toHaveBeenCalled());
-    // Staged AND submitted from the single tap.
+    fireEvent.click(button(/^card terminal/i));
+
+    expect(screen.queryByPlaceholderText(/up to/i)).toBeNull();
+    expect(screen.getByText(/confirm the terminal approved/i)).toBeVisible();
+    fireEvent.click(button(/^complete sale$/i));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete.mock.calls[0][0]).toEqual([
       { method: "card", amount: 500 },
     ]);
   });
 
-  it("locks the gateway amount too, and charges it in one tap", () => {
-    setup();
-    fireEvent.click(tile(/charge online/i));
-    expect(screen.queryByPlaceholderText(/amount/i)).toBeNull();
-    expect(tile(/charge ₹500/i)).toBeVisible();
+  it("collects cash received and previews change before completing", async () => {
+    const { onComplete } = setup();
+    fireEvent.click(button(/^cash/i));
+    const amount = screen.getByLabelText(/cash received/i);
+    expect(amount).toHaveValue("500");
+    fireEvent.change(amount, { target: { value: "600" } });
+    expect(screen.getByText("Give ₹100 change")).toBeVisible();
+    fireEvent.click(button(/^complete sale$/i));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toEqual([
+      { method: "cash", amount: 600, tendered: 600 },
+    ]);
   });
 
-  it("keeps a one-tap tender through manager approval", async () => {
+  it("charges and verifies a Razorpay payment before completing", async () => {
+    const onTakeOnline = vi.fn(async () => ({ reference: "pay_verified" }));
+    const { onComplete } = setup({ onTakeOnline });
+    fireEvent.click(button(/^razorpay/i));
+    expect(screen.queryByPlaceholderText(/up to/i)).toBeNull();
+    fireEvent.click(button(/^charge ₹500$/i));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onTakeOnline).toHaveBeenCalledWith(500);
+    expect(onComplete.mock.calls[0][0]).toEqual([
+      { method: "razorpay", amount: 500, reference: "pay_verified" },
+    ]);
+  });
+
+  it("keeps a recorded tender while manager approval is collected", async () => {
     const onComplete = vi
       .fn()
       .mockResolvedValueOnce({
@@ -110,11 +205,11 @@ describe("tender pad — paying in one method", () => {
     }));
     setup({ onComplete, onVerifyManager });
 
-    fireEvent.click(tile(/card machine/i));
-    fireEvent.click(tile(/complete sale · ₹500/i));
+    fireEvent.click(button(/^card terminal/i));
+    fireEvent.click(button(/^complete sale$/i));
     const pin = await screen.findByPlaceholderText(/manager's 8-digit pin/i);
     fireEvent.change(pin, { target: { value: "12345678" } });
-    fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+    fireEvent.click(button(/^approve$/i));
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     expect(onComplete.mock.calls[1]).toEqual([
@@ -131,85 +226,84 @@ describe("tender pad — paying in one method", () => {
     const onTakeOnline = vi.fn(async () => ({ reference: "pay_captured" }));
     setup({ onComplete, onTakeOnline });
 
-    fireEvent.click(tile(/charge online/i));
-    fireEvent.click(tile(/charge ₹500/i));
+    fireEvent.click(button(/^razorpay/i));
+    fireEvent.click(button(/^charge ₹500$/i));
 
     expect(
       await screen.findByText(/couldn't complete the sale/i),
     ).toBeVisible();
-    expect(screen.getByText("Charged online")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: /^complete sale$/i }));
+    expect(screen.getByText("Razorpay")).toBeVisible();
+    fireEvent.click(button(/^complete sale$/i));
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     expect(onComplete.mock.calls[1][0]).toEqual([
       { method: "razorpay", amount: 500, reference: "pay_captured" },
     ]);
     expect(onTakeOnline).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the amount editable for CASH, which can be over-handed", () => {
-    setup();
-    fireEvent.click(tile(/^cash/i));
-    // ₹600 for a ₹500 sale is ordinary, and change has to come from somewhere.
-    expect(screen.getByPlaceholderText(/amount/i)).toBeVisible();
-  });
-
-  it("can be backed out of without losing the sale", () => {
-    setup();
-    fireEvent.click(tile(/upi app/i));
-    fireEvent.click(tile(/change/i));
-    expect(tile(/split payment/i)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /remove razorpay payment/i }),
+    ).toBeNull();
+    expect(screen.getByText("Verified")).toBeVisible();
   });
 });
 
-describe("tender pad — splitting", () => {
-  it("will not settle the whole sale from a blank box", () => {
+describe("split payments", () => {
+  it("uses a method → amount → next method loop", () => {
     setup();
-    fireEvent.click(tile(/split payment/i));
-    // Blank means "I haven't said how much yet", never "all of it" — so the
-    // box is NOT prefilled here, and the button carries no figure.
-    expect(screen.getByPlaceholderText(/amount/i)).toHaveValue("");
-    expect(tile(/^add$/i)).toBeDisabled();
-    expect(screen.getByText(/enter the part being paid/i)).toBeVisible();
-  });
+    fireEvent.click(button(/^split payment/i));
+    expect(
+      screen.getByRole("heading", { name: "Split payment" }),
+    ).toBeVisible();
+    expect(screen.getByText(/choose how to collect ₹500/i)).toBeVisible();
+    expect(screen.queryByPlaceholderText(/up to/i)).toBeNull();
 
-  it("previews the remainder before the cashier commits", () => {
-    setup();
-    fireEvent.click(tile(/split payment/i));
-    fireEvent.change(screen.getByPlaceholderText(/amount/i), {
-      target: { value: "300" },
-    });
-    expect(screen.getByText(/part payment/i)).toBeVisible();
-    expect(screen.getByText(/200 still to pay/i)).toBeVisible();
-  });
+    fireEvent.click(button(/^cash/i));
+    const amount = screen.getByLabelText(/cash received/i);
+    expect(amount).toHaveValue("");
+    expect(button(/^enter amount$/i)).toBeDisabled();
+    fireEvent.change(amount, { target: { value: "300" } });
+    fireEvent.click(button(/^add ₹300$/i));
 
-  it("returns to the options grid for whatever is still owed", () => {
-    setup();
-    fireEvent.click(tile(/split payment/i));
-    fireEvent.change(screen.getByPlaceholderText(/amount/i), {
-      target: { value: "300" },
-    });
-    fireEvent.click(tile(/add ₹300/i));
-    // ₹300 cash + ₹200 online — the case the owner described.
-    expect(screen.getByText("Remaining")).toBeVisible();
     expect(screen.getByText("₹200")).toBeVisible();
-    expect(tile(/charge online/i)).toBeVisible();
+    expect(screen.getByText(/choose how to collect ₹200/i)).toBeVisible();
+    expect(screen.getAllByText("Cash")).toHaveLength(2);
   });
 
-  it("names a staged tender the way its tile is named", () => {
-    setup();
-    // A PART payment goes through Split — a method tile pays the whole sale
-    // and offers no amount box at all.
-    fireEvent.click(tile(/split payment/i));
-    fireEvent.click(tile(/upi app/i));
-    fireEvent.change(screen.getByPlaceholderText(/amount/i), {
+  it("finishes only after the cashier reviews all payment legs", async () => {
+    const { onComplete } = setup();
+    fireEvent.click(button(/^split payment/i));
+    fireEvent.click(button(/^cash/i));
+    fireEvent.change(screen.getByLabelText(/cash received/i), {
       target: { value: "300" },
     });
-    fireEvent.click(tile(/add ₹300/i));
-    // Was a raw `capitalize` of the enum, so the row said "Upi" while the
-    // control it came from said something else. Two matches IS the assertion:
-    // back on the options grid, the tile and the staged row use one name.
-    expect(screen.getAllByText("UPI app")).toHaveLength(2);
-    expect(screen.queryByText("Upi")).toBeNull();
+    fireEvent.click(button(/^add ₹300$/i));
+
+    fireEvent.click(button(/^upi \/ qr/i));
+    fireEvent.change(screen.getByLabelText(/^amount$/i), {
+      target: { value: "200" },
+    });
+    fireEvent.click(button(/^add ₹200$/i));
+
+    expect(screen.getByText("Payment complete")).toBeVisible();
+    expect(screen.getAllByText("UPI / QR").length).toBeGreaterThan(0);
+    expect(onComplete).not.toHaveBeenCalled();
+    fireEvent.click(button(/^complete sale$/i));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onComplete.mock.calls[0][0]).toEqual([
+      { method: "cash", amount: 300, tendered: 300 },
+      { method: "upi", amount: 200 },
+    ]);
+  });
+
+  it("turns a short store-credit balance into a clear split", () => {
+    setup({ storeCredit: 120 });
+    fireEvent.click(button(/^store credit/i));
+    expect(screen.getByText(/₹380 will still be due/i)).toBeVisible();
+    fireEvent.click(button(/^add ₹120$/i));
+    expect(
+      screen.getByRole("heading", { name: "Split payment" }),
+    ).toBeVisible();
+    expect(screen.getByText(/choose how to collect ₹380/i)).toBeVisible();
   });
 });

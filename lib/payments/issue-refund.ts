@@ -51,12 +51,24 @@ export type IssueRefundMethod =
   | "upi"
   | "store_credit";
 
+/**
+ * Payment statuses that mean money was captured at some point.
+ *
+ * The two refunded states are DERIVED from settled refunds, so they are proof
+ * of capture rather than evidence against it. See the gateway guard below.
+ */
+const PAID_FOR_REFUND = new Set(["paid", "partially_refunded", "refunded"]);
+
 export interface IssueRefundInput {
   storeId: string;
   orderId: string;
   /** Required for `store_credit` — there has to be somebody to credit. A
    *  walk-in with no account can't be given a balance. */
   customerId?: string | null;
+  /** A server-verified counter payment id. POS split payments keep gateway
+   *  ids on order_payments rather than the order row; passing that exact
+   *  original reference lets a split return go back to its real source. */
+  gatewayPaymentId?: string | null;
   /** Omit to refund everything still refundable. */
   amount?: number;
   method: IssueRefundMethod;
@@ -162,13 +174,29 @@ export async function issueRefund(
       };
 
       if (input.method === "razorpay") {
-        if (order.payment_method !== "razorpay") {
+        if (order.payment_method !== "razorpay" && !input.gatewayPaymentId) {
           return {
             error:
               "This order wasn't paid online, so it can't be refunded through the gateway.",
           };
         }
-        if (order.payment_status !== "paid") {
+        // ★★ "WAS IT EVER PAID?", NOT "IS IT STILL FULLY PAID?".
+        //
+        // `partially_refunded` and `refunded` are DERIVED by
+        // syncOrderRefundState from refunds that actually settled, so both of
+        // them PROVE the order was captured — they are the one thing that can
+        // never mean "never paid". Comparing against `paid` alone therefore
+        // refused a gateway refund the moment any earlier refund landed, and
+        // that fires INSIDE a single split return: the till settles the cash
+        // leg, syncOrderRefundState writes `partially_refunded`, and the
+        // Razorpay leg for the same return is then rejected with "This order
+        // was never paid" — goods restocked, card never credited. It also
+        // blocked every second partial gateway refund on one order.
+        //
+        // The real ceiling is refundableAmount below, which already excludes
+        // what has gone back; a fully-refunded order fails there with an
+        // accurate message instead of a false one here.
+        if (!PAID_FOR_REFUND.has(order.payment_status ?? "")) {
           return {
             error: "This order was never paid, so there's nothing to refund.",
           };
@@ -298,7 +326,7 @@ export async function issueRefund(
     };
   }
 
-  let paymentId = order.razorpay_payment_id;
+  let paymentId = input.gatewayPaymentId ?? order.razorpay_payment_id;
   if (!paymentId && order.razorpay_order_id) {
     const payments = await rzpFetchOrderPayments(
       gateway.creds,

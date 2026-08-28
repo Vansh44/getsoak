@@ -560,23 +560,45 @@ and removes delivery, shipment and fulfilment controls. The server actions also
 refuse to move a POS sale into a fulfilment state or create shipment work for
 it, so this is a channel invariant rather than presentation alone.
 
-That gap is now closed by the identity work below: the till can record a walk-in,
-and their later signup adopts the row.
+That gap is now closed by the identity work below: every new register checkout
+starts with a mobile number, and a later signup can adopt the till-created row.
 
 ### What Shopify does
 
-1. Cart → **Add customer** → search, or **create one inline** (name, email,
-   phone — all optional except a name).
-2. The sale completes with or without a customer. A walk-in is a first-class
-   outcome, never a blocked one.
-3. At payment → **receipt options**: print, email, text, none. Contact entered
-   _there_ attaches to the sale even with no customer record.
+1. Cart → **Charge** → type the shopper's 10-digit mobile number → **OK**.
+2. Only that submit performs an exact lookup. An existing customer's name,
+   email and store credit are loaded; a new number creates an unclaimed
+   customer automatically.
+3. The till advances straight to the payment methods. The resolved identity
+   stays visible and can be changed until the first tender is staged.
 
-**All three SHIPPED.** Search, inline create, a sale that completes with or
-without a customer, and the receipt-contact box on the tender panel — see
-"SHIPPED — receipt contact" below. SMS as a receipt channel is Step 5, not this
-step: no POS receipt path sends over SMS today (there is no
-`lib/pos/receipt-delivery.ts`).
+**SHIPPED, corrected 2026-08-28.** The first version copied Shopify's broad
+search/create panel too literally and queried while the cashier typed. The
+register now uses the faster phone-first path above: digits only, exactly ten,
+one explicit database lookup, automatic create, and no second Continue click.
+Receipt email and GSTIN remain available behind one optional-details control on
+the Payment screen. SMS as a receipt channel is still Step 5; the OTP below is
+identity verification, not receipt delivery.
+
+**POS-000023 hardening, shipped 2026-08-29.** Customer capture is now a server
+invariant, not merely the intended screen: `placePosSale` refuses a missing
+customer before pricing, stock or payment work, so a stale client cannot create
+another anonymous sale. Product photos remain on the cart lines. The pickup
+counter receives the same safe Razorpay configuration and opens the verified
+gateway flow after OTP. POS Sales now includes completed website pickups at the
+current shop and its receipt view shows customer, source, completion, line,
+total and tender detail.
+
+The counter return is now the settings-driven after-sales path requested with
+POS-000023. The store master switch, website-in-store switch, location
+capability, final-sale/window rules, required reason, merchant-fault fee waiver
+and restocking percentage are enforced again server-side. Refund money follows
+the saved original tender; split payments allocate proportionally rather than
+offering a cashier-selected conversion to cash. With exchanges enabled, the
+return/refund is recorded after OTP and Sell opens with the same customer locked
+for a normal fully tendered replacement; the return links that new order. The
+replacement can be any catalog item, and abandoning it never erases a return or
+refund that already happened.
 
 ### Why creating is hard here
 
@@ -648,16 +670,22 @@ one account taking over another's.
 **★ NEVER THROWS, at both layers.** A failed claim costs a link to in-store
 history; a thrown one would cost the shopper their signup.
 
-**UI.** The create form opens from the EMPTY search result, not a second button —
-"Add customer" beside the search box invites a duplicate of someone already on
-file. The typed query seeds whichever field it looks like. `sell`, not a manager
-grant: recording who bought something is part of ringing up a sale.
+**UI.** Selecting **Charge** opens one focused mobile-number step. The input
+accepts digits only, stops at ten, and enables **OK** only for a valid Indian
+mobile number. Typing is entirely local; **OK** performs the first database
+request. An exact match loads the customer's name, email and store credit. A new
+number creates a phone-only unclaimed customer and attaches it in the same
+action; a concurrent duplicate insert falls back to the winning existing row.
+Both paths advance directly to Payment, where the attached identity remains
+visible and **Change** returns to the number step before money is staged.
+Recording who bought something is part of ringing up a sale, so this is `sell`,
+not a manager grant.
 
-**SHIPPED — receipt contact.** An optional email box on the tender panel
+**SHIPPED — receipt contact.** An optional email box behind **Add receipt email
+or GSTIN** on the Payment screen
 (`lib/email/pos-receipt.ts`). It deliberately does NOT feed the notification
-spine: that routes an EVENT to IDENTIFIED recipients honouring preferences and
-digests, and a walk-in has no identity — no `users` row, so no inbox, no
-preferences, no digest. It is still a `sendEmail` call, so it lands in
+spine: that routes an EVENT to an identified customer's saved address while the
+receipt box may contain a one-sale address. It is still a `sendEmail` call, so it lands in
 `email_logs` and the CI send-coverage guard stays satisfied.
 `shouldSendDirectReceipt` (pure) keeps it to exactly ONE receipt: it fires only
 where the fan-out will not — no attached customer, or one with no address on
@@ -665,10 +693,24 @@ file, read in the same query as the ownership check. A bad address is dropped
 rather than refused, because this runs after the money is taken. SMS waits for
 Step 5.
 
-**Acceptance:** PS-C.25–C.43 — **written, not yet exercised in a browser.**
-117 unit tests cover the pure rules, the claim statement, the actions, the
-signup ordering and the receipt; nobody has yet rung up a walk-in on a real
-till.
+**Pickup and return verification, shipped 2026-08-28.** Before a parcel leaves
+the shop or a return is committed, StoreMink sends an OTP to the mobile saved on
+that exact order. Six digits verify automatically. The proof is short-lived,
+HTTP-only and bound to the order, purpose, store, location and operator; the
+mutation checks it again and consumes it after success. Resend/attempt limits,
+expired or wrong codes, changed/invalid order state, missing phone, missing
+Firebase configuration and direct action calls all fail closed. Firebase may
+create a phone-only identity while transporting an OTP for a new number, so the
+server deletes only a just-created identity with no StoreMink profile after the
+proof is saved; this prevents the counter check from blocking that customer's
+future signup.
+
+**Acceptance:** PS-C.25–C.47 + PS-PAY.1–PAY.4 + PS-8.4a–8.4d +
+PS-11.2a–11.2d + PS-C.48–C.50 + PS-8.4e + PS-11.11–11.18 — **written.** Focused tests cover lookup/create races, input
+gating, the customer-to-payment transition, signed OTP proof scope, action
+enforcement, throttling, temporary Firebase identity cleanup, cart imagery,
+collected-pickup Sales detail, pickup gateway availability, policy eligibility,
+original split-tender allocation and exchange linking.
 
 ---
 
@@ -1472,13 +1514,24 @@ already post `card`, so nothing new is reachable. The damage is to TRUTHFULNESS
   — Razorpay Standard Checkout on the till, then confirmation before the sale
   completes. The merchant keeps 0% surcharge; the money settles directly to
   them, exactly as online checkout does.
-- The tender panel gains the method, gated on a live gateway — a control that
+- The payment list gains the method, gated on a live gateway — a control that
   always fails in front of a customer is worse than no control (the
   `RegisterConfig.canDiscount` rule).
 - Card/UPI stay external-terminal records and the panel now SAYS so
   ("Recorded from your own terminal"); Online says "Charged and verified with
   the gateway". Three buttons that looked equally trustworthy were the reason
   nobody noticed only one of them proved anything.
+
+**✅ CHECKOUT CLARITY FOLLOW-UP (2026-08-27).** The tender grid and its
+"take now" / "record already taken" grouping still made cashiers parse payment
+architecture at the counter. Payment is now a short, single-column list with
+method-specific next screens: cash asks for notes and shows change; card
+terminal and UPI / QR ask for an explicit external-device confirmation; Razorpay
+opens and verifies its own payment. An unavailable gateway is omitted from the
+till instead of becoming a disabled explanation tile. Split payment follows the
+Shopify sequence directly — choose a method, enter that part, review the amount
+left, then choose the next method — and completes only after all legs are shown
+together. No tender, settlement, gateway or inventory rule changed underneath.
 
 **★★ NO QR-CODE API, DELIBERATELY.** A UPI QR is the natural Indian counter
 flow and Razorpay has an API for it — but it is provider surface this codebase

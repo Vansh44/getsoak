@@ -19,14 +19,13 @@ import {
   Camera,
   Package,
   Database,
-  UserPlus,
-  UserRound,
   LayoutGrid,
 } from "lucide-react";
 import {
   confirmPosGatewayPayment,
   lookupProducts,
   placePosSale,
+  resolvePosCustomerByPhone,
   startPosGatewayPayment,
   verifyManagerPin,
   type PosCatalogItem,
@@ -35,7 +34,6 @@ import {
   type RegisterConfig,
 } from "@/app/actions/pos-sale-actions";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
-import { CustomerPanel } from "./customer-panel";
 // posLock/endSession moved to the rail (app/pos/pos-nav.tsx) — locking is the
 // same act on every screen, and it was hand-rolled identically in two places.
 import { isCameraScanSupported } from "@/lib/pos/barcode-camera";
@@ -69,6 +67,7 @@ import {
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
 import { posTotals } from "@/lib/pos/totals";
+import type { PosExchangeContext } from "@/app/actions/pos-return-actions";
 
 export interface CartLine {
   key: string;
@@ -76,6 +75,7 @@ export interface CartLine {
   variantId: string | null;
   name: string;
   variantName: string | null;
+  image: string | null;
   unitPrice: number;
   quantity: number;
   /** Markdown on this line only, in rupees — for one damaged/expiring unit.
@@ -98,9 +98,13 @@ const subscribeNever = () => () => {};
 export function SellClient({
   config,
   initialItems,
+  exchange,
+  exchangeError,
 }: {
   config: RegisterConfig;
   initialItems: PosCatalogItem[];
+  exchange?: PosExchangeContext | null;
+  exchangeError?: string | null;
 }) {
   const router = useRouter();
   // The local catalog: IndexedDB-backed, background-synced, seeded with the
@@ -120,10 +124,13 @@ export function SellClient({
   // Disambiguation when one barcode maps to several variants.
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  // Customer attach (optional) + the B2B GSTIN that prints on the invoice.
-  const [customer, setCustomer] = useState<PosCustomer | null>(null);
+  // Customer is resolved once, by exact mobile, after Charge is selected.
+  const [exchangeActive, setExchangeActive] =
+    useState<PosExchangeContext | null>(exchange ?? null);
+  const [customer, setCustomer] = useState<PosCustomer | null>(
+    exchange?.customer ?? null,
+  );
   const [gstin, setGstin] = useState("");
-  const [customerOpen, setCustomerOpen] = useState(false);
   const [receiptEmail, setReceiptEmail] = useState("");
   const [parked, setParked] = useState<ParkedSale[]>([]);
   const [parkedOpen, setParkedOpen] = useState(false);
@@ -192,15 +199,10 @@ export function SellClient({
   );
   const scanRef = useRef<HTMLInputElement>(null);
   // Every overlay is listed: each one owns an input of its own (tender amount,
-  // customer search) and pulling focus out from under it 80 ms later would make
+  // customer mobile) and pulling focus out from under it 80 ms later would make
   // that field impossible to type in.
   const overlayOpen =
-    tendering ||
-    !!choices ||
-    cameraOpen ||
-    layoutOpen ||
-    customerOpen ||
-    !!saleId;
+    tendering || !!choices || cameraOpen || layoutOpen || !!saleId;
   const refocus = useCallback(() => {
     if (touchPrimary || overlayOpen) return;
     scanRef.current?.focus();
@@ -242,6 +244,7 @@ export function SellClient({
           variantId: it.variantId,
           name: it.name,
           variantName: it.variantName,
+          image: it.image,
           unitPrice: it.price,
           taxClassId: it.taxClassId ?? null,
           quantity: 1,
@@ -544,6 +547,7 @@ export function SellClient({
       customerId: customer?.id ?? null,
       customerGstin: gstin.trim() || null,
       receiptEmail: receiptEmail.trim() || null,
+      exchangeReturnId: exchangeActive?.returnId ?? null,
     });
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
@@ -560,7 +564,12 @@ export function SellClient({
     setReceiptEmail("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
-    router.refresh();
+    if (exchangeActive) {
+      setExchangeActive(null);
+      router.replace("/pos/sell", { scroll: false });
+    } else {
+      router.refresh();
+    }
     return {};
   };
 
@@ -617,6 +626,20 @@ export function SellClient({
           </button>
         )}
       </header>
+
+      {(exchangeActive || exchangeError) && (
+        <div
+          className={`shrink-0 border-b px-4 py-2.5 text-sm ${
+            exchangeActive
+              ? "border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]"
+              : "border-[var(--pos-danger-border)] bg-[var(--pos-danger-soft)] text-[var(--pos-danger)]"
+          }`}
+        >
+          {exchangeActive
+            ? `Exchange for ${exchangeActive.originalLabel}: ${exchangeActive.customer.name} is attached. Add the replacement, then settle its total.`
+            : exchangeError}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* Catalog */}
@@ -776,6 +799,20 @@ export function SellClient({
                   className="mb-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3"
                 >
                   <div className="flex items-start justify-between gap-2">
+                    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[var(--pos-surface-2)]">
+                      {l.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={l.image}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[var(--pos-ink-3)]">
+                          <Package className="h-5 w-5" strokeWidth={1.5} />
+                        </div>
+                      )}
+                    </div>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">
                         {l.name}
@@ -868,34 +905,6 @@ export function SellClient({
           </div>
 
           <div className="shrink-0 border-t border-[var(--pos-border)] p-3">
-            {/* Optional: a sale completes fine without a customer. */}
-            <button
-              type="button"
-              onClick={() => setCustomerOpen(true)}
-              className="mb-3 flex w-full items-center gap-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--pos-surface-2)]"
-            >
-              {customer ? (
-                <>
-                  <UserRound className="h-4 w-4 shrink-0 text-[var(--pos-ok)]" />
-                  <span className="min-w-0 flex-1 truncate">
-                    {customer.name}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <UserPlus className="h-4 w-4 shrink-0 text-[var(--pos-ink-3)]" />
-                  <span className="flex-1 text-[var(--pos-ink-2)]">
-                    Add customer
-                  </span>
-                </>
-              )}
-              {gstin && (
-                <span className="shrink-0 rounded bg-[var(--pos-surface-2)] px-1.5 py-0.5 text-[10px] tracking-wide text-[var(--pos-ink-2)]">
-                  GST
-                </span>
-              )}
-            </button>
-
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="text-[var(--pos-ink-2)]">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>
@@ -947,7 +956,7 @@ export function SellClient({
             <div className="mt-2 flex gap-2">
               <button
                 type="button"
-                disabled={cart.length === 0 || parking}
+                disabled={cart.length === 0 || parking || !!exchangeActive}
                 onClick={handlePark}
                 className="flex-1 rounded-xl bg-[var(--pos-surface-2)] py-2.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
               >
@@ -1022,17 +1031,6 @@ export function SellClient({
         />
       )}
 
-      {customerOpen && (
-        <CustomerPanel
-          customer={customer}
-          gstin={gstin}
-          gstEnabled={config.gstEnabled}
-          onPick={setCustomer}
-          onGstin={setGstin}
-          onClose={() => setCustomerOpen(false)}
-        />
-      )}
-
       {parkedOpen && (
         <ParkedPanel
           sales={parked}
@@ -1055,6 +1053,7 @@ export function SellClient({
                   variantId: l.variantId,
                   name: item.name,
                   variantName: item.variantName ?? null,
+                  image: item.image,
                   unitPrice: item.price,
                   quantity: l.quantity,
                   lineDiscount: l.lineDiscount ?? 0,
@@ -1086,8 +1085,14 @@ export function SellClient({
           onComplete={completeSale}
           receiptEmail={receiptEmail}
           onReceiptEmail={setReceiptEmail}
-          // Rides along with the attached customer — null for a walk-in, which
-          // is what hides the option entirely.
+          customer={customer}
+          customerLocked={!!exchangeActive}
+          onCustomer={setCustomer}
+          onResolveCustomer={resolvePosCustomerByPhone}
+          gstin={gstin}
+          onGstin={setGstin}
+          gstEnabled={config.gstEnabled}
+          // Rides along with the resolved customer.
           storeCredit={customer?.storeCredit ?? null}
           // Passed only when the store has a live gateway, so the method never
           // renders as a control that would fail in front of a customer.

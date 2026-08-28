@@ -4,13 +4,24 @@ import { makeDbMock } from "./_test-helpers";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/pos/operator", () => ({ resolvePosOperator: vi.fn() }));
+vi.mock("@/lib/pos/customer-verification", () => ({
+  gateCustomerVerification: vi.fn(async () => ({
+    ok: true,
+    overridden: false,
+  })),
+  clearCustomerVerification: vi.fn(async () => undefined),
+}));
 vi.mock("./pos-shift-actions", () => ({
   currentShiftIdFor: vi.fn(async () => "shift-1"),
 }));
 vi.mock("@/lib/notifications/record", () => ({ emitEvent: vi.fn() }));
+vi.mock("@/lib/pos/audit", () => ({ posAudit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/inventory/alerts", () => ({ reportStockChanges: vi.fn() }));
 vi.mock("@/lib/payments/issue-refund", () => ({
   issueRefund: vi.fn(async () => ({ refundId: "rf-1", status: "completed" })),
+}));
+vi.mock("@/lib/returns/counter-policy", () => ({
+  getCounterReturnPolicy: vi.fn(),
 }));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
@@ -21,7 +32,14 @@ vi.mock("@/lib/db/client", () => ({
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { emitEvent } from "@/lib/notifications/record";
 import { issueRefund } from "@/lib/payments/issue-refund";
-import { getReturnableSale, processReturn } from "./pos-return-actions";
+import {
+  findOrderForReturn,
+  getReturnableSale,
+  processReturn,
+} from "./pos-return-actions";
+import { gateCustomerVerification } from "@/lib/pos/customer-verification";
+import { posAudit } from "@/lib/pos/audit";
+import { getCounterReturnPolicy } from "@/lib/returns/counter-policy";
 
 const MANAGER = {
   role: "manager" as const,
@@ -41,6 +59,17 @@ function seedSale(
     /** Refunds already recorded, which the in-transaction cap reads. */
     existingRefunds?: { amount: number; status: string; method: string }[];
     storeCreditUsed?: number;
+    paymentRows?: Array<{
+      method: string;
+      amount: number;
+      change_due: number | null;
+      reference: string | null;
+    }>;
+    productReturnable?: boolean;
+    /** Anything other than a `pos` sale rung at `loc-1` is BORIS. */
+    salesChannel?: string;
+    locationId?: string | null;
+    paymentMethod?: string;
   } = {},
 ) {
   const order = {
@@ -51,12 +80,15 @@ function seedSale(
     total: 262.5,
     discount: 0,
     store_credit_used: opts.storeCreditUsed ?? 0,
-    payment_method: "cash",
+    payment_method: opts.paymentMethod ?? "cash",
     payment_status: "paid",
-    // Rung at THIS register — the ordinary till case, which stays
-    // returnable here regardless of the BORIS settings.
-    location_id: "loc-1",
-    sales_channel: "pos",
+    // Rung at THIS register — the grandfathered path that skips the BORIS
+    // gates and, when the store has never switched returns on, the policy too.
+    location_id: opts.locationId === undefined ? "loc-1" : opts.locationId,
+    sales_channel: opts.salesChannel ?? "pos",
+    status: "completed",
+    delivered_at: null,
+    collected_at: null,
   };
   const items = [
     {
@@ -70,6 +102,8 @@ function seedSale(
       total: 200,
       line_discount: 0,
       tax_amount: 10,
+      product_returnable: opts.productReturnable ?? true,
+      product_window: null,
     },
     {
       id: "li-b",
@@ -82,6 +116,8 @@ function seedSale(
       total: 50,
       line_discount: 0,
       tax_amount: 2.5,
+      product_returnable: true,
+      product_window: null,
     },
   ];
   const prior = opts.prior ?? [];
@@ -91,6 +127,7 @@ function seedSale(
       [order],
       items,
       prior,
+      opts.paymentRows ?? [],
       // processReturn's write transaction: FOR UPDATE lock → items → prior
       // → refunds already recorded (the money cap).
       [order],
@@ -104,6 +141,19 @@ function seedSale(
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolvePosOperator).mockResolvedValue(MANAGER as any);
+  vi.mocked(gateCustomerVerification).mockResolvedValue({
+    ok: true,
+    overridden: false,
+  });
+  vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+    enabled: true,
+    allowInStore: true,
+    allowExchanges: true,
+    requireReason: false,
+    windowDays: 365,
+    restockingFeePercent: 0,
+    locationAccepts: true,
+  });
   seedSale();
 });
 
@@ -137,9 +187,159 @@ describe("getReturnableSale", () => {
     // store AND location equality, alongside the order id.
     expect(dbHolder.current.calls.where.length).toBeGreaterThan(0);
   });
+
+  // ★★ `returns.enabled` DEFAULTS OFF and the till has taken returns of its own
+  // sales since pos_12, so the master switch must not reach them: gating it
+  // there removes a working capability from every existing POS merchant on
+  // deploy, with no migration to restore it (roadmap invariant 1).
+  describe("★ the master switch governs BORIS, never a sale rung here", () => {
+    const OFF = {
+      enabled: false,
+      allowInStore: false,
+      allowExchanges: false,
+      requireReason: true,
+      windowDays: 7,
+      restockingFeePercent: 0,
+      locationAccepts: false,
+    };
+
+    it("still takes back a sale rung at this counter", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      const { sale, error } = await getReturnableSale("o1");
+      expect(error).toBeUndefined();
+      expect(sale?.lines.map((l) => l.remaining)).toEqual([2, 1]);
+    });
+
+    it("runs it under LEGACY semantics, not the registry defaults", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+        ...OFF,
+        // Values a merchant never chose. None of them may apply.
+        requireReason: true,
+        restockingFeePercent: 20,
+        allowExchanges: true,
+        windowDays: 7,
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale).toMatchObject({
+        requireReason: false,
+        restockingFeePercent: 0,
+        allowExchanges: false,
+      });
+    });
+
+    it("★ a 7-day default window can't expire a till return it used to accept", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      // The seeded sale is from 2026-07-30 — well outside 7 days.
+      vi.setSystemTime(new Date("2026-09-30T10:00:00Z"));
+      const { sale } = await getReturnableSale("o1");
+      vi.useRealTimers();
+      expect(sale?.lines.every((l) => l.eligible)).toBe(true);
+    });
+
+    it("★ but still refuses a BROUGHT-IN order — that capability IS new", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue(OFF);
+      seedSale({ salesChannel: "online", locationId: null });
+      expect((await getReturnableSale("o1")).error).toMatch(
+        /returns are switched off/i,
+      );
+    });
+
+    it("★ and the switch still applies in full once it is ON", async () => {
+      vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+        ...OFF,
+        enabled: true,
+        allowInStore: true,
+        locationAccepts: true,
+        requireReason: true,
+        restockingFeePercent: 20,
+      });
+      const { sale } = await getReturnableSale("o1");
+      expect(sale).toMatchObject({
+        requireReason: true,
+        restockingFeePercent: 20,
+      });
+    });
+  });
+
+  it("marks a final-sale product ineligible at the till", async () => {
+    seedSale({ productReturnable: false });
+    const { sale } = await getReturnableSale("o1");
+    expect(sale?.lines[0]).toMatchObject({
+      eligible: false,
+      blockedCopy: expect.stringMatching(/final sale/i),
+    });
+  });
+
+  it("reads split tender rows instead of offering an arbitrary cash refund", async () => {
+    seedSale({
+      paymentRows: [
+        { method: "cash", amount: 62.5, change_due: 0, reference: null },
+        { method: "card", amount: 200, change_due: null, reference: "T-1" },
+      ],
+    });
+    const { sale } = await getReturnableSale("o1");
+    expect(sale?.refundRoute).toMatchObject({
+      method: "original",
+      counterChoice: false,
+    });
+    expect(sale?.refundTenders.map((tender) => tender.method)).toEqual([
+      "cash",
+      "card",
+    ]);
+  });
+});
+
+describe("findOrderForReturn", () => {
+  it("returns a customer-linked POS receipt found by the submitted phone", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [
+          {
+            id: "o1",
+            order_ref: "ORD1",
+            receipt_no: "POS-000007",
+            created_at: "2026-08-29T10:00:00Z",
+            total: 262.5,
+            payment_method: "cash",
+            location_id: "loc-1",
+            sales_channel: "pos",
+          },
+        ],
+      ],
+    });
+
+    const result = await findOrderForReturn("9814");
+
+    expect(result).toEqual({
+      results: [
+        expect.objectContaining({
+          orderId: "o1",
+          label: "ORD1",
+          broughtIn: false,
+        }),
+      ],
+    });
+    expect(dbHolder.current.calls.leftJoin).toHaveLength(1);
+  });
 });
 
 describe("processReturn", () => {
+  it("requires the server-bound customer OTP proof before loading refund details", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: false,
+      verificationRequired: true,
+      error: "Verify the customer's mobile number before handover.",
+    });
+    const result = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(result).toMatchObject({ verificationRequired: true });
+    expect(result.error).toMatch(/verify.*mobile/i);
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
   it("refuses a cashier", async () => {
     vi.mocked(resolvePosOperator).mockResolvedValue(CASHIER as any);
     const r = await processReturn(
@@ -163,6 +363,96 @@ describe("processReturn", () => {
     expect((await processReturn("o1", [], "cash")).error).toMatch(
       /what's coming back/i,
     );
+  });
+
+  it("requires a reason when the merchant setting does", async () => {
+    vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+      enabled: true,
+      allowInStore: true,
+      allowExchanges: true,
+      requireReason: true,
+      windowDays: 365,
+      restockingFeePercent: 0,
+      locationAccepts: true,
+    });
+    const result = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(result.error).toMatch(/choose why/i);
+  });
+
+  it("allocates a split refund over its original tenders", async () => {
+    seedSale({
+      paymentRows: [
+        { method: "cash", amount: 62.5, change_due: 0, reference: null },
+        { method: "card", amount: 200, change_due: null, reference: "T-1" },
+      ],
+    });
+    const result = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "original",
+    );
+    expect(result.error).toBeUndefined();
+    expect(
+      vi.mocked(issueRefund).mock.calls.map(([input]) => input.method),
+    ).toEqual(["cash", "card"]);
+    expect(
+      vi
+        .mocked(issueRefund)
+        .mock.calls.reduce((sum, [input]) => sum + Number(input.amount), 0),
+    ).toBe(105);
+  });
+
+  // The same dead end the hand-over counter had — a return on an order with no
+  // textable mobile could not be taken at all.
+  it("★ reports an unreachable OTP as unavailable, not as a refusal", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: false,
+      verificationUnavailable: true,
+      canOverride: true,
+      error: "This order has no mobile number that can be texted.",
+    });
+    const res = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+    );
+    expect(res).toMatchObject({
+      verificationUnavailable: true,
+      canOverrideVerification: true,
+    });
+    expect(dbHolder.current.calls.select).toHaveLength(0);
+  });
+
+  it("★ forwards the acknowledgement for the server to judge", async () => {
+    await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 1 }],
+      "cash",
+      undefined,
+      { acknowledgeUnverifiedCustomer: true },
+    );
+    expect(vi.mocked(gateCustomerVerification).mock.calls[0][0]).toMatchObject({
+      acknowledged: true,
+      purpose: "return",
+    });
+  });
+
+  it("★ audits an overridden return separately from the refund itself", async () => {
+    vi.mocked(gateCustomerVerification).mockResolvedValue({
+      ok: true,
+      overridden: true,
+    });
+    await processReturn("o1", [{ orderItemId: "li-a", quantity: 1 }], "cash");
+    const events = vi.mocked(posAudit).mock.calls.map(([e]) => e.event);
+    // BOTH — "who gave money back" and "and nobody checked who they were" are
+    // different questions, and folding the second into the first's detail
+    // hides it from the only query that would ever ask for it.
+    expect(events).toContain("refund_issued");
+    expect(events).toContain("identity_override");
   });
 
   it("★ recomputes the amount server-side — a line quantity beyond what remains is clamped", async () => {
@@ -191,7 +481,7 @@ describe("processReturn", () => {
   });
 
   it("emits order.refund_issued with what actually went back", async () => {
-    await processReturn("o1", [{ orderItemId: "li-b", quantity: 1 }], "upi");
+    await processReturn("o1", [{ orderItemId: "li-b", quantity: 1 }], "cash");
     // ★ `amount`, not `total`. The catalog declares `amount` for this event and
     // templateValues drops anything undeclared, so `total` meant the customer's
     // refund email carried no figure at all. `paymentMethod` is what keeps the
@@ -201,7 +491,7 @@ describe("processReturn", () => {
         type: "order.refund_issued",
         payload: expect.objectContaining({
           amount: 52.5,
-          paymentMethod: "upi",
+          paymentMethod: "cash",
         }),
       }),
     );
@@ -212,19 +502,18 @@ describe("processReturn", () => {
 // BORIS — returning an ONLINE order at a counter (roadmap Step 5)
 // ---------------------------------------------------------------------------
 
-/**
- * An order that was NOT rung at this register. `borisGates` runs two extra
- * selects (the store, then the location) before the sale is returned.
- */
+/** An order that was NOT rung at this register. */
 function seedBroughtIn(opts: {
   paymentMethod?: string;
   storeAllows?: boolean;
   locationAccepts?: boolean;
+  locationId?: string | null;
 }) {
   const {
     paymentMethod = "razorpay",
     storeAllows = true,
     locationAccepts = true,
+    locationId = null,
   } = opts;
   const order = {
     id: "o1",
@@ -236,9 +525,13 @@ function seedBroughtIn(opts: {
     store_credit_used: 0,
     payment_method: paymentMethod,
     payment_status: "paid",
-    // Fulfilled elsewhere — or online, where it's null.
-    location_id: null,
+    // Online is always a brought-in return, even if it was fulfilled by this
+    // same shop for pickup.
+    location_id: locationId,
     sales_channel: "online",
+    status: "delivered",
+    delivered_at: "2026-08-28T10:00:00Z",
+    collected_at: null,
   };
   const items = [
     {
@@ -252,64 +545,29 @@ function seedBroughtIn(opts: {
       total: 200,
       line_discount: 0,
       tax_amount: 10,
+      product_returnable: true,
+      product_window: null,
     },
   ];
+  vi.mocked(getCounterReturnPolicy).mockResolvedValue({
+    enabled: true,
+    allowInStore: storeAllows,
+    allowExchanges: true,
+    requireReason: false,
+    windowDays: 365,
+    restockingFeePercent: 0,
+    locationAccepts,
+  });
   dbHolder.current = makeDbMock({
     selectQueue: [
       [order],
       items,
       [], // prior returns
-      // borisGates: store, then location
-      [
-        {
-          settings: {
-            features: {
-              "returns.enabled": storeAllows,
-              "returns.allowInStore": storeAllows,
-            },
-          },
-          plan: "pro",
-          plan_expires_at: null,
-        },
-      ],
-      [
-        {
-          capabilities: locationAccepts
-            ? { pos: true, returns: true }
-            : { pos: true, returns: false },
-          type: "shop",
-        },
-      ],
-      // processReturn re-runs getReturnableSale (order → items → prior →
-      // boris store → boris location) and then, inside the write txn, takes
-      // the FOR UPDATE lock and re-reads: order → items → prior → refunds.
+      [], // original tender rows; payment_method is the legacy source
       [order],
       items,
       [],
-      [
-        {
-          settings: {
-            features: {
-              "returns.enabled": storeAllows,
-              "returns.allowInStore": storeAllows,
-            },
-          },
-          plan: "pro",
-          plan_expires_at: null,
-        },
-      ],
-      [
-        {
-          capabilities: locationAccepts
-            ? { pos: true, returns: true }
-            : { pos: true, returns: false },
-          type: "shop",
-        },
-      ],
-      [order],
-      items,
-      [],
-      [],
+      [], // existing refunds
     ],
     returning: [{ id: "ret-1" }],
   });
@@ -327,6 +585,13 @@ describe("BORIS — an order this counter didn't sell", () => {
     const { sale, error } = await getReturnableSale("o1");
     expect(error).toBeUndefined();
     expect(sale?.broughtIn).toBe(true);
+  });
+
+  it("treats an online pickup from this same shop as an in-store return", async () => {
+    seedBroughtIn({ locationId: "loc-1", storeAllows: false });
+    const { sale, error } = await getReturnableSale("o1");
+    expect(sale).toBeUndefined();
+    expect(error).toContain("only take back");
   });
 
   it("★ routes an online order's refund to the GATEWAY, with no counter choice", async () => {
@@ -366,7 +631,7 @@ describe("BORIS — an order this counter didn't sell", () => {
       [{ orderItemId: "li-a", quantity: 1 }],
       "cash",
     );
-    expect(res.error).toContain("go back the same way");
+    expect(res.error).toContain("original source");
     expect(issueRefund).not.toHaveBeenCalled();
   });
 
@@ -384,8 +649,8 @@ describe("BORIS — an order this counter didn't sell", () => {
     // A gateway refund never touches the drawer — stamping a shift would make
     // the cash report count money that never left the till.
     const call = vi.mocked(issueRefund).mock.calls[0][0] as any;
-    expect(call.shiftId).toBeUndefined();
-    expect(call.locationId).toBeUndefined();
+    expect(call.shiftId).toBeNull();
+    expect(call.locationId).toBeNull();
   });
 
   it("★ keeps the return when the gateway refund fails — the goods ARE back", async () => {
@@ -417,7 +682,7 @@ describe("BORIS — an order this counter didn't sell", () => {
       [{ orderItemId: "li-a", quantity: 1 }],
       "razorpay",
     );
-    expect(res.note).toContain("don't send it again");
+    expect(res.note).toContain("Do not send it a second time");
   });
 });
 
@@ -482,6 +747,79 @@ describe("★ the drawer is capped, not just the goods", () => {
       "cash",
     );
     expect(r.error).toMatch(/at most ₹62\.50/);
+  });
+
+  // ★★ A SPLIT HAS TWO CEILINGS. refundableAmount caps a MONEY method at what
+  // money actually paid, so measuring the WHOLE split against that ceiling
+  // refuses the credit leg for being money it never was.
+  describe("★ a split is capped per destination, not all as cash", () => {
+    /** ₹262.50 of goods: ₹200 on store credit, ₹62.50 in cash. */
+    const CREDIT_SPLIT = {
+      storeCreditUsed: 200,
+      paymentRows: [
+        {
+          method: "store_credit",
+          amount: 200,
+          change_due: null,
+          reference: null,
+        },
+        { method: "cash", amount: 62.5, change_due: 0, reference: null },
+      ],
+    };
+
+    it("★ takes back the WHOLE sale that was part-paid with credit", async () => {
+      seedSale(CREDIT_SPLIT);
+      const r = await processReturn(
+        "o1",
+        [
+          { orderItemId: "li-a", quantity: 2 },
+          { orderItemId: "li-b", quantity: 1 },
+        ],
+        "original",
+      );
+      // The old cap measured all ₹262.50 against the ₹62.50 money ceiling and
+      // refused a legitimate full return outright.
+      expect(r.error).toBeUndefined();
+      expect(r.refunded).toBe(262.5);
+    });
+
+    it("sends each leg to the instrument that actually paid it", async () => {
+      seedSale(CREDIT_SPLIT);
+      await processReturn(
+        "o1",
+        [
+          { orderItemId: "li-a", quantity: 2 },
+          { orderItemId: "li-b", quantity: 1 },
+        ],
+        "original",
+      );
+      expect(
+        vi.mocked(issueRefund).mock.calls.map(([i]) => [i.method, i.amount]),
+      ).toEqual([
+        ["store_credit", 200],
+        ["cash", 62.5],
+      ]);
+    });
+
+    it("★ still refuses when the MONEY legs exceed what money paid", async () => {
+      // The cash already went back, so only the credit share is left. Asking
+      // for it as an all-money split must not pass the overall cap alone.
+      seedSale({
+        storeCreditUsed: 200,
+        paymentRows: [
+          { method: "cash", amount: 62.5, change_due: 0, reference: null },
+        ],
+        existingRefunds: [
+          { amount: 62.5, status: "completed", method: "cash" },
+        ],
+      });
+      const r = await processReturn(
+        "o1",
+        [{ orderItemId: "li-a", quantity: 2 }],
+        "cash",
+      );
+      expect(r.error).toMatch(/at most ₹0\.00|fully refunded/i);
+    });
   });
 
   it("★ can't be multiplied by naming the same line twice", async () => {

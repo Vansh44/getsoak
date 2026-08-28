@@ -3,12 +3,11 @@ import { useCallback, useState } from "react";
 // Client-side throttle for phone-OTP flows: caps how many wrong codes can be
 // submitted and how many fresh codes can be requested in one session.
 //
-// This is a UX + SMS-cost guardrail layered ON TOP OF Supabase's server-side
-// rate limits — it is NOT a security boundary (it lives in the browser and can
-// be bypassed). The real abuse controls are Supabase Auth's rate limits and
-// CAPTCHA; this just stops honest users (and casual scripts) from hammering the
-// endpoints and running up SMS spend, and gives clearer feedback than silent
-// retries.
+// This is a UX + SMS-cost guardrail layered ON TOP OF the server action's rate
+// limits and Firebase Phone Auth's CAPTCHA/provider controls. It is NOT a
+// security boundary (it lives in the browser and can be bypassed); it stops
+// honest users and casual scripts from hammering the endpoints and gives clearer
+// feedback than silent retries.
 export const MAX_VERIFY_ATTEMPTS = 5;
 export const MAX_RESENDS = 3;
 

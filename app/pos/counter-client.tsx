@@ -65,13 +65,20 @@ import {
   findOrderForReturn,
   type FoundOrder,
 } from "@/app/actions/pos-return-actions";
-import type { PosTender } from "@/app/actions/pos-sale-actions";
+import {
+  confirmPosGatewayPayment,
+  startPosGatewayPayment,
+  type PosTender,
+} from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { CollectionDetail } from "./collection-detail";
 import { PosScreen } from "./pos-screen";
 import { usePoll } from "@/lib/pos/use-poll";
 import { fetchPickupQueue } from "@/lib/pos/live";
 import { claimPickupBadge, publishPickupCount } from "@/lib/pos/pickup-badge";
+import { CustomerPhoneVerification } from "./customer-phone-verification";
+import type { PosCustomerVerificationPurpose } from "@/lib/pos/customer-verification";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -132,6 +139,7 @@ export function CounterClient({
   error,
   canRefund,
   canFulfilPickup,
+  gateway,
 }: {
   mode: CounterMode;
   initial: PickupOrder[];
@@ -142,6 +150,11 @@ export function CounterClient({
   /** Marking a box packed and ready. Every POS role holds this today; the prop
    *  stays so a future restricted role does not silently get the button. */
   canFulfilPickup: boolean;
+  gateway?: {
+    keyId: string;
+    storeName: string;
+    locationName: string;
+  } | null;
 }) {
   const [queue, setQueue] = useState(initial);
   const [query, setQuery] = useState("");
@@ -154,6 +167,9 @@ export function CounterClient({
   const [tendering, setTendering] = useState<{
     order: PickupOrder;
     acked: boolean;
+    /** Carried on the row so a retry after an error re-sends the same
+     *  acknowledgement instead of re-opening the dialog for it. */
+    ackUnverified?: boolean;
   } | null>(null);
   /** The attached customer's spendable credit, or null while it loads. */
   const [collectionCredit, setCollectionCredit] = useState<number | null>(null);
@@ -167,6 +183,15 @@ export function CounterClient({
   const [detailReload, setDetailReload] = useState(0);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
+  // Takes the acknowledgement, so "proceed without a code" travels to the
+  // server as its own flag rather than being remembered as ambient state.
+  const verificationContinue = useRef<
+    ((ackUnverified: boolean) => void) | null
+  >(null);
+  const [verification, setVerification] = useState<{
+    orderId: string;
+    purpose: PosCustomerVerificationPurpose;
+  } | null>(null);
 
   const trimmed = query.trim();
   const tooShort = trimmed.length > 0 && trimmed.length < 4;
@@ -205,7 +230,12 @@ export function CounterClient({
   // goods over. Searching pauses it too: the queue isn't on screen, so re-reading
   // it is a request for nothing.
   const idle =
-    !busy && !tendering && !confirmUnprepared && !searching && !pending;
+    !busy &&
+    !tendering &&
+    !confirmUnprepared &&
+    !verification &&
+    !searching &&
+    !pending;
 
   // ★ THE QUEUE ALREADY CARRIES THE COUNT, so publishing it stops the rail
   // making a second request for the same fact — and, more importantly, keeps
@@ -299,9 +329,18 @@ export function CounterClient({
     [canRefund],
   );
 
+  const verifyThen = (
+    orderId: string,
+    purpose: PosCustomerVerificationPurpose,
+    next: (ackUnverified: boolean) => void,
+  ) => {
+    verificationContinue.current = next;
+    setVerification({ orderId, purpose });
+  };
+
   // Debounced so a scanner burst or a fast typist doesn't fire per keystroke.
-  // Nothing is set synchronously here — below the floor there is simply no
-  // search to schedule, and what shows is derived above.
+  // This lookup is unrelated to checkout customer capture: a counter search is
+  // intentionally live, while the customer mobile is explicitly submit-only.
   useEffect(() => {
     if (trimmed.length < 4) return;
     const handle = setTimeout(() => runSearch(trimmed), 300);
@@ -314,25 +353,6 @@ export function CounterClient({
     toast.success(message);
     setQueue((cur) => cur.filter((o) => o.id !== id));
     setResults((cur) => (cur ? cur.filter((r) => rowId(r) !== id) : cur));
-  };
-
-  /** A successful hand-over is the only generic action that removes a row. */
-  const act = async (
-    id: string,
-    fn: (id: string) => Promise<{ success?: boolean; error?: string }>,
-    message: string,
-  ): Promise<boolean> => {
-    setBusy(id);
-    const res = await fn(id);
-    setBusy(null);
-    if (res.error) {
-      toast.error(res.error);
-      // Refused means the list is stale — someone else got there first.
-      refreshQueue();
-      return false;
-    }
-    settle(id, message);
-    return true;
   };
 
   /**
@@ -380,13 +400,13 @@ export function CounterClient({
    * may genuinely be packing it while the customer waits, so this is a question,
    * not a refusal — but it must never be the thing a mis-tap does.
    */
-  const handOver = (o: PickupOrder, acked = false) => {
-    if (!acked && o.status !== "ready") {
-      setConfirmUnprepared(o);
-      return;
-    }
+  const continueHandOver = (
+    o: PickupOrder,
+    acked: boolean,
+    ackUnverified = false,
+  ) => {
     if (o.amountDue > 0) {
-      setTendering({ order: o, acked });
+      setTendering({ order: o, acked, ackUnverified });
       // Fetched here rather than carried on the queue row: the queue is polled
       // every 30s and is deliberately one cheap indexed read (§22). Starts at
       // null so the option stays hidden until we actually know.
@@ -396,23 +416,61 @@ export function CounterClient({
         .catch(() => setCollectionCredit(0));
       return;
     }
-    void act(
-      o.id,
-      (id) => markCollected(id, [], { acknowledgeUnprepared: acked }),
-      "Handed over.",
-    ).then((ok) => {
-      // The order has left the shelf, so the panel describing it has nothing
-      // left to offer. A no-op when the hand-over came from the row.
-      if (ok) setDetailFor(null);
-    });
+    setBusy(o.id);
+    void (async () => {
+      try {
+        const res = await markCollected(o.id, [], {
+          acknowledgeUnprepared: acked,
+          acknowledgeUnverifiedCustomer: ackUnverified,
+        });
+        // A stale/cleared proof can happen after a long confirmation dialog.
+        // Re-open the same verification instead of reducing this to a toast
+        // that makes the cashier start the whole hand-over again.
+        if (res.verificationRequired || res.verificationUnavailable) {
+          verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
+          return;
+        }
+        if (res.error) {
+          toast.error(res.error);
+          refreshQueue();
+          return;
+        }
+        settle(o.id, "Handed over.");
+        // The order has left the shelf, so the panel describing it has nothing
+        // left to offer. A no-op when the hand-over came from the row.
+        setDetailFor(null);
+      } catch {
+        toast.error("Couldn't reach the server. Try the hand-over again.");
+      } finally {
+        setBusy(null);
+      }
+    })();
+  };
+
+  const handOver = (o: PickupOrder, acked = false) => {
+    if (!acked && o.status !== "ready") {
+      setConfirmUnprepared(o);
+      return;
+    }
+    verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
   };
 
   const takePayment = async (tenders: PosTender[]) => {
     if (!tendering) return {};
-    const { order: o, acked } = tendering;
+    const { order: o, acked, ackUnverified } = tendering;
     const res = await markCollected(o.id, tenders, {
       acknowledgeUnprepared: acked,
+      acknowledgeUnverifiedCustomer: ackUnverified === true,
     });
+    if (res.verificationRequired || res.verificationUnavailable) {
+      // Re-open on the SAME tendering row, then retry with whatever the dialog
+      // answered — a proof, or an acknowledged override.
+      verifyThen(o.id, "pickup", (ack) => {
+        setTendering((cur) => (cur ? { ...cur, ackUnverified: ack } : cur));
+        void takePayment(tenders);
+      });
+      return {};
+    }
     if (res.error) {
       // The panel stays open — the customer is standing there and the cashier
       // needs to see why, and to retry, without re-entering the tender. But the
@@ -461,6 +519,48 @@ export function CounterClient({
     );
     setDetailFor(null);
     return {};
+  };
+
+  const takeOnlinePayment = async (
+    amount: number,
+  ): Promise<{ reference?: string; error?: string }> => {
+    if (!gateway?.keyId) {
+      return { error: "Razorpay isn't connected for this store." };
+    }
+    const amountPaise = Math.round(amount * 100);
+    const started = await startPosGatewayPayment(amountPaise);
+    if ("error" in started) return { error: started.error };
+
+    return new Promise((resolve) => {
+      void openRazorpayModal({
+        keyId: started.keyId,
+        rzpOrderId: started.rzpOrderId,
+        amountPaise: started.amountPaise,
+        name: gateway.storeName,
+        description: `${gateway.locationName} · pickup`,
+        onSuccess: (result) => {
+          void confirmPosGatewayPayment({
+            rzpOrderId: result.razorpay_order_id,
+            paymentId: result.razorpay_payment_id,
+            signature: result.razorpay_signature,
+            amountPaise: started.amountPaise,
+          }).then((confirmed) =>
+            resolve(
+              "error" in confirmed
+                ? { error: confirmed.error }
+                : { reference: confirmed.paymentId },
+            ),
+          );
+        },
+        onDismiss: () => resolve({ error: "Payment cancelled." }),
+      }).then((opened) => {
+        if (!opened) {
+          resolve({
+            error: "Couldn't open the payment window. Check the connection.",
+          });
+        }
+      });
+    });
   };
 
   const isReturns = mode === "returns";
@@ -900,6 +1000,30 @@ export function CounterClient({
           // spends it atomically, so a stale figure costs a refusal, never an
           // overdraw.
           storeCredit={collectionCredit}
+          onTakeOnline={gateway ? takeOnlinePayment : undefined}
+        />
+      )}
+
+      {verification && (
+        <CustomerPhoneVerification
+          orderId={verification.orderId}
+          purpose={verification.purpose}
+          onCancel={() => {
+            verificationContinue.current = null;
+            setVerification(null);
+          }}
+          onVerified={() => {
+            const next = verificationContinue.current;
+            verificationContinue.current = null;
+            setVerification(null);
+            next?.(false);
+          }}
+          onOverride={() => {
+            const next = verificationContinue.current;
+            verificationContinue.current = null;
+            setVerification(null);
+            next?.(true);
+          }}
         />
       )}
 

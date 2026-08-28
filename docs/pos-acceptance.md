@@ -802,7 +802,8 @@ Tap the search box and type a product name.
 out of the way whenever an editable element has focus.
 
 **PS-7.23 — Overlays keep their own focus**
-Open "Add customer" (or the tender panel) and type.
+Select **Charge**, focus the mobile-number field (or expand the optional receipt
+details on Payment) and type.
 **Expect:** the field keeps focus. The register never pulls focus back to the
 scan box while an overlay owns the screen.
 
@@ -1018,40 +1019,42 @@ orders must still reach everyone — `order.placed` is deliberately not narrowed
 ## 7e. Till-created customers & the signup claim (roadmap Step 4)
 
 ⚠ Needs `supabase/pos_13_customer_claim.sql` applied (staging: ✅ 2026-08-14).
-**None of these has been exercised in a browser yet** — 96 unit tests cover the
-rules, the claim statement, the action and the signup ordering, but nobody has
-rung up a walk-in on a real till.
+The Checkout, customer and payment surfaces have been visually exercised in a
+local browser at desktop and 390px widths. The full flow has not been completed
+against a real till yet; focused unit tests cover the rules, claim statement,
+actions, signup ordering and checkout UI.
 
-**PS-C.25 — A cashier can record a walk-in**
-Register → Customer → search "Asha". Nothing found.
-**Expect:** an **Add as a new customer** button under "No customer found", and
-below it "Or leave it — the sale can go through without one."
-**Not** a button beside the search box: reaching it only after an empty search
-means the search has happened by construction, so a cashier can't create a
-duplicate of someone already on file.
+**PS-C.25 — Charge asks for one mobile number**
+Register → **Charge**.
+**Expect:** one focused **Mobile number** field and **OK**. The field accepts
+digits only, ignores spaces/letters, stops at 10 digits, and **OK** remains
+disabled until the number is a valid 10-digit Indian mobile. The cashier is not
+asked for a name or email before payment.
 
-**PS-C.26 — The typed query seeds the form**
-Search "Asha" → Add. Then separately search "9876543210" → Add.
-**Expect:** the first prefills **Name**, the second prefills **Mobile number**.
-Nothing is retyped.
+**PS-C.26 ★★ — Typing never queries the database**
+Type and erase the mobile number several times, pausing between keys.
+**Expect:** no customer action or database request. Exactly one request starts
+only after a valid number is submitted with **OK** (or Enter). Repeated taps
+while that request is pending are ignored.
 
-**PS-C.27 — A mobile is required, a name is required, email is not**
-Try to save with a name and no number.
-**Expect:** "A mobile number is needed so they can be found again later." The
-form also explains why: "The mobile links this to their account if they ever
-sign up online." Saving with no email must succeed.
+**PS-C.27 — An existing number resolves and advances**
+Submit a mobile belonging to a customer with a name, email and store credit.
+**Expect:** the Payment screen opens automatically, without a second Continue
+tap. It shows the resolved mobile plus name/email, and Store credit is available
+with the server-read balance. No cashier-entered identity data overwrites the
+saved customer.
 
-**PS-C.28 ★ — It attaches immediately**
-Save a new customer.
-**Expect:** the panel switches to the attached-customer card. Nobody adds a
-customer in order to then search for them.
+**PS-C.28 ★ — A new number creates and attaches in the same action**
+Submit a valid mobile that is not in the store.
+**Expect:** StoreMink creates one `pos_<uuid>` unclaimed customer containing the
+normalised mobile, attaches it, and opens Payment automatically. Name and email
+can remain blank. A later verified signup can claim this row.
 
-**PS-C.29 ★ — A duplicate phone attaches, it does not fail**
-Add a customer using the phone of someone already on file (the commonest route
-here is a cashier who mistyped a search and typed the number by hand).
-**Expect:** the EXISTING customer attaches, with their real name — not "that
-customer already exists". It leaks nothing: it is the same row the search would
-have returned for the number they just typed.
+**PS-C.29 ★ — A concurrent duplicate resolves to one customer**
+Submit the same new number at two tills at the same time.
+**Expect:** one insert wins; the unique-key loser re-reads and attaches that
+same customer. Neither till reports a duplicate error and only one customer row
+exists. Invalid/repeated-digit placeholder numbers are refused before lookup.
 
 **PS-C.30 ★ — The sale is attributed**
 Ring up a sale with the new customer attached. Then Dashboard → Orders.
@@ -1073,7 +1076,8 @@ export Website or POS and inspect the CSV to confirm only that channel appears.
 
 **PS-C.30b ★★ — A standard POS sale has no fulfilment work**
 Open a completed register sale from Dashboard → Orders → POS orders.
-**Expect:** receipt, customer/Walk-in, **Sold at** location, cashier, items and
+**Expect:** receipt, attached customer (or Walk-in only on a legacy row),
+**Sold at** location, cashier, items and
 payment. There is NO Delivery card, editable delivery phone, shipment panel or
 Fulfillment selector; the footer says the sale was handed over at the register.
 The invoice says **Sold At**, never **Ship To**. Calling the status/shipment
@@ -1157,14 +1161,15 @@ claim that moved the person and left their balance behind.
 ⚠ The shopper's signup then fails on the unique phone, which is the one place
 this trade bites. It is still the right way round.
 
-**PS-C.39 — A recorded walk-in gets an emailed receipt today**
-Record a walk-in WITH an email, attach them, ring up a sale.
-**Expect:** an order confirmation arrives. No new code — `placePosSale` emits
-`order.placed` and the fan-out resolves the address from their `users` row.
+**PS-C.39 — A newly captured mobile can still receive an emailed receipt**
+Submit a new mobile, then expand Payment details and enter a receipt email.
+**Expect:** one direct POS receipt arrives even though the newly created
+customer has no profile email. `placePosSale` does not write the receipt-only
+address into `users`.
 
-**PS-C.36 — Receipt contact at the tender panel**
-Ring up a sale with NO customer attached. At **Take payment**, fill
-**Email a receipt (optional)** and complete the sale.
+**PS-C.36 — Receipt contact stays out of the fast path**
+Resolve a customer, then on Payment expand **Add receipt email or GSTIN** and
+fill **Receipt email (optional)**.
 **Expect:** a receipt arrives — items, what they paid with, change given, the
 order reference — from the store's own sending domain, and a row appears in
 Logs → Email logs with mailer **POS receipt**.
@@ -1192,6 +1197,83 @@ Open **Take payment** from `/pos/pickups` on a pay-at-store collection.
 **Expect:** no receipt field. That order was placed online and already carries
 an address; asking again at hand-over is a field with no job.
 
+**PS-C.44 — Customer identity and payment are one linear flow**
+Ring a cart with no customer and select **Charge**.
+**Expect:** mobile → **OK** → Payment. There is no live search, explicit
+create form, walk-in choice, or second Continue button. The payment methods are
+not visible until the one submitted lookup resolves.
+
+**PS-C.45 — Lookup failures are recoverable without losing the cart**
+Submit during a database failure, then retry; separately close the number screen
+and reopen Charge.
+**Expect:** a plain error remains beside the number, the cashier can edit and
+retry, no customer is attached, and the cart is untouched. Closing returns to
+the cart; reopening starts with a clean input.
+
+**PS-C.46 — Payment shows and can change the attached customer**
+Resolve a customer with a mobile and email, then select **Change**.
+**Expect:** the identity is visible above the payment methods. Change returns to
+the number step before any money is staged; submitting another number replaces
+the customer, and the final sale belongs only to the person shown. After a
+tender is staged, customer change is unavailable.
+
+**PS-C.47 — Optional invoice details do not create another customer flow**
+On Payment expand **Add receipt email or GSTIN**.
+**Expect:** receipt email and GSTIN are available without obscuring payment.
+Receipt email sends this receipt only and does not create or modify a customer;
+an invalid email never blocks the already-taken sale. Collapse/reopen preserves
+the current values, and a completed sale clears them for the next cart.
+
+**PS-C.48 ★★ — A stale client cannot create an anonymous POS sale**
+Call `placePosSale` directly with a valid cart and tender but no `customerId`,
+then repeat with an empty id.
+**Expect:** both stop before price, stock, credit, payment or order writes and
+say to add the customer's mobile. A valid attached customer completes normally.
+Historical Walk-in receipts remain readable; this test prevents new ones.
+
+**PS-C.49 — The cart keeps the product photo**
+Tap a product with an image, then one without an image; also park and restore the
+cart.
+**Expect:** a small photo appears beside the first cart line and a package
+placeholder beside the second. Restoring resolves the current catalog image.
+Neither image adds a checkout click or crowds out name, variant, quantity or
+price.
+
+**PS-C.50 ★ — Sales shows the complete shop transaction**
+Complete a register sale and hand over a website pickup at this location, then
+open both from POS → Sales.
+**Expect:** the pickup is labelled **Store pickup**, appears once using its
+order reference, and remains a website-channel order. Each detail shows customer
+contact, sale type, completion, every line/quantity, subtotal, discounts, tax,
+total and each tender, with Print and Return available as permitted.
+
+**PS-PAY.1 — Payment methods are one decision, not system architecture**
+Continue from Checkout to Payment with and without a connected Razorpay gateway.
+**Expect:** one plain-language list shows Cash, Card terminal, UPI / QR and,
+when available, Razorpay. Each row says the next physical action. There are no
+"take now" / "record already taken" groups and no disabled gateway tile.
+
+**PS-PAY.2 — A full payment asks only what its method needs**
+Pay the full sale once by cash, card terminal, UPI / QR and Razorpay.
+**Expect:** cash asks what was received and previews change. Card and UPI use the
+full amount due and ask for confirmation after the external device succeeds;
+there is no editable amount that can accidentally turn the sale into a split.
+Razorpay opens and verifies the full amount. Each path has one clear final
+action.
+
+**PS-PAY.3 — Split payment is a linear loop**
+Select **Split payment**, take ₹300 cash on a ₹500 sale, then ₹200 by UPI / QR.
+**Expect:** the flow asks for the first method, then that part's amount, shows
+₹200 still due, and returns to the same method list. After the second part it
+shows both payment rows and requires one final **Complete sale** review. It never
+shows method selection and an unexplained global amount field at the same time.
+
+**PS-PAY.4 — Short store credit becomes an understandable split**
+Attach a customer with ₹120 credit to a ₹500 sale and choose Store credit.
+**Expect:** Checkout says ₹380 will remain, applies the ₹120 leg, and returns to
+the payment list for the remainder. The cashier does not have to discover or
+enable a separate split mode first.
+
 ---
 
 ## 8. Pickup — click & collect
@@ -1216,6 +1298,41 @@ stock here."_ Offering it is how two people get promised the same box.
 `/pos/pickups` → Mark ready → Hand over.
 **Expect:** the customer gets the ready notification; on hand-over the holds
 commit (on-hand finally drops) and the order leaves the queue.
+
+**PS-8.4a ★★ — The saved pickup phone must pass OTP before hand-over**
+Open a ready, paid pickup and select **Hand over**.
+**Expect:** StoreMink sends an OTP to the masked mobile saved on that exact
+order. Entering the sixth digit verifies automatically, then the same hand-over
+continues without another action choice. The full mobile is never rendered.
+
+**PS-8.4b — Pay-at-store uses the same verification gate**
+Open a pickup that still owes money and select **Take payment**.
+**Expect:** phone OTP comes before the tender screen. A valid proof is reused
+when payment completes and hand-over runs; the shopper is not asked twice inside
+the 30-minute proof window. A deposit leaves the parcel in the queue and a later
+hand-over still requires a current proof.
+
+**PS-8.4c ★★ — Pickup verification fails closed at the action**
+Call `markCollected` directly without a valid proof, and try a proof from a
+different order, shop, location, operator, or from the return flow.
+**Expect:** `verificationRequired`; no status, stock, payment or drawer mutation.
+After a successful hand-over the proof is consumed and cannot release another
+parcel.
+
+**PS-8.4d — OTP edge cases stay recoverable**
+Try a wrong/expired code, resend, exhaust request/attempt limits, use an order
+with no valid mobile, and test a server without Firebase phone auth configured.
+**Expect:** a clear inline error, no hand-over, and no lost queue/cart state.
+Resend obtains fresh server authorisation and a fresh CAPTCHA. A phone-only
+Firebase identity created solely to transport the counter OTP is removed only
+when it is just-created and has no StoreMink customer profile.
+
+**PS-8.4e ★ — A connected pickup counter offers verified Razorpay**
+Connect and enable Razorpay, open an amount-due pickup, and pass its OTP.
+**Expect:** Razorpay appears with the collection tenders, opens the merchant's
+checkout window and stages only the server-confirmed payment id. Disconnect or
+disable the gateway, or use an ineligible plan: the option is absent, while
+cash/card terminal/UPI remain available. A modal cancellation stages nothing.
 
 **PS-8.5 ★ — Cancelling a pickup does NOT restock**
 Cancel a pickup order from the dashboard.
@@ -1545,9 +1662,34 @@ Sign in as a cashier → Sales.
 money back is a manager capability, like every other way to give money away.
 
 **PS-11.2 — Return part of a sale**
-Sales → a sale → Return items → "All 2" on one line → Cash → Refund.
-**Expect:** the refund equals that line's value plus its tax. Stock goes back at
-this shop, the sale stays "completed" — the customer kept the rest.
+Sales → a cash sale → Return items → "All 2" on one line → Refund.
+**Expect:** the refund equals that line's value plus its tax and is fixed to
+Cash, the original tender. Stock goes back at this shop, the sale stays
+"completed" — the customer kept the rest.
+
+**PS-11.2a ★★ — A return verifies the order phone at final submit**
+Prepare a return and select the final refund action.
+**Expect:** StoreMink sends an OTP to the masked mobile saved on that order. The
+sixth digit verifies automatically, then the prepared return submits without a
+second refund click. Selecting quantities and refund method does not send OTP.
+
+**PS-11.2b — A direct return cannot bypass OTP**
+Call `processReturn` without a proof, then with a pickup proof or a proof for a
+different order/operator/location.
+**Expect:** `verificationRequired`; no returned quantities, refund, stock,
+credit note, drawer entry or audit event is written.
+
+**PS-11.2c — Return OTP failures preserve the prepared return**
+Enter a wrong/expired code, cancel verification, then retry and resend.
+**Expect:** selected quantities, restock choices and refund method remain on
+screen. No return is committed until a current proof succeeds; the proof is
+cleared only after the server commits the return.
+
+**PS-11.2d — Missing phone or configuration blocks safely**
+Open an otherwise eligible order with no valid saved mobile, then test without
+Firebase phone verification configured.
+**Expect:** the manager sees the specific reason and can cancel back to the
+prepared return, but cannot override identity verification at the till.
 
 **PS-11.3 ★ — The amount is recomputed server-side**
 Post a quantity larger than was sold.
@@ -1590,6 +1732,62 @@ card machine.
 Return every remaining unit.
 **Expect:** the sale shows "Cancelled/Refunded" in the list and offers no
 further return.
+
+**PS-11.11 ★ — The master return switch governs the till**
+Turn Orders settings → Accept returns off and open both a same-register sale and
+an online order at the return desk.
+**Expect:** both are refused before item selection, naming the setting. Turning
+it back on restores eligible local sales; website orders still need PS-15.8's
+additional store/location gates.
+
+**PS-11.12 ★ — Product and window eligibility are enforced twice**
+Try a final-sale line, an expired product-specific window, an eligible line and
+a forged direct `processReturn` request for either blocked line.
+**Expect:** blocked lines are disabled with their exact reason and the server
+refuses the forged request. The eligible line remains selectable. A legacy
+delivered order with no possession timestamp follows the documented fail-open
+eligibility rule.
+
+**PS-11.13 — Reason and policy deduction are explicit**
+Require a reason and configure a 10% restocking fee. Try no reason,
+change-of-mind, then damaged/defective.
+**Expect:** no reason is refused; change-of-mind previews and retains 10%; a
+merchant-fault reason waives the fee. A counter return never adds return postage
+and no deduction can make the refund negative.
+
+**PS-11.14 ★★ — Refund follows the original tender**
+Return cash-, terminal-card-, UPI-, Razorpay- and store-credit-paid sales.
+**Expect:** each refund route is fixed to its original source. Only cash affects
+the drawer; only Razorpay uses the gateway; credit returns to the attached
+customer. A direct request for cash against card/Razorpay/credit is refused.
+
+**PS-11.15 ★★ — Split tender is refunded proportionally**
+Sell for ₹500 using ₹100 cash + ₹150 card terminal + ₹250 Razorpay, then return
+₹200.
+**Expect:** refund allocations are ₹40 cash, ₹60 card and ₹100 Razorpay (with a
+one-paise rounding remainder assigned only once when needed). The UI shows this
+plan; the cashier cannot choose a single alternative method.
+
+**PS-11.16 ★ — A counter exchange is a linked return plus sale**
+Enable Offer exchanges, choose Exchange on an eligible return, and pass OTP.
+**Expect:** the return and original-method refund commit, Sell opens with the
+same customer attached and unchangeable, and the manager may add any catalog
+replacement. Completing normal payment writes one replacement POS order and
+sets `order_returns.exchange_order_id` exactly once.
+
+**PS-11.17 — Exchange price differences use ordinary payment records**
+Exchange once for a cheaper product and once for a more expensive product.
+**Expect:** the original goods are refunded according to policy in both cases;
+the replacement's full current price is tendered as a new sale. Therefore the
+net difference is visible from the refund plus replacement payments without a
+special unauditable adjustment row.
+
+**PS-11.18 ★ — Abandoning replacement does not undo a real return**
+Pass exchange OTP, then close Sell without adding or paying for a replacement;
+also race two attempts to complete the replacement.
+**Expect:** the completed return/refund remains valid and can be reviewed. No
+replacement order exists until one normal sale completes, and the return can
+link only one winning order.
 
 ---
 
@@ -1844,8 +2042,11 @@ Call `processReturn(orderId, lines, "cash")` directly.
 **Expect:** refused. Cash back for a card sale is the card-not-present
 laundering path.
 
-**PS-15.5 — A COD order DOES offer the counter tenders**
-**Expect:** Cash / Card / UPI, and cash reduces the drawer.
+**PS-15.5 — A legacy COD order needs an explicit recorded counter route**
+Open a COD order with no usable `order_payments` source.
+**Expect:** the manager may choose Cash / Card / UPI as the documented legacy
+fallback, and cash reduces the drawer. Once a counter payment row exists, its
+actual tender becomes fixed like PS-11.14.
 
 **PS-15.6 ★ — A gateway refund never touches the drawer**
 Take a card-order return, then open `/pos/shift`.
@@ -1860,10 +2061,12 @@ the shop that sold it, and not the store default.
 Untick "Accept returns" for this location and retry.
 **Expect:** refused, naming Locations. Same when `returns.allowInStore` is off.
 
-**PS-15.9 ★ — But this till's OWN sales still work**
-With both BORIS switches OFF, return a sale rung at this register.
-**Expect:** works exactly as before. Invariant 1 — the till has done this since
-pos_12 and a later setting must not break it.
+**PS-15.9 ★ — A local sale avoids only the extra BORIS gates**
+Keep Accept returns ON but turn the in-store-online switch and this location's
+Accept returns capability off, then return a sale rung at this register.
+**Expect:** the local sale still works because it did not come from the website
+or another shop. Turning the master Accept returns switch off refuses it under
+PS-11.11.
 
 **PS-15.10 ★ — A failed gateway refund keeps the return**
 Disconnect Razorpay in Channels, then return a card order.
@@ -2491,10 +2694,10 @@ rate-limits the burst. Checkout still performs its own final COD/prepaid quote.
 ⚠ Needs a customer with a balance — refund an order to store credit first.
 
 **PS-CR.1 — The option appears only when there is something to spend**
-Ring up a sale with no customer attached, open **Take payment**.
-**Expect:** no Store credit button. Attach a customer with a ₹0 balance:
-still absent. Attach one with a balance: it appears.
-**Why:** a greyed-out button on every walk-in sale is a control that never
+Ring up a sale, submit a new mobile and open Payment.
+**Expect:** no Store credit button. Resolve an existing customer with a ₹0
+balance: still absent. Resolve one with a balance: it appears.
+**Why:** a greyed-out button on every zero-balance sale is a control that never
 works and one more thing to read past at a busy counter.
 
 **PS-CR.2 — It settles a sale**
@@ -2623,30 +2826,30 @@ accepted tender with no gateway call behind it anywhere, so it settled sales
 and entered shift reconciliation as money nobody had checked was taken.
 
 **PS-GW.1 — The method appears only when it can work**
-Open the tender pad with the gateway connected, then pause it in Channels and
-reopen.
-**Expect:** Online is offered, then gone. A control that always fails in front
+Open Payment with the gateway connected, then pause it in Channels and reopen.
+**Expect:** Razorpay is offered, then gone. A control that always fails in front
 of a customer is worse than no control.
 
-**PS-GW.2 ★ — The pad says which methods are real**
-Select Card, then Online.
-**Expect:** Card reads "Recorded from your own terminal"; Online reads "Charged
-and verified with the gateway". Three identical buttons is why nobody noticed
-only one of them proved anything.
+**PS-GW.2 ★ — Payment says which methods are real**
+Select Card terminal, then Razorpay.
+**Expect:** Card says to record it after the external terminal approves and its
+confirmation repeats that StoreMink cannot verify the terminal. Razorpay says
+StoreMink opens and verifies the payment. Similar-looking methods must not imply
+the same verification guarantee.
 
-**PS-GW.3 ★★ — A split settles: ₹300 cash + ₹200 online**
-On a ₹500 sale, add ₹300 cash, then charge ₹200 online.
+**PS-GW.3 ★★ — A split settles: ₹300 cash + ₹200 Razorpay**
+On a ₹500 sale, add ₹300 cash, then charge ₹200 with Razorpay.
 **Expect:** the pad shows paid in full; the sale completes; `order_payments`
 holds two rows and the razorpay one carries the gateway's payment id.
 
 **PS-GW.4 ★★ — The tender is staged only AFTER confirmation**
-Charge online, then watch the staged list while the modal is open.
+Charge with Razorpay, then watch the staged list while the modal is open.
 **Expect:** nothing is staged until the payment confirms. Staging optimistically
 would let a cashier complete a sale on a payment that never captured.
 
 **PS-GW.5 ★ — Dismissing the modal is not an error state**
-Start a ₹200 online leg on a sale that already has ₹300 cash staged, then close
-the modal.
+Start a ₹200 Razorpay leg on a sale that already has ₹300 cash staged, then
+close the modal.
 **Expect:** "Payment cancelled", the ₹300 cash is still staged, and the cart is
 intact. The cashier takes the ₹200 another way.
 
@@ -3178,6 +3381,12 @@ Real and deliberate, so nobody files them as bugs:
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Cancel doesn't offer a refund**                                       | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                                                                                                                                                                             |
+| ~~**Checkout queried customers while the cashier typed**~~              | **FIXED** (PS-C.25–C.29, C.44–C.47). Charge now accepts one 10-digit mobile locally; only OK performs an exact lookup, creates a phone-only customer when absent, and advances directly to payment                                                                                                                                                                                                             |
+| ~~**A stale checkout could still create a Walk-in sale**~~              | **FIXED** (PS-C.48). Customer capture is enforced by `placePosSale` before all pricing, stock and money work; historical anonymous receipts remain readable but no new register sale can omit its customer                                                                                                                                                                                                     |
+| ~~**Cart lines lost the product photo**~~                               | **FIXED** (PS-C.49). The catalog image rides onto the cart line with a compact package fallback, including a held cart restored against the current catalog                                                                                                                                                                                                                                                    |
+| ~~**POS Sales omitted collected pickups and hid transaction detail**~~  | **FIXED** (PS-C.50). Completed pickups at this location join the same Sales list without changing channel or duplicating the order; reprint detail includes customer, source/completion, every line, totals and tenders                                                                                                                                                                                        |
+| ~~**Counter returns ignored policy and let refund tender drift**~~      | **FIXED** (PS-11.11–11.18). Master/BORIS/location/product/window/reason/fee rules are server-enforced; refunds follow and proportionally split across original tenders; an enabled exchange links a normal customer-locked replacement POS sale                                                                                                                                                                |
+| ~~**Pickup and return identity was trusted without OTP**~~              | **FIXED** (PS-8.4a–8.4d, PS-11.2a–11.2d). The final server mutations require a short-lived proof for the saved order mobile, bound to order, purpose, shop, location and operator; failure leaves stock and money untouched                                                                                                                                                                                    |
 | ~~**The success page says nothing about collection**~~                  | **FIXED** (PS-8.25). It is a server component now and loads the order, so the shop, its address and the hold deadline are in the first paint                                                                                                                                                                                                                                                                   |
 | ~~**The dashboard is blind to pickups**~~                               | **FIXED** (PS-8.27). Badge + collection stage on the list, a Collection section in the drawer                                                                                                                                                                                                                                                                                                                  |
 | ~~**The invoice shows a shipping address for a collected order**~~      | **FIXED** (PS-8.26). "Ship To" becomes "Collect From" with the SHOP's address; the customer party always renders so the invoice still names the buyer                                                                                                                                                                                                                                                          |
@@ -3207,10 +3416,10 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**A collection can't be part-paid**~~                                 | **FIXED** (PS-DP.1–DP.7). A short payment is recorded as a DEPOSIT and the parcel stays on the shelf — no third pickup state. `amountDueAtCollection` is now net of what has already been taken                                                                                                                                                                                                                |
 | **A collection can't be discounted**                                    | By decision (owner, 2026-08-18). It is already placed and INVOICED, with GST computed and an order_ref issued; knocking money off is a partial refund or store credit, both already built. A discount path would mutate a placed sale and move the tax base                                                                                                                                                    |
 | ~~**No tender at the till is gateway-verified**~~                       | **FIXED** (PS-GW.1–GW.12). `razorpay` sat in `TENDER_METHODS` with no gateway call anywhere; `placePosSale` now reads the payment back from Razorpay and refuses anything that is not a CAPTURED INR payment for the exact tender amount. Card/UPI remain external-terminal records BY DESIGN, and the pad now says so                                                                                         |
-| ~~**A collection can't take a gateway payment**~~                       | **FIXED** (PS-GW.13–GW.15). `markCollected` runs the same `verifyGatewayTenders` as the sell counter, before its claim, so `razorpay` rejoined `COUNTER_TENDER_METHODS`                                                                                                                                                                                                                                        |
+| ~~**A collection can't take a gateway payment**~~                       | **FIXED** (PS-GW.13–GW.15, PS-8.4e). `markCollected` runs the same `verifyGatewayTenders` as Sell before its claim, and the pickup page now supplies the connected gateway configuration so the post-OTP tender panel can actually open and confirm Razorpay                                                                                                                                                   |
 | ~~**A dashboard-received return restocks the DEFAULT location**~~       | **FIXED** (PS-RL.1–RL.7). `order_returns.location_id` was never written from `return-actions.ts`, so `receiveReturn` fell to the bare `adjust_stock` wrapper and a parcel that arrived in Mumbai credited Delhi. Now asked for, validated before the claim, and named in the toast                                                                                                                             |
-| **A walk-in with NO record can't get an emailed receipt**               | **FIXED** (PS-C.36, C.40–C.43). An optional email box on the tender panel, sent directly via `sendEmail` rather than through the notification spine — a walk-in has no identity to route to. `shouldSendDirectReceipt` keeps it to exactly one receipt                                                                                                                                                         |
-| **The customer claim has never been run in a browser**                  | PS-C.25–C.43. 96 unit tests, zero real tills. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                                                                                                                     |
+| ~~**A phone-only customer couldn't get an emailed receipt**~~           | **FIXED** (PS-C.36, C.39–C.43, C.47). Optional receipt email sits behind Payment details and sends directly via `sendEmail`; it does not mutate the customer profile. `shouldSendDirectReceipt` keeps delivery to exactly one receipt                                                                                                                                                                          |
+| **The customer claim has never been run on a real till**                | PS-C.25–C.47. The Checkout/customer surfaces have local desktop and mobile visual coverage, but no real till has exercised the claim. PS-C.31 is the one that matters: it rewrites a primary key across six tables                                                                                                                                                                                             |
 | ~~**Store credit can't be spent at a COLLECTION**~~                     | **FIXED** (PS-CR.9–CR.13). `markCollected` spends it inside the same transaction as its hand-over claim, so `store_credit` rejoined `COUNTER_TENDER_METHODS` — the two tender lists are now equal, and `gift_card` is the only method still off both                                                                                                                                                           |
 | ~~**A held sale has no auto-expiry**~~                                  | **FIXED** (PS-PK.13). `pos_parked_sales` joined the §32 retention sweep at 7 days. The CAP was the problem, not the disk: abandoned carts filled the 20-slot list and eventually stopped a counter parking a real one                                                                                                                                                                                          |
 | ~~**Analytics has no owner-selectable location filter**~~               | **FIXED (PS-AN.1–AN.4).** Staff scope remains the authority; owners and eligible staff can select one accessible physical location through the URL-owned global filter, and an exact shop view excludes online/unassigned orders                                                                                                                                                                               |

@@ -199,4 +199,7 @@ export const TENDER_LABEL: Record<string, string> = {
   gift_card: "Gift card",
   store_credit: "Store credit",
   razorpay: "Online",
+  cash_on_delivery: "Cash on delivery",
+  split: "Split payment",
+  exchange: "Exchange",
 };

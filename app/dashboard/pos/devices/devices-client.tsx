@@ -37,6 +37,12 @@ const EVENT_META: Record<
   operator_login: { label: "Staff signed in", tone: "info" },
   operator_login_failed: { label: "Failed sign-in", tone: "warn" },
   credential_reset: { label: "Credential reset", tone: "info" },
+  // `warn`, not `info`: it is ordinary enough on legacy orders to be expected,
+  // and serious enough that a run of them is worth a second look.
+  identity_override: {
+    label: "Handed over without customer verification — no mobile on the order",
+    tone: "warn",
+  },
 };
 
 const REVOKED_REASON: Record<string, string> = {
