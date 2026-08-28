@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pickupActions = vi.hoisted(() => ({
@@ -15,7 +16,10 @@ const pickupActions = vi.hoisted(() => ({
   markReadyForPickup: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-const customerVerification = vi.hoisted(() => vi.fn(() => null));
+const customerVerification = vi.hoisted(() =>
+  vi.fn<(props: { onVerified: () => void }) => ReactNode>(() => null),
+);
+const tenderPanel = vi.hoisted(() => vi.fn(() => null));
 
 vi.mock("@/app/actions/pos-pickup-actions", () => pickupActions);
 vi.mock("@/app/actions/pos-return-actions", () => ({
@@ -29,7 +33,7 @@ vi.mock("@/lib/pos/pickup-badge", () => ({
 }));
 vi.mock("sonner", () => ({ toast }));
 vi.mock("./collection-detail", () => ({ CollectionDetail: vi.fn(() => null) }));
-vi.mock("./sell/tender-panel", () => ({ TenderPanel: vi.fn(() => null) }));
+vi.mock("./sell/tender-panel", () => ({ TenderPanel: tenderPanel }));
 vi.mock("./customer-phone-verification", () => ({
   CustomerPhoneVerification: customerVerification,
 }));
@@ -53,6 +57,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   pickupActions.markReadyForPickup.mockResolvedValue({ success: true });
   pickupActions.getPickupQueue.mockResolvedValue({ orders: [ORDER] });
+  pickupActions.getCollectionCredit.mockResolvedValue(0);
 });
 
 describe("pickup queue — marking an order ready", () => {
@@ -111,5 +116,39 @@ describe("customer verification", () => {
       undefined,
     );
     expect(pickupActions.markCollected).not.toHaveBeenCalled();
+  });
+
+  it("offers Razorpay after OTP when a connected pickup still has money due", async () => {
+    customerVerification.mockImplementationOnce(
+      (props: { onVerified: () => void }) => (
+        <button type="button" onClick={props.onVerified}>
+          Verify now
+        </button>
+      ),
+    );
+    render(
+      <CounterClient
+        mode="pickups"
+        initial={[{ ...ORDER, status: "ready" }]}
+        error={null}
+        canRefund
+        canFulfilPickup
+        gateway={{
+          keyId: "rzp_test_1",
+          storeName: "Echoes",
+          locationName: "Shop",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /take payment/i }));
+    fireEvent.click(screen.getByRole("button", { name: /verify now/i }));
+
+    await waitFor(() =>
+      expect(tenderPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ onTakeOnline: expect.any(Function) }),
+        undefined,
+      ),
+    );
   });
 });

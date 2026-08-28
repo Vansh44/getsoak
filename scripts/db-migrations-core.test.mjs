@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(32);
+    expect(loaded.migrations).toHaveLength(33);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -322,6 +322,35 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[31].sql).toContain(
       "Verify the customer before hand-over",
+    );
+    expect(loaded.migrations[32]).toMatchObject({
+      id: "20260829_0033_pos_customer_sales_returns_help",
+      transaction: true,
+      requires: ["20260828_0032_pos_phone_checkout_and_verification_help"],
+      verify: {},
+      applyVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("policy-driven returns"),
+            equals: "4",
+          }),
+        ],
+      },
+      adoptVerify: {
+        queries: [
+          expect.objectContaining({
+            name: expect.stringContaining("policy-driven returns"),
+            equals: "4",
+          }),
+        ],
+      },
+    });
+    expect(loaded.migrations[32].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[32].sql).toContain(
+      "split payment is refunded across its original tenders",
+    );
+    expect(loaded.migrations[32].sql).toContain(
+      "Understand collected pickups in Sales",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

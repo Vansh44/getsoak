@@ -67,6 +67,7 @@ import {
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
 import { posTotals } from "@/lib/pos/totals";
+import type { PosExchangeContext } from "@/app/actions/pos-return-actions";
 
 export interface CartLine {
   key: string;
@@ -74,6 +75,7 @@ export interface CartLine {
   variantId: string | null;
   name: string;
   variantName: string | null;
+  image: string | null;
   unitPrice: number;
   quantity: number;
   /** Markdown on this line only, in rupees — for one damaged/expiring unit.
@@ -96,9 +98,13 @@ const subscribeNever = () => () => {};
 export function SellClient({
   config,
   initialItems,
+  exchange,
+  exchangeError,
 }: {
   config: RegisterConfig;
   initialItems: PosCatalogItem[];
+  exchange?: PosExchangeContext | null;
+  exchangeError?: string | null;
 }) {
   const router = useRouter();
   // The local catalog: IndexedDB-backed, background-synced, seeded with the
@@ -119,7 +125,11 @@ export function SellClient({
   const [choices, setChoices] = useState<PosCatalogItem[] | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   // Customer is resolved once, by exact mobile, after Charge is selected.
-  const [customer, setCustomer] = useState<PosCustomer | null>(null);
+  const [exchangeActive, setExchangeActive] =
+    useState<PosExchangeContext | null>(exchange ?? null);
+  const [customer, setCustomer] = useState<PosCustomer | null>(
+    exchange?.customer ?? null,
+  );
   const [gstin, setGstin] = useState("");
   const [receiptEmail, setReceiptEmail] = useState("");
   const [parked, setParked] = useState<ParkedSale[]>([]);
@@ -234,6 +244,7 @@ export function SellClient({
           variantId: it.variantId,
           name: it.name,
           variantName: it.variantName,
+          image: it.image,
           unitPrice: it.price,
           taxClassId: it.taxClassId ?? null,
           quantity: 1,
@@ -536,6 +547,7 @@ export function SellClient({
       customerId: customer?.id ?? null,
       customerGstin: gstin.trim() || null,
       receiptEmail: receiptEmail.trim() || null,
+      exchangeReturnId: exchangeActive?.returnId ?? null,
     });
     if (res.error) {
       return { error: res.error, needsApproval: res.needsApproval };
@@ -552,7 +564,12 @@ export function SellClient({
     setReceiptEmail("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
-    router.refresh();
+    if (exchangeActive) {
+      setExchangeActive(null);
+      router.replace("/pos/sell", { scroll: false });
+    } else {
+      router.refresh();
+    }
     return {};
   };
 
@@ -609,6 +626,20 @@ export function SellClient({
           </button>
         )}
       </header>
+
+      {(exchangeActive || exchangeError) && (
+        <div
+          className={`shrink-0 border-b px-4 py-2.5 text-sm ${
+            exchangeActive
+              ? "border-[var(--pos-ok-border)] bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]"
+              : "border-[var(--pos-danger-border)] bg-[var(--pos-danger-soft)] text-[var(--pos-danger)]"
+          }`}
+        >
+          {exchangeActive
+            ? `Exchange for ${exchangeActive.originalLabel}: ${exchangeActive.customer.name} is attached. Add the replacement, then settle its total.`
+            : exchangeError}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* Catalog */}
@@ -768,6 +799,20 @@ export function SellClient({
                   className="mb-2 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-3"
                 >
                   <div className="flex items-start justify-between gap-2">
+                    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[var(--pos-surface-2)]">
+                      {l.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={l.image}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[var(--pos-ink-3)]">
+                          <Package className="h-5 w-5" strokeWidth={1.5} />
+                        </div>
+                      )}
+                    </div>
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">
                         {l.name}
@@ -911,7 +956,7 @@ export function SellClient({
             <div className="mt-2 flex gap-2">
               <button
                 type="button"
-                disabled={cart.length === 0 || parking}
+                disabled={cart.length === 0 || parking || !!exchangeActive}
                 onClick={handlePark}
                 className="flex-1 rounded-xl bg-[var(--pos-surface-2)] py-2.5 text-sm font-medium transition-colors hover:bg-[var(--pos-surface-3)] disabled:opacity-40"
               >
@@ -1008,6 +1053,7 @@ export function SellClient({
                   variantId: l.variantId,
                   name: item.name,
                   variantName: item.variantName ?? null,
+                  image: item.image,
                   unitPrice: item.price,
                   quantity: l.quantity,
                   lineDiscount: l.lineDiscount ?? 0,
@@ -1040,6 +1086,7 @@ export function SellClient({
           receiptEmail={receiptEmail}
           onReceiptEmail={setReceiptEmail}
           customer={customer}
+          customerLocked={!!exchangeActive}
           onCustomer={setCustomer}
           onResolveCustomer={resolvePosCustomerByPhone}
           gstin={gstin}

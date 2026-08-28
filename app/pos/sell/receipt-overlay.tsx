@@ -1,10 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Printer, Receipt, X } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  PackageCheck,
+  Printer,
+  Receipt,
+  UserRound,
+  X,
+} from "lucide-react";
 import { getPosReceipt } from "@/app/actions/pos-sale-actions";
 import { ThermalReceipt } from "@/components/pos/thermal-receipt";
-import type { ReceiptModel } from "@/lib/pos/receipt";
+import { TENDER_LABEL, type ReceiptModel } from "@/lib/pos/receipt";
 
 // Two decimals always — change handed back is money, and "₹249.9" reads as a
 // typo at the exact moment a customer is checking it.
@@ -33,6 +41,9 @@ export function ReceiptOverlay({
   mode?: "completed" | "reprint";
 }) {
   const [receipt, setReceipt] = useState<ReceiptModel | null>(null);
+  const [detail, setDetail] = useState<
+    Awaited<ReturnType<typeof getPosReceipt>>["detail"] | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,7 +51,10 @@ export function ReceiptOverlay({
     void getPosReceipt(orderId).then((r) => {
       if (!live) return;
       if (r.error) setError(r.error);
-      else setReceipt(r.receipt ?? null);
+      else {
+        setReceipt(r.receipt ?? null);
+        setDetail(r.detail ?? null);
+      }
     });
     return () => {
       live = false;
@@ -60,9 +74,13 @@ export function ReceiptOverlay({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="tr-no-print w-full max-w-sm rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] shadow-2xl p-5 text-center">
+      <div
+        className={`tr-no-print max-h-[calc(100vh-2rem)] w-full overflow-y-auto rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-5 shadow-2xl ${
+          reprint ? "max-w-2xl text-left" : "max-w-sm text-center"
+        }`}
+      >
         <div
-          className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
+          className={`${reprint ? "" : "mx-auto"} flex h-14 w-14 items-center justify-center rounded-2xl ${
             reprint
               ? "bg-[var(--pos-surface-2)] text-[var(--pos-ink-2)]"
               : "bg-[var(--pos-ok-soft)] text-[var(--pos-ok)]"
@@ -97,6 +115,94 @@ export function ReceiptOverlay({
         )}
         {!receipt && !error && (
           <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-[var(--pos-ink-3)]" />
+        )}
+
+        {reprint && receipt && detail && (
+          <div className="mt-5 space-y-3 text-left">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-xl bg-[var(--pos-surface-2)] p-3">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-[var(--pos-ink-3)]">
+                  <UserRound className="h-4 w-4" /> Customer
+                </div>
+                <div className="mt-2 text-sm font-semibold">
+                  {detail.customerName || "Customer"}
+                </div>
+                <div className="text-xs text-[var(--pos-ink-2)]">
+                  {[detail.customerPhone, detail.customerEmail]
+                    .filter(Boolean)
+                    .join(" · ") || "No contact details"}
+                </div>
+              </div>
+              <div className="rounded-xl bg-[var(--pos-surface-2)] p-3">
+                <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-[var(--pos-ink-3)]">
+                  <PackageCheck className="h-4 w-4" /> Sale
+                </div>
+                <div className="mt-2 text-sm font-semibold">
+                  {detail.kind === "pickup"
+                    ? "Collected in store"
+                    : "Register sale"}
+                </div>
+                <div className="text-xs text-[var(--pos-ink-2)]">
+                  {new Date(detail.completedAt).toLocaleString("en-IN")} ·{" "}
+                  {detail.paymentStatus}
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-[var(--pos-border)]">
+              {receipt.lines.map((line, index) => (
+                <div
+                  key={`${line.name}-${index}`}
+                  className="flex items-start justify-between gap-3 border-b border-[var(--pos-border)] px-3 py-2.5 last:border-b-0"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {line.name}
+                    </div>
+                    <div className="text-xs text-[var(--pos-ink-2)]">
+                      {line.variantName ? `${line.variantName} · ` : ""}
+                      {line.quantity} × ₹{money(line.unitPrice)}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-sm font-semibold">
+                    ₹{money(line.total)}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-xl bg-[var(--pos-surface-2)] p-3 text-sm">
+              <div className="flex justify-between text-[var(--pos-ink-2)]">
+                <span>Subtotal</span>
+                <span>₹{money(receipt.subtotal)}</span>
+              </div>
+              {receipt.discount > 0 && (
+                <div className="mt-1 flex justify-between text-[var(--pos-ink-2)]">
+                  <span>Discount</span>
+                  <span>−₹{money(receipt.discount)}</span>
+                </div>
+              )}
+              {receipt.tax > 0 && (
+                <div className="mt-1 flex justify-between text-[var(--pos-ink-2)]">
+                  <span>Tax{receipt.taxInclusive ? " (included)" : ""}</span>
+                  <span>₹{money(receipt.tax)}</span>
+                </div>
+              )}
+              <div className="mt-2 flex justify-between border-t border-[var(--pos-border)] pt-2 font-bold">
+                <span>Total</span>
+                <span>₹{money(receipt.total)}</span>
+              </div>
+              {receipt.tenders.map((tender, index) => (
+                <div
+                  key={`${tender.method}-${index}`}
+                  className="mt-1 flex justify-between text-xs text-[var(--pos-ink-2)]"
+                >
+                  <span>{TENDER_LABEL[tender.method] ?? tender.method}</span>
+                  <span>₹{money(tender.amount)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         <div className="mt-5 flex gap-2">

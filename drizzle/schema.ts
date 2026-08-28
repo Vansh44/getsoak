@@ -1852,9 +1852,10 @@ export const orders = pgTable(
     shiftId: uuid("shift_id"),
     id: uuid().defaultRandom().primaryKey().notNull(),
     storeId: uuid("store_id").notNull(),
-    // Nullable since pos_06: a walk-in POS sale has no account and no
-    // delivery address. The customer-own RLS policy (customer_id = auth.uid())
-    // never matches NULL, so those orders stay admin-only.
+    // Nullable for online guest orders and historical walk-in POS rows. New
+    // register sales require an attached phone-resolved customer in
+    // placePosSale. Customer-own RLS (customer_id = auth.uid()) never matches
+    // NULL, so legacy anonymous orders stay admin-only.
     customerId: text("customer_id"),
     status: text().default("pending").notNull(),
     paymentMethod: text("payment_method").default("cash_on_delivery").notNull(),
@@ -1978,8 +1979,8 @@ export const orders = pgTable(
     razorpayOrderId: text("razorpay_order_id"),
     razorpayPaymentId: text("razorpay_payment_id"),
     // POS Phase 2 (pos_06_sell_path.sql). In-person sales share this table,
-    // tagged sales_channel='pos'; customerId/shippingAddress are nullable above
-    // because a walk-in has neither.
+    // tagged sales_channel='pos'. shippingAddress stays null for POS;
+    // customerId remains nullable in storage for legacy rows and other channels.
     salesChannel: text("sales_channel").default("online").notNull(),
     locationId: uuid("location_id"),
     deviceId: uuid("device_id"),

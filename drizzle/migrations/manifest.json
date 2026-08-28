@@ -1091,6 +1091,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0033_pos_customer_sales_returns_help",
+      "description": "Document mandatory POS customers, cart images, pickup Razorpay, unified Sales, and policy-driven counter returns and exchanges",
+      "file": "sql/20260829_0033_pos_customer_sales_returns_help.sql",
+      "transaction": true,
+      "requires": ["20260828_0032_pos_phone_checkout_and_verification_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain cart images, pickup Razorpay, unified Sales, and policy-driven returns and exchanges",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%Recognise items in the cart%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Use Razorpay at collection%' and body like '%verified Razorpay payment window%') or (slug = 'take-returns-at-the-counter' and body like '%split payment is refunded across its original tenders%' and body like '%Exchange at the counter%') or (slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%completed in-store pickup orders%' and body like '%Understand collected pickups in Sales%'))",
+            "equals": "4"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "POS guides explain cart images, pickup Razorpay, unified Sales, and policy-driven returns and exchanges",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'process-an-in-store-sale' and body like '%Recognise items in the cart%') or (slug = 'prepare-and-hand-over-pickup-orders' and body like '%Use Razorpay at collection%' and body like '%verified Razorpay payment window%') or (slug = 'take-returns-at-the-counter' and body like '%split payment is refunded across its original tenders%' and body like '%Exchange at the counter%') or (slug = 'view-pos-sales-shifts-money-and-analytics' and body like '%completed in-store pickup orders%' and body like '%Understand collected pickups in Sales%'))",
+            "equals": "4"
+          }
+        ]
+      }
     }
   ]
 }

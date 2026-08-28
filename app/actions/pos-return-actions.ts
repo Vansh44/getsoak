@@ -8,14 +8,10 @@
 // client says which lines and how many — never how much money.
 //
 // ── Scope ──────────────────────────────────────────────────────────────────
-// In-store returns of sales rung at THIS location, refunded at the counter:
-// cash from the drawer, or the shop's own card machine. No gateway call, so
-// this does not wait on the Razorpay refund work.
-//
-// Returning at a DIFFERENT shop from the one that sold is deliberately out —
-// it raises whose shelf gains the stock and whose drawer pays, and getting
-// that wrong means refunding cash from a till that never took it. It belongs
-// with the online-order returns (BORIS) that need the gateway anyway.
+// Setting-controlled in-store returns for register sales, another branch's
+// sales, and online orders (BORIS). Stock goes back to the location accepting
+// the goods; money follows the original tender, including split and Razorpay
+// payments, through the shared refund core.
 
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -23,10 +19,13 @@ import { withService } from "@/lib/db/client";
 import { dbErrorMessage } from "@/lib/db/errors";
 import {
   orderItems,
+  orderPayments,
   orderRefunds,
   orderReturnItems,
   orderReturns,
   orders,
+  products,
+  users,
 } from "@/drizzle/schema";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import {
@@ -43,31 +42,49 @@ import {
 } from "@/lib/pos/returns";
 import { emitEvent } from "@/lib/notifications/record";
 import { reportStockChanges } from "@/lib/inventory/alerts";
-import { storeLocations, stores } from "@/drizzle/schema";
-import {
-  locationCan,
-  normalizeCapabilities,
-  type LocationType,
-} from "@/lib/locations/capabilities";
-import { resolveStoreSettings } from "@/lib/settings/registry";
-import { effectivePlan } from "@/lib/plans";
-import {
-  canTakeReturnHere,
-  isTenderAllowed,
-  refundRouteFor,
-  type RefundRoute,
-} from "@/lib/returns/in-store";
+import { canTakeReturnHere, refundRouteFor } from "@/lib/returns/in-store";
 import { issueRefund } from "@/lib/payments/issue-refund";
 import { refundableAmount } from "@/lib/payments/refunds";
 import { logError } from "@/lib/observability/logger";
 import { OPEN_RETURN_STATUSES } from "@/lib/returns/lifecycle";
+import { getCounterReturnPolicy } from "@/lib/returns/counter-policy";
+import {
+  RETURN_BLOCKED_COPY,
+  returnEligibility,
+} from "@/lib/returns/eligibility";
+import {
+  feesFor,
+  isReturnReason,
+  type ReturnReason,
+} from "@/lib/returns/reasons";
+import { getCreditBalance } from "@/lib/credit/store-credit";
 
 /** Tenders a shop can hand money back through at the counter. */
 // What a counter can hand money back through, PLUS the gateway — which the
 // operator never chooses (refundRouteFor decides it from the tender) but which
 // processReturn must accept when that is where the money has to go.
-const REFUND_METHODS = ["cash", "card", "upi", "razorpay"] as const;
+const REFUND_METHODS = [
+  "cash",
+  "card",
+  "upi",
+  "razorpay",
+  "store_credit",
+  "original",
+] as const;
 export type RefundMethod = (typeof REFUND_METHODS)[number];
+
+export interface CounterRefundTender {
+  method: Exclude<RefundMethod, "original">;
+  amount: number;
+  reference: string | null;
+}
+
+export interface CounterRefundRoute {
+  method: RefundMethod;
+  counterChoice: boolean;
+  copy: string;
+  affectsDrawer: boolean;
+}
 
 export type ReturnCondition = "sellable" | "damaged";
 
@@ -83,6 +100,9 @@ export interface ReturnableSaleLine {
   unitPrice: number;
   lineTotal: number;
   taxAmount: number;
+  eligible: boolean;
+  blockedCopy: string | null;
+  returnUntil: string | null;
 }
 
 export interface ReturnableSale {
@@ -101,7 +121,13 @@ export interface ReturnableSale {
   broughtIn: boolean;
   /** Where the money must go, and whether the counter gets a say. Computed
    *  server-side from the TENDER, never offered as a preference. */
-  refundRoute: RefundRoute;
+  refundRoute: CounterRefundRoute;
+  /** Original tender contributions. A split return is allocated over these by
+   *  the server; the cashier never converts a card payment into cash. */
+  refundTenders: CounterRefundTender[];
+  allowExchanges: boolean;
+  requireReason: boolean;
+  restockingFeePercent: number;
 }
 
 export interface FoundOrder {
@@ -112,6 +138,142 @@ export interface FoundOrder {
   paymentMethod: string;
   /** Not rung at this counter — needs the BORIS gates. */
   broughtIn: boolean;
+}
+
+const REFUND_LABEL: Record<Exclude<RefundMethod, "original">, string> = {
+  cash: "cash",
+  card: "the card terminal",
+  upi: "UPI",
+  razorpay: "Razorpay",
+  store_credit: "store credit",
+};
+
+function refundRouting(
+  order: {
+    payment_method: string | null;
+    payment_status: string | null;
+    total: number;
+  },
+  rows: Array<{
+    method: string;
+    amount: number;
+    change_due: number | null;
+    reference: string | null;
+  }>,
+): { route: CounterRefundRoute; tenders: CounterRefundTender[] } {
+  const allowed = new Set<Exclude<RefundMethod, "original">>([
+    "cash",
+    "card",
+    "upi",
+    "razorpay",
+    "store_credit",
+  ]);
+  const tenders = rows.flatMap((row) => {
+    if (!allowed.has(row.method as Exclude<RefundMethod, "original">)) {
+      return [];
+    }
+    // Cash handed over can exceed the sale; change was never payment and must
+    // not increase the share that later comes out of the drawer.
+    const contribution = Math.max(
+      0,
+      Number(row.amount) - Number(row.change_due ?? 0),
+    );
+    if (contribution <= 0) return [];
+    return [
+      {
+        method: row.method as Exclude<RefundMethod, "original">,
+        amount: contribution,
+        reference: row.reference ?? null,
+      },
+    ];
+  });
+
+  if (tenders.length === 1) {
+    const method = tenders[0]!.method;
+    return {
+      tenders,
+      route: {
+        method,
+        counterChoice: false,
+        copy: `Refund to ${REFUND_LABEL[method]}, matching the original payment.`,
+        affectsDrawer: method === "cash",
+      },
+    };
+  }
+  if (tenders.length > 1) {
+    return {
+      tenders,
+      route: {
+        method: "original",
+        counterChoice: false,
+        copy: "Refunded across the original payment methods in the same proportions.",
+        affectsDrawer: tenders.some((tender) => tender.method === "cash"),
+      },
+    };
+  }
+
+  // Online gateway orders predate order_payments, and some legacy POS sales
+  // did not record tender rows. A named original method is still authoritative;
+  // only an ambiguous legacy counter row falls back to a cashier choice.
+  if (allowed.has(order.payment_method as Exclude<RefundMethod, "original">)) {
+    const method = order.payment_method as Exclude<RefundMethod, "original">;
+    return {
+      tenders: [
+        {
+          method,
+          amount: Number(order.total) || 0,
+          reference: null,
+        },
+      ],
+      route: {
+        method,
+        counterChoice: false,
+        copy: `Refund to ${REFUND_LABEL[method]}, matching the original payment.`,
+        affectsDrawer: method === "cash",
+      },
+    };
+  }
+
+  const legacy = refundRouteFor({
+    paymentMethod: order.payment_method,
+    paymentStatus: order.payment_status,
+  });
+  return {
+    tenders: [],
+    route: {
+      ...legacy,
+      method: legacy.method,
+    },
+  };
+}
+
+function allocateRefund(
+  amount: number,
+  route: CounterRefundRoute,
+  original: CounterRefundTender[],
+): CounterRefundTender[] {
+  if (route.method !== "original") {
+    const source = original.find((tender) => tender.method === route.method);
+    return [
+      {
+        method: route.method,
+        amount,
+        reference: source?.reference ?? null,
+      },
+    ];
+  }
+
+  const totalPaid = original.reduce((sum, tender) => sum + tender.amount, 0);
+  if (totalPaid <= 0) return [];
+  let assigned = 0;
+  return original.map((tender, index) => {
+    const share =
+      index === original.length - 1
+        ? Math.round((amount - assigned) * 100) / 100
+        : Math.round(((amount * tender.amount) / totalPaid) * 100) / 100;
+    assigned += share;
+    return { ...tender, amount: Math.max(0, share) };
+  });
 }
 
 /**
@@ -150,8 +312,13 @@ export async function findOrderForReturn(
           total: orders.total,
           payment_method: orders.paymentMethod,
           location_id: orders.locationId,
+          sales_channel: orders.salesChannel,
         })
         .from(orders)
+        .leftJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, op.storeId)),
+        )
         .where(
           and(
             eq(orders.storeId, op.storeId),
@@ -170,6 +337,15 @@ export async function findOrderForReturn(
               // shipping_address is jsonb.
               sql`${orders.shippingAddress}->>'phone' ilike ${like}`,
               sql`${orders.shippingAddress}->>'email' ilike ${like}`,
+              // POS customers live on the attached store user, not in an
+              // address snapshot. Search that record too so the same mobile
+              // entered at checkout can find the receipt at the return desk.
+              ilike(users.phone, like),
+              ilike(users.email, like),
+              ilike(
+                sql<string>`concat_ws(' ', ${users.firstName}, ${users.lastName})`,
+                like,
+              ),
             ),
           ),
         )
@@ -184,77 +360,12 @@ export async function findOrderForReturn(
         createdAt: r.created_at,
         total: Number(r.total ?? 0),
         paymentMethod: r.payment_method ?? "",
-        broughtIn: r.location_id !== op.locationId,
+        broughtIn: r.sales_channel !== "pos" || r.location_id !== op.locationId,
       })),
     };
   } catch (err) {
     logError("pos.return_search", err);
     return { results: [], error: "Couldn't search orders." };
-  }
-}
-
-/**
- * The two store-side gates BORIS needs: the `returns.allowInStore` setting and
- * this location's `returns` capability.
- *
- * Read together in one place so the answer can't drift between the lookup and
- * the write. Fails CLOSED on an error — refusing a return the merchant can
- * still take by hand is recoverable; accepting one at a counter that isn't set
- * up for it puts stock on the wrong shelf and money out of the wrong drawer.
- */
-async function borisGates(
-  storeId: string,
-  locationId: string,
-): Promise<{ storeAllows: boolean; locationAccepts: boolean }> {
-  try {
-    const [storeRow, locRow] = await withService(async (db) => {
-      const st = await db
-        .select({
-          settings: stores.settings,
-          plan: stores.plan,
-          plan_expires_at: stores.planExpiresAt,
-        })
-        .from(stores)
-        .where(eq(stores.id, storeId))
-        .limit(1);
-      const loc = await db
-        .select({
-          capabilities: storeLocations.capabilities,
-          type: storeLocations.type,
-        })
-        .from(storeLocations)
-        .where(eq(storeLocations.id, locationId))
-        .limit(1);
-      return [st[0], loc[0]] as const;
-    });
-    if (!storeRow || !locRow) {
-      return { storeAllows: false, locationAccepts: false };
-    }
-
-    const plan = effectivePlan({
-      plan: storeRow.plan,
-      plan_expires_at: storeRow.plan_expires_at,
-    });
-    const settings = resolveStoreSettings(
-      storeRow.settings as Record<string, unknown> | null,
-      plan,
-    );
-    const caps = normalizeCapabilities(
-      locRow.capabilities,
-      locRow.type as LocationType,
-    );
-
-    return {
-      storeAllows:
-        settings["returns.enabled"] === true &&
-        settings["returns.allowInStore"] === true,
-      locationAccepts: locationCan(caps, "returns", { plan }),
-    };
-  } catch (err) {
-    // Fails CLOSED, so this log is the only trace: the counter simply reports
-    // that it can't take the return, and nothing says why.
-    logError("pos.boris_gates", err, { storeId, locationId });
-    return { storeAllows: false, locationAccepts: false };
   }
 }
 
@@ -270,6 +381,14 @@ export async function getReturnableSale(
   if (typeof orderId !== "string" || !orderId)
     return { error: "Invalid sale." };
 
+  const policy = await getCounterReturnPolicy(op.storeId, op.locationId);
+  if (!policy.enabled) {
+    return {
+      error:
+        "Returns are switched off for this store. An owner can enable them in Orders settings.",
+    };
+  }
+
   try {
     const data = await withService(async (db) => {
       const orderRows = await db
@@ -284,6 +403,9 @@ export async function getReturnableSale(
           payment_status: orders.paymentStatus,
           location_id: orders.locationId,
           sales_channel: orders.salesChannel,
+          status: orders.status,
+          delivered_at: orders.deliveredAt,
+          collected_at: orders.collectedAt,
         })
         .from(orders)
         // ★ STORE-scoped, not location-scoped (roadmap Step 5). The old
@@ -309,8 +431,11 @@ export async function getReturnableSale(
           total: orderItems.total,
           line_discount: orderItems.lineDiscount,
           tax_amount: orderItems.taxAmount,
+          product_returnable: products.returnable,
+          product_window: products.returnWindowDays,
         })
         .from(orderItems)
+        .leftJoin(products, eq(products.id, orderItems.productId))
         .where(eq(orderItems.orderId, orderId));
 
       // Everything already returned on this sale, per line.
@@ -321,20 +446,37 @@ export async function getReturnableSale(
               qty: sql<number>`sum(${orderReturnItems.quantity})`,
             })
             .from(orderReturnItems)
+            .innerJoin(
+              orderReturns,
+              eq(orderReturns.id, orderReturnItems.returnId),
+            )
             .where(
-              inArray(
-                orderReturnItems.orderItemId,
-                items.map((i) => i.id),
+              and(
+                inArray(
+                  orderReturnItems.orderItemId,
+                  items.map((i) => i.id),
+                ),
+                inArray(orderReturns.status, OPEN_RETURN_STATUSES),
               ),
             )
             .groupBy(orderReturnItems.orderItemId)
         : [];
 
-      return { order, items, priorRows };
+      const paymentRows = await db
+        .select({
+          method: orderPayments.method,
+          amount: orderPayments.amount,
+          change_due: orderPayments.changeDue,
+          reference: orderPayments.reference,
+        })
+        .from(orderPayments)
+        .where(eq(orderPayments.orderId, orderId));
+
+      return { order, items, priorRows, paymentRows };
     });
 
     if (!data) return { error: "That sale isn't from this shop." };
-    const { order, items, priorRows } = data;
+    const { order, items, priorRows, paymentRows } = data;
     const prior = new Map(
       priorRows.map((p) => [p.order_item_id, Number(p.qty) || 0]),
     );
@@ -352,26 +494,44 @@ export async function getReturnableSale(
     );
 
     // ── May this counter take it? ────────────────────────────────────────
-    // A sale rung HERE is always returnable here (invariant 1 — the till has
-    // done this since pos_12). Anything else is BORIS, and needs both the
-    // store switch and this location's `returns` capability.
-    const broughtIn = order.location_id !== op.locationId;
+    // The master switch governs every counter return. An order bought online
+    // or at another branch additionally needs BORIS plus this location's
+    // explicit returns capability.
+    const broughtIn =
+      order.sales_channel !== "pos" || order.location_id !== op.locationId;
     if (broughtIn) {
       const verdict = canTakeReturnHere({
         soldHere: false,
-        ...(await borisGates(op.storeId, op.locationId)),
+        storeAllows: policy.allowInStore,
+        locationAccepts: policy.locationAccepts,
       });
       if (!verdict.allowed) return { error: verdict.reason };
     }
+
+    const routing = refundRouting(
+      {
+        payment_method: order.payment_method,
+        payment_status: order.payment_status,
+        total: Number(order.total) || 0,
+      },
+      paymentRows,
+    );
+    const orderInfo = {
+      status: order.collected_at ? "completed" : order.status,
+      deliveredAt: order.delivered_at,
+      collectedAt: order.collected_at,
+      createdAt: order.created_at,
+    };
 
     return {
       sale: {
         orderId: order.id,
         broughtIn,
-        refundRoute: refundRouteFor({
-          paymentMethod: order.payment_method,
-          paymentStatus: order.payment_status,
-        }),
+        refundRoute: routing.route,
+        refundTenders: routing.tenders,
+        allowExchanges: policy.allowExchanges,
+        requireReason: policy.requireReason,
+        restockingFeePercent: policy.restockingFeePercent,
         receiptNo: order.receipt_no ?? "",
         orderRef: order.order_ref ?? "",
         createdAt: order.created_at,
@@ -380,6 +540,14 @@ export async function getReturnableSale(
         paymentMethod: order.payment_method ?? "",
         lines: items.map((i) => {
           const returned = prior.get(i.id) ?? 0;
+          const eligibility = returnEligibility(
+            orderInfo,
+            {
+              returnable: i.product_returnable,
+              returnWindowDays: i.product_window,
+            },
+            { enabled: policy.enabled, windowDays: policy.windowDays },
+          );
           return {
             id: i.id,
             productId: i.product_id,
@@ -398,6 +566,11 @@ export async function getReturnableSale(
             unitPrice: Number(i.price) || 0,
             lineTotal: Number(i.total) || 0,
             taxAmount: Number(i.tax_amount) || 0,
+            eligible: eligibility.eligible,
+            blockedCopy: eligibility.reason
+              ? RETURN_BLOCKED_COPY[eligibility.reason]
+              : null,
+            returnUntil: eligibility.until,
           };
         }),
       },
@@ -423,6 +596,95 @@ export interface ReturnResult {
   verificationRequired?: boolean;
 }
 
+export interface PosExchangeContext {
+  returnId: string;
+  originalLabel: string;
+  returnedValue: number;
+  customer: {
+    id: string;
+    name: string;
+    phone: string;
+    email: string | null;
+    storeCredit: number;
+  };
+}
+
+/** Resume the second half of an exchange on Sell with the original customer
+ * attached. The return id in the URL is only a lookup key; store, location,
+ * lifecycle, policy and customer ownership are all re-proved here. */
+export async function getPosExchangeContext(
+  returnId: string,
+): Promise<{ context?: PosExchangeContext; error?: string }> {
+  const op = await resolvePosOperator();
+  if (!op) return { error: "Not signed in." };
+  if (!posCan(op.role, "sell")) return { error: "Not allowed." };
+  if (typeof returnId !== "string" || !returnId) {
+    return { error: "Invalid exchange." };
+  }
+  const policy = await getCounterReturnPolicy(op.storeId, op.locationId);
+  if (!policy.enabled || !policy.allowExchanges) {
+    return { error: "Exchanges are switched off for this store." };
+  }
+
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          return_id: orderReturns.id,
+          returned_value: orderReturns.total,
+          exchange_order_id: orderReturns.exchangeOrderId,
+          order_ref: orders.orderRef,
+          customer_id: orders.customerId,
+          first_name: users.firstName,
+          last_name: users.lastName,
+          phone: users.phone,
+          email: users.email,
+        })
+        .from(orderReturns)
+        .innerJoin(orders, eq(orders.id, orderReturns.orderId))
+        .innerJoin(
+          users,
+          and(eq(users.id, orders.customerId), eq(users.storeId, op.storeId)),
+        )
+        .where(
+          and(
+            eq(orderReturns.id, returnId),
+            eq(orderReturns.storeId, op.storeId),
+            eq(orderReturns.locationId, op.locationId),
+            eq(orderReturns.status, "completed"),
+          ),
+        )
+        .limit(1),
+    );
+    const row = rows[0];
+    if (!row?.customer_id) return { error: "That exchange isn't available." };
+    if (row.exchange_order_id) {
+      return { error: "A replacement sale is already linked to this return." };
+    }
+    const storeCredit = await getCreditBalance(op.storeId, row.customer_id);
+    const name = [row.first_name, row.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    return {
+      context: {
+        returnId: row.return_id,
+        originalLabel: row.order_ref,
+        returnedValue: Number(row.returned_value) || 0,
+        customer: {
+          id: row.customer_id,
+          name: name || row.phone || "Customer",
+          phone: row.phone ?? "",
+          email: row.email ?? null,
+          storeCredit,
+        },
+      },
+    };
+  } catch (error) {
+    return { error: dbErrorMessage(error, "Couldn't open that exchange.") };
+  }
+}
+
 /**
  * Take goods back and hand the money over.
  *
@@ -434,7 +696,7 @@ export async function processReturn(
   orderId: string,
   lines: ReturnLineInput[],
   method: RefundMethod,
-  reason?: string,
+  reason?: ReturnReason,
 ): Promise<ReturnResult> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
@@ -460,15 +722,33 @@ export async function processReturn(
   if (error || !sale)
     return { error: error ?? "That sale isn't from this shop." };
 
+  const reasonCode = isReturnReason(reason) ? reason : null;
+  if (sale.requireReason && !reasonCode) {
+    return { error: "Choose why the items are coming back." };
+  }
+
+  const selectedIds = new Set(lines.map((line) => line.orderItemId));
+  const blocked = sale.lines.find(
+    (line) => selectedIds.has(line.id) && !line.eligible,
+  );
+  if (blocked) {
+    return {
+      error: blocked.blockedCopy ?? `"${blocked.name}" can't be returned.`,
+    };
+  }
+
   // ★ THE TENDER DECIDES WHERE THE MONEY GOES — the till hides the wrong
   // options, and this is the server refusing them anyway. Handing cash back
   // for a card sale is the card-not-present laundering path.
   const route = sale.refundRoute;
-  if (!isTenderAllowed(route, method)) {
+  const allowedMethod = route.counterChoice
+    ? method === "cash" || method === "card" || method === "upi"
+    : method === route.method;
+  if (!allowedMethod) {
     return {
       error: route.counterChoice
         ? "Choose how the money goes back."
-        : "This order was paid online, so the refund has to go back the same way.",
+        : "Refund this payment to its original source.",
     };
   }
 
@@ -483,6 +763,7 @@ export async function processReturn(
 
   let returnId: string;
   let breakdown: ReturnType<typeof refundBreakdown>;
+  let refundTotal = 0;
   try {
     const written = await withService(async (db) => {
       // ★ LOCK THE ORDER, THEN RE-READ WHAT IS LEFT.
@@ -574,6 +855,20 @@ export async function processReturn(
         return { error: "Nothing on this sale is still returnable." };
       }
 
+      // An in-store return has no return-postage deduction. The configured
+      // restocking fee still applies to no-fault reasons, and is automatically
+      // waived for damage/wrong-item/other merchant-fault reasons.
+      const fees = feesFor(
+        reasonCode,
+        {
+          restockingFeePercent: sale.restockingFeePercent,
+          returnShippingFee: 0,
+        },
+        priced.amount,
+      );
+      const payable =
+        Math.round(Math.max(0, priced.total - fees.totalDeduction) * 100) / 100;
+
       // ★ AND CAP IT AGAINST WHAT THE ORDER CAN STILL GIVE BACK. The quantity
       // clamp above bounds the GOODS; this bounds the MONEY, which is the
       // thing leaving the drawer. issueRefund does exactly this for the
@@ -595,9 +890,9 @@ export async function processReturn(
             method: r.method,
           })),
           storeCreditUsed: Number(locked[0]!.store_credit_used ?? 0),
-          method,
+          method: method === "original" ? "cash" : method,
         });
-        if (priced.total > cap) {
+        if (payable > cap) {
           return {
             error:
               cap > 0
@@ -616,8 +911,11 @@ export async function processReturn(
           shiftId: shiftId ?? null,
           amount: priced.amount,
           tax: priced.tax,
-          total: priced.total,
-          reason: reason?.trim().slice(0, 200) || null,
+          total: payable,
+          restockingFee: fees.restockingFee,
+          returnShippingFee: 0,
+          reasonCode,
+          reason: reasonCode,
           actor: op.staffId ?? op.name,
         })
         .returning({ id: orderReturns.id });
@@ -637,33 +935,12 @@ export async function processReturn(
         })),
       );
 
-      // ★ A COUNTER refund is recorded here, inside the same transaction as
-      // the goods — the money is already across the counter, so the row must
-      // not be able to exist without the return, or vice versa.
-      //
-      // A GATEWAY refund is NOT written here: it has to call Razorpay, which
-      // cannot happen inside a transaction, and it is issued below through the
-      // shared lib/payments/issue-refund.ts so the till inherits the
-      // pending-row-first idempotency rather than reimplementing it.
-      if (method !== "razorpay") {
-        await db.insert(orderRefunds).values({
-          storeId: op.storeId,
-          orderId,
-          returnId: id,
-          locationId: op.locationId,
-          shiftId: shiftId ?? null,
-          method,
-          amount: priced.total,
-          status: "completed",
-          actor: op.staffId ?? op.name,
-        });
-      }
-
-      return { id, priced };
+      return { id, priced, payable };
     });
     if ("error" in written) return { error: written.error };
     returnId = written.id;
     breakdown = written.priced;
+    refundTotal = written.payable;
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't record the return.") };
   }
@@ -680,7 +957,7 @@ export async function processReturn(
     try {
       await withService((db) =>
         db.execute(
-          sql`select adjust_stock_at(p_store => ${op.storeId}, p_location => ${op.locationId}, p_product => ${src.productId}, p_variant => ${src.variantId || null}, p_delta => ${l.quantity}, p_reason => ${"return"}, p_note => ${`Return on ${sale.receiptNo}`}, p_actor => ${op.staffId ?? op.name}) as new_stock`,
+          sql`select adjust_stock_at(p_store => ${op.storeId}, p_location => ${op.locationId}, p_product => ${src.productId}, p_variant => ${src.variantId || null}, p_delta => ${l.quantity}, p_reason => ${"return"}, p_note => ${`Return on ${sale.receiptNo || sale.orderRef}`}, p_actor => ${op.staffId ?? op.name}) as new_stock`,
         ),
       );
       restocked.push(l.id);
@@ -720,50 +997,59 @@ export async function processReturn(
     );
   }
 
-  // ── Gateway refunds go out through the shared core ──────────────────────
-  // The goods are already booked in. If the gateway call fails, the RETURN
-  // still stands (the customer handed the items over and is walking away with
-  // nothing) — the merchant is told and can retry from the order. Unwinding
-  // the receipt instead would lose a restock that physically happened.
-  let gatewayNote: string | undefined;
-  if (method === "razorpay") {
+  // Every refund — cash, terminal, UPI, credit, gateway, and each leg of a
+  // split — goes through the shared money core. This gives counter tenders the
+  // same row lock and cap as Razorpay and records the original source instead
+  // of letting the cashier convert a card payment into cash.
+  const effectiveRoute: CounterRefundRoute = route.counterChoice
+    ? { ...route, method }
+    : route;
+  const allocations = allocateRefund(
+    refundTotal,
+    effectiveRoute,
+    sale.refundTenders,
+  ).filter((allocation) => allocation.amount > 0);
+  const notes: string[] = [];
+  let settled = 0;
+  for (const allocation of allocations) {
     const res = await issueRefund({
       storeId: op.storeId,
       orderId,
-      amount: breakdown.total,
-      method: "razorpay",
+      amount: allocation.amount,
+      method: allocation.method,
+      gatewayPaymentId:
+        allocation.method === "razorpay" ? allocation.reference : null,
       actor: op.staffId ?? op.name,
-      reason: reason?.trim().slice(0, 200) || "Returned in store",
+      reason: reasonCode ?? "Returned in store",
       returnId,
-      // ★ Deliberately NO locationId/shiftId: a gateway refund never touches
-      // the drawer, and stamping a shift would make the cash report count
-      // money that never left the till.
+      // Gateway refunds never touch the drawer. All recorded counter tenders
+      // retain the location; only cash contributes to drawer arithmetic.
+      locationId: allocation.method === "razorpay" ? null : op.locationId,
+      shiftId: allocation.method === "cash" ? (shiftId ?? null) : null,
     });
     if (res.error) {
-      gatewayNote =
-        res.code === "gateway_not_connected"
-          ? "Items taken back, but the card refund couldn't be sent — ask the owner to refund it from the dashboard."
-          : `Items taken back, but the refund failed: ${res.error}`;
-    } else if (res.pendingReconcile) {
-      gatewayNote =
-        "Items taken back. The refund is with the bank and hasn't confirmed yet — don't send it again.";
+      notes.push(
+        allocation.method === "razorpay" && res.code === "gateway_not_connected"
+          ? "The card refund couldn't be sent; ask the owner to complete it from the dashboard."
+          : `${REFUND_LABEL[allocation.method]} refund needs attention: ${res.error}`,
+      );
+      continue;
+    }
+    settled += res.amount ?? allocation.amount;
+    if (res.pendingReconcile) {
+      notes.push(
+        "The bank refund is still confirming. Do not send it a second time.",
+      );
     }
   }
-
-  // Fully returned ⇒ the sale is refunded. Partially ⇒ leave it alone: it is
-  // still a completed sale for the part the customer kept.
-  const allBack = sale.lines.every(
-    (l) =>
-      l.remaining === 0 ||
-      breakdown.lines.find((b) => b.id === l.id)?.quantity === l.remaining,
-  );
-  if (allBack) {
-    await withService((db) =>
-      db
-        .update(orders)
-        .set({ status: "refunded", paymentStatus: "refunded" })
-        .where(and(eq(orders.id, orderId), eq(orders.storeId, op.storeId))),
-    ).catch((err) => logError("pos.return_order_status", err, { orderId }));
+  if (refundTotal === 0) {
+    notes.push(
+      "The return was recorded; the policy deductions leave no refund.",
+    );
+  } else if (allocations.length === 0) {
+    notes.push(
+      "The return was recorded, but its original payment details are missing. Complete the refund from the order dashboard.",
+    );
   }
 
   emitEvent({
@@ -771,12 +1057,19 @@ export async function processReturn(
     storeId: op.storeId,
     locationId: op.locationId,
     actor: { type: "admin", id: op.staffId ?? null, label: op.name },
-    subject: { type: "order", id: orderId, label: sale.receiptNo },
+    subject: {
+      type: "order",
+      id: orderId,
+      label: sale.receiptNo || sale.orderRef,
+    },
     payload: {
       // `amount`, not `total` — see refund-actions.ts.
-      amount: breakdown.total,
+      amount: settled,
       currency: "INR",
-      paymentMethod: method,
+      paymentMethod:
+        allocations.length > 1
+          ? "original split"
+          : (allocations[0]?.method ?? method),
       items: breakdown.lines.reduce((a, l) => a + l.quantity, 0),
     },
   });
@@ -791,12 +1084,16 @@ export async function processReturn(
     locationId: op.locationId,
     staffId: op.staffId,
     actor: op.name,
-    amount: breakdown.total,
+    amount: settled,
     orderId,
-    detail: `${sale.receiptNo ?? orderId.slice(0, 8)} · ${method} · ${breakdown.lines.reduce((a, l) => a + l.quantity, 0)} item(s)`,
+    detail: `${sale.receiptNo || sale.orderRef || orderId.slice(0, 8)} · ${method} · ${breakdown.lines.reduce((a, l) => a + l.quantity, 0)} item(s)`,
   });
 
   revalidatePath("/pos/sales");
   await clearCustomerVerification();
-  return { returnId, refunded: breakdown.total, note: gatewayNote };
+  return {
+    returnId,
+    refunded: settled,
+    note: notes.length > 0 ? notes.join(" ") : undefined,
+  };
 }

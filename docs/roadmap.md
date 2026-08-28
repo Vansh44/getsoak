@@ -580,6 +580,26 @@ Receipt email and GSTIN remain available behind one optional-details control on
 the Payment screen. SMS as a receipt channel is still Step 5; the OTP below is
 identity verification, not receipt delivery.
 
+**POS-000023 hardening, shipped 2026-08-29.** Customer capture is now a server
+invariant, not merely the intended screen: `placePosSale` refuses a missing
+customer before pricing, stock or payment work, so a stale client cannot create
+another anonymous sale. Product photos remain on the cart lines. The pickup
+counter receives the same safe Razorpay configuration and opens the verified
+gateway flow after OTP. POS Sales now includes completed website pickups at the
+current shop and its receipt view shows customer, source, completion, line,
+total and tender detail.
+
+The counter return is now the settings-driven after-sales path requested with
+POS-000023. The store master switch, website-in-store switch, location
+capability, final-sale/window rules, required reason, merchant-fault fee waiver
+and restocking percentage are enforced again server-side. Refund money follows
+the saved original tender; split payments allocate proportionally rather than
+offering a cashier-selected conversion to cash. With exchanges enabled, the
+return/refund is recorded after OTP and Sell opens with the same customer locked
+for a normal fully tendered replacement; the return links that new order. The
+replacement can be any catalog item, and abandoning it never erases a return or
+refund that already happened.
+
 ### Why creating is hard here
 
 `users.id` **is** the Firebase uid, and `multitenant_01` scopes uniqueness to
@@ -686,9 +706,11 @@ proof is saved; this prevents the counter check from blocking that customer's
 future signup.
 
 **Acceptance:** PS-C.25–C.47 + PS-PAY.1–PAY.4 + PS-8.4a–8.4d +
-PS-11.2a–11.2d — **written.** Focused tests cover lookup/create races, input
+PS-11.2a–11.2d + PS-C.48–C.50 + PS-8.4e + PS-11.11–11.18 — **written.** Focused tests cover lookup/create races, input
 gating, the customer-to-payment transition, signed OTP proof scope, action
-enforcement, throttling and temporary Firebase identity cleanup.
+enforcement, throttling, temporary Firebase identity cleanup, cart imagery,
+collected-pickup Sales detail, pickup gateway availability, policy eligibility,
+original split-tender allocation and exchange linking.
 
 ---
 

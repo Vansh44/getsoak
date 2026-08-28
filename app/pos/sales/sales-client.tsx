@@ -8,7 +8,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { Receipt, RotateCcw, Search } from "lucide-react";
+import { PackageCheck, Receipt, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { listPosSales, type PosSaleRow } from "@/app/actions/pos-sale-actions";
 import {
@@ -157,12 +157,21 @@ export function SalesClient({
               onClick={() => setOpenId(s.id)}
               className="flex w-full items-center gap-3 rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4 text-left transition-colors hover:bg-[var(--pos-surface-2)]"
             >
-              <Receipt className="h-5 w-5 shrink-0 text-[var(--pos-ink-3)]" />
+              {s.kind === "pickup" ? (
+                <PackageCheck className="h-5 w-5 shrink-0 text-[var(--pos-ok)]" />
+              ) : (
+                <Receipt className="h-5 w-5 shrink-0 text-[var(--pos-ink-3)]" />
+              )}
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-mono text-sm font-semibold">
                     {s.receiptNo}
                   </span>
+                  {s.kind === "pickup" && (
+                    <span className="rounded-full bg-[var(--pos-ok-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--pos-ok)]">
+                      Store pickup
+                    </span>
+                  )}
                   {s.refunded && (
                     <span className="rounded-full bg-[var(--pos-danger-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--pos-danger)]">
                       Cancelled

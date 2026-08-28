@@ -7,7 +7,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, RotateCcw } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   processReturn,
@@ -16,6 +16,12 @@ import {
 } from "@/app/actions/pos-return-actions";
 import { refundBreakdown } from "@/lib/pos/returns";
 import { CustomerPhoneVerification } from "../../customer-phone-verification";
+import {
+  feesFor,
+  RETURN_REASON_REGISTRY,
+  RETURN_REASONS,
+  type ReturnReason,
+} from "@/lib/returns/reasons";
 
 const money = (n: number) =>
   `₹${n.toLocaleString("en-IN", {
@@ -38,7 +44,8 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
   // server-side, in front of a customer, is worse than no control.
   const route = sale.refundRoute;
   const [method, setMethod] = useState<RefundMethod>(route.method);
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState<ReturnReason | "">("");
+  const [intent, setIntent] = useState<"refund" | "exchange">("refund");
   const [pending, start] = useTransition();
   const [verificationOpen, setVerificationOpen] = useState(false);
 
@@ -58,8 +65,21 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
     [qty, sale],
   );
 
-  const nothingChosen = preview.total <= 0;
-  const anythingLeft = sale.lines.some((l) => l.remaining > 0);
+  const policyFees = feesFor(
+    reason || null,
+    {
+      restockingFeePercent: sale.restockingFeePercent,
+      returnShippingFee: 0,
+    },
+    preview.amount,
+  );
+  const refundPreview =
+    Math.round(Math.max(0, preview.total - policyFees.totalDeduction) * 100) /
+    100;
+
+  const nothingChosen =
+    preview.total <= 0 || (sale.requireReason && reason === "");
+  const anythingLeft = sale.lines.some((l) => l.remaining > 0 && l.eligible);
 
   const submit = () =>
     start(async () => {
@@ -75,7 +95,7 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
               : ("sellable" as const),
           })),
         method,
-        reason,
+        reason || undefined,
       );
       if (res.verificationRequired) {
         setVerificationOpen(true);
@@ -90,13 +110,13 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
       if (res.note) {
         toast.warning(res.note, { duration: 8000 });
       } else {
-        toast.success(
-          route.counterChoice
-            ? `Refunded ${money(res.refunded ?? 0)}`
-            : `${money(res.refunded ?? 0)} on its way back to their card`,
-        );
+        toast.success(`Return recorded · ${money(res.refunded ?? 0)} refunded`);
       }
-      router.push("/pos/sales");
+      if (intent === "exchange" && res.returnId) {
+        router.push(`/pos/sell?exchange=${encodeURIComponent(res.returnId)}`);
+      } else {
+        router.push("/pos/sales");
+      }
     });
 
   return (
@@ -129,13 +149,15 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
       <div className="mx-auto w-full max-w-3xl min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {!anythingLeft && (
           <p className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] px-4 py-6 text-center text-sm text-[var(--pos-ink-2)]">
-            Everything on this sale has already been returned.
+            {sale.lines.some((line) => line.remaining > 0)
+              ? "The remaining items aren't eligible under this store's return policy."
+              : "Everything on this sale has already been returned."}
           </p>
         )}
 
         {sale.lines.map((l) => {
           const chosen = qty[l.id] ?? 0;
-          const done = l.remaining === 0;
+          const done = l.remaining === 0 || !l.eligible;
           return (
             <div
               key={l.id}
@@ -154,6 +176,11 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                     {l.returned > 0 ? ` · ${l.returned} returned` : ""}
                     {done ? "" : ` · ${l.remaining} can come back`}
                   </div>
+                  {!l.eligible && l.blockedCopy && (
+                    <div className="mt-1 text-xs font-medium text-[var(--pos-danger)]">
+                      {l.blockedCopy}
+                    </div>
+                  )}
                 </div>
                 <div className="shrink-0 text-sm text-[var(--pos-ink-2)]">
                   {money(l.unitPrice)}
@@ -229,6 +256,59 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
         {anythingLeft && (
           <>
             <div className="rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] p-4">
+              {sale.allowExchanges && (
+                <div className="mb-4 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIntent("refund")}
+                    className={`rounded-lg py-2.5 text-sm font-semibold ${
+                      intent === "refund"
+                        ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                        : "bg-[var(--pos-surface-2)]"
+                    }`}
+                  >
+                    Refund
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIntent("exchange")}
+                    className={`rounded-lg py-2.5 text-sm font-semibold ${
+                      intent === "exchange"
+                        ? "bg-[var(--pos-accent)] text-[var(--pos-on-accent)]"
+                        : "bg-[var(--pos-surface-2)]"
+                    }`}
+                  >
+                    Exchange
+                  </button>
+                </div>
+              )}
+
+              {intent === "exchange" && (
+                <p className="mb-4 rounded-lg bg-[var(--pos-ok-soft)] px-3 py-2.5 text-sm text-[var(--pos-ok)]">
+                  Record this return, then the Sell screen opens with the same
+                  customer attached. Add the replacement and settle any price
+                  difference normally.
+                </p>
+              )}
+
+              <label className="block text-xs font-medium tracking-wide text-[var(--pos-ink-2)] uppercase">
+                Reason {sale.requireReason ? "(required)" : "(optional)"}
+                <select
+                  value={reason}
+                  onChange={(event) =>
+                    setReason(event.target.value as ReturnReason | "")
+                  }
+                  className="mt-2 w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm normal-case tracking-normal text-[var(--pos-ink)] outline-none focus:border-[var(--pos-border-strong)]"
+                >
+                  <option value="">Choose a reason</option>
+                  {RETURN_REASONS.map((value) => (
+                    <option key={value} value={value}>
+                      {RETURN_REASON_REGISTRY[value].label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <div className="text-xs font-medium tracking-wide text-[var(--pos-ink-2)] uppercase">
                 Money goes back as
               </div>
@@ -257,12 +337,24 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                   {route.copy}
                 </p>
               )}
-              <input
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Reason (optional)"
-                className="mt-3 w-full rounded-lg border border-[var(--pos-border)] bg-[var(--pos-surface)] px-3 py-2.5 text-sm outline-none focus:border-[var(--pos-border-strong)]"
-              />
+              {route.method === "original" && (
+                <div className="mt-2 space-y-1 text-xs text-[var(--pos-ink-2)]">
+                  {sale.refundTenders.map((tender, index) => (
+                    <div
+                      key={`${tender.method}-${index}`}
+                      className="flex justify-between"
+                    >
+                      <span>{tender.method.replace("_", " ")}</span>
+                      <span>{money(tender.amount)} paid</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {policyFees.totalDeduction > 0 && (
+                <p className="mt-3 text-xs text-[var(--pos-warn)]">
+                  Policy deduction: {money(policyFees.totalDeduction)}
+                </p>
+              )}
             </div>
 
             {/* STICKY, not FIXED. `fixed inset-x-0` is measured against the
@@ -273,9 +365,11 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
             <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-[var(--pos-border)] bg-[var(--pos-bg)]/95 p-4 backdrop-blur">
               <div className="flex items-center gap-4">
                 <div className="min-w-0">
-                  <div className="text-xs text-[var(--pos-ink-2)]">Refund</div>
+                  <div className="text-xs text-[var(--pos-ink-2)]">
+                    {intent === "exchange" ? "Return value" : "Refund"}
+                  </div>
                   <div className="text-2xl font-bold tabular-nums">
-                    {money(preview.total)}
+                    {money(refundPreview)}
                   </div>
                 </div>
                 <button
@@ -286,10 +380,14 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
                 >
                   {pending ? (
                     <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : intent === "exchange" ? (
+                    <ArrowRightLeft className="h-5 w-5" />
                   ) : (
                     <RotateCcw className="h-5 w-5" />
                   )}
-                  Refund {money(preview.total)}
+                  {intent === "exchange"
+                    ? "Continue exchange"
+                    : `Refund ${money(refundPreview)}`}
                 </button>
               </div>
             </div>
