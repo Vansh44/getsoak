@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { resolvePosOperator } from "@/lib/pos/operator";
 import { posCan } from "@/lib/pos/permissions";
 import { getPickupQueue } from "@/app/actions/pos-pickup-actions";
+import { getRegisterConfig } from "@/app/actions/pos-sale-actions";
 import { CounterClient } from "../counter-client";
 
 // Collections waiting on this shop's shelf — plus, through the same box, any
@@ -20,7 +21,18 @@ export default async function PosPickupsPage() {
   if (!operator) redirect("/pos/login");
   if (!posCan(operator.role, "sell")) redirect("/pos");
 
-  const { orders, error } = await getPickupQueue();
+  const [{ orders, error }, config] = await Promise.all([
+    getPickupQueue(),
+    getRegisterConfig(),
+  ]);
+  const gateway =
+    !("error" in config) && config.onlinePayments && config.gatewayKeyId
+      ? {
+          keyId: config.gatewayKeyId,
+          storeName: config.storeName,
+          locationName: config.locationName,
+        }
+      : null;
 
   return (
     <CounterClient
@@ -29,6 +41,7 @@ export default async function PosPickupsPage() {
       error={error ?? null}
       canRefund={posCan(operator.role, "refund")}
       canFulfilPickup={posCan(operator.role, "fulfil_pickup")}
+      gateway={gateway}
     />
   );
 }

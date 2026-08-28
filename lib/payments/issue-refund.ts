@@ -57,6 +57,10 @@ export interface IssueRefundInput {
   /** Required for `store_credit` — there has to be somebody to credit. A
    *  walk-in with no account can't be given a balance. */
   customerId?: string | null;
+  /** A server-verified counter payment id. POS split payments keep gateway
+   *  ids on order_payments rather than the order row; passing that exact
+   *  original reference lets a split return go back to its real source. */
+  gatewayPaymentId?: string | null;
   /** Omit to refund everything still refundable. */
   amount?: number;
   method: IssueRefundMethod;
@@ -162,7 +166,7 @@ export async function issueRefund(
       };
 
       if (input.method === "razorpay") {
-        if (order.payment_method !== "razorpay") {
+        if (order.payment_method !== "razorpay" && !input.gatewayPaymentId) {
           return {
             error:
               "This order wasn't paid online, so it can't be refunded through the gateway.",
@@ -298,7 +302,7 @@ export async function issueRefund(
     };
   }
 
-  let paymentId = order.razorpay_payment_id;
+  let paymentId = input.gatewayPaymentId ?? order.razorpay_payment_id;
   if (!paymentId && order.razorpay_order_id) {
     const payments = await rzpFetchOrderPayments(
       gateway.creds,

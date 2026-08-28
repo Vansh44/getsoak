@@ -104,6 +104,7 @@ export function TenderPanel({
   receiptEmail,
   onReceiptEmail,
   customer,
+  customerLocked = false,
   onCustomer,
   onResolveCustomer,
   gstin,
@@ -128,6 +129,8 @@ export function TenderPanel({
   onReceiptEmail?: (value: string) => void;
   /** Present only on the Sell checkout. Collection payments skip this step. */
   customer?: PosCustomer | null;
+  /** Exchange replacements stay with the customer who made the return. */
+  customerLocked?: boolean;
   onCustomer?: (customer: PosCustomer | null) => void;
   /** One explicit server round-trip after a complete number, never per key. */
   onResolveCustomer?: (
@@ -473,7 +476,7 @@ export function TenderPanel({
             <div className="mb-4">
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-sm font-semibold">Customer mobile</p>
-                {customer && (
+                {customer && !customerLocked && (
                   <button
                     type="button"
                     onClick={() => {
@@ -592,20 +595,22 @@ export function TenderPanel({
                       {customer.email ? ` · ${customer.email}` : ""}
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      onCustomer?.(null);
-                      setMobile("");
-                      setCustomerWasCreated(false);
-                      setScreen("customer");
-                      setError(null);
-                    }}
-                    className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface)] disabled:opacity-40"
-                  >
-                    Change
-                  </button>
+                  {!customerLocked && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        onCustomer?.(null);
+                        setMobile("");
+                        setCustomerWasCreated(false);
+                        setScreen("customer");
+                        setError(null);
+                      }}
+                      className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--pos-ink-2)] hover:bg-[var(--pos-surface)] disabled:opacity-40"
+                    >
+                      Change
+                    </button>
+                  )}
                 </div>
               </div>
             )}

@@ -27,7 +27,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink AI drawer is still a canned placeholder; its Vertex/Gemini agent architecture and phased rollout are specified (not implemented) in `docs/mink-ai-dashboard-plan.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
 | Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                              |
@@ -674,9 +674,11 @@ wholesip/
 │   │                          # collection still OWES at the counter. Renamed off
 │   │                          # that basename precisely so the two can't be
 │   │                          # imported for each other)
-│   ├── returns/               # ★ §28: in-store.ts (BORIS — canTakeReturnHere +
-│   │                          # refundRouteFor: the TENDER decides where money goes,
-│   │                          # and a sale rung HERE is always returnable here),
+│   ├── returns/               # ★ §28: counter-policy.ts (server-only merge of
+│   │                          # store return settings + this location's capability),
+│   │                          # in-store.ts (BORIS — canTakeReturnHere + legacy
+│   │                          # refundRouteFor; the original TENDER decides where
+│   │                          # money goes),
 │   │                          # exchange.ts (settlement + the v1 boundary —
 │   │                          # a replacement may not cost MORE, because collecting a
 │   │                          # difference is a payment flow that doesn't exist yet),
@@ -1284,7 +1286,10 @@ wholesip/
 │                              # 0027 clarifies downgrade-safe cleanup/editing and shopper-safe
 │                              # shipping fallback after the entitlement review; 0028 documents
 │                              # the location-first inventory workspace, location-filtered history,
-│                              # and the product-editor handoff to physical shelf quantities.
+│                              # and the product-editor handoff to physical shelf quantities;
+│                              # 0029–0033 keep Locations and POS Help aligned through
+│                              # fulfilment navigation, phone-first checkout, pickup Razorpay,
+│                              # unified Sales, and policy-driven returns/exchanges.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2308,9 +2313,11 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     collapsed off the fast path, cash alone asks for notes and previews change,
     while full card/UPI payments carry the full amount into a method-specific
     confirmation. Split payment is a method → amount → remaining-balance
-    loop, then one review of every staged leg before completion. The server
-    allowlists, paise settlement, gateway verification, replay protection and
-    stock authority below are unchanged. **★ THE SHELF IS CHECKED
+    loop, then one review of every staged leg before completion. Each selected
+    cart line keeps the catalog image beside its name (with a package fallback),
+    including carts restored from the live catalog, so recognition adds no
+    checkout step. The server allowlists, paise settlement, gateway verification,
+    replay protection and stock authority below are unchanged. **★ THE SHELF IS CHECKED
     BEFORE THE MONEY (Step 16)** — `startPosGatewayPayment` takes the cart and
     runs `shortLinesAt`, refusing before the Razorpay order exists, which
     catches the commoner stale-IndexedDB-cache case for free. That courtesy read
@@ -2333,8 +2340,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
     Spending before it would take money for a hand-over that then loses a race;
     after it would give the goods away when the balance moved. A false spend
     THROWS, rolling the claim back. `getCollectionCredit` reads the balance when
-    the pad OPENS rather than on the 30s queue poll. The two tender lists are
-    equal today and stay SEPARATE constants: the next method (a gift card) will
+    the pad OPENS rather than on the 30s queue poll. The pickup page now passes
+    the same safe public gateway configuration as Sell, so `counter-client.tsx`
+    opens and server-confirms Razorpay after the order-bound OTP. The two tender
+    lists are equal today and stay SEPARATE constants: the next method (a gift card) will
     land on the sell counter first and must earn its place here on its own. ⚠ A gateway clash at the collection counter CANNOT
     unwind the way the sell counter's does — the claim has committed and the
     parcel is gone — so it is logged distinctly for a human to reconcile. - **★★ THERE IS A MERCHANT WEBHOOK NOW** (`/api/webhooks/payments/[storeId]`,
@@ -3236,6 +3245,15 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       vocabulary, its **allowlist** and the coverage/change math live in
       `lib/pos/tenders.ts` — shared with the collection counter, which is the
       second place money is taken (§23).
+      - **Sales is the completed shop ledger, not only receipt-numbered rows.**
+        `listPosSales` includes register orders plus website pickup orders once
+        `collected_at` is set at this location. A collected pickup keeps its
+        online sales channel and order reference; the list labels it rather
+        than cloning it into another order. `getPosReceipt` authorizes both
+        shapes and returns customer contact, completion/status, items, totals
+        and tender detail for the expanded reprint view. Historical anonymous
+        rows remain readable; new Sell orders require a customer before any
+        pricing, stock or payment write.
       - **★ ONLY THE SUPERADMIN MAY GIVE MONEY AWAY** (`pos.ownerOnlyDiscounts`,
         default **on**). A discount is the till's one irreversible act that
         leaves NOTHING missing from the shelf to count afterwards — no physical
@@ -3540,8 +3558,10 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         `users` — a POS shipping address is deliberately null — so both an
         existing phone match and a phone-only customer created at Charge remain
         visible after the sale.
-        The POS drawer/invoice say **Sold at**, render a truthful Walk-in when
-        nobody was attached, and expose neither delivery address/phone,
+        The POS drawer/invoice say **Sold at**; `Walk-in` is now only a truthful
+        label for historical rows created before customer capture became
+        mandatory. New register sales cannot cross the `placePosSale` boundary
+        without an attached store customer. POS detail exposes neither delivery address/phone,
         ShipmentPanel nor the fulfilment selector. That is enforced below the
         UI too: `updateOrderStatus` excludes POS rows from fulfilment states,
         and shipment actions refuse the POS channel before creating warehouse
@@ -3553,8 +3573,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         nothing else: no `/dashboard/logs` entry, no team alert, and no
         low/out-of-stock warning even when it emptied the shelf — the one
         channel physically in front of the merchant was the one they couldn't
-        see. `customerId` is null for a walk-in, which the fan-out reads as "no
-        customer audience" (right: they leave holding a receipt). NOTE the
+        see. Every new sale carries `customerId`, so customer notifications and
+        mobile-based after-sales lookup have an owner; legacy anonymous rows
+        continue to render but cannot be produced by a stale client. NOTE the
         coverage guard can't catch this class of gap — it asserts a key is
         emitted SOMEWHERE, not that every path which should emit it does.
       - **★★ AN EXPLICIT `null` IS NOT A DEFAULT, AND IT TOOK EVERY TILL DOWN**
@@ -4337,8 +4358,9 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         into expected cash and report the drawer SHORT: the same defect pointed
         the other way, and worse, because "over on cash, short on card" cannot
         be attributed to anything. `/pos/pickups` shows the amount owed on the
-        row and opens the register's own `TenderPanel` (cash/card/UPI, split
-        tenders, change) before handing over. It is the rule §26 and §28
+        row and opens the register's own `TenderPanel` (cash/card/UPI, connected
+        Razorpay, store credit, split tenders, change) after customer OTP and
+        before handing over. It is the rule §26 and §28
         already state for refunds, read backwards: **the tender decides where
         the money goes.**
       - **★ COVERAGE IS CHECKED BEFORE THE CLAIM.** Claiming
@@ -5263,9 +5285,9 @@ Every registry event has a real emitter;
 `order.cancellation_requested` was the last one waiting. Keep it that
 way — an entry there is a deliberate act, not a way to silence the guard.
 
-28. **Returns — the policy surface.** Config + the pure rules; the request flow
-    itself is NOT built (design + phasing: `docs/returns-exchanges-plan.md`,
-    build order §7; what shipped: §11).
+28. **Returns — policy, online requests, counter returns and exchanges.**
+    Design + phasing: `docs/returns-exchanges-plan.md`; implementation detail
+    and shipped exceptions are recorded below.
     - **★ "ONLY CERTAIN PRODUCTS" IS A COLUMN, NOT A SETTING.**
       `lib/settings/registry.ts` holds one boolean or number PER STORE and
       cannot address a single SKU, so `products.returnable` + optional
@@ -5305,13 +5327,16 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Settings**: twelve `returns.*` keys, group Returns, section `orders`,
       at `/dashboard/orders/settings`. Almost all `dependsOn: returns.enabled`,
       so an unenabled store sees ONE switch rather than a wall of config.
-      `returns.enabled` defaults OFF (invariant 1); `returns.allowInStore` is
-      Pro (it needs POS). **Only two are enforced today** — `ownerOnlyRefunds`
-      and `maxRefundWithoutApproval` gate `refundOrder` (§26) via
-      `isStoreSuperadmin()`, and ★ the cap is re-checked INSIDE the transaction
-      once the amount resolves, because an omitted amount means "refund
-      everything left" and checking only `input.amount` is bypassed by leaving
-      the field blank. The rest are consumed by Steps 3–5.
+      `returns.enabled` defaults OFF; `returns.allowInStore` is Pro (it needs
+      POS). Dashboard refund authority still uses `ownerOnlyRefunds` and
+      `maxRefundWithoutApproval`, with the cap re-checked inside the transaction
+      once the amount resolves. The till reads its policy through
+      `lib/returns/counter-policy.ts`: the master switch governs every counter
+      return; every website order additionally needs `allowInStore` plus this
+      location's `returns` capability; `allowExchanges`, `requireReason`, the
+      store window and restocking percentage are passed as decisions rather
+      than raw client authority. Product final-sale/window overrides and reason-
+      based fee waivers are re-evaluated by `processReturn` before any write.
     - **Final sale is said BEFORE the sale**: a badge on both PDP layouts,
       shown regardless of whether returns are switched on, because it is a
       statement about that product and discovering it afterwards is how a
@@ -5377,12 +5402,12 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         RE-PRICE inside the lock, which is what `issueRefund` has always done
         (and why the gateway path was never exposed).
       - **★★ THE TILL'S CASH REFUND HAD NO MONEY CAP AT ALL.** `processReturn`
-        inserted its `order_refunds` row directly with `breakdown.total` and
-        never consulted `refundableAmount` — that check lived only in
-        `issueRefund`, which the counter tenders bypass by design (the money is
-        already across the counter, so it is recorded in the same transaction
-        as the goods). The quantity clamp bounded the GOODS; nothing bounded
-        the DRAWER. It now checks the cap inside the lock.
+        used to insert its `order_refunds` row directly with `breakdown.total`.
+        It now checks `refundableAmount` while the order is locked, records the
+        return, then sends every original-tender allocation through the shared
+        `issueRefund` core. Cash, external card/UPI, store credit and Razorpay
+        therefore share the same money cap, idempotent refund rows, status sync
+        and credit-note trigger; only cash carries the current drawer shift.
       - **★ AN EXCHANGE OWES THE DIFFERENCE, NOT THE WHOLE LINE.**
         `order_returns.total` is what the merchant's queue prints and what the
         approval email quotes, and `requestReturn` stored the full goods value
@@ -5402,7 +5427,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       - **Not built:** photo upload (column + sanitiser + dashboard rendering
         exist; the storefront only warns one may be asked for), and per-line
         damaged marking at receipt (books in as sellable, like the till).
-    - **★ AN EXCHANGE IS A RETURN PLUS A NEW ORDER**
+    - **★ AN ONLINE-REQUEST EXCHANGE IS A RETURN PLUS A NEW ORDER**
       (`returns_03_exchanges.sql`, `lib/returns/exchange.ts`). A distinct
       `exchanges` table would add an "…or exchange" branch to every stock path,
       tax calculation, invoice and report forever; as two existing rows and one
@@ -5432,9 +5457,11 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         refunded from its snapshot. `payment_method: 'exchange'`,
         `payment_status: 'paid'` — paid for by the goods that came back, and it
         must never read as unpaid revenue to chase.
-      - **Not built:** shipping the replacement BEFORE the return arrives (an
+      - **Not built for online self-service:** shipping the replacement BEFORE the return arrives (an
         advance exchange needs a card hold, and there is no hold primitive),
-        and cross-product swaps.
+        and cross-product swaps. The manager-led counter exchange below may use
+        any catalog product because it creates and tenders the replacement at
+        the register after the return is already in hand.
     - **★ BORIS — RETURNING AN ONLINE ORDER AT A COUNTER**
       (`lib/returns/in-store.ts`, `/pos/pickups`). This is what finally reads
       the `returns` location capability, in the registry unused since Phase 0.
@@ -5444,17 +5471,20 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         STORE-scoped, and the location question splits into the two it always
         was — whose shelf gains the stock (the shop they walked into) and
         whether this counter may accept it (`canTakeReturnHere`).
-      - **★ A SALE RUNG AT THIS COUNTER IS ALWAYS RETURNABLE HERE**, regardless
-        of the BORIS settings. Invariant 1: the till has done this since
-        pos_12, and making it conditional on a later setting would break every
-        shop doing it today. `returns.allowInStore` governs the NEW capability
-        only.
-      - **★ THE TENDER DECIDES WHERE THE MONEY GOES.** An online order refunds
-        to the gateway and the till shows NO cash button — a control that
-        always fails server-side, in front of a customer, is worse than no
-        control; `isTenderAllowed` refuses it server-side anyway. Cash back for
-        a card sale is the card-not-present laundering path. COD is the one
-        case where cash at the counter is right.
+      - **★ THE MASTER SWITCH GOVERNS EVERY COUNTER RETURN.** A sale rung here
+        avoids only the additional BORIS gates; it still follows the merchant's
+        enabled/window/final-sale/reason/fee policy. Every website order counts
+        as brought in — including a pickup collected at this same shop — and
+        additionally needs `returns.allowInStore` plus this location's Returns
+        capability.
+      - **★ THE ORIGINAL TENDER DECIDES WHERE THE MONEY GOES.** `order_payments`
+        is the source: cash returns to the drawer, external card/UPI is recorded
+        back to that rail, store credit returns to its owner, and Razorpay goes
+        through the gateway. A split refund is allocated proportionally across
+        the original contributions with the rounding remainder on the final leg.
+        Only a legacy order with no usable tender record can ask a manager for a
+        supported counter method. Cash back for a card sale is refused below the
+        UI as well as hidden in it.
       - **★ A gateway refund carries NO location_id and NO shift_id.** It never
         touches the drawer, and stamping a shift would make the cash report
         count money that never left the till.
@@ -5469,9 +5499,14 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         copy of the pending-row-first idempotency is how someone gets refunded
         twice at a till where nobody is watching a log. It returns a stable
         `code` so each caller can advise its own audience.
-      - **Not enforced at the till:** the return window and final-sale rules.
-        Adding them would change what the counter does today (invariant 1), and
-        the merchant is standing right there.
+      - **Counter exchanges reuse the ordinary sale path.** The return and its
+        original-method refund commit first, then `/pos/sell?exchange=…` loads a
+        store/location-scoped completed return, attaches and locks the original
+        customer, and lets the manager add any replacement. The replacement is
+        a normal fully tendered POS order; `placePosSale` validates and writes
+        `order_returns.exchange_order_id`. This keeps sales, tax and payment
+        reporting ordinary. Abandoning the replacement does not undo goods and
+        money that already came back.
     - **★ GST CREDIT NOTES** (`returns_04_credit_notes.sql`,
       `lib/billing/credit-note-data.ts`). A legal document, not a receipt: it
       reverses output tax the store has already declared.

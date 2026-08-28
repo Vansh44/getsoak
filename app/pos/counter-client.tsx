@@ -65,7 +65,11 @@ import {
   findOrderForReturn,
   type FoundOrder,
 } from "@/app/actions/pos-return-actions";
-import type { PosTender } from "@/app/actions/pos-sale-actions";
+import {
+  confirmPosGatewayPayment,
+  startPosGatewayPayment,
+  type PosTender,
+} from "@/app/actions/pos-sale-actions";
 import { TenderPanel } from "./sell/tender-panel";
 import { CollectionDetail } from "./collection-detail";
 import { PosScreen } from "./pos-screen";
@@ -74,6 +78,7 @@ import { fetchPickupQueue } from "@/lib/pos/live";
 import { claimPickupBadge, publishPickupCount } from "@/lib/pos/pickup-badge";
 import { CustomerPhoneVerification } from "./customer-phone-verification";
 import type { PosCustomerVerificationPurpose } from "@/lib/pos/customer-verification";
+import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 
 const money = (n: number) => `₹${n.toFixed(2)}`;
 
@@ -134,6 +139,7 @@ export function CounterClient({
   error,
   canRefund,
   canFulfilPickup,
+  gateway,
 }: {
   mode: CounterMode;
   initial: PickupOrder[];
@@ -144,6 +150,11 @@ export function CounterClient({
   /** Marking a box packed and ready. Every POS role holds this today; the prop
    *  stays so a future restricted role does not silently get the button. */
   canFulfilPickup: boolean;
+  gateway?: {
+    keyId: string;
+    storeName: string;
+    locationName: string;
+  } | null;
 }) {
   const [queue, setQueue] = useState(initial);
   const [query, setQuery] = useState("");
@@ -490,6 +501,48 @@ export function CounterClient({
     );
     setDetailFor(null);
     return {};
+  };
+
+  const takeOnlinePayment = async (
+    amount: number,
+  ): Promise<{ reference?: string; error?: string }> => {
+    if (!gateway?.keyId) {
+      return { error: "Razorpay isn't connected for this store." };
+    }
+    const amountPaise = Math.round(amount * 100);
+    const started = await startPosGatewayPayment(amountPaise);
+    if ("error" in started) return { error: started.error };
+
+    return new Promise((resolve) => {
+      void openRazorpayModal({
+        keyId: started.keyId,
+        rzpOrderId: started.rzpOrderId,
+        amountPaise: started.amountPaise,
+        name: gateway.storeName,
+        description: `${gateway.locationName} · pickup`,
+        onSuccess: (result) => {
+          void confirmPosGatewayPayment({
+            rzpOrderId: result.razorpay_order_id,
+            paymentId: result.razorpay_payment_id,
+            signature: result.razorpay_signature,
+            amountPaise: started.amountPaise,
+          }).then((confirmed) =>
+            resolve(
+              "error" in confirmed
+                ? { error: confirmed.error }
+                : { reference: confirmed.paymentId },
+            ),
+          );
+        },
+        onDismiss: () => resolve({ error: "Payment cancelled." }),
+      }).then((opened) => {
+        if (!opened) {
+          resolve({
+            error: "Couldn't open the payment window. Check the connection.",
+          });
+        }
+      });
+    });
   };
 
   const isReturns = mode === "returns";
@@ -929,6 +982,7 @@ export function CounterClient({
           // spends it atomically, so a stale figure costs a refusal, never an
           // overdraw.
           storeCredit={collectionCredit}
+          onTakeOnline={gateway ? takeOnlinePayment : undefined}
         />
       )}
 
