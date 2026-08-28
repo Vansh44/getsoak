@@ -2268,7 +2268,25 @@ export interface PosSaleRow {
   customerName: string | null;
   itemCount: number;
   paymentMethod: string;
-  refunded: boolean;
+  /** The sale was undone outright. */
+  cancelled: boolean;
+  /**
+   * How much of the money has gone back.
+   *
+   * ★ DERIVED FROM `payment_status`, NOT `orders.status`. It used to read
+   * `status === "refunded"`, which only ever became true because the till
+   * WROTE it — and once counter refunds moved onto the shared money core that
+   * write went away, leaving a fully refunded sale looking untouched in this
+   * list. `syncOrderRefundState` is the designed mechanism: it recomputes
+   * payment_status from refunds that actually SETTLED, so a refund that later
+   * fails moves the sale back off "refunded" (§26). Re-introducing a manual
+   * status write would be a flag that cannot move back.
+   *
+   * ★ AND IT IS THREE-STATE, because a partial refund still has goods on it.
+   * Collapsing it to a boolean would hide the "Return items" link on a sale
+   * the customer can still bring the rest of back.
+   */
+  refund: "none" | "partial" | "full";
   kind: "register" | "pickup";
 }
 
@@ -2315,6 +2333,7 @@ export async function listPosSales(
           customer_last_name: users.lastName,
           payment_method: orders.paymentMethod,
           status: orders.status,
+          payment_status: orders.paymentStatus,
           fulfilment_type: orders.fulfilmentType,
           pickup_status: orders.pickupStatus,
           completed_at: sql<string>`coalesce(${orders.collectedAt}, ${orders.createdAt})`,
@@ -2416,7 +2435,13 @@ export async function listPosSales(
           customerName: name,
           itemCount: counts.get(r.id) ?? 0,
           paymentMethod: r.payment_method ?? "",
-          refunded: r.status === "cancelled" || r.status === "refunded",
+          cancelled: r.status === "cancelled",
+          refund:
+            r.payment_status === "refunded"
+              ? ("full" as const)
+              : r.payment_status === "partially_refunded"
+                ? ("partial" as const)
+                : ("none" as const),
           kind:
             r.fulfilment_type === "pickup" && r.pickup_status === "collected"
               ? "pickup"

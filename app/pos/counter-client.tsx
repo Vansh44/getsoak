@@ -183,11 +183,22 @@ export function CounterClient({
   const [detailReload, setDetailReload] = useState(0);
   const [pending, start] = useTransition();
   const boxRef = useRef<HTMLInputElement>(null);
-  // Takes the acknowledgement, so "proceed without a code" travels to the
-  // server as its own flag rather than being remembered as ambient state.
-  const verificationContinue = useRef<
-    ((ackUnverified: boolean) => void) | null
-  >(null);
+  // ★★ AWAITABLE, NOT A CALLBACK — and that is what keeps the tender pad
+  // honest. `takePayment` is the panel's `onComplete`: returning `{}` to it
+  // while a dialog opened behind the scenes reads as SUCCESS, so the panel
+  // cleared its spinner, showed no error, and left an enabled "Complete sale"
+  // under the verification dialog. The retry then ran OUTSIDE the panel, so
+  // its own failure had nowhere to be displayed either.
+  //
+  // Awaiting it means `finish` never returns until the whole thing resolves:
+  // the panel stays busy, and every outcome — verified, overridden, cancelled,
+  // failed — comes back through the one path that already renders errors.
+  //
+  // Resolves `false` for a real proof, `true` for an acknowledged override
+  // (which travels to the server as its own flag), and `null` for cancelled.
+  const verificationResolve = useRef<((ack: boolean | null) => void) | null>(
+    null,
+  );
   const [verification, setVerification] = useState<{
     orderId: string;
     purpose: PosCustomerVerificationPurpose;
@@ -329,13 +340,22 @@ export function CounterClient({
     [canRefund],
   );
 
-  const verifyThen = (
+  const requestVerification = (
     orderId: string,
     purpose: PosCustomerVerificationPurpose,
-    next: (ackUnverified: boolean) => void,
-  ) => {
-    verificationContinue.current = next;
-    setVerification({ orderId, purpose });
+  ): Promise<boolean | null> =>
+    new Promise((resolve) => {
+      // A dialog already open would otherwise strand its awaiter forever.
+      verificationResolve.current?.(null);
+      verificationResolve.current = resolve;
+      setVerification({ orderId, purpose });
+    });
+
+  const settleVerification = (ack: boolean | null) => {
+    const resolve = verificationResolve.current;
+    verificationResolve.current = null;
+    setVerification(null);
+    resolve?.(ack);
   };
 
   // Debounced so a scanner burst or a fast typist doesn't fire per keystroke.
@@ -427,7 +447,8 @@ export function CounterClient({
         // Re-open the same verification instead of reducing this to a toast
         // that makes the cashier start the whole hand-over again.
         if (res.verificationRequired || res.verificationUnavailable) {
-          verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
+          const ack = await requestVerification(o.id, "pickup");
+          if (ack !== null) continueHandOver(o, acked, ack);
           return;
         }
         if (res.error) {
@@ -452,24 +473,46 @@ export function CounterClient({
       setConfirmUnprepared(o);
       return;
     }
-    verifyThen(o.id, "pickup", (ack) => continueHandOver(o, acked, ack));
+    void requestVerification(o.id, "pickup").then((ack) => {
+      if (ack !== null) continueHandOver(o, acked, ack);
+    });
   };
 
-  const takePayment = async (tenders: PosTender[]) => {
-    if (!tendering) return {};
-    const { order: o, acked, ackUnverified } = tendering;
+  /**
+   * Take the money and hand over, retrying once behind a verification dialog.
+   *
+   * ★ SEPARATE FROM `takePayment`, and not just a second parameter on it.
+   * `takePayment` IS the panel's `onComplete`, whose second argument is the
+   * manager `approvalToken` — a string, and truthy. A positional `ackOverride`
+   * there would have the panel's own approval flow silently assert "proceed
+   * without verifying the customer". (TypeScript caught it; it would not have
+   * been visible in review.)
+   */
+  const runCollect = async (
+    o: PickupOrder,
+    acked: boolean,
+    tenders: PosTender[],
+    ackUnverified: boolean,
+    // Bounded: a server that keeps refusing a proof it just accepted would
+    // otherwise re-open the dialog forever.
+    attempt = 0,
+  ): Promise<{ error?: string }> => {
     const res = await markCollected(o.id, tenders, {
       acknowledgeUnprepared: acked,
-      acknowledgeUnverifiedCustomer: ackUnverified === true,
+      acknowledgeUnverifiedCustomer: ackUnverified,
     });
     if (res.verificationRequired || res.verificationUnavailable) {
-      // Re-open on the SAME tendering row, then retry with whatever the dialog
-      // answered — a proof, or an acknowledged override.
-      verifyThen(o.id, "pickup", (ack) => {
-        setTendering((cur) => (cur ? { ...cur, ackUnverified: ack } : cur));
-        void takePayment(tenders);
-      });
-      return {};
+      // ★ AWAITED, so the panel's `finish` is still running: its spinner stays
+      // up and the retry's own result is returned to it like any other. The
+      // previous shape returned `{}` here — a SUCCESS to the panel — and then
+      // retried outside it, where an error had nowhere to go.
+      if (attempt >= 1) return { error: res.error };
+      const ack = await requestVerification(o.id, "pickup");
+      if (ack === null) {
+        return { error: "Verification was cancelled, so nothing was taken." };
+      }
+      setTendering((cur) => (cur ? { ...cur, ackUnverified: ack } : cur));
+      return runCollect(o, acked, tenders, ack, attempt + 1);
     }
     if (res.error) {
       // The panel stays open — the customer is standing there and the cashier
@@ -519,6 +562,14 @@ export function CounterClient({
     );
     setDetailFor(null);
     return {};
+  };
+
+  /** The tender pad's `onComplete`. Its shape must stay exactly what
+   *  TenderPanel expects — see the note on `runCollect`. */
+  const takePayment = async (tenders: PosTender[]) => {
+    if (!tendering) return {};
+    const { order: o, acked, ackUnverified } = tendering;
+    return runCollect(o, acked, tenders, ackUnverified === true);
   };
 
   const takeOnlinePayment = async (
@@ -1008,22 +1059,9 @@ export function CounterClient({
         <CustomerPhoneVerification
           orderId={verification.orderId}
           purpose={verification.purpose}
-          onCancel={() => {
-            verificationContinue.current = null;
-            setVerification(null);
-          }}
-          onVerified={() => {
-            const next = verificationContinue.current;
-            verificationContinue.current = null;
-            setVerification(null);
-            next?.(false);
-          }}
-          onOverride={() => {
-            const next = verificationContinue.current;
-            verificationContinue.current = null;
-            setVerification(null);
-            next?.(true);
-          }}
+          onCancel={() => settleVerification(null)}
+          onVerified={() => settleVerification(false)}
+          onOverride={() => settleVerification(true)}
         />
       )}
 

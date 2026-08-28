@@ -3274,6 +3274,22 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
         and tender detail for the expanded reprint view. Historical anonymous
         rows remain readable; new Sell orders require a customer before any
         pricing, stock or payment write.
+        **★★ AND ITS REFUND BADGE READS `payment_status`, NOT `orders.status`.**
+        It used to be `status === "cancelled" || status === "refunded"`, and the
+        second half only ever became true because `processReturn` WROTE it. Once
+        counter refunds moved onto the shared money core that write went away —
+        `syncOrderRefundState` derives `payment_status` instead — so a fully
+        refunded sale rendered in this list as completely untouched, and its
+        "Return items" link stayed live for goods that had already gone back.
+        Re-introducing the manual write would be the wrong repair twice over:
+        it is a flag that cannot move back when a refund later fails (§26's
+        derived-never-accumulated rule), and `orders.status` is the FULFILMENT
+        axis, where "refunded" would additionally make the order
+        `order_not_eligible` for any further partial return. The row now carries
+        `cancelled` and a THREE-STATE `refund` (`none`/`partial`/`full`),
+        because a boolean cannot say "part of this came back": collapsing them
+        printed "Cancelled" over a refunded sale and hid the return link on one
+        the customer can still bring the rest of back.
       - **★ ONLY THE SUPERADMIN MAY GIVE MONEY AWAY** (`pos.ownerOnlyDiscounts`,
         default **on**). A discount is the till's one irreversible act that
         leaves NOTHING missing from the shelf to count afterwards — no physical
@@ -3918,16 +3934,30 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
           cancelled order is exactly when the shop must be able to say what
           happened. It renders with NO buttons (`collectionState` decides), the
           same rule the row follows.
-        - **★★ MARK READY MOVES THE ROW; HANDING OVER REMOVES IT.** Once the
-          server confirms Mark ready, `counter-client.tsx` changes that order to
-          `ready` in the queue, search results and open detail in the same frame.
-          It therefore moves immediately from **To prepare** to **Ready to
-          collect** instead of disappearing until a poll/reload rediscovers it.
-          The detail stays open because the next tap may be Hand over; only a
-          completed hand-over uses `settle` to remove the row. A deposit also
-          keeps the detail open — the order is still work — and re-reads,
-          applying `partial.remaining` optimistically first so no stale balance
-          is on screen for a round trip.
+        - **★★ A DEFERRED HAND-OVER IS NEVER REPORTED TO THE PAD AS SUCCESS.**
+          `takePayment` IS `TenderPanel`'s `onComplete`, so returning `{}` while a
+          verification dialog opened behind it read as SUCCESS: the panel cleared
+          its spinner, showed no error, and left an enabled "Complete sale" under
+          the dialog — and the retry then ran OUTSIDE the panel, where its own
+          failure had nowhere to be displayed. Verification is a PROMISE now
+          (`requestVerification`), so `finish` stays awaiting for the whole round
+          and every outcome — verified, overridden, cancelled, failed — comes back
+          through the one path that already renders errors. ⚠ The retry lives in
+          `runCollect`, NOT in a second parameter on `takePayment`: `onComplete`'s
+          second argument is the manager `approvalToken`, a truthy STRING, so a
+          positional `ackUnverified` there would have the approval flow silently
+          assert "proceed without verifying the customer". TypeScript caught that;
+          review would not have.
+      - **★★ MARK READY MOVES THE ROW; HANDING OVER REMOVES IT.** Once the
+        server confirms Mark ready, `counter-client.tsx` changes that order to
+        `ready` in the queue, search results and open detail in the same frame.
+        It therefore moves immediately from **To prepare** to **Ready to
+        collect** instead of disappearing until a poll/reload rediscovers it.
+        The detail stays open because the next tap may be Hand over; only a
+        completed hand-over uses `settle` to remove the row. A deposit also
+        keeps the detail open — the order is still work — and re-reads,
+        applying `partial.remaining` optimistically first so no stale balance
+        is on screen for a round trip.
       - **The old paths still resolve** (`/pos/orders`, `/pos/returns` → 307),
         because `revalidatePath` calls and `docs/pos-acceptance.md` name them.
         **307, not 308** — a permanent redirect is cached by browsers
@@ -5571,6 +5601,17 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         registry's 7-day default is a number the merchant never chose, and
         `final_sale`/`return_window_days` belong to the same unswitched feature.
         Pinned in both directions by `pos-return-actions.test.ts`.
+      - **★★ CHANGE IS ONE FIGURE PER SALE, NOT ONE PER TENDER ROW.**
+        `placePosSale` computes the sale's change once and stamps it on EVERY
+        cash tender row, so `refundRouting` subtracting `change_due` row by row
+        deducted it once per row: a ₹500 sale settled ₹200 + ₹400 cash carries
+        change ₹100 on both, and the naive read scored the cash contribution at
+        ₹400 against the ₹500 that actually stayed in the drawer — skewing every
+        leg of a later split return. `lib/pos/shifts.ts` already guards this
+        exact shape (`netCashFromSales` groups by order and takes the MAX rather
+        than summing); the same rule now applies within the one order, taking
+        the change ONCE across the cash rows. With a single cash row — all but a
+        rare split — it is byte-for-byte what it did before.
       - **★ THE ORIGINAL TENDER DECIDES WHERE THE MONEY GOES.** `order_payments`
         is the source: cash returns to the drawer, external card/UPI is recorded
         back to that rail, store credit returns to its owner, and Razorpay goes
