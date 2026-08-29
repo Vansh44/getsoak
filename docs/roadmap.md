@@ -40,6 +40,7 @@ sequence AND the spec for everything still to build.
 | —      | Plan matrix + transactional soft-downgrade entitlements         | M    | ✅ done |
 | —      | Post-review order, entitlement and Help compatibility hardening | M    | ✅ done |
 | —      | Location-first inventory and product stock workflow             | S    | ✅ done |
+| —      | Permission/location-scoped Mink low-stock visibility            | S    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace   | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |

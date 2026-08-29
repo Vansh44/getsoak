@@ -6,6 +6,7 @@ import type {
   MinkActorContext,
   MinkModelSession,
   MinkRunEvent,
+  MinkRunProgress,
   MinkRunResult,
   MinkUsage,
 } from "./types";
@@ -25,13 +26,18 @@ export async function runMinkAgent(input: {
   registry: MinkToolRegistry;
   session: MinkModelSession;
   onEvent?: (event: MinkRunEvent) => void | Promise<void>;
+  onProgress?: (progress: MinkRunProgress) => void;
 }): Promise<MinkRunResult> {
-  const { actor, message, config, registry, session, onEvent } = input;
+  const { actor, message, config, registry, session, onEvent, onProgress } =
+    input;
   let usage = { ...EMPTY_USAGE };
   let steps = 1;
   let toolCalls = 0;
+  let retryCount = 0;
   let turn = await session.sendUserMessage(message);
   usage = addUsage(usage, turn.usage);
+  retryCount += turn.retryCount;
+  onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
 
   while (turn.functionCalls.length > 0) {
     if (steps >= config.maxSteps) {
@@ -86,8 +92,11 @@ export async function runMinkAgent(input: {
 
     toolCalls += turn.functionCalls.length;
     steps += 1;
+    onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
     turn = await session.sendToolResponses(responses);
     usage = addUsage(usage, turn.usage);
+    retryCount += turn.retryCount;
+    onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
   }
 
   if (!turn.text) {
@@ -97,7 +106,14 @@ export async function runMinkAgent(input: {
     );
   }
 
-  return { text: turn.text, model: config.model, steps, toolCalls, usage };
+  return {
+    text: turn.text,
+    model: config.model,
+    steps,
+    toolCalls,
+    retryCount,
+    usage,
+  };
 }
 
 function toolErrorCode(response: Record<string, unknown>): string | undefined {

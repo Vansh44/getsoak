@@ -1,10 +1,12 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { can } from "@/app/dashboard/lib/permissions";
 import { getViewerContext } from "@/app/dashboard/lib/access";
-import { stores } from "@/drizzle/schema";
+import { adminLocations, stores } from "@/drizzle/schema";
 import { withUser } from "@/lib/db/client";
+import { normalizeAnalyticsTimeZone } from "@/lib/analytics/range";
+import { resolveStoreSettings } from "@/lib/settings/registry";
 import { MinkRequestError } from "./errors";
 import type { MinkActorContext, MinkPlan } from "./types";
 
@@ -41,14 +43,30 @@ export async function getMinkActorContext(
   }
 
   const identity = { uid: viewer.userId, email: viewer.userEmail };
-  const rows = await withUser(identity, (db) =>
-    db
-      .select({ plan: stores.plan })
+  const trusted = await withUser(identity, async (db) => {
+    const storeRows = await db
+      .select({ plan: stores.plan, settings: stores.settings })
       .from(stores)
       .where(eq(stores.id, viewer.storeId))
-      .limit(1),
-  );
-  const rawPlan = rows[0]?.plan;
+      .limit(1);
+    let locationIds: string[] | null = null;
+    if (!viewer.isSuperadmin && !viewer.isPlatformAdmin) {
+      const bindings = await db
+        .select({ locationId: adminLocations.locationId })
+        .from(adminLocations)
+        .where(
+          and(
+            eq(adminLocations.adminId, viewer.userId),
+            eq(adminLocations.storeId, viewer.storeId),
+          ),
+        );
+      locationIds = bindings.length
+        ? bindings.map((binding) => binding.locationId)
+        : null;
+    }
+    return { store: storeRows[0], locationIds };
+  });
+  const rawPlan = trusted.store?.plan;
   if (!rawPlan || !PLANS.has(rawPlan as MinkPlan)) {
     throw new MinkRequestError(
       "store_unavailable",
@@ -57,6 +75,22 @@ export async function getMinkActorContext(
     );
   }
 
+  const settings = resolveStoreSettings(
+    (trusted.store?.settings as Record<string, unknown> | undefined) ?? {},
+    rawPlan,
+  );
+  const rawBusiness =
+    trusted.store?.settings &&
+    typeof trusted.store.settings === "object" &&
+    !Array.isArray(trusted.store.settings) &&
+    typeof (trusted.store.settings as Record<string, unknown>).business ===
+      "object" &&
+    !Array.isArray((trusted.store.settings as Record<string, unknown>).business)
+      ? ((trusted.store.settings as Record<string, unknown>).business as Record<
+          string,
+          unknown
+        >)
+      : {};
   return {
     storeId: viewer.storeId,
     adminId: viewer.userId,
@@ -65,6 +99,11 @@ export async function getMinkActorContext(
     permissions: viewer.permissions,
     isSuperadmin: viewer.isSuperadmin,
     effectivePlan: rawPlan as MinkPlan,
+    locationIds: trusted.locationIds,
+    analyticsTimeZone: normalizeAnalyticsTimeZone(rawBusiness.timeZone),
+    currency: "INR",
+    defaultLowStockThreshold:
+      (settings["inventory.lowStockThreshold"] as number | undefined) ?? 5,
     requestId,
   };
 }

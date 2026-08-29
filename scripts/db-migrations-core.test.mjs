@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(37);
+    expect(loaded.migrations).toHaveLength(38);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -421,6 +421,20 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[36].sql).toContain("Delete conversation");
     expect(loaded.migrations[36].sql).toContain("Shift+Enter");
+    expect(loaded.migrations[37]).toMatchObject({
+      id: "20260829_0038_mink_phase_1b",
+      transaction: true,
+      requires: ["20260829_0037_mink_sidebar_composer"],
+      verify: {
+        columns: expect.arrayContaining([
+          "mink_runs.retry_count",
+          "mink_usage_ledger.estimated_cost_microusd",
+        ]),
+      },
+    });
+    expect(loaded.migrations[37].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[37].sql).toContain("mink_runs_started_idx");
+    expect(loaded.migrations[37].sql).toContain("Analytics → View");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

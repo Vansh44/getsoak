@@ -24,6 +24,10 @@ const ACTOR: MinkActorContext = {
   permissions: {},
   isSuperadmin: true,
   effectivePlan: "pro",
+  locationIds: null,
+  analyticsTimeZone: "Asia/Kolkata",
+  currency: "INR",
+  defaultLowStockThreshold: 5,
   requestId: "request-1",
 };
 
@@ -37,12 +41,20 @@ function config(overrides: Partial<MinkConfig> = {}): MinkConfig {
     maxToolCalls: 16,
     maxParallelReadTools: 4,
     maxOutputTokens: 2_048,
+    maxModelRetries: 1,
+    runTimeoutMs: 120_000,
     ...overrides,
   };
 }
 
 function turn(overrides: Partial<MinkModelTurn> = {}): MinkModelTurn {
-  return { text: "", functionCalls: [], usage: ZERO_USAGE, ...overrides };
+  return {
+    text: "",
+    functionCalls: [],
+    usage: ZERO_USAGE,
+    retryCount: 0,
+    ...overrides,
+  };
 }
 
 function registry() {
@@ -54,6 +66,7 @@ function registry() {
         parametersJsonSchema: { type: "object", properties: {} },
       },
       permission: { section: "dashboard", action: "view" },
+      timeoutMs: 5_000,
       execute: vi.fn(async (actor) => ({ storeId: actor.storeId })),
     },
   ]);
@@ -111,6 +124,7 @@ describe("runMinkAgent", () => {
       model: "gemini-3.7-flash",
       steps: 2,
       toolCalls: 1,
+      retryCount: 0,
       usage: {
         promptTokens: 30,
         outputTokens: 8,
@@ -129,6 +143,35 @@ describe("runMinkAgent", () => {
       name: "get_store_profile",
       ok: true,
     });
+  });
+
+  it("accumulates retry telemetry and reports progress without changing tool execution", async () => {
+    const onProgress = vi.fn();
+    const session: MinkModelSession = {
+      sendUserMessage: vi.fn(async () =>
+        turn({
+          functionCalls: [{ name: "get_store_profile", args: {} }],
+          retryCount: 1,
+        }),
+      ),
+      sendToolResponses: vi.fn(async () =>
+        turn({ text: "Ready.", retryCount: 1 }),
+      ),
+    };
+
+    const result = await runMinkAgent({
+      actor: ACTOR,
+      message: "Check my store.",
+      config: config(),
+      registry: registry(),
+      session,
+      onProgress,
+    });
+
+    expect(result.retryCount).toBe(2);
+    expect(onProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ steps: 2, toolCalls: 1, retryCount: 2 }),
+    );
   });
 
   it("stops before exceeding the reasoning-step cap", async () => {

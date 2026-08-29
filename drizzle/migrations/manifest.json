@@ -1267,6 +1267,51 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0038_mink_phase_1b",
+      "description": "Add Mink reliability and shadow-cost telemetry, operator inspection support, and sales/low-stock Help Centre guidance",
+      "file": "sql/20260829_0038_mink_phase_1b.sql",
+      "transaction": true,
+      "requires": ["20260829_0037_mink_sidebar_composer"],
+      "verify": {
+        "columns": [
+          "mink_runs.retry_count",
+          "mink_usage_ledger.usage_status",
+          "mink_usage_ledger.estimated_cost_microusd",
+          "mink_usage_ledger.pricing_version"
+        ],
+        "constraints": [
+          "mink_runs_counts_check",
+          "mink_usage_ledger_counts_check",
+          "mink_usage_ledger_status_check"
+        ],
+        "queries": [
+          {
+            "name": "the cross-store Mink run index exists",
+            "sql": "select (to_regclass('public.mink_runs_started_idx') is not null)::text",
+            "equals": "true"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents Phase 1B tools permissions and reliability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide includes sales and low-stock permissions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

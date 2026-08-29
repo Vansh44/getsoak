@@ -23,6 +23,8 @@ describe("getMinkConfig", () => {
       maxToolCalls: 16,
       maxParallelReadTools: 4,
       maxOutputTokens: 2_048,
+      maxModelRetries: 1,
+      runTimeoutMs: 120_000,
     });
   });
 
@@ -42,12 +44,16 @@ describe("getMinkConfig", () => {
     process.env.MINK_MAX_TOOL_CALLS_PER_RUN = "0";
     process.env.MINK_MAX_PARALLEL_READ_TOOLS = "not-a-number";
     process.env.MINK_MAX_OUTPUT_TOKENS = "12.5";
+    process.env.MINK_MAX_MODEL_RETRIES = "9";
+    process.env.MINK_RUN_TIMEOUT_SECONDS = "5";
 
     expect(getMinkConfig()).toMatchObject({
       maxSteps: 8,
       maxToolCalls: 16,
       maxParallelReadTools: 4,
       maxOutputTokens: 2_048,
+      maxModelRetries: 1,
+      runTimeoutMs: 120_000,
     });
   });
 });

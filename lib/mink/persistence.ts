@@ -8,9 +8,15 @@ import {
   minkToolCalls,
   minkUsageLedger,
 } from "@/drizzle/schema";
-import { withService } from "@/lib/db/client";
+import { withService, type Db } from "@/lib/db/client";
+import { estimateMinkCost } from "./cost";
 import { MinkRequestError } from "./errors";
-import type { MinkActorContext, MinkRunResult, MinkToolCall } from "./types";
+import type {
+  MinkActorContext,
+  MinkRunProgress,
+  MinkRunResult,
+  MinkToolCall,
+} from "./types";
 
 const HISTORY_MESSAGES = 12;
 const DISPLAY_MESSAGES = 50;
@@ -44,6 +50,8 @@ export interface MinkConversationDetail {
   title: string;
   messages: MinkConversationMessage[];
 }
+
+export type MinkUsageStatus = "reported" | "partial" | "unavailable";
 
 export async function listMinkConversations(
   actor: MinkActorContext,
@@ -335,6 +343,7 @@ export async function completeMinkRun(input: {
   started: MinkStartedRun;
   result: MinkRunResult;
   latencyMs: number;
+  pricingLocation: string;
 }): Promise<void> {
   const { actor, started, result } = input;
   const completedAt = new Date().toISOString();
@@ -349,6 +358,7 @@ export async function completeMinkRun(input: {
         totalTokens: result.usage.totalTokens,
         stepCount: result.steps,
         toolCallCount: result.toolCalls,
+        retryCount: result.retryCount,
         latencyMs: input.latencyMs,
         completedAt,
       })
@@ -371,18 +381,13 @@ export async function completeMinkRun(input: {
       contentJson: { text: result.text },
       model: result.model,
     });
-    await db.insert(minkUsageLedger).values({
-      storeId: actor.storeId,
-      adminId: actor.adminId,
-      runId: started.runId,
+    await insertUsage(db, {
+      actor,
+      started,
       model: result.model,
-      inputTokens: result.usage.promptTokens,
-      outputTokens: result.usage.outputTokens,
-      thoughtTokens: result.usage.thoughtTokens,
-      totalTokens: result.usage.totalTokens,
-      // Phase 1 records shadow usage only. Billing begins after pilot data sets
-      // the documented weights and an atomic reservation/reconciliation flow.
-      chargedCredits: 0,
+      pricingLocation: input.pricingLocation,
+      usage: result.usage,
+      usageStatus: "reported",
     });
     await db
       .update(minkConversations)
@@ -403,6 +408,10 @@ export async function failMinkRun(input: {
   status: "failed" | "cancelled";
   errorCode: string;
   latencyMs: number;
+  model: string;
+  pricingLocation: string;
+  progress: MinkRunProgress;
+  usageStatus: MinkUsageStatus;
 }): Promise<void> {
   const completedAt = new Date().toISOString();
   await withService(async (db) => {
@@ -426,6 +435,13 @@ export async function failMinkRun(input: {
       .set({
         status: input.status,
         errorCode: safeErrorCode(input.errorCode),
+        inputTokens: input.progress.usage.promptTokens,
+        outputTokens: input.progress.usage.outputTokens,
+        thoughtTokens: input.progress.usage.thoughtTokens,
+        totalTokens: input.progress.usage.totalTokens,
+        stepCount: input.progress.steps,
+        toolCallCount: input.progress.toolCalls,
+        retryCount: input.progress.retryCount,
         latencyMs: Math.max(0, Math.round(input.latencyMs)),
         completedAt,
       })
@@ -437,6 +453,14 @@ export async function failMinkRun(input: {
           eq(minkRuns.status, "running"),
         ),
       );
+    await insertUsage(db, {
+      actor: input.actor,
+      started: input.started,
+      model: input.model,
+      pricingLocation: input.pricingLocation,
+      usage: input.progress.usage,
+      usageStatus: input.usageStatus,
+    });
   });
 }
 
@@ -519,4 +543,44 @@ function toConversationMessage(row: {
 function safeErrorCode(value: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
   return normalized || "mink_failed";
+}
+
+async function insertUsage(
+  db: Db,
+  input: {
+    actor: MinkActorContext;
+    started: MinkStartedRun;
+    model: string;
+    pricingLocation: string;
+    usage: MinkRunProgress["usage"];
+    usageStatus: MinkUsageStatus;
+  },
+): Promise<void> {
+  const estimate =
+    input.usageStatus === "unavailable"
+      ? { estimatedCostMicrousd: null, pricingVersion: null }
+      : estimateMinkCost({
+          model: input.model,
+          location: input.pricingLocation,
+          usage: input.usage,
+        });
+  await db
+    .insert(minkUsageLedger)
+    .values({
+      storeId: input.actor.storeId,
+      adminId: input.actor.adminId,
+      runId: input.started.runId,
+      model: input.model,
+      inputTokens: input.usage.promptTokens,
+      outputTokens: input.usage.outputTokens,
+      thoughtTokens: input.usage.thoughtTokens,
+      totalTokens: input.usage.totalTokens,
+      usageStatus: input.usageStatus,
+      estimatedCostMicrousd: estimate.estimatedCostMicrousd,
+      pricingVersion: estimate.pricingVersion,
+      // Phase 1 records shadow usage only. Billing begins after pilot data sets
+      // the documented weights and an atomic reservation/reconciliation flow.
+      chargedCredits: 0,
+    })
+    .onConflictDoNothing({ target: minkUsageLedger.runId });
 }

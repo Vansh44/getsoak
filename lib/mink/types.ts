@@ -17,6 +17,11 @@ export interface MinkActorContext {
   permissions: RolePermissions;
   isSuperadmin: boolean;
   effectivePlan: MinkPlan;
+  /** Null means unrestricted; an array is the exact server-derived location scope. */
+  locationIds: string[] | null;
+  analyticsTimeZone: string;
+  currency: string;
+  defaultLowStockThreshold: number;
   requestId: string;
 }
 
@@ -54,6 +59,8 @@ export interface MinkModelTurn {
   text: string;
   functionCalls: MinkToolCall[];
   usage: MinkUsage;
+  /** Provider-call retries consumed while producing this turn. */
+  retryCount: number;
 }
 
 export interface MinkModelSession {
@@ -76,5 +83,13 @@ export interface MinkRunResult {
   model: string;
   steps: number;
   toolCalls: number;
+  retryCount: number;
+  usage: MinkUsage;
+}
+
+export interface MinkRunProgress {
+  steps: number;
+  toolCalls: number;
+  retryCount: number;
   usage: MinkUsage;
 }

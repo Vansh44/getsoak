@@ -15,6 +15,7 @@ import { createVertexMinkSession } from "@/lib/mink/vertex-client";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { rejectForeignMinkOrigin } from "@/lib/mink/request-origin";
+import type { MinkRunProgress } from "@/lib/mink/types";
 
 export const runtime = "nodejs";
 
@@ -22,6 +23,17 @@ const MAX_BODY_BYTES = 16_384;
 const MAX_MESSAGE_LENGTH = 4_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const EMPTY_PROGRESS: MinkRunProgress = {
+  steps: 0,
+  toolCalls: 0,
+  retryCount: 0,
+  usage: {
+    promptTokens: 0,
+    outputTokens: 0,
+    thoughtTokens: 0,
+    totalTokens: 0,
+  },
+};
 
 export async function POST(request: Request) {
   const config = getMinkConfig();
@@ -73,6 +85,7 @@ export async function POST(request: Request) {
         once: true,
       });
 
+    let progress: MinkRunProgress = EMPTY_PROGRESS;
     let session;
     try {
       session = createVertexMinkSession(config, actor, declarations, {
@@ -87,6 +100,10 @@ export async function POST(request: Request) {
         errorCode:
           error instanceof MinkAgentError ? error.code : "session_setup_failed",
         latencyMs: 0,
+        model: config.model,
+        pricingLocation: config.location,
+        progress,
+        usageStatus: "unavailable",
       });
       request.signal.removeEventListener("abort", abortFromRequest);
       throw error;
@@ -94,6 +111,11 @@ export async function POST(request: Request) {
     const encoder = new TextEncoder();
     const startedAt = Date.now();
     let consumerCancelled = false;
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, config.runTimeoutMs);
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -119,6 +141,9 @@ export async function POST(request: Request) {
             config,
             registry: minkReadToolRegistry,
             session,
+            onProgress(next) {
+              progress = next;
+            },
             async onEvent(event) {
               if (event.type === "tool_call") {
                 await startMinkToolCall({
@@ -144,6 +169,7 @@ export async function POST(request: Request) {
                   state: event.ok ? "completed" : "failed",
                   name: event.name,
                   sequence: event.sequence,
+                  ...(event.errorCode ? { errorCode: event.errorCode } : {}),
                 });
               }
             },
@@ -153,12 +179,14 @@ export async function POST(request: Request) {
             started,
             result,
             latencyMs: Date.now() - startedAt,
+            pricingLocation: config.location,
           });
           send("message", { role: "assistant", text: result.text });
           send("usage", {
             model: result.model,
             steps: result.steps,
             toolCalls: result.toolCalls,
+            retryCount: result.retryCount,
             ...result.usage,
           });
           send("done", {
@@ -173,22 +201,43 @@ export async function POST(request: Request) {
             model: result.model,
             steps: result.steps,
             toolCalls: result.toolCalls,
+            retryCount: result.retryCount,
             totalTokens: result.usage.totalTokens,
             ms: Date.now() - startedAt,
           });
         } catch (error) {
           const cancelled =
-            abortController.signal.aborted || isAbortError(error);
+            !timedOut &&
+            (abortController.signal.aborted || isAbortError(error));
+          const failedProgress = {
+            ...progress,
+            retryCount: Math.max(
+              progress.retryCount,
+              error instanceof MinkAgentError ? error.retryCount : 0,
+            ),
+          };
+          const errorCode = timedOut
+            ? "run_timeout"
+            : cancelled
+              ? "cancelled"
+              : error instanceof MinkAgentError
+                ? error.code
+                : "mink_failed";
           await failMinkRun({
             actor,
             started,
             status: cancelled ? "cancelled" : "failed",
-            errorCode: cancelled
-              ? "cancelled"
-              : error instanceof MinkAgentError
-                ? error.code
-                : "mink_failed",
+            errorCode,
             latencyMs: Date.now() - startedAt,
+            model: config.model,
+            pricingLocation: config.location,
+            progress: failedProgress,
+            usageStatus: failureUsageStatus({
+              error,
+              timedOut,
+              cancelled,
+              progress: failedProgress,
+            }),
           }).catch((persistenceError) =>
             logError("mink.run: failure record failed", persistenceError, {
               requestId,
@@ -204,18 +253,17 @@ export async function POST(request: Request) {
             ms: Date.now() - startedAt,
           };
           if (cancelled) logInfo("mink.run: cancelled", logContext);
+          else if (timedOut) logWarn("mink.run: timed out", logContext);
           else logError("mink.run: failed", error, logContext);
           send("error", {
-            code: cancelled
-              ? "cancelled"
-              : error instanceof MinkAgentError
-                ? error.code
-                : "mink_failed",
-            message: cancelled
-              ? "Mink AI stopped this request."
-              : error instanceof MinkAgentError
-                ? error.message
-                : "Mink AI couldn't complete that request.",
+            code: errorCode,
+            message: timedOut
+              ? "Mink AI took too long to finish. Try a narrower question."
+              : cancelled
+                ? "Mink AI stopped this request."
+                : error instanceof MinkAgentError
+                  ? error.message
+                  : "Mink AI couldn't complete that request.",
           });
           send("done", {
             requestId,
@@ -223,6 +271,7 @@ export async function POST(request: Request) {
             runId: started.runId,
           });
         } finally {
+          clearTimeout(timeoutId);
           request.signal.removeEventListener("abort", abortFromRequest);
           if (!consumerCancelled) controller.close();
         }
@@ -301,4 +350,23 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException
     ? error.name === "AbortError"
     : error instanceof Error && error.name === "AbortError";
+}
+
+function failureUsageStatus(input: {
+  error: unknown;
+  timedOut: boolean;
+  cancelled: boolean;
+  progress: MinkRunProgress;
+}): "reported" | "partial" | "unavailable" {
+  const hasReportedUsage = input.progress.usage.totalTokens > 0;
+  if (input.timedOut || input.cancelled) {
+    return hasReportedUsage ? "partial" : "unavailable";
+  }
+  if (
+    !(input.error instanceof MinkAgentError) ||
+    input.error.code === "provider_unavailable"
+  ) {
+    return hasReportedUsage ? "partial" : "unavailable";
+  }
+  return "reported";
 }

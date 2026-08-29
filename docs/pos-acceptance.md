@@ -378,6 +378,20 @@ and does not offer a store-wide aggregate.
 As that Mumbai-bound admin, hit `/dashboard/inventory?location=<pune-id>`.
 **Expect:** refused server-side, not just hidden in the UI.
 
+**PS-3.4 ★★ — Mink AI reads the same shelves the admin may see**
+As the Mumbai-bound admin, ask Mink AI which items are low in stock, then ask
+for Pune by its exact name.
+**Expect:** the aggregate list is calculated only from the admin's trusted
+Mumbai assignment. The Pune request returns a safe inaccessible-location error;
+the prompt cannot supply a location ID or widen the assignment.
+
+**PS-3.5 — Inventory permission removes the Mink stock tool**
+Use an admin with Dashboard → View but without Inventory → View and ask for the
+low-stock list.
+**Expect:** `list_low_stock` is absent from the model's tool manifest and a
+direct function-call attempt is rejected again at execution. No inventory row
+is read and Mink explains that the current read-only assistant cannot access it.
+
 ---
 
 ## 4. Inventory — the dashboard

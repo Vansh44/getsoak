@@ -2,7 +2,7 @@ import "server-only";
 
 import { can } from "@/app/dashboard/lib/permissions";
 import { logError } from "@/lib/observability/logger";
-import { MinkToolInputError } from "../errors";
+import { MinkToolInputError, MinkToolTimeoutError } from "../errors";
 import type {
   MinkActorContext,
   MinkToolCall,
@@ -14,6 +14,7 @@ import type {
 export interface MinkTool {
   declaration: MinkToolDeclaration;
   permission: MinkToolPermission;
+  timeoutMs: number;
   execute: (
     actor: MinkActorContext,
     args: Record<string, unknown>,
@@ -57,7 +58,10 @@ export class MinkToolRegistry {
     }
 
     try {
-      const output = await tool.execute(actor, call.args);
+      const output = await executeWithTimeout(
+        () => tool.execute(actor, call.args),
+        tool.timeoutMs,
+      );
       return {
         id: call.id,
         name: call.name,
@@ -66,6 +70,13 @@ export class MinkToolRegistry {
     } catch (error) {
       if (error instanceof MinkToolInputError) {
         return failure(call, "invalid_tool_input", error.message);
+      }
+      if (error instanceof MinkToolTimeoutError) {
+        return failure(
+          call,
+          "tool_timeout",
+          "The store data read took too long. Try a narrower question.",
+        );
       }
       logError("mink.tool: failed", error, {
         requestId: actor.requestId,
@@ -89,6 +100,26 @@ export class MinkToolRegistry {
       tool.permission.action,
       actor.isSuperadmin,
     );
+  }
+}
+
+async function executeWithTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new MinkToolTimeoutError()),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

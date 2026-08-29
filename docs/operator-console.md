@@ -22,20 +22,21 @@ single scroll, under a metric row. Three consequences, all of them real:
 
 ## The information architecture
 
-| Group              | Entry          | Path                       | What it answers                       |
-| ------------------ | -------------- | -------------------------- | ------------------------------------- |
-| **OPERATIONS**     | Overview       | `/dashboard`               | What needs someone right now?         |
-|                    | Stores         | `/dashboard/stores`        | The merchant estate                   |
-|                    | ↳ store detail | `/dashboard/stores/[id]`   | Everything about ONE merchant         |
-|                    | People         | `/dashboard/people`        | Who can sign in to which store        |
-|                    | Announcements  | `/dashboard/announcements` | Tell merchants something _(phase 4)_  |
-|                    | Logs           | `/dashboard/logs`          | What happened, what broke _(phase 3)_ |
-| **ADMINISTRATION** | Help Centre    | `/dashboard/help`          | Platform docs                         |
-|                    | Themes         | `/dashboard/themes`        | The catalog + demo stores             |
-|                    | Pricing        | `/dashboard/pricing`       | What StoreMink charges                |
-|                    | Analytics      | `/dashboard/analytics`     | Platform Analytics availability       |
-|                    | Operators      | `/dashboard/operators`     | Who runs the platform                 |
-|                    | Billing & tax  | `/dashboard/billing`       | StoreMink's own GST identity          |
+| Group              | Entry          | Path                       | What it answers                         |
+| ------------------ | -------------- | -------------------------- | --------------------------------------- |
+| **OPERATIONS**     | Overview       | `/dashboard`               | What needs someone right now?           |
+|                    | Stores         | `/dashboard/stores`        | The merchant estate                     |
+|                    | ↳ store detail | `/dashboard/stores/[id]`   | Everything about ONE merchant           |
+|                    | People         | `/dashboard/people`        | Who can sign in to which store          |
+|                    | Announcements  | `/dashboard/announcements` | Tell merchants something _(phase 4)_    |
+|                    | Logs           | `/dashboard/logs`          | What happened, what broke _(phase 3)_   |
+|                    | Mink AI        | `/dashboard/mink`          | Are agent runs reliable and affordable? |
+| **ADMINISTRATION** | Help Centre    | `/dashboard/help`          | Platform docs                           |
+|                    | Themes         | `/dashboard/themes`        | The catalog + demo stores               |
+|                    | Pricing        | `/dashboard/pricing`       | What StoreMink charges                  |
+|                    | Analytics      | `/dashboard/analytics`     | Platform Analytics availability         |
+|                    | Operators      | `/dashboard/operators`     | Who runs the platform                   |
+|                    | Billing & tax  | `/dashboard/billing`       | StoreMink's own GST identity            |
 
 **The split is by job**, the rule `app/dashboard/lib/permissions.ts` already
 applies to the merchant nav. Operations is what an operator watches and acts on
@@ -107,6 +108,22 @@ takes colour and becomes a link. This is §22's sidebar-badge rule — a hardcod
 the screen someone opens when something is wrong, so a 500 is the worst
 available behaviour — but **rendering zeroes as though they were the answer is
 the second worst**, hence the banner.
+
+### ★ Mink traces are useful without exposing conversations
+
+`/dashboard/mink` reads cross-store run telemetry through
+`lib/platform/mink-runs.ts` only after the page calls `requireOperator()`. It
+shows status, store, model, tool names, steps, latency, retry count, token usage,
+shadow model cost and safe error codes. It deliberately does **not** select or
+render prompts, answers, tool arguments, tool results, provider state, thought
+signatures or model reasoning. An operational inspector is not permission to
+read merchant conversations.
+
+Unknown and interrupted usage is labelled `partial` or `unavailable`; a null
+estimate is rendered as **Unknown**, never `$0`. Filters are URL-owned and the
+table is capped at the 100 newest matching runs. The aggregate cards still use
+the complete filtered interval, so narrowing by store, status or window changes
+both the table and the operating picture.
 
 ## Phases
 
@@ -207,6 +224,13 @@ the second worst**, hence the banner.
     calling that "failed" invites an operator to send the whole thing again.
   - **⚠ SMS is built and gated** — see below. Sending refuses with its reason
     and writes no recipient rows.
+- **Phase 5 — Mink AI run and cost inspector ✅**
+  `/dashboard/mink` adds a redacted, read-only view of the last 1, 7 or 30 days
+  of agent runs. Summary cards expose success rate, p95 latency, retries,
+  tokens, known provider cost, unknown/partial cost and timeouts; the run table
+  exposes only safe trace metadata and distinct tool names. The pricing
+  schedule is stored on each usage row so a future model price change does not
+  rewrite historical estimates.
 
 ## ⚠ Announcement SMS cannot send yet, and that is not a code problem
 

@@ -9,6 +9,8 @@ export interface MinkConfig {
   maxToolCalls: number;
   maxParallelReadTools: number;
   maxOutputTokens: number;
+  maxModelRetries: number;
+  runTimeoutMs: number;
 }
 
 function enabled(value: string | undefined): boolean {
@@ -58,5 +60,10 @@ export function getMinkConfig(): MinkConfig {
       256,
       8_192,
     ),
+    // One retry is enough to absorb a transient 429/5xx without hiding a
+    // persistent outage behind a long backoff chain.
+    maxModelRetries: boundedInt(process.env.MINK_MAX_MODEL_RETRIES, 1, 0, 2),
+    runTimeoutMs:
+      boundedInt(process.env.MINK_RUN_TIMEOUT_SECONDS, 120, 15, 300) * 1_000,
   };
 }

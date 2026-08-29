@@ -4699,7 +4699,8 @@ export const stores = pgTable(
 
 // ---------------------------------------------------------------------------
 // Mink dashboard agent — internal read-only alpha
-// (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql).
+// (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql and
+//  20260829_0038_mink_phase_1b.sql).
 // Service-role only: every application query must carry an explicit store id.
 // ---------------------------------------------------------------------------
 export const minkConversations = pgTable(
@@ -4776,6 +4777,7 @@ export const minkRuns = pgTable(
     totalTokens: integer("total_tokens").default(0).notNull(),
     stepCount: integer("step_count").default(0).notNull(),
     toolCallCount: integer("tool_call_count").default(0).notNull(),
+    retryCount: integer("retry_count").default(0).notNull(),
     latencyMs: integer("latency_ms"),
     errorCode: text("error_code"),
     startedAt: timestamp("started_at", {
@@ -4805,6 +4807,7 @@ export const minkRuns = pgTable(
       table.status,
       table.startedAt,
     ),
+    index("mink_runs_started_idx").on(table.startedAt.desc()),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -4829,7 +4832,7 @@ export const minkRuns = pgTable(
     ),
     check(
       "mink_runs_counts_check",
-      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND step_count >= 0 AND tool_call_count >= 0 AND (latency_ms IS NULL OR latency_ms >= 0)`,
+      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND step_count >= 0 AND tool_call_count >= 0 AND retry_count >= 0 AND (latency_ms IS NULL OR latency_ms >= 0)`,
     ),
     check(
       "mink_runs_completion_check",
@@ -4976,6 +4979,9 @@ export const minkUsageLedger = pgTable(
     outputTokens: integer("output_tokens").notNull(),
     thoughtTokens: integer("thought_tokens").notNull(),
     totalTokens: integer("total_tokens").notNull(),
+    usageStatus: text("usage_status").default("reported").notNull(),
+    estimatedCostMicrousd: integer("estimated_cost_microusd"),
+    pricingVersion: text("pricing_version"),
     chargedCredits: integer("charged_credits").default(0).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
@@ -4996,7 +5002,11 @@ export const minkUsageLedger = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_usage_ledger_counts_check",
-      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND charged_credits >= 0`,
+      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND charged_credits >= 0 AND (estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0)`,
+    ),
+    check(
+      "mink_usage_ledger_status_check",
+      sql`usage_status = ANY (ARRAY['reported'::text, 'partial'::text, 'unavailable'::text])`,
     ),
   ],
 );

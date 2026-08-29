@@ -82,6 +82,11 @@ export default async function PlatformDashboardLayout({
           label: "Logs",
           icon: "activity" as const,
         },
+        {
+          href: "/dashboard/mink",
+          label: "Mink AI",
+          icon: "ai" as const,
+        },
       ],
     },
     {
