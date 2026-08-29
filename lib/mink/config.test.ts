@@ -1,0 +1,53 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { getMinkConfig } from "./config";
+
+const ORIGINAL_ENV = { ...process.env };
+
+afterEach(() => {
+  process.env = { ...ORIGINAL_ENV };
+});
+
+describe("getMinkConfig", () => {
+  it("fails closed and uses the production model defaults", () => {
+    delete process.env.MINK_AI_ENABLED;
+    delete process.env.MINK_VERTEX_MODEL;
+    delete process.env.MINK_VERTEX_LOCATION;
+    process.env.GCP_PROJECT_ID = "storemink-test";
+
+    expect(getMinkConfig()).toMatchObject({
+      enabled: false,
+      projectId: "storemink-test",
+      location: "global",
+      model: "gemini-3.7-flash",
+      maxSteps: 8,
+      maxToolCalls: 16,
+      maxParallelReadTools: 4,
+      maxOutputTokens: 2_048,
+    });
+  });
+
+  it("only enables on an explicit true value", () => {
+    for (const value of ["false", "yes", "TRUE", "enabled", ""]) {
+      process.env.MINK_AI_ENABLED = value;
+      expect(getMinkConfig().enabled, value).toBe(false);
+    }
+    process.env.MINK_AI_ENABLED = "true";
+    expect(getMinkConfig().enabled).toBe(true);
+    process.env.MINK_AI_ENABLED = "1";
+    expect(getMinkConfig().enabled).toBe(true);
+  });
+
+  it("rejects unsafe numeric limits instead of trusting environment input", () => {
+    process.env.MINK_MAX_STEPS_PER_RUN = "999";
+    process.env.MINK_MAX_TOOL_CALLS_PER_RUN = "0";
+    process.env.MINK_MAX_PARALLEL_READ_TOOLS = "not-a-number";
+    process.env.MINK_MAX_OUTPUT_TOKENS = "12.5";
+
+    expect(getMinkConfig()).toMatchObject({
+      maxSteps: 8,
+      maxToolCalls: 16,
+      maxParallelReadTools: 4,
+      maxOutputTokens: 2_048,
+    });
+  });
+});

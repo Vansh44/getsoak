@@ -24,18 +24,28 @@ interface ChatContextType {
   input: string;
   setInput: (value: string) => void;
   isReplying: boolean;
+  statusText: string | null;
+  error: { code: string; message: string } | null;
   send: (raw?: string) => void;
+  cancel: () => void;
+  retry: () => void;
   reset: () => void;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-export function ChatProvider({ children }: { children: ReactNode }) {
+export function ChatProvider({
+  children,
+  minkEnabled,
+}: {
+  children: ReactNode;
+  minkEnabled: boolean;
+}) {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   // Conversation state lives here (not in each surface) so a message typed in
   // the Home box carries over into the panel/full view that opens.
-  const mink = useMinkAi();
+  const mink = useMinkAi({ enabled: minkEnabled });
   const { send } = mink;
 
   const toggleChat = useCallback(() => setIsChatOpen((prev) => !prev), []);
@@ -96,7 +106,11 @@ export function useChat() {
       input: "",
       setInput: () => {},
       isReplying: false,
+      statusText: null,
+      error: null,
       send: () => {},
+      cancel: () => {},
+      retry: () => {},
       reset: () => {},
     } satisfies ChatContextType;
   }

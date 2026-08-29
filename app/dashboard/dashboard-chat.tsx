@@ -12,6 +12,8 @@ import {
   Mic,
   Sparkles,
   ArrowUp,
+  RotateCcw,
+  Square,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -34,7 +36,11 @@ export function DashboardChat({
     input,
     setInput,
     isReplying,
+    statusText,
+    error,
     send,
+    cancel,
+    retry,
     reset,
   } = useChat();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -45,13 +51,13 @@ export function DashboardChat({
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, isReplying]);
+  }, [messages, isReplying, error, statusText]);
 
   if (!isChatOpen) return null;
   // Render only the surface for the active mode.
   if (isOverlay !== isExpanded) return null;
 
-  const hasThread = messages.length > 0 || isReplying;
+  const hasThread = messages.length > 0 || isReplying || Boolean(error);
 
   const wrapperClass = isOverlay
     ? "absolute inset-0 z-20 flex flex-col bg-white"
@@ -153,10 +159,28 @@ export function DashboardChat({
                 <div className="h-7 w-7 shrink-0 rounded-lg bg-[#f4f0ff] flex items-center justify-center text-[#7F4AFA]">
                   <Sparkles className="h-3.5 w-3.5" />
                 </div>
-                <div className="rounded-2xl rounded-tl-sm bg-[#f6f6f7] px-3.5 py-3 flex items-center gap-1">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#8c9196] animate-bounce [animation-delay:-0.2s]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#8c9196] animate-bounce [animation-delay:-0.1s]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#8c9196] animate-bounce" />
+                <div className="rounded-2xl rounded-tl-sm bg-[#f6f6f7] px-3.5 py-2.5 flex items-center gap-2 text-xs text-[#5c5f62]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#7F4AFA] animate-pulse" />
+                  {statusText ?? "Thinking…"}
+                </div>
+              </div>
+            )}
+
+            {error && (
+              <div className="flex gap-2.5" role="alert">
+                <div className="h-7 w-7 shrink-0 rounded-lg bg-[#fff1f0] flex items-center justify-center text-[#d72c0d]">
+                  <Sparkles className="h-3.5 w-3.5" />
+                </div>
+                <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-[#fff4f4] px-3.5 py-2.5 text-sm text-[#5c1b14]">
+                  <div>{error.message}</div>
+                  <button
+                    type="button"
+                    onClick={retry}
+                    className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#7F4AFA] hover:underline"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Retry
+                  </button>
                 </div>
               </div>
             )}
@@ -196,14 +220,25 @@ export function DashboardChat({
             >
               <Mic className="h-4 w-4" />
             </button>
-            <button
-              type="submit"
-              disabled={!input.trim() || isReplying}
-              className="p-1.5 rounded-md bg-[#7F4AFA] text-white transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
-              aria-label="Send message"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
+            {isReplying ? (
+              <button
+                type="button"
+                onClick={cancel}
+                className="p-1.5 rounded-md bg-[#1a1a1a] text-white"
+                aria-label="Stop Mink AI"
+              >
+                <Square className="h-4 w-4 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!input.trim()}
+                className="p-1.5 rounded-md bg-[#7F4AFA] text-white transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Send message"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </form>
       </div>
