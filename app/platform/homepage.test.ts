@@ -13,7 +13,11 @@ describe("StoreMink public homepage", () => {
     expect(page).toContain('id="platform"');
     expect(page).toContain('id="pricing"');
     expect(page).toContain('id="faq"');
-    expect(page).toContain("One place to");
+    expect(page).toContain("Create your store.");
+    expect(page).toContain("Sell everywhere.");
+    expect(page).toContain("Grow with AI.");
+    expect(page).toContain("Mink AI, currently in beta, helps");
+    expect(page).toContain('q: "What can Mink AI do?"');
     expect(page).toContain("StoreMink Point of Sale");
     expect(page).toContain("<HomepageMobileNav");
     expect(page).toContain('href="/signup"');

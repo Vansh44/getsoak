@@ -21,6 +21,8 @@ import {
 import { PLATFORM_URL, POS_URL, THEMES_URL } from "@/lib/site";
 import { LEGAL_DOCS } from "@/lib/legal/documents";
 import {
+  BRAND_DESCRIPTION,
+  BRAND_TAGLINE,
   BRAND_SOCIAL_LINKS,
   SUPPORT_EMAIL,
   platformOrganizationSchema,
@@ -185,6 +187,10 @@ const FAQS = [
   {
     q: "Is StoreMink built for Indian businesses?",
     a: "Yes. Plans are priced in rupees, GST tax classes and invoices are built in, and StoreMink supports the payment and fulfilment workflows Indian brands use every day.",
+  },
+  {
+    q: "What can Mink AI do?",
+    a: "Mink AI is StoreMink's built-in assistant, currently in beta. It can answer permission-aware questions from your store data and prepare private, editable content drafts. Guarded dashboard actions will expand as their approval controls are ready.",
   },
 ];
 
@@ -474,6 +480,7 @@ export default async function StoreminkLanding() {
         applicationCategory: "BusinessApplication",
         operatingSystem: "Web",
         url: PLATFORM_URL,
+        description: BRAND_DESCRIPTION,
         publisher: { "@id": `${PLATFORM_URL}/#organization` },
         offers: {
           "@type": "AggregateOffer",
@@ -530,15 +537,18 @@ export default async function StoreminkLanding() {
             <div className="smh-hero-wash" aria-hidden="true" />
             <div className="smh-container smh-hero-copy">
               <p className="smh-eyebrow">
-                <span>New</span> Commerce, made for India{" "}
+                <span>AI-powered</span> commerce, made for India{" "}
                 <ArrowRight size={13} />
               </p>
               <h1>
-                One place to <em>build, sell</em> and grow.
+                Create your store. <em>Sell everywhere.</em> Grow with AI.
               </h1>
               <p className="smh-hero-lead">
-                Your online store, in-store checkout, orders, customers,
-                inventory and marketing—working together from day one.
+                Create your online store in minutes, then manage products,
+                orders, customers, inventory, locations, online sales and POS
+                from one connected dashboard. Mink AI, currently in beta, helps
+                you understand your business and prepare everyday work using
+                simple prompts.
               </p>
               <div className="smh-hero-actions">
                 <Link href="/signup" className="smh-button smh-button-primary">
@@ -878,8 +888,8 @@ export default async function StoreminkLanding() {
                 </span>
               </Link>
               <p>
-                One connected platform to build, sell and grow your brand—online
-                and in person.
+                {BRAND_TAGLINE} One connected platform for online and in-person
+                commerce.
               </p>
               <span>
                 Made in India <Globe2 size={14} />

@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     template: "%s | StoreMink Help",
   },
   description:
-    "Guides and answers for setting up and growing your online store on StoreMink — products, payments, domains, orders and more.",
+    "Guides for creating your StoreMink storefront and managing products, orders, payments, inventory, locations, POS and Mink AI.",
   alternates: { canonical: "/help" },
   // Only production (storemink.com) is ever indexed — staging/dev help pages
   // are explicitly noindex, matching the SEARCH_INDEXABLE gate used by

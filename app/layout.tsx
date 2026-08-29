@@ -12,6 +12,7 @@ import {
 } from "next/font/google";
 import NextTopLoader from "nextjs-toploader";
 import { PLATFORM_URL } from "@/lib/site";
+import { BRAND_DESCRIPTION } from "@/lib/seo/brand-identity";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
 
 // Default WholeSip / platform fonts.
@@ -93,7 +94,7 @@ export const metadata = {
   metadataBase: new URL(PLATFORM_URL),
   applicationName: "StoreMink",
   title: { default: "StoreMink", template: "%s" },
-  description: "Launch, grow, and scale your D2C brand online.",
+  description: BRAND_DESCRIPTION,
   // Belt-and-braces with the X-Robots-Tag header in next.config.ts: on any
   // non-production build EVERY page inherits noindex, including store
   // subdomains on staging. Production evaluates this to nothing, so nothing is
