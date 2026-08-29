@@ -4698,9 +4698,9 @@ export const stores = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Mink dashboard agent — permission-aware read-only beta
-// (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql and
-//  20260829_0039_mink_phase_2.sql).
+// Mink dashboard agent — permission-aware read beta + private draft proposals
+// (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql,
+//  20260829_0039_mink_phase_2.sql and 20260830_0040_mink_phase_3.sql).
 // Service-role only: every application query must carry an explicit store id.
 // ---------------------------------------------------------------------------
 export const minkStoreAccess = pgTable(
@@ -4708,6 +4708,7 @@ export const minkStoreAccess = pgTable(
   {
     storeId: uuid("store_id").primaryKey().notNull(),
     enabled: boolean().default(false).notNull(),
+    draftingEnabled: boolean("drafting_enabled").default(false).notNull(),
     phase: text().default("merchant_beta").notNull(),
     invitedBy: text("invited_by"),
     invitedAt: timestamp("invited_at", {
@@ -4734,6 +4735,170 @@ export const minkStoreAccess = pgTable(
     check(
       "mink_store_access_invitation_check",
       sql`(enabled = false) OR (invited_by IS NOT NULL AND invited_at IS NOT NULL)`,
+    ),
+    check(
+      "mink_store_access_drafting_check",
+      sql`drafting_enabled = false OR enabled = true`,
+    ),
+  ],
+);
+
+export const minkDrafts = pgTable(
+  "mink_drafts",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    kind: text().notNull(),
+    status: text().default("proposed").notNull(),
+    destinationType: text("destination_type").notNull(),
+    destinationId: uuid("destination_id"),
+    destinationLabel: text("destination_label").notNull(),
+    destinationPath: text("destination_path").notNull(),
+    title: text().notNull(),
+    beforeJson: jsonb("before_json").default({}).notNull(),
+    contentJson: jsonb("content_json").notNull(),
+    expectedCredits: integer("expected_credits").notNull(),
+    chargedCredits: integer("charged_credits").default(0).notNull(),
+    creditSource: text("credit_source"),
+    currentVersion: integer("current_version").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_drafts_id_store_key").on(table.id, table.storeId),
+    index("mink_drafts_owner_status_idx").on(
+      table.storeId,
+      table.adminId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("mink_drafts_run_idx").on(table.storeId, table.runId),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_drafts_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_drafts_kind_check",
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text])`,
+    ),
+    check(
+      "mink_drafts_status_check",
+      sql`status = ANY (ARRAY['proposed'::text, 'draft'::text])`,
+    ),
+    check(
+      "mink_drafts_destination_check",
+      sql`btrim(destination_type) <> '' AND btrim(destination_label) <> '' AND destination_path LIKE '/dashboard%' AND char_length(destination_path) <= 500`,
+    ),
+    check(
+      "mink_drafts_title_check",
+      sql`char_length(btrim(title)) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "mink_drafts_content_check",
+      sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(content_json) = 'object'`,
+    ),
+    check(
+      "mink_drafts_credit_check",
+      sql`expected_credits BETWEEN 1 AND 20 AND charged_credits BETWEEN 0 AND 20 AND (credit_source IS NULL OR credit_source = ANY (ARRAY['plan'::text, 'credit'::text, 'mixed'::text, 'plan_unlimited'::text]))`,
+    ),
+    check("mink_drafts_version_check", sql`current_version >= 0`),
+  ],
+);
+
+export const minkDraftVersions = pgTable(
+  "mink_draft_versions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    draftId: uuid("draft_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    version: integer().notNull(),
+    contentJson: jsonb("content_json").notNull(),
+    action: text().notNull(),
+    createdBy: text("created_by").notNull(),
+    sourceVersion: integer("source_version"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_draft_versions_draft_version_key").on(
+      table.draftId,
+      table.version,
+    ),
+    index("mink_draft_versions_store_draft_idx").on(
+      table.storeId,
+      table.draftId,
+      table.version,
+    ),
+    foreignKey({
+      columns: [table.draftId, table.storeId],
+      foreignColumns: [minkDrafts.id, minkDrafts.storeId],
+      name: "mink_draft_versions_draft_store_fkey",
+    }).onDelete("cascade"),
+    check("mink_draft_versions_version_check", sql`version > 0`),
+    check(
+      "mink_draft_versions_content_check",
+      sql`jsonb_typeof(content_json) = 'object'`,
+    ),
+    check(
+      "mink_draft_versions_action_check",
+      sql`action = ANY (ARRAY['save'::text, 'rollback'::text])`,
+    ),
+    check(
+      "mink_draft_versions_source_check",
+      sql`source_version IS NULL OR source_version > 0`,
+    ),
+  ],
+);
+
+export const minkDraftCreditUsage = pgTable(
+  "mink_draft_credit_usage",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    draftId: uuid("draft_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    draftKind: text("draft_kind").notNull(),
+    period: text().notNull(),
+    expectedCredits: integer("expected_credits").notNull(),
+    chargedCredits: integer("charged_credits").notNull(),
+    planCredits: integer("plan_credits").default(0).notNull(),
+    balanceCredits: integer("balance_credits").default(0).notNull(),
+    source: text().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_draft_credit_usage_draft_key").on(table.draftId),
+    index("mink_draft_credit_usage_store_idx").on(
+      table.storeId,
+      table.createdAt,
+    ),
+    index("mink_draft_credit_usage_run_idx").on(table.storeId, table.runId),
+    foreignKey({
+      columns: [table.draftId, table.storeId],
+      foreignColumns: [minkDrafts.id, minkDrafts.storeId],
+      name: "mink_draft_credit_usage_draft_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_draft_credit_usage_counts_check",
+      sql`expected_credits BETWEEN 1 AND 20 AND charged_credits BETWEEN 0 AND 20 AND plan_credits >= 0 AND balance_credits >= 0 AND charged_credits = plan_credits + balance_credits`,
+    ),
+    check(
+      "mink_draft_credit_usage_source_check",
+      sql`source = ANY (ARRAY['plan'::text, 'credit'::text, 'mixed'::text, 'plan_unlimited'::text])`,
+    ),
+    check(
+      "mink_draft_credit_usage_period_check",
+      sql`period ~ '^[0-9]{4}-[0-9]{2}$'`,
     ),
   ],
 );
@@ -5062,7 +5227,7 @@ export const minkUsageLedger = pgTable(
     ),
     check(
       "mink_usage_ledger_cohort_check",
-      sql`cost_cohort = ANY (ARRAY['read_lookup'::text, 'read_analysis'::text, 'read_failed'::text, 'read_unknown'::text])`,
+      sql`cost_cohort = ANY (ARRAY['read_lookup'::text, 'read_analysis'::text, 'read_failed'::text, 'read_unknown'::text, 'draft_proposal'::text])`,
     ),
   ],
 );

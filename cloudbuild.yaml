@@ -114,9 +114,10 @@ substitutions:
   _MAX_INSTANCES: "4"
   # Mink dashboard agent runtime. A bare build targets staging and therefore
   # fails closed; the dev trigger is the only trigger that overrides the enable
-  # flag to true during the internal alpha. Keep the model and bounded-loop
-  # limits declarative here because --set-env-vars replaces the complete Cloud
-  # Run environment on every deploy.
+  # flag to true for controlled invited stores. Phase 3's drafting gate is an
+  # operator-owned database flag, not a deploy-wide environment switch. Keep
+  # the model and bounded-loop limits declarative here because --set-env-vars
+  # replaces the complete Cloud Run environment on every deploy.
   _MINK_AI_ENABLED: "false"
   _MINK_BETA_REQUIRE_INVITE: "true"
   _MINK_VERTEX_MODEL: gemini-3.7-flash

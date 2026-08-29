@@ -74,6 +74,68 @@ describe("Mink read-tool declarations", () => {
     ]);
   });
 
+  it("exposes proposal tools only behind drafting opt-in, manage permission, and context", () => {
+    const names = (overrides: Partial<MinkActorContext>) =>
+      minkReadToolRegistry
+        .declarationsFor({ ...ACTOR, isSuperadmin: false, ...overrides })
+        .map((tool) => tool.name);
+
+    expect(
+      names({
+        draftingEnabled: false,
+        permissions: {
+          products: ["manage"],
+          blogs: ["manage"],
+          marketing: ["manage"],
+          users: ["manage"],
+        },
+      }).filter((name) => name.startsWith("propose_")),
+    ).toEqual([]);
+
+    expect(
+      names({
+        draftingEnabled: true,
+        selectedResource: {
+          type: "product",
+          id: "11111111-1111-4111-8111-111111111111",
+        },
+        permissions: {
+          products: ["manage"],
+          blogs: ["manage"],
+          marketing: ["manage"],
+          users: ["manage"],
+        },
+      }).filter((name) => name.startsWith("propose_")),
+    ).toEqual([
+      "propose_current_product_description",
+      "propose_current_product_seo",
+      "propose_blog_draft",
+      "propose_coupon_email",
+      "propose_customer_message",
+    ]);
+
+    const marketingTools = names({
+      draftingEnabled: true,
+      permissions: { marketing: ["view", "manage"] },
+    });
+    expect(marketingTools.indexOf("get_coupon_for_draft")).toBeGreaterThan(-1);
+    expect(marketingTools.indexOf("get_coupon_for_draft")).toBeLessThan(
+      marketingTools.indexOf("propose_coupon_email"),
+    );
+    const couponReader = minkReadToolRegistry
+      .declarationsFor({
+        ...ACTOR,
+        isSuperadmin: false,
+        draftingEnabled: true,
+        permissions: { marketing: ["view", "manage"] },
+      })
+      .find((tool) => tool.name === "get_coupon_for_draft");
+    expect(couponReader?.parametersJsonSchema).toMatchObject({
+      required: ["coupon_code"],
+      additionalProperties: false,
+    });
+  });
+
   it("rejects direct calls to every hidden business tool before data access", async () => {
     const restricted: MinkActorContext = {
       ...ACTOR,

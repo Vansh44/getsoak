@@ -7,6 +7,7 @@ import { adminLocations, orders, products, stores } from "@/drizzle/schema";
 import { withUser } from "@/lib/db/client";
 import { normalizeAnalyticsTimeZone } from "@/lib/analytics/range";
 import { resolveStoreSettings } from "@/lib/settings/registry";
+import { getBrandSoulForStore } from "@/lib/ai/brand-voice";
 import { MinkRequestError } from "./errors";
 import { requireMinkStoreInvite } from "./access";
 import { getMinkConfig } from "./config";
@@ -49,7 +50,7 @@ export async function getMinkActorContext(
     );
   }
 
-  await requireMinkStoreInvite(
+  const minkAccess = await requireMinkStoreInvite(
     viewer.storeId,
     options.betaRequireInvite ?? getMinkConfig().betaRequireInvite,
   );
@@ -134,6 +135,12 @@ export async function getMinkActorContext(
           unknown
         >)
       : {};
+  const brandVoice = (await getBrandSoulForStore(viewer.storeId))
+    .slice(0, 6_000)
+    .replaceAll("<", "‹")
+    .replaceAll(">", "›")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .trim();
   return {
     storeId: viewer.storeId,
     adminId: viewer.userId,
@@ -149,6 +156,8 @@ export async function getMinkActorContext(
       (settings["inventory.lowStockThreshold"] as number | undefined) ?? 5,
     currentPath: options.pageContext?.currentPath ?? null,
     selectedResource: trusted.selectedResource ?? null,
+    draftingEnabled: minkAccess?.draftingEnabled === true,
+    brandVoice,
     requestId,
   };
 }

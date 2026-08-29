@@ -8,11 +8,17 @@ vi.mock("@/lib/db/client", () => ({
   withService: holder.withService,
 }));
 
-import { isMinkStoreInvited, requireMinkStoreInvite } from "./access";
+import {
+  getMinkStoreAccess,
+  isMinkStoreInvited,
+  requireMinkStoreInvite,
+} from "./access";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  holder.withService.mockResolvedValue([{ enabled: true }]);
+  holder.withService.mockResolvedValue([
+    { enabled: true, draftingEnabled: true },
+  ]);
 });
 
 describe("Mink invited-store access", () => {
@@ -24,6 +30,20 @@ describe("Mink invited-store access", () => {
 
     holder.withService.mockResolvedValueOnce([]);
     await expect(isMinkStoreInvited("store-3")).resolves.toBe(false);
+  });
+
+  it("requires both gates before exposing drafting", async () => {
+    await expect(getMinkStoreAccess("store-1")).resolves.toEqual({
+      enabled: true,
+      draftingEnabled: true,
+    });
+    holder.withService.mockResolvedValueOnce([
+      { enabled: false, draftingEnabled: true },
+    ]);
+    await expect(getMinkStoreAccess("store-2")).resolves.toEqual({
+      enabled: false,
+      draftingEnabled: false,
+    });
   });
 
   it("fails closed when the invitation table cannot be read", async () => {
@@ -39,9 +59,10 @@ describe("Mink invited-store access", () => {
   });
 
   it("bypasses the store row only when the server invitation flag is off", async () => {
-    await expect(
-      requireMinkStoreInvite("store-1", false),
-    ).resolves.toBeUndefined();
+    await expect(requireMinkStoreInvite("store-1", false)).resolves.toEqual({
+      enabled: true,
+      draftingEnabled: false,
+    });
     expect(holder.withService).not.toHaveBeenCalled();
   });
 });

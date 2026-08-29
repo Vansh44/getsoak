@@ -12,6 +12,7 @@ import { resolveMinkLocation } from "./location-scope";
 import { MinkToolRegistry, type MinkTool } from "./registry";
 import { currentOrderTool, listOrdersTool } from "./order-tools";
 import { searchHelpCentreTool } from "./help-tool";
+import { minkDraftTools } from "./draft-tools";
 
 const EMPTY_OBJECT_SCHEMA = {
   type: "object",
@@ -171,6 +172,9 @@ const getCurrentProduct: MinkTool = {
           id: products.id,
           name: products.name,
           sku: products.sku,
+          description: products.description,
+          seoTitle: products.seoTitle,
+          seoDescription: products.seoDescription,
           status: products.status,
           sellingPrice: products.sellingPrice,
           stock: products.stock,
@@ -190,6 +194,13 @@ const getCurrentProduct: MinkTool = {
       count: rows.length,
       products: rows.map((product) => ({
         ...product,
+        ...(!actor.draftingEnabled
+          ? {
+              description: undefined,
+              seoTitle: undefined,
+              seoDescription: undefined,
+            }
+          : {}),
         dashboardPath: `/dashboard/products/${product.id}`,
       })),
       dataAsOf: new Date().toISOString(),
@@ -573,4 +584,5 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   listOrdersTool,
   currentOrderTool,
   searchHelpCentreTool,
+  ...minkDraftTools,
 ]);

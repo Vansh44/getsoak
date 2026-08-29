@@ -3,14 +3,24 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowUpCircle, Bot, Coins, Power, Trash2 } from "lucide-react";
+import {
+  ArrowUpCircle,
+  Bot,
+  Coins,
+  FilePenLine,
+  Power,
+  Trash2,
+} from "lucide-react";
 import {
   deleteStore,
   grantAiCredits,
   setStorePlan,
   setStoreStatus,
 } from "@/app/actions/platform";
-import { setMinkBetaAccess } from "@/app/actions/mink-operator-actions";
+import {
+  setMinkBetaAccess,
+  setMinkDraftingAccess,
+} from "@/app/actions/mink-operator-actions";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 
 // ---------------------------------------------------------------------------
@@ -69,6 +79,7 @@ export function StoreManageBar({
   plan,
   canManage,
   minkBetaEnabled,
+  minkDraftingEnabled,
 }: {
   storeId: string;
   slug: string;
@@ -77,6 +88,7 @@ export function StoreManageBar({
   plan: Plan;
   canManage: boolean;
   minkBetaEnabled: boolean;
+  minkDraftingEnabled: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -119,6 +131,18 @@ export function StoreManageBar({
       minkBetaEnabled
         ? `Removed ${name} from the Mink AI beta.`
         : `Invited ${name} to the Mink AI beta.`,
+    );
+  }
+
+  async function toggleMinkDrafting() {
+    setBusy(true);
+    const res = await setMinkDraftingAccess(storeId, !minkDraftingEnabled);
+    setBusy(false);
+    if (res.error) return void toast.error(res.error);
+    done(
+      minkDraftingEnabled
+        ? `Disabled private Mink drafts for ${name}.`
+        : `Enabled private Mink drafts for ${name}.`,
     );
   }
 
@@ -201,6 +225,19 @@ export function StoreManageBar({
         >
           <Bot className="h-4 w-4" />
           {minkBetaEnabled ? "Remove Mink beta" : "Invite to Mink beta"}
+        </button>
+        <button
+          onClick={toggleMinkDrafting}
+          disabled={busy || !minkBetaEnabled}
+          title={
+            minkBetaEnabled
+              ? "Control private, charged Mink proposal tools"
+              : "Invite this store to the Mink beta first"
+          }
+          className="inline-flex items-center gap-1.5 rounded-lg bg-fuchsia-50 px-3.5 py-2 text-sm font-semibold text-fuchsia-700 transition hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <FilePenLine className="h-4 w-4" />
+          {minkDraftingEnabled ? "Disable Mink drafts" : "Enable Mink drafts"}
         </button>
         <button
           onClick={toggleStatus}

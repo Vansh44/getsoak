@@ -14,6 +14,7 @@ import { estimateMinkCost } from "./cost";
 import { historyWithCompaction } from "./compaction";
 import { MinkRequestError } from "./errors";
 import { minkShadowMeter } from "./metering";
+import { discardFailedMinkRunDrafts, getMinkRunDraftUsage } from "./drafts";
 import type {
   MinkActorContext,
   MinkArtifact,
@@ -348,8 +349,11 @@ export async function startMinkRun(input: {
         requestedBy: actor.adminId,
         requestId: actor.requestId,
         model,
-        promptVersion: "read-beta-v2",
-        toolRegistryVersion: "read-beta-v2",
+        promptVersion: actor.draftingEnabled ? "draft-beta-v3" : "read-beta-v2",
+        toolRegistryVersion: actor.draftingEnabled
+          ? "draft-beta-v3"
+          : "read-beta-v2",
+        riskTier: actor.draftingEnabled ? "R1" : "R0",
         currentPath: actor.currentPath ?? null,
         selectedResourceType: actor.selectedResource?.type ?? null,
         selectedResourceId: actor.selectedResource?.id ?? null,
@@ -502,6 +506,11 @@ export async function failMinkRun(input: {
           eq(minkRuns.status, "running"),
         ),
       );
+    await discardFailedMinkRunDrafts(
+      db,
+      input.actor.storeId,
+      input.started.runId,
+    );
     await insertUsage(db, {
       actor: input.actor,
       started: input.started,
@@ -528,6 +537,8 @@ export async function startMinkToolCall(input: {
       sequence: input.sequence,
       providerCallId: input.call.id ?? null,
       toolName: input.call.name,
+      toolVersion: input.call.name.startsWith("propose_") ? 3 : 2,
+      riskTier: input.call.name.startsWith("propose_") ? "R1" : "R0",
       // Arguments intentionally stay redacted in the alpha ledger. The model
       // receives them, but telemetry never needs a product search phrase.
       argumentsSummary: {},
@@ -656,6 +667,11 @@ async function insertUsage(
     toolCalls: input.toolCalls,
     usageKnown: input.usageStatus !== "unavailable",
   });
+  const draftUsage = await getMinkRunDraftUsage(
+    db,
+    input.actor.storeId,
+    input.started.runId,
+  );
   await db
     .insert(minkUsageLedger)
     .values({
@@ -670,11 +686,12 @@ async function insertUsage(
       usageStatus: input.usageStatus,
       estimatedCostMicrousd: estimate.estimatedCostMicrousd,
       pricingVersion: estimate.pricingVersion,
-      // Phase 1 records shadow usage only. Billing begins after pilot data sets
-      // the documented weights and an atomic reservation/reconciliation flow.
-      chargedCredits: 0,
+      // Read-only work remains shadow-metered. Phase 3 proposal tools reserve
+      // their documented weight atomically and are summed into this run row.
+      chargedCredits: draftUsage.chargedCredits,
       shadowCredits: shadow.shadowCredits,
-      costCohort: shadow.costCohort,
+      costCohort:
+        draftUsage.proposalCount > 0 ? "draft_proposal" : shadow.costCohort,
     })
     .onConflictDoNothing({ target: minkUsageLedger.runId });
 }

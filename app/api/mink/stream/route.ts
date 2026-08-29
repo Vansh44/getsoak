@@ -81,6 +81,7 @@ export async function POST(request: Request) {
       message,
       model: config.model,
     });
+    const runActor = { ...actor, runId: started.runId };
     const abortController = new AbortController();
     const abortFromRequest = () => abortController.abort();
     if (request.signal.aborted) abortController.abort();
@@ -92,7 +93,7 @@ export async function POST(request: Request) {
     let progress: MinkRunProgress = EMPTY_PROGRESS;
     let session;
     try {
-      session = createVertexMinkSession(config, actor, declarations, {
+      session = createVertexMinkSession(config, runActor, declarations, {
         history: started.history,
         abortSignal: abortController.signal,
       });
@@ -140,7 +141,7 @@ export async function POST(request: Request) {
         });
         try {
           const result = await runMinkAgent({
-            actor,
+            actor: runActor,
             message,
             config,
             registry: minkReadToolRegistry,

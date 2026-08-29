@@ -80,7 +80,7 @@ export class MinkToolRegistry {
         return failure(
           call,
           "tool_timeout",
-          "The store data read took too long. Try a narrower question.",
+          "The Mink AI tool took too long. Try a narrower request.",
         );
       }
       logError("mink.tool: failed", error, {
@@ -93,7 +93,7 @@ export class MinkToolRegistry {
       return failure(
         call,
         "tool_failed",
-        "The store data could not be read right now.",
+        "The Mink AI tool could not finish right now.",
       );
     }
   }

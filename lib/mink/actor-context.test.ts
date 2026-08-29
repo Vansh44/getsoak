@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const holder = vi.hoisted(() => ({
   viewer: vi.fn(),
   withUser: vi.fn(),
+  brandVoice: vi.fn(),
 }));
 
 vi.mock("@/app/dashboard/lib/access", () => ({
@@ -12,7 +13,12 @@ vi.mock("@/lib/db/client", () => ({
   withUser: holder.withUser,
 }));
 vi.mock("./access", () => ({
-  requireMinkStoreInvite: vi.fn().mockResolvedValue(undefined),
+  requireMinkStoreInvite: vi
+    .fn()
+    .mockResolvedValue({ enabled: true, draftingEnabled: true }),
+}));
+vi.mock("@/lib/ai/brand-voice", () => ({
+  getBrandSoulForStore: holder.brandVoice,
 }));
 
 import { getMinkActorContext } from "./actor-context";
@@ -38,6 +44,7 @@ beforeEach(() => {
     },
     locationIds: ["location-1"],
   });
+  holder.brandVoice.mockResolvedValue("Warm, concise, and honest.");
 });
 
 describe("getMinkActorContext", () => {
@@ -62,6 +69,8 @@ describe("getMinkActorContext", () => {
       defaultLowStockThreshold: 7,
       currentPath: null,
       selectedResource: null,
+      draftingEnabled: true,
+      brandVoice: "Warm, concise, and honest.",
       requestId: "request-1",
     });
   });

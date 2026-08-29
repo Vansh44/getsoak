@@ -5,6 +5,7 @@ import {
   ChartNoAxesCombined,
 } from "lucide-react";
 import type { MinkArtifact } from "@/lib/mink/types";
+import { MinkProposalCard } from "./mink-proposal-card";
 
 export function MinkArtifacts({ artifacts }: { artifacts: MinkArtifact[] }) {
   if (!artifacts.length) return null;
@@ -24,6 +25,14 @@ export function MinkArtifacts({ artifacts }: { artifacts: MinkArtifact[] }) {
             <RecordArtifact
               key={`${artifact.type}-${index}`}
               artifact={artifact}
+            />
+          );
+        }
+        if (artifact.type === "proposal") {
+          return (
+            <MinkProposalCard
+              key={`${artifact.type}-${artifact.draftId}`}
+              proposal={artifact}
             />
           );
         }

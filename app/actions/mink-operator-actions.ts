@@ -1,6 +1,6 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { getPlatformViewer } from "@/app/actions/platform";
 import { minkStoreAccess, stores } from "@/drizzle/schema";
@@ -38,6 +38,7 @@ export async function setMinkBetaAccess(
           target: minkStoreAccess.storeId,
           set: {
             enabled,
+            ...(!enabled ? { draftingEnabled: false } : {}),
             phase: "merchant_beta",
             invitedBy: enabled ? viewer.email : null,
             invitedAt: enabled ? now : null,
@@ -58,5 +59,52 @@ export async function setMinkBetaAccess(
   } catch (error) {
     logError("mink.beta_access: failed", error, { storeId, enabled });
     return { error: "Could not change Mink beta access. Try again." };
+  }
+}
+
+export async function setMinkDraftingAccess(
+  storeId: string,
+  enabled: boolean,
+): Promise<{ success?: true; error?: string }> {
+  const viewer = await getPlatformViewer();
+  if (viewer?.role !== "superadmin") {
+    return {
+      error: "Only a platform superadmin can change Mink drafting access.",
+    };
+  }
+  if (typeof enabled !== "boolean") return { error: "Invalid drafting state." };
+  try {
+    const changed = await withService((db) =>
+      db
+        .update(minkStoreAccess)
+        .set({ draftingEnabled: enabled, updatedAt: new Date().toISOString() })
+        .where(
+          enabled
+            ? and(
+                eq(minkStoreAccess.storeId, storeId),
+                eq(minkStoreAccess.enabled, true),
+              )
+            : eq(minkStoreAccess.storeId, storeId),
+        )
+        .returning({ storeId: minkStoreAccess.storeId }),
+    );
+    if (!changed[0]) {
+      return {
+        error: enabled
+          ? "Invite the store to the Mink beta before enabling drafting."
+          : "This store does not have a Mink access record.",
+      };
+    }
+    revalidatePath(`/dashboard/stores/${storeId}`);
+    revalidatePath("/dashboard/mink");
+    logInfo("mink.drafting_access: changed", {
+      storeId,
+      enabled,
+      operator: viewer.email,
+    });
+    return { success: true };
+  } catch (error) {
+    logError("mink.drafting_access: failed", error, { storeId, enabled });
+    return { error: "Could not change Mink drafting access. Try again." };
   }
 }
