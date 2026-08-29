@@ -111,6 +111,39 @@ describe("POST /api/mink/stream", () => {
     expect(holder.actor).not.toHaveBeenCalled();
   });
 
+  it("accepts the public dashboard origin behind an internal proxy host", async () => {
+    const publicHost = "echos.staging.storemink.com";
+    const response = await POST(
+      request(
+        { message: "Hello" },
+        {
+          origin: `https://${publicHost}`,
+          "x-forwarded-host": publicHost,
+          host: "internal-service:8080",
+        },
+      ),
+    );
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(holder.actor).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a same-origin local store host without proxy headers", async () => {
+    const response = await POST(
+      request(
+        { message: "Hello" },
+        {
+          origin: "http://echos.localhost:3000",
+          host: "echos.localhost:3000",
+        },
+      ),
+    );
+    await response.text();
+
+    expect(response.status).toBe(200);
+  });
+
   it("returns app-level SSE events and trims the user message", async () => {
     const response = await POST(request({ message: "  Show my catalog  " }));
     const body = await response.text();

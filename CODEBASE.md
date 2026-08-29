@@ -526,6 +526,8 @@ wholesip/
 │       ├── mink/stream/      # ★ Internal read-only Mink agent SSE boundary.
 │       │                      # Disabled unless MINK_AI_ENABLED=true; derives the
 │       │                      # actor/tenant/permissions server-side, rate-limits,
+│       │                      # validates browser Origin against x-forwarded-host/host
+│       │                      # (never the proxy's internal request.url host),
 │       │                      # creates a durable run, replays only successful prior
 │       │                      # turns, runs bounded Gemini 3.7 tool turns, records
 │       │                      # redacted tool/token telemetry, and emits typed status/
