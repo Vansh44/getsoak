@@ -8,7 +8,12 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-import { useMinkAi, type MinkMessage } from "./mink-ai";
+import {
+  useMinkAi,
+  type MinkConversationSummary,
+  type MinkMessage,
+  type MinkUiError,
+} from "./mink-ai";
 
 interface ChatContextType {
   isChatOpen: boolean;
@@ -21,15 +26,22 @@ interface ChatContextType {
   startExpandedChat: (message: string) => void;
   // The shared Mink AI conversation (one thread across the Home box + panel).
   messages: MinkMessage[];
+  conversations: MinkConversationSummary[];
+  activeConversationId: string | null;
+  activeConversationTitle: string | null;
   input: string;
   setInput: (value: string) => void;
   isReplying: boolean;
+  isHistoryLoading: boolean;
+  deletingConversationId: string | null;
   statusText: string | null;
   error: { code: string; message: string } | null;
   send: (raw?: string) => void;
   cancel: () => void;
   retry: () => void;
   reset: () => void;
+  loadConversation: (id: string) => Promise<void>;
+  deleteConversation: (id: string) => Promise<MinkUiError | null>;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -103,15 +115,25 @@ export function useChat() {
       toggleExpand: () => {},
       startExpandedChat: () => {},
       messages: [],
+      conversations: [],
+      activeConversationId: null,
+      activeConversationTitle: null,
       input: "",
       setInput: () => {},
       isReplying: false,
+      isHistoryLoading: false,
+      deletingConversationId: null,
       statusText: null,
       error: null,
       send: () => {},
       cancel: () => {},
       retry: () => {},
       reset: () => {},
+      loadConversation: async () => {},
+      deleteConversation: async () => ({
+        code: "mink_unavailable",
+        message: "Mink AI is unavailable.",
+      }),
     } satisfies ChatContextType;
   }
   return context;

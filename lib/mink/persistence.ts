@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import {
   minkConversations,
   minkMessages,
@@ -13,6 +13,8 @@ import { MinkRequestError } from "./errors";
 import type { MinkActorContext, MinkRunResult, MinkToolCall } from "./types";
 
 const HISTORY_MESSAGES = 12;
+const DISPLAY_MESSAGES = 50;
+export const MINK_CONVERSATION_LIMIT = 10;
 
 export interface MinkStoredMessage {
   role: "user" | "assistant";
@@ -23,6 +25,164 @@ export interface MinkStartedRun {
   conversationId: string;
   runId: string;
   history: MinkStoredMessage[];
+}
+
+export interface MinkConversationSummary {
+  id: string;
+  title: string;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
+export interface MinkConversationMessage extends MinkStoredMessage {
+  id: string;
+  createdAt: string;
+}
+
+export interface MinkConversationDetail {
+  id: string;
+  title: string;
+  messages: MinkConversationMessage[];
+}
+
+export async function listMinkConversations(
+  actor: MinkActorContext,
+): Promise<MinkConversationSummary[]> {
+  const now = new Date().toISOString();
+  return withService((db) =>
+    db
+      .select({
+        id: minkConversations.id,
+        title: minkConversations.title,
+        lastMessageAt: minkConversations.lastMessageAt,
+        createdAt: minkConversations.createdAt,
+      })
+      .from(minkConversations)
+      .where(
+        and(
+          eq(minkConversations.storeId, actor.storeId),
+          eq(minkConversations.adminId, actor.adminId),
+          eq(minkConversations.status, "active"),
+          gt(minkConversations.expiresAt, now),
+        ),
+      )
+      .orderBy(
+        desc(minkConversations.lastMessageAt),
+        desc(minkConversations.createdAt),
+        desc(minkConversations.id),
+      )
+      .limit(MINK_CONVERSATION_LIMIT),
+  );
+}
+
+export async function getMinkConversation(
+  actor: MinkActorContext,
+  conversationId: string,
+): Promise<MinkConversationDetail> {
+  const now = new Date().toISOString();
+  return withService(async (db) => {
+    const conversations = await db
+      .select({
+        id: minkConversations.id,
+        title: minkConversations.title,
+      })
+      .from(minkConversations)
+      .where(
+        and(
+          eq(minkConversations.id, conversationId),
+          eq(minkConversations.storeId, actor.storeId),
+          eq(minkConversations.adminId, actor.adminId),
+          eq(minkConversations.status, "active"),
+          gt(minkConversations.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    const conversation = conversations[0];
+    if (!conversation) {
+      throw new MinkRequestError(
+        "conversation_not_found",
+        "That Mink AI conversation is no longer available.",
+        404,
+      );
+    }
+
+    const rows = await db
+      .select({
+        id: minkMessages.id,
+        role: minkMessages.role,
+        content: minkMessages.contentJson,
+        createdAt: minkMessages.createdAt,
+      })
+      .from(minkMessages)
+      .innerJoin(
+        minkRuns,
+        and(
+          eq(minkRuns.id, minkMessages.runId),
+          eq(minkRuns.storeId, minkMessages.storeId),
+          eq(minkRuns.status, "succeeded"),
+        ),
+      )
+      .where(
+        and(
+          eq(minkMessages.storeId, actor.storeId),
+          eq(minkMessages.conversationId, conversationId),
+        ),
+      )
+      .orderBy(desc(minkMessages.createdAt), desc(minkMessages.id))
+      .limit(DISPLAY_MESSAGES);
+
+    return {
+      ...conversation,
+      messages: rows.reverse().flatMap(toConversationMessage),
+    };
+  });
+}
+
+export async function deleteMinkConversation(
+  actor: MinkActorContext,
+  conversationId: string,
+): Promise<void> {
+  await withService(async (db) => {
+    await db.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`mink-conversation:${conversationId}`}, 0))`,
+    );
+    const running = await db
+      .select({ id: minkRuns.id })
+      .from(minkRuns)
+      .where(
+        and(
+          eq(minkRuns.storeId, actor.storeId),
+          eq(minkRuns.conversationId, conversationId),
+          eq(minkRuns.status, "running"),
+        ),
+      )
+      .limit(1);
+    if (running[0]) {
+      throw new MinkRequestError(
+        "conversation_busy",
+        "Wait for Mink AI to finish before deleting this conversation.",
+        409,
+      );
+    }
+
+    const deleted = await db
+      .delete(minkConversations)
+      .where(
+        and(
+          eq(minkConversations.id, conversationId),
+          eq(minkConversations.storeId, actor.storeId),
+          eq(minkConversations.adminId, actor.adminId),
+        ),
+      )
+      .returning({ id: minkConversations.id });
+    if (!deleted[0]) {
+      throw new MinkRequestError(
+        "conversation_not_found",
+        "That Mink AI conversation is no longer available.",
+        404,
+      );
+    }
+  });
 }
 
 export async function startMinkRun(input: {
@@ -37,6 +197,9 @@ export async function startMinkRun(input: {
   return withService(async (db) => {
     let conversationId = input.conversationId;
     if (conversationId) {
+      await db.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`mink-conversation:${conversationId}`}, 0))`,
+      );
       const existing = await db
         .select({ id: minkConversations.id })
         .from(minkConversations)
@@ -58,6 +221,11 @@ export async function startMinkRun(input: {
         );
       }
     } else {
+      // Serialise first-message creation for this actor/store so two tabs
+      // cannot both observe ten rows and leave eleven after committing.
+      await db.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`mink-conversations:${actor.storeId}:${actor.adminId}`}, 0))`,
+      );
       const created = await db
         .insert(minkConversations)
         .values({
@@ -69,6 +237,34 @@ export async function startMinkRun(input: {
       conversationId = created[0]?.id;
       if (!conversationId)
         throw new Error("Mink conversation insert returned no id");
+
+      const overflow = await db
+        .select({ id: minkConversations.id })
+        .from(minkConversations)
+        .where(
+          and(
+            eq(minkConversations.storeId, actor.storeId),
+            eq(minkConversations.adminId, actor.adminId),
+          ),
+        )
+        .orderBy(
+          desc(minkConversations.lastMessageAt),
+          desc(minkConversations.createdAt),
+          desc(minkConversations.id),
+        )
+        .offset(MINK_CONVERSATION_LIMIT);
+      if (overflow.length) {
+        await db.delete(minkConversations).where(
+          and(
+            eq(minkConversations.storeId, actor.storeId),
+            eq(minkConversations.adminId, actor.adminId),
+            inArray(
+              minkConversations.id,
+              overflow.map((row) => row.id),
+            ),
+          ),
+        );
+      }
     }
 
     const previous = await db
@@ -308,6 +504,16 @@ function toStoredMessage(row: {
   const text = (row.content as Record<string, unknown>).text;
   if (typeof text !== "string" || !text.trim()) return [];
   return [{ role: row.role, text }];
+}
+
+function toConversationMessage(row: {
+  id: string;
+  role: string;
+  content: unknown;
+  createdAt: string;
+}): MinkConversationMessage[] {
+  const stored = toStoredMessage(row)[0];
+  return stored ? [{ ...stored, id: row.id, createdAt: row.createdAt }] : [];
 }
 
 function safeErrorCode(value: string): string {

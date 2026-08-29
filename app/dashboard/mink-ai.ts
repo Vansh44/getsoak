@@ -7,9 +7,16 @@ export const CANNED_REPLY = `Hi, I'm ${ASSISTANT_NAME} — your store assistant.
 const REPLY_DELAY_MS = 500;
 
 export type MinkMessage = {
-  id: number;
+  id: number | string;
   role: "user" | "assistant";
   text: string;
+};
+
+export type MinkConversationSummary = {
+  id: string;
+  title: string;
+  lastMessageAt: string;
+  createdAt: string;
 };
 
 export type MinkUiError = {
@@ -21,15 +28,31 @@ type SsePayload = Record<string, unknown>;
 
 export function useMinkAi({ enabled }: { enabled: boolean }) {
   const [messages, setMessages] = useState<MinkMessage[]>([]);
+  const [conversations, setConversations] = useState<MinkConversationSummary[]>(
+    [],
+  );
+  const [activeConversationId, setActiveConversationId] = useState<
+    string | null
+  >(null);
+  const [activeConversationTitle, setActiveConversationTitle] = useState<
+    string | null
+  >(null);
   const [input, setInput] = useState("");
   const [isReplying, setIsReplying] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [deletingConversationId, setDeletingConversationId] = useState<
+    string | null
+  >(null);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<MinkUiError | null>(null);
   const nextId = useRef(0);
   const isReplyingRef = useRef(false);
   const conversationId = useRef<string | null>(null);
   const lastFailedMessage = useRef<string | null>(null);
+  const shouldRestoreLatest = useRef(true);
+  const deletingConversationRef = useRef<string | null>(null);
   const abortController = useRef<AbortController | null>(null);
+  const historyAbortController = useRef<AbortController | null>(null);
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const setReplying = useCallback((value: boolean) => {
@@ -37,16 +60,133 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
     setIsReplying(value);
   }, []);
 
+  const loadConversation = useCallback(
+    async (id: string) => {
+      if (!enabled || isReplyingRef.current) return;
+      shouldRestoreLatest.current = false;
+      historyAbortController.current?.abort();
+      const controller = new AbortController();
+      historyAbortController.current = controller;
+      setIsHistoryLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(
+          `/api/mink/conversations/${encodeURIComponent(id)}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) throw await responseError(response);
+        const body = (await response.json()) as unknown;
+        const detail = readConversationDetail(body);
+        conversationId.current = detail.id;
+        setActiveConversationId(detail.id);
+        setActiveConversationTitle(detail.title);
+        setMessages(detail.messages);
+        setInput("");
+        setStatusText(null);
+        lastFailedMessage.current = null;
+      } catch (caught) {
+        if (!controller.signal.aborted) setError(toUiError(caught));
+      } finally {
+        if (historyAbortController.current === controller) {
+          historyAbortController.current = null;
+          setIsHistoryLoading(false);
+        }
+      }
+    },
+    [enabled],
+  );
+
+  const loadConversations = useCallback(
+    async (restoreLatest = false) => {
+      if (!enabled) return;
+      try {
+        const response = await fetch("/api/mink/conversations", {
+          cache: "no-store",
+        });
+        if (!response.ok) throw await responseError(response);
+        const body = (await response.json()) as unknown;
+        const recent = readConversationSummaries(body);
+        setConversations(recent);
+        if (
+          restoreLatest &&
+          shouldRestoreLatest.current &&
+          !conversationId.current &&
+          !isReplyingRef.current &&
+          recent[0]
+        ) {
+          shouldRestoreLatest.current = false;
+          await loadConversation(recent[0].id);
+        }
+      } catch (caught) {
+        setError(toUiError(caught));
+      }
+    },
+    [enabled, loadConversation],
+  );
+
+  const deleteConversation = useCallback(
+    async (id: string): Promise<MinkUiError | null> => {
+      if (
+        !enabled ||
+        isReplyingRef.current ||
+        deletingConversationRef.current
+      ) {
+        return {
+          code: "conversation_delete_unavailable",
+          message: "Wait for Mink AI to finish before deleting a conversation.",
+        };
+      }
+      shouldRestoreLatest.current = false;
+      deletingConversationRef.current = id;
+      setDeletingConversationId(id);
+      setError(null);
+      try {
+        const response = await fetch(
+          `/api/mink/conversations/${encodeURIComponent(id)}`,
+          { method: "DELETE" },
+        );
+        if (!response.ok) throw await responseError(response);
+        const body = (await response.json()) as unknown;
+        const recent = readConversationSummaries(body);
+        setConversations(recent);
+
+        if (conversationId.current === id) {
+          historyAbortController.current?.abort();
+          conversationId.current = null;
+          lastFailedMessage.current = null;
+          setActiveConversationId(null);
+          setActiveConversationTitle(null);
+          setMessages([]);
+          setInput("");
+          setStatusText(null);
+          if (recent[0]) await loadConversation(recent[0].id);
+        }
+        return null;
+      } catch (caught) {
+        const nextError = toUiError(caught);
+        setError(nextError);
+        return nextError;
+      } finally {
+        deletingConversationRef.current = null;
+        setDeletingConversationId(null);
+      }
+    },
+    [enabled, loadConversation],
+  );
+
   useEffect(() => {
+    if (enabled) void loadConversations(true);
     return () => {
       abortController.current?.abort();
+      historyAbortController.current?.abort();
       if (replyTimer.current) clearTimeout(replyTimer.current);
     };
-  }, []);
+  }, [enabled, loadConversations]);
 
   const run = useCallback(
     async (text: string, appendUser: boolean) => {
       if (!text || isReplyingRef.current) return;
+      shouldRestoreLatest.current = false;
       if (appendUser) {
         setMessages((previous) => [
           ...previous,
@@ -101,6 +241,10 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
           if (event === "status") {
             if (typeof data.conversationId === "string") {
               conversationId.current = data.conversationId;
+              setActiveConversationId(data.conversationId);
+              setActiveConversationTitle(
+                (current) => current ?? conversationTitle(text),
+              );
             }
             setStatusText("Thinking…");
           } else if (event === "tool") {
@@ -139,6 +283,7 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
         if (!receivedMessage) {
           throw new Error("Mink AI finished without an answer.");
         }
+        void loadConversations();
       } catch (caught) {
         if (!controller.signal.aborted) {
           const nextError = toUiError(caught);
@@ -153,7 +298,7 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
         }
       }
     },
-    [enabled, setReplying],
+    [enabled, loadConversations, setReplying],
   );
 
   const send = useCallback(
@@ -175,29 +320,41 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
   }, [run]);
 
   const reset = useCallback(() => {
+    shouldRestoreLatest.current = false;
     abortController.current?.abort();
+    historyAbortController.current?.abort();
     if (replyTimer.current) clearTimeout(replyTimer.current);
     conversationId.current = null;
     lastFailedMessage.current = null;
+    setActiveConversationId(null);
+    setActiveConversationTitle(null);
     setMessages([]);
     setInput("");
     setStatusText(null);
     setError(null);
+    setIsHistoryLoading(false);
     setReplying(false);
   }, [setReplying]);
 
   return {
     enabled,
     messages,
+    conversations,
+    activeConversationId,
+    activeConversationTitle,
     input,
     setInput,
     isReplying,
+    isHistoryLoading,
+    deletingConversationId,
     statusText,
     error,
     send,
     cancel,
     retry,
     reset,
+    loadConversation,
+    deleteConversation,
   };
 }
 
@@ -244,9 +401,13 @@ function emitSseBlock(
 
 async function responseError(response: Response): Promise<MinkUiError> {
   try {
-    const body = (await response.json()) as { error?: unknown };
+    const body = (await response.json()) as { error?: unknown; code?: unknown };
     if (typeof body.error === "string") {
-      return { code: `http_${response.status}`, message: body.error };
+      return {
+        code:
+          typeof body.code === "string" ? body.code : `http_${response.status}`,
+        message: body.error,
+      };
     }
   } catch {
     // Fall through to the safe status-based message.
@@ -270,6 +431,75 @@ function toUiError(error: unknown): MinkUiError {
     code: "mink_failed",
     message: "Mink AI couldn't complete that request. Try again.",
   };
+}
+
+function readConversationSummaries(value: unknown): MinkConversationSummary[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const conversations = (value as Record<string, unknown>).conversations;
+  if (!Array.isArray(conversations)) return [];
+  return conversations.flatMap((conversation) => {
+    if (!conversation || typeof conversation !== "object") return [];
+    const row = conversation as Record<string, unknown>;
+    if (
+      typeof row.id !== "string" ||
+      typeof row.title !== "string" ||
+      typeof row.lastMessageAt !== "string" ||
+      typeof row.createdAt !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: row.id,
+        title: row.title,
+        lastMessageAt: row.lastMessageAt,
+        createdAt: row.createdAt,
+      },
+    ];
+  });
+}
+
+function readConversationDetail(value: unknown): {
+  id: string;
+  title: string;
+  messages: MinkMessage[];
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid conversation response.");
+  }
+  const conversation = (value as Record<string, unknown>).conversation;
+  if (!conversation || typeof conversation !== "object") {
+    throw new Error("Invalid conversation response.");
+  }
+  const row = conversation as Record<string, unknown>;
+  if (
+    typeof row.id !== "string" ||
+    typeof row.title !== "string" ||
+    !Array.isArray(row.messages)
+  ) {
+    throw new Error("Invalid conversation response.");
+  }
+  const messages = row.messages.flatMap((message) => {
+    if (!message || typeof message !== "object") return [];
+    const item = message as Record<string, unknown>;
+    if (
+      typeof item.id !== "string" ||
+      (item.role !== "user" && item.role !== "assistant") ||
+      typeof item.text !== "string"
+    ) {
+      return [];
+    }
+    const role: MinkMessage["role"] = item.role;
+    return [{ id: item.id, role, text: item.text }];
+  });
+  return { id: row.id, title: row.title, messages };
+}
+
+function conversationTitle(message: string): string {
+  const compact = message.replace(/\s+/g, " ").trim();
+  const characters = Array.from(compact);
+  if (characters.length <= 80) return compact;
+  return `${characters.slice(0, 77).join("").trimEnd()}…`;
 }
 
 function readableToolName(name: string): string {

@@ -1202,6 +1202,71 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0036_mink_conversation_ux",
+      "description": "Cap Mink history at ten actor/store conversations and document history, resizing, header identity, and answer formatting",
+      "file": "sql/20260829_0036_mink_conversation_ux.sql",
+      "transaction": true,
+      "requires": ["20260829_0035_mink_dashboard_alpha"],
+      "verify": {
+        "queries": [
+          {
+            "name": "app_service can enforce the Mink conversation cap",
+            "sql": "select has_table_privilege('app_service', 'public.mink_conversations', 'DELETE')::text",
+            "equals": "true"
+          },
+          {
+            "name": "no actor and store retain more than ten Mink conversations",
+            "sql": "select count(*)::text from (select store_id, admin_id from public.mink_conversations group by store_id, admin_id having count(*) > 10) overflow",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents history resizing and formatted answers",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%drag the left edge of the drawer%' and body like '%10 most recent conversations%' and body like '%double asterisks are not shown%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents history resizing and formatted answers",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%drag the left edge of the drawer%' and body like '%10 most recent conversations%' and body like '%double asterisks are not shown%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0037_mink_sidebar_composer",
+      "description": "Document the unified Mink robot identity, conversation sidebar deletion, and growing multiline composer",
+      "file": "sql/20260829_0037_mink_sidebar_composer.sql",
+      "transaction": true,
+      "requires": ["20260829_0036_mink_conversation_ux"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%purple robot mark in the dashboard header%' and body like '%conversation-sidebar button%' and body like '%Delete conversation%' and body like '%message box grows as a prompt wraps%' and body like '%Shift+Enter%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%purple robot mark in the dashboard header%' and body like '%conversation-sidebar button%' and body like '%Delete conversation%' and body like '%message box grows as a prompt wraps%' and body like '%Shift+Enter%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

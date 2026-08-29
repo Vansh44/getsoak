@@ -11,19 +11,13 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import {
-  ArrowRight,
-  Search,
-  Store,
-  Menu,
-  MessageSquare,
-  X,
-} from "lucide-react";
+import { ArrowRight, Search, Store, Menu, X } from "lucide-react";
 import { TopbarProfile, formatRole } from "./topbar-profile";
 import { useMobileNav } from "./dashboard-mobile-nav";
 import { useChat } from "./chat-context";
 import { NotificationBell } from "./components/notification-bell";
 import { LocationTag } from "./location-tag";
+import { MinkMark } from "./mink-mark";
 
 // Plan pill styling on the dark topbar — neutral for free, brand-tinted as the
 // plan climbs, mirroring the console's plan colours.
@@ -416,7 +410,7 @@ export function DashboardTopbar({
           }`}
           aria-label="Mink AI"
         >
-          <MessageSquare className="h-[18px] w-[18px]" />
+          <MinkMark size="sm" />
         </button>
 
         <NotificationBell />
