@@ -4,8 +4,10 @@ import type { MinkConfig } from "./config";
 import { MinkAgentError } from "./errors";
 import type {
   MinkActorContext,
+  MinkArtifact,
   MinkModelSession,
   MinkRunEvent,
+  MinkRunProgress,
   MinkRunResult,
   MinkUsage,
 } from "./types";
@@ -25,13 +27,19 @@ export async function runMinkAgent(input: {
   registry: MinkToolRegistry;
   session: MinkModelSession;
   onEvent?: (event: MinkRunEvent) => void | Promise<void>;
+  onProgress?: (progress: MinkRunProgress) => void;
 }): Promise<MinkRunResult> {
-  const { actor, message, config, registry, session, onEvent } = input;
+  const { actor, message, config, registry, session, onEvent, onProgress } =
+    input;
   let usage = { ...EMPTY_USAGE };
   let steps = 1;
   let toolCalls = 0;
+  let retryCount = 0;
+  const artifacts: MinkArtifact[] = [];
   let turn = await session.sendUserMessage(message);
   usage = addUsage(usage, turn.usage);
+  retryCount += turn.retryCount;
+  onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
 
   while (turn.functionCalls.length > 0) {
     if (steps >= config.maxSteps) {
@@ -78,16 +86,25 @@ export async function runMinkAgent(input: {
             name: response.name,
             ok: !errorCode,
             ...(errorCode ? { errorCode } : {}),
+            ...(response.artifact ? { artifact: response.artifact } : {}),
           });
         }),
       );
       responses.push(...batchResponses);
+      for (const response of batchResponses) {
+        if (response.artifact && artifacts.length < 6) {
+          artifacts.push(response.artifact);
+        }
+      }
     }
 
     toolCalls += turn.functionCalls.length;
     steps += 1;
+    onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
     turn = await session.sendToolResponses(responses);
     usage = addUsage(usage, turn.usage);
+    retryCount += turn.retryCount;
+    onProgress?.({ steps, toolCalls, retryCount, usage: { ...usage } });
   }
 
   if (!turn.text) {
@@ -97,7 +114,15 @@ export async function runMinkAgent(input: {
     );
   }
 
-  return { text: turn.text, model: config.model, steps, toolCalls, usage };
+  return {
+    text: turn.text,
+    model: config.model,
+    steps,
+    toolCalls,
+    retryCount,
+    usage,
+    artifacts,
+  };
 }
 
 function toolErrorCode(response: Record<string, unknown>): string | undefined {

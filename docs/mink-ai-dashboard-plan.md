@@ -1,8 +1,10 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** The first read-only internal alpha is implemented behind a
-> disabled-by-default server flag. It is not enabled for merchants and remains
-> far narrower than the complete product described in this plan.
+> **Status:** Phase 2's invited read-only merchant beta is implemented in code
+> behind a disabled-by-default global flag and a fail-closed per-store
+> invitation gate. Migration `20260829_0039_mink_phase_2`, the live evaluation
+> gate and the rollout checks below must pass in each target environment before
+> invitations are treated as production-ready. No mutation authority is live.
 >
 > **Plan date:** 2026-08-29
 >
@@ -11,7 +13,7 @@
 
 ### Implementation checkpoint — 2026-08-29
 
-The current Phase 0/1 foundation slice now includes:
+The current Phase 0/1/2 read-only slice now includes:
 
 - the official `@google/genai` SDK pinned to the supported 2.x line;
 - a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
@@ -19,8 +21,11 @@ The current Phase 0/1 foundation slice now includes:
 - trusted actor construction from the authenticated host, admin, database role,
   permissions and effective plan;
 - a permission-filtered tool registry that rechecks authorization at execution;
-- three explicitly store-scoped, RLS-backed tools:
-  `get_store_profile`, `get_catalog_summary` and `search_products`;
+- five explicitly store-scoped read tools: `get_store_profile`,
+  `get_catalog_summary`, `search_products`, `get_sales_summary` and
+  `list_low_stock`; sales reuse the dashboard's recognized-order, refund,
+  timezone and location contract, while stock intersects exact location names
+  with trusted admin assignments and uses per-SKU thresholds;
 - a bounded multi-step orchestration loop with step, tool and parallel-read
   limits;
 - an authenticated, same-origin, rate-limited SSE endpoint at
@@ -38,17 +43,46 @@ The current Phase 0/1 foundation slice now includes:
 - a separate published Help Centre guide for the dashboard alpha's supported
   questions, permission behavior, privacy and limits;
 - prompt-injection instructions that treat all tool values as untrusted data;
-- safe public errors while detailed failures remain in server logs; and
+- one abort-aware retry for transient model failures, bounded tool timeouts, a
+  hard run timeout and safe public errors while details remain in server logs;
+- complete/partial/unavailable usage states with a versioned micro-USD Gemini
+  3.7 Flash shadow estimate (unknown usage is never presented as free);
+- a page-gated operator inspector at `/dashboard/mink` for redacted status,
+  latency, retries, tool names, tokens and cost—never conversation content or
+  provider reasoning;
+- a 50-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
+  security refusals, malformed calls, latency and manual grounding review; and
 - focused tests for config fail-closed behavior, actor construction,
-  authorization, tenant-free tool schemas, agent limits and the SSE boundary.
+  authorization/permission matrices, location scope, tenant-free tool schemas,
+  retry/cost logic, agent limits, operator filters and the SSE boundary;
+- operator-managed, per-store beta invitations in addition to the global kill
+  switch;
+- order list/current-order and selected-product reads with tenant revalidation,
+  location scoping and minimized/masked customer data;
+- rich metric, order, product, inventory and Help-source cards that repeat the
+  applied date, location and channel scope;
+- normalized current-page/selected-record context, never trusted as identity;
+- published Help Centre hybrid lexical/vector retrieval as a bounded tool;
+- deterministic extractive compaction after 16 messages while retaining the
+  newest eight messages verbatim;
+- actor-owned answer feedback with bounded, privacy-redacted issue detail and
+  operator-visible trace correlation; and
+- shadow credit weights and cost cohorts stored with each usage row.
+
+The dev deployment has also passed manual acceptance for ten-conversation
+history, conversation deletion, panel resizing, multiline input growth and
+cross-tenant isolation. These checks validate the internal-alpha UX/security
+slice; they do not replace the evaluation and production-readiness gates below.
 
 The real client and endpoint remain unreachable unless
-`MINK_AI_ENABLED=true`; the disabled state still returns the existing canned
-coming-soon response. The current build does not charge credits, stream token
-deltas, or provide order, analytics, customer, Help Centre, coding or mutation tools.
-It also does not yet have the evaluation corpus, automatic timeout/retry policy,
-cost dashboards or production invitation controls required to leave internal
-alpha. Those are remaining work, not implied capability.
+`MINK_AI_ENABLED=true`; with `MINK_BETA_REQUIRE_INVITE=true`, the store must
+also have an enabled operator invitation. The disabled/uninvited state keeps
+the canned coming-soon response. The current build does not charge live
+credits, stream token deltas, write store data, expose raw customer contact
+details, perform coding work or provide approval tools. The 50 cases are the
+first comparison set, not the complete 200-case Phase 0 corpus, and still need
+controlled live execution and cost reconciliation. Phase 2 is code-complete,
+not automatically deployed or accepted by those facts.
 
 ## 1. Executive decision
 
@@ -697,6 +731,9 @@ Exit criteria:
 
 ### Phase 2 — Read-only merchant beta and grounded analytics
 
+**Implementation:** ✅ code-complete on 2026-08-29; migration, live evaluation
+and invited-store rollout validation remain deployment gates.
+
 **Duration:** 3–4 weeks
 
 Deliver:
@@ -1078,26 +1115,33 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should turn the implemented skeleton into measured internal
-evidence, not broaden its authority:
+The next sprint should validate and safely roll out Phase 2 before giving Mink
+write authority:
 
-1. Apply migrations through `20260829_0037_mink_sidebar_composer` to staging
-   before enabling the server flag.
-2. Enable the alpha only for StoreMink's internal staging store and exercise
-   the real drawer with Vertex ADC.
-3. Expand the automated suite with adversarial tenant IDs, permission matrices,
-   prompt injection inside product data, disconnect/cancel races and database
-   failure recovery.
-4. Build the first 50-prompt comparison set for Gemini 2.5 Flash versus 3.7
-   Flash, then expand it toward the 200-case Phase 0 target.
-5. Measure tool selection, factual accuracy, tokens, latency and effective
-   provider cost from `mink_runs` and `mink_usage_ledger`.
-6. Add operator run/cost visibility plus a hard run timeout before any invited
-   merchant test.
-7. Add two more R0 tools only after their store scoping, permissions, result
-   bounds and evaluation cases are reviewed.
-8. Make the documented go/no-go decision for an invited read-only beta; do not
-   add mutation tools in this sprint.
+1. Apply migration `20260829_0039_mink_phase_2` to the controlled staging
+   database before deploying code that reads invitation/feedback/context rows.
+2. Deploy with `_MINK_AI_ENABLED=true`, `_MINK_BETA_REQUIRE_INVITE=true`,
+   `_MINK_MAX_MODEL_RETRIES=1` and `_MINK_RUN_TIMEOUT_SECONDS=120`; verify that
+   an uninvited store still receives the canned assistant, then invite one
+   controlled store from its operator detail page.
+3. Smoke-test metric/order/product/inventory/Help cards, displayed
+   date/location/channel scope, selected-record revalidation, compaction and
+   feedback as an owner, permission-restricted admin and location-bound admin.
+4. Run the 50 cases through `npm run mink:eval` against Gemini 2.5 Flash and
+   Gemini 3.7 Flash on the same representative internal store; preserve the
+   redacted reports and manually review every answer-contract case.
+5. Fix any cross-tenant, permission, malformed-call or grounding failure before
+   expanding the corpus toward the 200-case Phase 0 target. The release gate is
+   100% security cases, at least 90% overall, malformed calls under 1% and p95
+   ordinary latency under 8 seconds.
+6. Reconcile each shadow credit cohort and the operator inspector's cost totals
+   with the Vertex billing export for the same run window; do not enable live
+   customer charging until the distributions are stable.
+7. Add prompt-injection fixtures inside controlled product/location names and
+   database/disconnect race tests that a normal live prompt cannot create.
+8. Make the documented go/no-go decision for a wider invited read-only beta.
+   Phase 3 may add drafts only after this gate; do not add mutation tools in
+   the validation sprint.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

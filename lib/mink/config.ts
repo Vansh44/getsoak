@@ -2,6 +2,7 @@ import "server-only";
 
 export interface MinkConfig {
   enabled: boolean;
+  betaRequireInvite: boolean;
   projectId: string | null;
   location: string;
   model: string;
@@ -9,6 +10,8 @@ export interface MinkConfig {
   maxToolCalls: number;
   maxParallelReadTools: number;
   maxOutputTokens: number;
+  maxModelRetries: number;
+  runTimeoutMs: number;
 }
 
 function enabled(value: string | undefined): boolean {
@@ -33,6 +36,9 @@ export function getMinkConfig(): MinkConfig {
     // Fail closed: merely configuring a model must not expose an unfinished
     // merchant feature. An operator must explicitly enable the runtime.
     enabled: enabled(process.env.MINK_AI_ENABLED),
+    // Phase 2 is an invited beta. An explicit false is required to retain the
+    // all-store internal-alpha behavior in a controlled environment.
+    betaRequireInvite: process.env.MINK_BETA_REQUIRE_INVITE !== "false",
     projectId: process.env.GCP_PROJECT_ID?.trim() || null,
     location:
       process.env.MINK_VERTEX_LOCATION?.trim() ||
@@ -58,5 +64,10 @@ export function getMinkConfig(): MinkConfig {
       256,
       8_192,
     ),
+    // One retry is enough to absorb a transient 429/5xx without hiding a
+    // persistent outage behind a long backoff chain.
+    maxModelRetries: boundedInt(process.env.MINK_MAX_MODEL_RETRIES, 1, 0, 2),
+    runTimeoutMs:
+      boundedInt(process.env.MINK_RUN_TIMEOUT_SECONDS, 120, 15, 300) * 1_000,
   };
 }

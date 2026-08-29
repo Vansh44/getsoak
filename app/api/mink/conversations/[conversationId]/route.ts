@@ -20,7 +20,8 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
-  if (!getMinkConfig().enabled) {
+  const config = getMinkConfig();
+  if (!config.enabled) {
     return NextResponse.json(
       { error: "Mink AI is not enabled." },
       { status: 404 },
@@ -37,7 +38,9 @@ export async function GET(
 
   const requestId = crypto.randomUUID();
   try {
-    const actor = await getMinkActorContext(requestId);
+    const actor = await getMinkActorContext(requestId, {
+      betaRequireInvite: config.betaRequireInvite,
+    });
     const limited = await rateLimit(
       `mink-history:${actor.storeId}:${actor.adminId}`,
       { max: 60, windowSeconds: 60 },
@@ -81,7 +84,8 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ conversationId: string }> },
 ) {
-  if (!getMinkConfig().enabled) {
+  const config = getMinkConfig();
+  if (!config.enabled) {
     return NextResponse.json(
       { error: "Mink AI is not enabled." },
       { status: 404 },
@@ -101,7 +105,9 @@ export async function DELETE(
 
   const requestId = crypto.randomUUID();
   try {
-    const actor = await getMinkActorContext(requestId);
+    const actor = await getMinkActorContext(requestId, {
+      betaRequireInvite: config.betaRequireInvite,
+    });
     const limited = await rateLimit(
       `mink-history-write:${actor.storeId}:${actor.adminId}`,
       { max: 20, windowSeconds: 60 },

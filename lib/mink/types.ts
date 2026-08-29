@@ -5,6 +5,67 @@ import type {
 
 export type MinkPlan = "free" | "basic" | "pro";
 
+export type MinkSelectedResource = {
+  type: "product" | "order";
+  id: string;
+};
+
+export type MinkFilter = {
+  label: string;
+  value: string;
+};
+
+export type MinkArtifact =
+  | {
+      type: "metrics";
+      title: string;
+      currency?: string;
+      metrics: Array<{
+        label: string;
+        value: number;
+        format: "number" | "currency" | "percent";
+        trendPercent?: number | null;
+      }>;
+      filters: MinkFilter[];
+      dataAsOf?: string;
+      dashboardPath?: string;
+    }
+  | {
+      type: "records";
+      title: string;
+      recordType: "order" | "product" | "inventory";
+      records: Array<{
+        id: string;
+        title: string;
+        subtitle?: string;
+        value?: string;
+        status?: string;
+        dashboardPath?: string;
+      }>;
+      filters: MinkFilter[];
+      dataAsOf?: string;
+      dashboardPath?: string;
+      truncated?: boolean;
+    }
+  | {
+      type: "sources";
+      title: string;
+      sources: Array<{
+        title: string;
+        excerpt?: string;
+        url: string;
+      }>;
+      query: string;
+    };
+
+export type MinkFeedbackRating = "helpful" | "unhelpful";
+export type MinkFeedbackIssue =
+  | "incorrect"
+  | "missing_context"
+  | "privacy"
+  | "slow"
+  | "other";
+
 /**
  * Trusted, server-derived identity for one Mink run. Model-generated input must
  * never be able to replace any field on this object.
@@ -17,6 +78,13 @@ export interface MinkActorContext {
   permissions: RolePermissions;
   isSuperadmin: boolean;
   effectivePlan: MinkPlan;
+  /** Null means unrestricted; an array is the exact server-derived location scope. */
+  locationIds: string[] | null;
+  analyticsTimeZone: string;
+  currency: string;
+  defaultLowStockThreshold: number;
+  currentPath?: string | null;
+  selectedResource?: MinkSelectedResource | null;
   requestId: string;
 }
 
@@ -41,6 +109,7 @@ export interface MinkToolResponse {
   id?: string;
   name: string;
   response: Record<string, unknown>;
+  artifact?: MinkArtifact;
 }
 
 export interface MinkUsage {
@@ -54,6 +123,8 @@ export interface MinkModelTurn {
   text: string;
   functionCalls: MinkToolCall[];
   usage: MinkUsage;
+  /** Provider-call retries consumed while producing this turn. */
+  retryCount: number;
 }
 
 export interface MinkModelSession {
@@ -69,6 +140,7 @@ export type MinkRunEvent =
       name: string;
       ok: boolean;
       errorCode?: string;
+      artifact?: MinkArtifact;
     };
 
 export interface MinkRunResult {
@@ -76,5 +148,14 @@ export interface MinkRunResult {
   model: string;
   steps: number;
   toolCalls: number;
+  retryCount: number;
+  usage: MinkUsage;
+  artifacts: MinkArtifact[];
+}
+
+export interface MinkRunProgress {
+  steps: number;
+  toolCalls: number;
+  retryCount: number;
   usage: MinkUsage;
 }

@@ -3,16 +3,27 @@ import "server-only";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import {
   minkConversations,
+  minkFeedback,
   minkMessages,
   minkRuns,
   minkToolCalls,
   minkUsageLedger,
 } from "@/drizzle/schema";
-import { withService } from "@/lib/db/client";
+import { withService, type Db } from "@/lib/db/client";
+import { estimateMinkCost } from "./cost";
+import { historyWithCompaction } from "./compaction";
 import { MinkRequestError } from "./errors";
-import type { MinkActorContext, MinkRunResult, MinkToolCall } from "./types";
+import { minkShadowMeter } from "./metering";
+import type {
+  MinkActorContext,
+  MinkArtifact,
+  MinkFeedbackIssue,
+  MinkFeedbackRating,
+  MinkRunProgress,
+  MinkRunResult,
+  MinkToolCall,
+} from "./types";
 
-const HISTORY_MESSAGES = 12;
 const DISPLAY_MESSAGES = 50;
 export const MINK_CONVERSATION_LIMIT = 10;
 
@@ -36,7 +47,13 @@ export interface MinkConversationSummary {
 
 export interface MinkConversationMessage extends MinkStoredMessage {
   id: string;
+  runId: string;
   createdAt: string;
+  artifacts: MinkArtifact[];
+  feedback: {
+    rating: MinkFeedbackRating;
+    issueCategory: MinkFeedbackIssue | null;
+  } | null;
 }
 
 export interface MinkConversationDetail {
@@ -44,6 +61,8 @@ export interface MinkConversationDetail {
   title: string;
   messages: MinkConversationMessage[];
 }
+
+export type MinkUsageStatus = "reported" | "partial" | "unavailable";
 
 export async function listMinkConversations(
   actor: MinkActorContext,
@@ -111,7 +130,10 @@ export async function getMinkConversation(
         id: minkMessages.id,
         role: minkMessages.role,
         content: minkMessages.contentJson,
+        runId: minkMessages.runId,
         createdAt: minkMessages.createdAt,
+        feedbackRating: minkFeedback.rating,
+        feedbackIssueCategory: minkFeedback.issueCategory,
       })
       .from(minkMessages)
       .innerJoin(
@@ -120,6 +142,14 @@ export async function getMinkConversation(
           eq(minkRuns.id, minkMessages.runId),
           eq(minkRuns.storeId, minkMessages.storeId),
           eq(minkRuns.status, "succeeded"),
+        ),
+      )
+      .leftJoin(
+        minkFeedback,
+        and(
+          eq(minkFeedback.runId, minkMessages.runId),
+          eq(minkFeedback.storeId, actor.storeId),
+          eq(minkFeedback.adminId, actor.adminId),
         ),
       )
       .where(
@@ -288,7 +318,27 @@ export async function startMinkRun(input: {
         ),
       )
       .orderBy(desc(minkMessages.createdAt), desc(minkMessages.id))
-      .limit(HISTORY_MESSAGES);
+      .limit(DISPLAY_MESSAGES);
+
+    const compacted = historyWithCompaction(
+      previous.reverse().flatMap(toStoredMessage),
+    );
+    if (compacted.summary) {
+      await db
+        .update(minkConversations)
+        .set({
+          summaryJson: { text: compacted.summary },
+          summarizedMessageCount: compacted.summarizedMessageCount,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(minkConversations.id, conversationId),
+            eq(minkConversations.storeId, actor.storeId),
+            eq(minkConversations.adminId, actor.adminId),
+          ),
+        );
+    }
 
     const createdRuns = await db
       .insert(minkRuns)
@@ -298,6 +348,11 @@ export async function startMinkRun(input: {
         requestedBy: actor.adminId,
         requestId: actor.requestId,
         model,
+        promptVersion: "read-beta-v2",
+        toolRegistryVersion: "read-beta-v2",
+        currentPath: actor.currentPath ?? null,
+        selectedResourceType: actor.selectedResource?.type ?? null,
+        selectedResourceId: actor.selectedResource?.id ?? null,
       })
       .returning({ id: minkRuns.id });
     const runId = createdRuns[0]?.id;
@@ -325,7 +380,7 @@ export async function startMinkRun(input: {
     return {
       conversationId,
       runId,
-      history: previous.reverse().flatMap(toStoredMessage),
+      history: compacted.history,
     };
   });
 }
@@ -335,6 +390,7 @@ export async function completeMinkRun(input: {
   started: MinkStartedRun;
   result: MinkRunResult;
   latencyMs: number;
+  pricingLocation: string;
 }): Promise<void> {
   const { actor, started, result } = input;
   const completedAt = new Date().toISOString();
@@ -349,6 +405,7 @@ export async function completeMinkRun(input: {
         totalTokens: result.usage.totalTokens,
         stepCount: result.steps,
         toolCallCount: result.toolCalls,
+        retryCount: result.retryCount,
         latencyMs: input.latencyMs,
         completedAt,
       })
@@ -368,21 +425,18 @@ export async function completeMinkRun(input: {
       conversationId: started.conversationId,
       runId: started.runId,
       role: "assistant",
-      contentJson: { text: result.text },
+      contentJson: { text: result.text, artifacts: result.artifacts },
       model: result.model,
     });
-    await db.insert(minkUsageLedger).values({
-      storeId: actor.storeId,
-      adminId: actor.adminId,
-      runId: started.runId,
+    await insertUsage(db, {
+      actor,
+      started,
       model: result.model,
-      inputTokens: result.usage.promptTokens,
-      outputTokens: result.usage.outputTokens,
-      thoughtTokens: result.usage.thoughtTokens,
-      totalTokens: result.usage.totalTokens,
-      // Phase 1 records shadow usage only. Billing begins after pilot data sets
-      // the documented weights and an atomic reservation/reconciliation flow.
-      chargedCredits: 0,
+      pricingLocation: input.pricingLocation,
+      usage: result.usage,
+      usageStatus: "reported",
+      status: "succeeded",
+      toolCalls: result.toolCalls,
     });
     await db
       .update(minkConversations)
@@ -403,6 +457,10 @@ export async function failMinkRun(input: {
   status: "failed" | "cancelled";
   errorCode: string;
   latencyMs: number;
+  model: string;
+  pricingLocation: string;
+  progress: MinkRunProgress;
+  usageStatus: MinkUsageStatus;
 }): Promise<void> {
   const completedAt = new Date().toISOString();
   await withService(async (db) => {
@@ -426,6 +484,13 @@ export async function failMinkRun(input: {
       .set({
         status: input.status,
         errorCode: safeErrorCode(input.errorCode),
+        inputTokens: input.progress.usage.promptTokens,
+        outputTokens: input.progress.usage.outputTokens,
+        thoughtTokens: input.progress.usage.thoughtTokens,
+        totalTokens: input.progress.usage.totalTokens,
+        stepCount: input.progress.steps,
+        toolCallCount: input.progress.toolCalls,
+        retryCount: input.progress.retryCount,
         latencyMs: Math.max(0, Math.round(input.latencyMs)),
         completedAt,
       })
@@ -437,6 +502,16 @@ export async function failMinkRun(input: {
           eq(minkRuns.status, "running"),
         ),
       );
+    await insertUsage(db, {
+      actor: input.actor,
+      started: input.started,
+      model: input.model,
+      pricingLocation: input.pricingLocation,
+      usage: input.progress.usage,
+      usageStatus: input.usageStatus,
+      status: input.status,
+      toolCalls: input.progress.toolCalls,
+    });
   });
 }
 
@@ -510,13 +585,96 @@ function toConversationMessage(row: {
   id: string;
   role: string;
   content: unknown;
+  runId: string;
   createdAt: string;
+  feedbackRating: string | null;
+  feedbackIssueCategory: string | null;
 }): MinkConversationMessage[] {
   const stored = toStoredMessage(row)[0];
-  return stored ? [{ ...stored, id: row.id, createdAt: row.createdAt }] : [];
+  if (!stored) return [];
+  const content = row.content as Record<string, unknown>;
+  const artifacts = Array.isArray(content.artifacts)
+    ? (content.artifacts as MinkArtifact[]).slice(0, 6)
+    : [];
+  const rating =
+    row.feedbackRating === "helpful" || row.feedbackRating === "unhelpful"
+      ? row.feedbackRating
+      : null;
+  const issueCategory = isFeedbackIssue(row.feedbackIssueCategory)
+    ? row.feedbackIssueCategory
+    : null;
+  return [
+    {
+      ...stored,
+      id: row.id,
+      runId: row.runId,
+      createdAt: row.createdAt,
+      artifacts,
+      feedback: rating ? { rating, issueCategory } : null,
+    },
+  ];
+}
+
+function isFeedbackIssue(value: unknown): value is MinkFeedbackIssue {
+  return (
+    value === "incorrect" ||
+    value === "missing_context" ||
+    value === "privacy" ||
+    value === "slow" ||
+    value === "other"
+  );
 }
 
 function safeErrorCode(value: string): string {
   const normalized = value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
   return normalized || "mink_failed";
+}
+
+async function insertUsage(
+  db: Db,
+  input: {
+    actor: MinkActorContext;
+    started: MinkStartedRun;
+    model: string;
+    pricingLocation: string;
+    usage: MinkRunProgress["usage"];
+    usageStatus: MinkUsageStatus;
+    status: "succeeded" | "failed" | "cancelled";
+    toolCalls: number;
+  },
+): Promise<void> {
+  const estimate =
+    input.usageStatus === "unavailable"
+      ? { estimatedCostMicrousd: null, pricingVersion: null }
+      : estimateMinkCost({
+          model: input.model,
+          location: input.pricingLocation,
+          usage: input.usage,
+        });
+  const shadow = minkShadowMeter({
+    status: input.status,
+    toolCalls: input.toolCalls,
+    usageKnown: input.usageStatus !== "unavailable",
+  });
+  await db
+    .insert(minkUsageLedger)
+    .values({
+      storeId: input.actor.storeId,
+      adminId: input.actor.adminId,
+      runId: input.started.runId,
+      model: input.model,
+      inputTokens: input.usage.promptTokens,
+      outputTokens: input.usage.outputTokens,
+      thoughtTokens: input.usage.thoughtTokens,
+      totalTokens: input.usage.totalTokens,
+      usageStatus: input.usageStatus,
+      estimatedCostMicrousd: estimate.estimatedCostMicrousd,
+      pricingVersion: estimate.pricingVersion,
+      // Phase 1 records shadow usage only. Billing begins after pilot data sets
+      // the documented weights and an atomic reservation/reconciliation flow.
+      chargedCredits: 0,
+      shadowCredits: shadow.shadowCredits,
+      costCohort: shadow.costCohort,
+    })
+    .onConflictDoNothing({ target: minkUsageLedger.runId });
 }

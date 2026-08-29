@@ -11,6 +11,9 @@ vi.mock("@/app/dashboard/lib/access", () => ({
 vi.mock("@/lib/db/client", () => ({
   withUser: holder.withUser,
 }));
+vi.mock("./access", () => ({
+  requireMinkStoreInvite: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getMinkActorContext } from "./actor-context";
 
@@ -25,7 +28,16 @@ beforeEach(() => {
     isSuperadmin: false,
     isPlatformAdmin: false,
   });
-  holder.withUser.mockResolvedValue([{ plan: "pro" }]);
+  holder.withUser.mockResolvedValue({
+    store: {
+      plan: "pro",
+      settings: {
+        business: { timeZone: "Asia/Kolkata" },
+        features: { "inventory.lowStockThreshold": 7 },
+      },
+    },
+    locationIds: ["location-1"],
+  });
 });
 
 describe("getMinkActorContext", () => {
@@ -44,6 +56,12 @@ describe("getMinkActorContext", () => {
       permissions: { dashboard: ["view"], products: ["view"] },
       isSuperadmin: false,
       effectivePlan: "pro",
+      locationIds: ["location-1"],
+      analyticsTimeZone: "Asia/Kolkata",
+      currency: "INR",
+      defaultLowStockThreshold: 7,
+      currentPath: null,
+      selectedResource: null,
       requestId: "request-1",
     });
   });

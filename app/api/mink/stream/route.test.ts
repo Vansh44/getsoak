@@ -10,11 +10,13 @@ const holder = vi.hoisted(() => ({
   failRun: vi.fn(),
   startTool: vi.fn(),
   completeTool: vi.fn(),
+  runTimeoutMs: 120_000,
 }));
 
 vi.mock("@/lib/mink/config", () => ({
   getMinkConfig: vi.fn(() => ({
     enabled: holder.enabled,
+    betaRequireInvite: true,
     projectId: "project-1",
     location: "global",
     model: "gemini-3.7-flash",
@@ -22,6 +24,8 @@ vi.mock("@/lib/mink/config", () => ({
     maxToolCalls: 16,
     maxParallelReadTools: 4,
     maxOutputTokens: 2_048,
+    maxModelRetries: 1,
+    runTimeoutMs: holder.runTimeoutMs,
   })),
 }));
 vi.mock("@/lib/mink/actor-context", () => ({
@@ -60,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   holder.enabled = true;
   holder.rateAllowed = true;
+  holder.runTimeoutMs = 120_000;
   holder.actor.mockResolvedValue({
     storeId: "store-1",
     adminId: "admin-1",
@@ -68,6 +73,10 @@ beforeEach(() => {
     permissions: {},
     isSuperadmin: true,
     effectivePlan: "pro",
+    locationIds: null,
+    analyticsTimeZone: "Asia/Kolkata",
+    currency: "INR",
+    defaultLowStockThreshold: 5,
     requestId: "request-1",
   });
   holder.startRun.mockResolvedValue({
@@ -84,12 +93,14 @@ beforeEach(() => {
     model: "gemini-3.7-flash",
     steps: 2,
     toolCalls: 1,
+    retryCount: 0,
     usage: {
       promptTokens: 100,
       outputTokens: 20,
       thoughtTokens: 10,
       totalTokens: 130,
     },
+    artifacts: [],
   });
 });
 
@@ -213,6 +224,26 @@ describe("POST /api/mink/stream", () => {
     );
     expect(body).toContain("Mink AI couldn't complete that request.");
     expect(body).not.toContain("database details");
+  });
+
+  it("fails a hard-timeout run instead of recording it as user cancellation", async () => {
+    holder.runTimeoutMs = 5;
+    holder.run.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new DOMException("aborted", "AbortError")),
+            10,
+          ),
+        ),
+    );
+    const response = await POST(request({ message: "Slow question" }));
+    const body = await response.text();
+
+    expect(holder.failRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "failed", errorCode: "run_timeout" }),
+    );
+    expect(body).toContain("Mink AI took too long to finish");
   });
 });
 

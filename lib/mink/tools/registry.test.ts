@@ -12,6 +12,10 @@ function actor(overrides: Partial<MinkActorContext> = {}): MinkActorContext {
     permissions: {},
     isSuperadmin: false,
     effectivePlan: "pro",
+    locationIds: null,
+    analyticsTimeZone: "Asia/Kolkata",
+    currency: "INR",
+    defaultLowStockThreshold: 5,
     requestId: "request-1",
     ...overrides,
   };
@@ -29,6 +33,7 @@ function tool(overrides: Partial<MinkTool> = {}): MinkTool {
       },
     },
     permission: { section: "products", action: "view" },
+    timeoutMs: 5_000,
     execute: vi.fn(async (ctx) => ({ storeIdUsed: ctx.storeId })),
     ...overrides,
   };
@@ -94,5 +99,27 @@ describe("MinkToolRegistry", () => {
     expect(() => new MinkToolRegistry([tool(), tool()])).toThrow(
       "Duplicate Mink tool: read_products",
     );
+  });
+
+  it("bounds a stalled read and returns a safe tool error", async () => {
+    const registry = new MinkToolRegistry([
+      tool({
+        timeoutMs: 1,
+        execute: vi.fn(() => new Promise<Record<string, unknown>>(() => {})),
+      }),
+    ]);
+
+    await expect(
+      registry.execute(actor({ permissions: { products: ["view"] } }), {
+        name: "read_products",
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      response: {
+        error: {
+          code: "tool_timeout",
+        },
+      },
+    });
   });
 });
