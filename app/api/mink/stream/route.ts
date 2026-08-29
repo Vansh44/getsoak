@@ -306,7 +306,19 @@ function foreignOrigin(request: Request): NextResponse | null {
   const origin = request.headers.get("origin");
   if (!origin) return null;
   try {
-    if (new URL(origin).host === new URL(request.url).host) return null;
+    // request.url may contain Cloud Run's/Next's internal service host. The
+    // browser-facing tenant host is carried by the proxy headers, matching the
+    // host-resolution convention used throughout StoreMink.
+    const forwardedHost = request.headers
+      .get("x-forwarded-host")
+      ?.split(",")[0]
+      ?.trim();
+    const requestHost = (
+      forwardedHost ||
+      request.headers.get("host")?.trim() ||
+      new URL(request.url).host
+    ).toLowerCase();
+    if (new URL(origin).host.toLowerCase() === requestHost) return null;
   } catch {
     // Invalid origins are rejected below.
   }
