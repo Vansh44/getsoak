@@ -75,7 +75,12 @@ export interface StoreDetail {
   /** Lifetime and 30-day gross, excluding cancelled orders. */
   revenue: { lifetime: number; last30d: number };
   ai: { used: number; cap: number | null; creditBalance: number };
-  mink: { betaEnabled: boolean; draftingEnabled: boolean };
+  mink: {
+    betaEnabled: boolean;
+    draftingEnabled: boolean;
+    productDescriptionActionEnabled: boolean;
+    productSeoActionEnabled: boolean;
+  };
   channels: {
     payments: ChannelState;
     logistics: ChannelState;
@@ -155,6 +160,14 @@ export async function loadStoreDetail(
             where ma.store_id = s.id) as mink_beta_enabled,
           (select drafting_enabled from mink_store_access ma
             where ma.store_id = s.id) as mink_drafting_enabled,
+          (select enabled from mink_action_tool_access ata
+            where ata.store_id = s.id
+              and ata.tool_name = 'apply_product_description')
+            as mink_product_description_action_enabled,
+          (select enabled from mink_action_tool_access ata
+            where ata.store_id = s.id
+              and ata.tool_name = 'apply_product_seo')
+            as mink_product_seo_action_enabled,
           (select case when enabled then 'enabled' else 'paused' end
              from store_payment_providers pp where pp.store_id = s.id) as gateway,
           (select case when enabled then 'enabled' else 'paused' end
@@ -242,6 +255,9 @@ export async function loadStoreDetail(
         mink: {
           betaEnabled: row.mink_beta_enabled === true,
           draftingEnabled: row.mink_drafting_enabled === true,
+          productDescriptionActionEnabled:
+            row.mink_product_description_action_enabled === true,
+          productSeoActionEnabled: row.mink_product_seo_action_enabled === true,
         },
         channels: {
           payments: (str(row.gateway) ?? "none") as ChannelState,

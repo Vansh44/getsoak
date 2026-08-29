@@ -44,6 +44,7 @@ sequence AND the spec for everything still to build.
 | —      | Invited Mink order/analytics cards, scope filters and PII masking | M    | ✅ done |
 | —      | Mink name-plus-type location resolution without scope fallback    | S    | ✅ done |
 | —      | Mink private drafts, version rollback and weighted AI credits     | M    | ✅ done |
+| —      | Mink guarded product description/SEO approval and safe rollback   | M    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |

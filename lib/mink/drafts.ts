@@ -21,6 +21,8 @@ import {
   type MinkDraftVersionSummary,
 } from "./draft-types";
 import { MinkRequestError, MinkToolInputError } from "./errors";
+import { getLatestMinkProductAction } from "./product-actions";
+import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
 
 const DRAFT_PERMISSION: Record<
@@ -48,6 +50,7 @@ export interface MinkDraftState {
   chargedCredits: number;
   creditSource: MinkDraftCreditSource;
   versions: MinkDraftVersionSummary[];
+  lastProductAction: MinkProductActionResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -166,7 +169,7 @@ export async function getMinkDraft(
   actor: MinkActorContext,
   draftId: string,
 ): Promise<MinkDraftState> {
-  return withService(async (db) => {
+  const state = await withService(async (db) => {
     const draft = await selectOwnedDraft(db, actor, draftId);
     const versions = await db
       .select({
@@ -186,6 +189,13 @@ export async function getMinkDraft(
       .limit(10);
     return toDraftState(draft, versions);
   });
+  return {
+    ...state,
+    lastProductAction:
+      state.kind === "product_description" || state.kind === "product_seo"
+        ? await getLatestMinkProductAction(actor, draftId)
+        : null,
+  };
 }
 
 export async function saveMinkDraftVersion(input: {
@@ -401,6 +411,7 @@ function toDraftState(
           ]
         : [],
     ),
+    lastProductAction: null,
   };
 }
 

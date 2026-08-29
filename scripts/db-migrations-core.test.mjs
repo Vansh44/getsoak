@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(41);
+    expect(loaded.migrations).toHaveLength(42);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -497,6 +497,38 @@ describe("database migration controls", () => {
     expect(loaded.migrations[40].sql).toContain(
       "does not replace a failed named-location request with all-store results",
     );
+    expect(loaded.migrations[41]).toMatchObject({
+      id: "20260830_0042_mink_phase_4a_product_actions",
+      transaction: true,
+      requires: ["20260830_0041_mink_location_alias_help"],
+      verify: {
+        tables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+        rlsTables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+      },
+    });
+    expect(loaded.migrations[41].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_idempotency_key",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_product_store_fkey",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "GRANT SELECT, INSERT ON TABLE public.mink_action_audit",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "Approved product-text actions",
+    );
+    expect(loaded.migrations[41].sql).toContain("Approve and apply");
+    expect(loaded.migrations[41].sql).toContain("Review safe rollback");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

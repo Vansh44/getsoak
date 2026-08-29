@@ -1,10 +1,13 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–3 are implemented in code. Phase 2 remains the invited
+> **Status:** Phases 0–3 and the narrow Phase 4A product-text slice are
+> implemented in code. Phase 2 remains the invited
 > read-only merchant beta. Phase 3 adds a separate, fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
-> `20260830_0040_mink_phase_3`. No publish, send, customer-contact or live
-> business-record mutation authority is present.
+> `20260830_0040_mink_phase_3`. Phase 4A adds separately gated, explicitly
+> approved description/SEO updates through migration
+> `20260830_0042_mink_phase_4a_product_actions`; no price, inventory, status,
+> publication, image, customer-contact or cross-domain authority is present.
 >
 > **Plan date:** 2026-08-30
 >
@@ -13,7 +16,8 @@
 
 ### Implementation checkpoint — 2026-08-30
 
-The current Phase 0/1/2 read slice and Phase 3 drafting slice now include:
+The current Phase 0/1/2 read slice, Phase 3 drafting slice and Phase 4A guarded
+product-text slice now include:
 
 - the official `@google/genai` SDK pinned to the supported 2.x line;
 - a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
@@ -82,8 +86,21 @@ The current Phase 0/1/2 read slice and Phase 3 drafting slice now include:
   version saves and append-only rollback history;
 - atomic compensation that discards an unseen proposal and restores its exact
   plan/balance credits when the enclosing run fails or is cancelled; and
-- explicit absence of any tool or API that publishes, sends, contacts a
-  customer or writes the proposal into a live product/blog/campaign row.
+- explicit absence of any model tool that publishes, sends, contacts a
+  customer or performs a general live-record write;
+- independent operator kill switches for product-description and product-SEO
+  actions, automatically shut when the parent beta or drafting gate closes;
+- saved-draft-only exact previews bound to the actor, tenant, draft version,
+  product content version, tool version and before/after field values;
+- an execute API that accepts only the approval id, writes only the approved
+  description or SEO fields in one transaction, and is idempotent under retry;
+- fail-closed concurrent edit/expiry handling with one append-only outcome row;
+- result cards linking to the product plus a second explicitly approved safe
+  rollback while the product still matches its post-action checkpoint; and
+- cache invalidation and the standard product-updated event only after commit;
+  and
+- redacted operator counts for action-enabled stores, executed actions and
+  refused conflicts/expiries without approval content.
 
 The dev deployment has also passed manual acceptance for ten-conversation
 history, conversation deletion, panel resizing, multiline input growth and
@@ -93,11 +110,14 @@ slice; they do not replace the evaluation and production-readiness gates below.
 The real client and endpoint remain unreachable unless
 `MINK_AI_ENABLED=true`; with `MINK_BETA_REQUIRE_INVITE=true`, the store must
 also have an enabled operator invitation. Draft tools additionally require
-`drafting_enabled=true` and the related Manage permission. The
+`drafting_enabled=true` and the related Manage permission. Phase 4A product
+actions also require the matching per-tool operator switch and Products →
+Manage. The
 disabled/uninvited state keeps the canned coming-soon response. The current
-build charges live credits only when it creates a Phase 3 private proposal; it
-does not stream token deltas, alter live business rows, expose raw customer
-contact details, perform coding work or provide approval tools. The 50 cases are the
+build charges live credits only when it creates a Phase 3 private proposal;
+Phase 4A review/apply/rollback adds no model generation charge. It does not
+stream token deltas, expose raw customer contact details, perform coding work,
+create/publish products or alter non-approved fields. The 50 cases are the
 first comparison set, not the complete 200-case Phase 0 corpus, and still need
 controlled live execution and cost reconciliation. Phases 2 and 3 are code-complete,
 not automatically deployed or accepted by those facts.
@@ -802,6 +822,11 @@ Exit criteria:
 
 ### Phase 4 — Guarded single-domain actions
 
+**Implementation:** ◐ Phase 4A product-description and product-SEO updates are
+code-complete on 2026-08-30. Controlled migration, operator enablement and
+adversarial live acceptance remain rollout gates. Product creation, coupons and
+customer groups remain unbuilt Phase 4B work.
+
 **Duration:** 5–6 weeks
 
 Start with Products because StoreMink already has mature CRUD, permissions,
@@ -817,6 +842,11 @@ Deliver:
 - result cards linking to changed records;
 - rollback where safe;
 - then repeat the pattern for coupons and customer groups.
+
+Phase 4A intentionally implements only updates from saved product-description
+and product-SEO drafts. It does not expose product creation or a model-callable
+mutation tool. The merchant's explicit approval click invokes the field-limited
+server action after seeing the exact database-derived before/after values.
 
 Exit criteria for each domain:
 
@@ -1137,33 +1167,35 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out the Phase 3 private-draft
-boundary before Phase 4 receives guarded business-record authority:
+The next sprint should validate and safely roll out Phase 4A before adding any
+new write domain:
 
-1. Apply migration `20260830_0040_mink_phase_3` after 0039 in the controlled
-   staging database before deploying code that reads drafting/proposal rows.
-2. Deploy with `_MINK_AI_ENABLED=true`, `_MINK_BETA_REQUIRE_INVITE=true`,
-   `_MINK_MAX_MODEL_RETRIES=1` and `_MINK_RUN_TIMEOUT_SECONDS=120`; verify that
-   an uninvited store still receives the canned assistant, then invite one
-   controlled store and enable its separate private-drafting switch.
-3. Smoke-test all five proposal kinds as an owner and permission-restricted
-   admin: expected cost, before/after card, private save, concurrent-tab
-   conflict and rollback. Confirm another admin and another store receive 404.
-4. Run the 50 cases through `npm run mink:eval` against Gemini 2.5 Flash and
-   Gemini 3.7 Flash on the same representative internal store; preserve the
-   redacted reports and manually review every answer-contract case.
-5. Fix any cross-tenant, permission, malformed-call or grounding failure before
-   expanding the corpus toward the 200-case Phase 0 target. The release gate is
-   100% security cases, at least 90% overall, malformed calls under 1% and p95
-   ordinary latency under 8 seconds.
-6. Reconcile `ai_usage`, `ai_credit_balances`, `ai_credit_ledger`,
-   `mink_draft_credit_usage` and the operator charged-credit total for retries,
-   mixed plan/balance charges and insufficient balances before adding stores.
-7. Add prompt-injection fixtures inside controlled product/location names and
-   database/disconnect race tests that a normal live prompt cannot create.
-8. Make the documented go/no-go decision for wider drafting access. Begin
-   Phase 4 product actions only after this gate; do not add publish/send paths
-   to the Phase 3 proposal API.
+1. Apply migration `20260830_0042_mink_phase_4a_product_actions` after 0041 in
+   the controlled staging database, then deploy the matching application code.
+2. Keep both action tools disabled initially. On one synthetic/demo store,
+   enable the beta, drafting, and product-description action in that order;
+   leave product SEO disabled to prove the gates are independent.
+3. Verify owner and role matrices: Products → Manage can preview/execute;
+   Products → View cannot; another admin cannot use the first admin's draft or
+   approval; another store receives 404 without revealing record existence.
+4. Exercise exact apply and rollback for draft and published products. Confirm
+   only description changes for description actions and only SEO title/meta
+   description changes for SEO actions; compare price, inventory, variants,
+   status, images and publication before and after.
+5. Run concurrent-tab tests: edit the draft after preview, edit the product
+   after preview, expire an approval, retry one completed approval, retry one
+   request idempotency key and disable the tool between preview and execute.
+   Every stale case must refuse without overwriting current work, and a repeat
+   completion must produce no second mutation/event/audit outcome.
+6. Reconcile each completed/conflicted/expired approval with exactly one
+   `mink_action_audit` row and the standard product activity event only for the
+   first successful execution. Confirm audit rows have no update/delete grant.
+7. Run the existing 50 read cases plus Phase 3 proposal regression tests. The
+   model manifest must still contain no live mutation tool; Phase 4A is a human
+   approval endpoint attached to a saved proposal card.
+8. After four stable weeks and the Phase 4 exit criteria, decide whether Phase
+   4B should add product creation or coupons. Do not begin inventory, orders,
+   publishing, campaigns or bulk price changes before their Phase 5 gates.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

@@ -2623,6 +2623,7 @@ export const products = pgTable(
       foreignColumns: [taxClasses.id],
       name: "products_tax_class_id_fkey",
     }).onDelete("set null"),
+    unique("products_id_store_key").on(table.id, table.storeId),
     unique("products_store_slug_key").on(table.slug, table.storeId),
     pgPolicy("Read products", {
       as: "permissive",
@@ -4698,9 +4699,11 @@ export const stores = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Mink dashboard agent — permission-aware read beta + private draft proposals
+// Mink dashboard agent — permission-aware reads, private draft proposals and
+// explicitly approved product-content actions
 // (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql,
-//  20260829_0039_mink_phase_2.sql and 20260830_0040_mink_phase_3.sql).
+//  20260829_0039_mink_phase_2.sql, 20260830_0040_mink_phase_3.sql and
+//  20260830_0042_mink_phase_4a_product_actions.sql).
 // Service-role only: every application query must carry an explicit store id.
 // ---------------------------------------------------------------------------
 export const minkStoreAccess = pgTable(
@@ -4900,6 +4903,221 @@ export const minkDraftCreditUsage = pgTable(
       "mink_draft_credit_usage_period_check",
       sql`period ~ '^[0-9]{4}-[0-9]{2}$'`,
     ),
+  ],
+);
+
+export const minkActionToolAccess = pgTable(
+  "mink_action_tool_access",
+  {
+    storeId: uuid("store_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    enabled: boolean().default(false).notNull(),
+    enabledBy: text("enabled_by"),
+    enabledAt: timestamp("enabled_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.toolName] }),
+    index("mink_action_tool_access_enabled_idx").on(
+      table.toolName,
+      table.enabled,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_action_tool_access_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_action_tool_access_name_check",
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+    ),
+    check(
+      "mink_action_tool_access_enablement_check",
+      sql`enabled = false OR (enabled_by IS NOT NULL AND enabled_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const minkActionApprovals = pgTable(
+  "mink_action_approvals",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    draftId: uuid("draft_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    sourceApprovalId: uuid("source_approval_id"),
+    toolName: text("tool_name").notNull(),
+    operation: text().notNull(),
+    status: text().default("pending").notNull(),
+    draftVersion: integer("draft_version").notNull(),
+    productVersion: timestamp("product_version", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    beforeJson: jsonb("before_json").notNull(),
+    afterJson: jsonb("after_json").notNull(),
+    requestHash: text("request_hash").notNull(),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    approvedAt: timestamp("approved_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    executedAt: timestamp("executed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_action_approvals_id_store_key").on(table.id, table.storeId),
+    unique("mink_action_approvals_idempotency_key").on(
+      table.storeId,
+      table.adminId,
+      table.idempotencyKey,
+    ),
+    index("mink_action_approvals_owner_status_idx").on(
+      table.storeId,
+      table.adminId,
+      table.status,
+      table.createdAt,
+    ),
+    index("mink_action_approvals_product_idx").on(
+      table.storeId,
+      table.productId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_action_approvals_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.draftId, table.storeId],
+      foreignColumns: [minkDrafts.id, minkDrafts.storeId],
+      name: "mink_action_approvals_draft_store_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.productId, table.storeId],
+      foreignColumns: [products.id, products.storeId],
+      name: "mink_action_approvals_product_store_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceApprovalId, table.storeId],
+      foreignColumns: [table.id, table.storeId],
+      name: "mink_action_approvals_source_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_action_approvals_tool_check",
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+    ),
+    check(
+      "mink_action_approvals_operation_check",
+      sql`operation = ANY (ARRAY['apply'::text, 'rollback'::text])`,
+    ),
+    check(
+      "mink_action_approvals_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'executed'::text, 'conflicted'::text, 'expired'::text, 'cancelled'::text])`,
+    ),
+    check("mink_action_approvals_draft_version_check", sql`draft_version > 0`),
+    check(
+      "mink_action_approvals_payload_check",
+      sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(after_json) = 'object'`,
+    ),
+    check(
+      "mink_action_approvals_hash_check",
+      sql`request_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "mink_action_approvals_execution_check",
+      sql`(status = 'executed' AND approved_at IS NOT NULL AND executed_at IS NOT NULL) OR status <> 'executed'`,
+    ),
+  ],
+);
+
+export const minkActionAudit = pgTable(
+  "mink_action_audit",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    approvalId: uuid("approval_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    draftId: uuid("draft_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    operation: text().notNull(),
+    outcome: text().notNull(),
+    beforeJson: jsonb("before_json").notNull(),
+    afterJson: jsonb("after_json").notNull(),
+    productVersionBefore: timestamp("product_version_before", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    productVersionAfter: timestamp("product_version_after", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    requestHash: text("request_hash").notNull(),
+    toolVersion: integer("tool_version").default(1).notNull(),
+    detail: text(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_action_audit_approval_key").on(table.approvalId),
+    index("mink_action_audit_store_created_idx").on(
+      table.storeId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.approvalId, table.storeId],
+      foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
+      name: "mink_action_audit_approval_store_fkey",
+    }).onDelete("restrict"),
+    check(
+      "mink_action_audit_tool_check",
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+    ),
+    check(
+      "mink_action_audit_operation_check",
+      sql`operation = ANY (ARRAY['apply'::text, 'rollback'::text])`,
+    ),
+    check(
+      "mink_action_audit_outcome_check",
+      sql`outcome = ANY (ARRAY['executed'::text, 'conflicted'::text, 'expired'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_action_audit_payload_check",
+      sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(after_json) = 'object'`,
+    ),
+    check("mink_action_audit_tool_version_check", sql`tool_version > 0`),
   ],
 );
 

@@ -9,6 +9,7 @@ import {
   Coins,
   FilePenLine,
   Power,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import {
@@ -18,9 +19,11 @@ import {
   setStoreStatus,
 } from "@/app/actions/platform";
 import {
+  setMinkActionToolAccess,
   setMinkBetaAccess,
   setMinkDraftingAccess,
 } from "@/app/actions/mink-operator-actions";
+import type { MinkProductActionTool } from "@/lib/mink/product-action-types";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +83,8 @@ export function StoreManageBar({
   canManage,
   minkBetaEnabled,
   minkDraftingEnabled,
+  minkProductDescriptionActionEnabled,
+  minkProductSeoActionEnabled,
 }: {
   storeId: string;
   slug: string;
@@ -89,6 +94,8 @@ export function StoreManageBar({
   canManage: boolean;
   minkBetaEnabled: boolean;
   minkDraftingEnabled: boolean;
+  minkProductDescriptionActionEnabled: boolean;
+  minkProductSeoActionEnabled: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -144,6 +151,21 @@ export function StoreManageBar({
         ? `Disabled private Mink drafts for ${name}.`
         : `Enabled private Mink drafts for ${name}.`,
     );
+  }
+
+  async function toggleMinkAction(
+    toolName: MinkProductActionTool,
+    current: boolean,
+  ) {
+    setBusy(true);
+    const res = await setMinkActionToolAccess(storeId, toolName, !current);
+    setBusy(false);
+    if (res.error) return void toast.error(res.error);
+    const label =
+      toolName === "apply_product_description"
+        ? "product-description actions"
+        : "product-SEO actions";
+    done(`${current ? "Disabled" : "Enabled"} Mink ${label} for ${name}.`);
   }
 
   /** The expiry the current selection resolves to, or an error to show. */
@@ -238,6 +260,35 @@ export function StoreManageBar({
         >
           <FilePenLine className="h-4 w-4" />
           {minkDraftingEnabled ? "Disable Mink drafts" : "Enable Mink drafts"}
+        </button>
+        <button
+          onClick={() =>
+            toggleMinkAction(
+              "apply_product_description",
+              minkProductDescriptionActionEnabled,
+            )
+          }
+          disabled={busy || !minkDraftingEnabled}
+          title="Independent kill switch for approved product-description changes"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ShieldCheck className="h-4 w-4" />
+          {minkProductDescriptionActionEnabled
+            ? "Disable description actions"
+            : "Enable description actions"}
+        </button>
+        <button
+          onClick={() =>
+            toggleMinkAction("apply_product_seo", minkProductSeoActionEnabled)
+          }
+          disabled={busy || !minkDraftingEnabled}
+          title="Independent kill switch for approved product-SEO changes"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ShieldCheck className="h-4 w-4" />
+          {minkProductSeoActionEnabled
+            ? "Disable SEO actions"
+            : "Enable SEO actions"}
         </button>
         <button
           onClick={toggleStatus}

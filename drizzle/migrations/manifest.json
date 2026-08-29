@@ -1447,6 +1447,59 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260830_0042_mink_phase_4a_product_actions",
+      "description": "Add exact approvals, per-tool operator kill switches, transactional product text actions, and append-only action audit",
+      "file": "sql/20260830_0042_mink_phase_4a_product_actions.sql",
+      "transaction": true,
+      "requires": ["20260830_0041_mink_location_alias_help"],
+      "verify": {
+        "tables": [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit"
+        ],
+        "columns": [
+          "mink_action_approvals.product_version",
+          "mink_action_approvals.request_hash",
+          "mink_action_audit.product_version_after",
+          "mink_action_audit.tool_version"
+        ],
+        "constraints": [
+          "mink_action_tool_access_pkey",
+          "mink_action_approvals_idempotency_key",
+          "mink_action_approvals_draft_store_fkey",
+          "mink_action_approvals_product_store_fkey",
+          "mink_action_approvals_source_store_fkey",
+          "mink_action_approvals_execution_check",
+          "mink_action_audit_approval_key",
+          "mink_action_audit_outcome_check"
+        ],
+        "rlsTables": [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents exact approvals field limits audit conflicts and safe rollback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Approved product-text actions%' and body like '%Approve and apply%' and body like '%append-only audit row%' and body like '%Review safe rollback%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already contains Phase 4A guarded product action guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Approved product-text actions%' and body like '%Approve and apply%' and body like '%Review safe rollback%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
