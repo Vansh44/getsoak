@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(35);
+    expect(loaded.migrations).toHaveLength(37);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -380,6 +380,47 @@ describe("database migration controls", () => {
     expect(loaded.migrations[34].sql).toContain(
       "use-mink-ai-in-your-dashboard",
     );
+    expect(loaded.migrations[35]).toMatchObject({
+      id: "20260829_0036_mink_conversation_ux",
+      transaction: true,
+      requires: ["20260829_0035_mink_dashboard_alpha"],
+      verify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: "app_service can enforce the Mink conversation cap",
+            equals: "true",
+          }),
+          expect.objectContaining({
+            name: "no actor and store retain more than ten Mink conversations",
+            equals: "0",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[35].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[35].sql).toContain(
+      "GRANT DELETE ON TABLE public.mink_conversations TO app_service",
+    );
+    expect(loaded.migrations[35].sql).toContain("position > 10");
+    expect(loaded.migrations[36]).toMatchObject({
+      id: "20260829_0037_mink_sidebar_composer",
+      transaction: true,
+      requires: ["20260829_0036_mink_conversation_ux"],
+      applyVerify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            equals: "1",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[36].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[36].sql).toContain(
+      "purple robot mark in the dashboard header",
+    );
+    expect(loaded.migrations[36].sql).toContain("Delete conversation");
+    expect(loaded.migrations[36].sql).toContain("Shift+Enter");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

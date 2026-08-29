@@ -14,6 +14,7 @@ import { minkReadToolRegistry } from "@/lib/mink/tools/read-tools";
 import { createVertexMinkSession } from "@/lib/mink/vertex-client";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import { rateLimit } from "@/lib/rate-limit";
+import { rejectForeignMinkOrigin } from "@/lib/mink/request-origin";
 
 export const runtime = "nodejs";
 
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const originError = foreignOrigin(request);
+  const originError = rejectForeignMinkOrigin(request);
   if (originError) return originError;
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
@@ -300,30 +301,4 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException
     ? error.name === "AbortError"
     : error instanceof Error && error.name === "AbortError";
-}
-
-function foreignOrigin(request: Request): NextResponse | null {
-  const origin = request.headers.get("origin");
-  if (!origin) return null;
-  try {
-    // request.url may contain Cloud Run's/Next's internal service host. The
-    // browser-facing tenant host is carried by the proxy headers, matching the
-    // host-resolution convention used throughout StoreMink.
-    const forwardedHost = request.headers
-      .get("x-forwarded-host")
-      ?.split(",")[0]
-      ?.trim();
-    const requestHost = (
-      forwardedHost ||
-      request.headers.get("host")?.trim() ||
-      new URL(request.url).host
-    ).toLowerCase();
-    if (new URL(origin).host.toLowerCase() === requestHost) return null;
-  } catch {
-    // Invalid origins are rejected below.
-  }
-  return NextResponse.json(
-    { error: "Cross-origin Mink AI requests are not allowed." },
-    { status: 403 },
-  );
 }

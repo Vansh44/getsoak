@@ -239,11 +239,17 @@ wholesip/
 │   │   │                      # topbar Search/⌘K is a keyboard/touch command palette
 │   │   │                      # built only from the viewer's permission-filtered nav
 │   │   ├── mink-ai.ts         # ★ Flag-selected drawer client: disabled → canned reply;
-│   │   │                      # enabled → abortable SSE, per-tab conversation continuity,
-│   │   │                      # tool progress, safe errors, explicit Stop + Retry.
+│   │   │                      # enabled → abortable SSE, restores/loads the actor's last
+│   │   │                      # ten conversations, deletes scoped threads, tool progress,
+│   │   │                      # safe errors, Stop + Retry.
 │   │   ├── chat-context.tsx   # Shares the same Mink thread between Home, drawer and
 │   │   │                      # expanded view; receives the private server-side flag.
-│   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer and composer.
+│   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer: Codex-style history sidebar
+│   │   │                      # with confirmed deletion, persisted drag/keyboard width,
+│   │   │                      # Help-matched robot identity and auto-growing composer.
+│   │   ├── mink-answer.tsx    # Safe React-rendered bold/inline-code subset; model text
+│   │   │                      # is never raw HTML and `**` markers do not leak into UI.
+│   │   ├── mink-mark.tsx      # Shared solid-purple robot mark matching Help Centre Mink.
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
@@ -532,6 +538,8 @@ wholesip/
 │       │                      # turns, runs bounded Gemini 3.7 tool turns, records
 │       │                      # redacted tool/token telemetry, and emits typed status/
 │       │                      # tool/message/usage/done events to the dashboard client.
+│       ├── mink/conversations/ # ★ No-store, rate-limited recent-history API: list the
+│       │   └── [conversationId]/ # actor/store's last ten; load or same-origin delete one.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -932,7 +940,11 @@ wholesip/
 │   │                          # store-scoped RLS read tools (profile/catalog/search);
 │   │                          # persistence.ts owns admin/store-scoped conversations,
 │   │                          # runs, successful-turn history, redacted tool records and
-│   │                          # append-only raw usage. Internal alpha only: no live credit
+│   │                          # append-only raw usage; an advisory lock + cascading delete
+│   │                          # retain exactly the latest 10 threads per actor/store.
+│   │                          # request-origin.ts is the shared CSRF boundary for streaming
+│   │                          # and conversation deletion behind Cloud Run proxy hosts.
+│   │                          # Internal alpha only: no live credit
 │   │                          # billing, order/customer/analytics tools or mutations.
 │   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
 │   │                          # assistant-input.ts rejects low-signal turns; chunks.ts
@@ -1335,7 +1347,10 @@ wholesip/
 │                              # fulfilment navigation, phone-first checkout, pickup Razorpay,
 │                              # unified Sales, and policy-driven returns/exchanges; 0035 adds
 │                              # the service-only Mink conversation/run/message/tool/raw-usage
-│                              # tables and publishes the separate dashboard-agent alpha guide.
+│                              # tables and publishes the separate dashboard-agent alpha guide;
+│                              # 0036 prunes/caps actor-store history at ten, grants the service
+│                              # delete needed to enforce it, and documents history/resize/format UX;
+│                              # 0037 documents the robot identity, sidebar delete flow and composer.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2765,12 +2780,19 @@ database query also carries the trusted `store_id`.
      owned by `(store_id, admin_id)`, expire after 90 days, and history replay
      includes only successful prior runs. Tool arguments/results stay redacted
      in telemetry; raw prompt/output/thought/total token counts are recorded
-     with `charged_credits=0` for shadow costing. The UI retains one conversation
-     ID for the mounted dashboard session, renders safe tool progress/errors,
-     and has explicit Stop and Retry. A refresh/history picker is not built yet;
-     nor are order/customer/analytics tools, live billing, approvals, mutations
-     or StoreMink source/deployment access. The same migration publishes
-     `use-mink-ai-in-your-dashboard` with these exact capabilities and limits.
+     with `charged_credits=0` for shadow costing. Migration
+     `20260829_0036_mink_conversation_ux` caps retained data at the newest ten
+     conversations per actor/store, with serialized creation and cascading
+     deletion of the oldest. The UI restores the newest thread after refresh,
+     exposes all ten in a dedicated responsive sidebar, allows confirmed
+     same-origin deletion, renders supported Markdown without raw HTML,
+     remembers a bounded drag/keyboard panel width, and grows the multiline
+     composer to a scrollable cap. The dashboard and Help Centre share the same
+     solid-purple robot identity. Explicit Stop and Retry remain available.
+     Order/customer/analytics tools, live billing, approvals, mutations and
+     StoreMink source/deployment access remain absent. The original migration
+     publishes the guide; migrations 0036 and 0037 keep
+     `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
     docs (Shopify-style).** StoreMink's OWN product docs, NOT per-store data, so
