@@ -9,7 +9,8 @@ import { rateLimit } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 
 export async function GET() {
-  if (!getMinkConfig().enabled) {
+  const config = getMinkConfig();
+  if (!config.enabled) {
     return NextResponse.json(
       { error: "Mink AI is not enabled." },
       { status: 404 },
@@ -18,7 +19,9 @@ export async function GET() {
 
   const requestId = crypto.randomUUID();
   try {
-    const actor = await getMinkActorContext(requestId);
+    const actor = await getMinkActorContext(requestId, {
+      betaRequireInvite: config.betaRequireInvite,
+    });
     const limited = await rateLimit(
       `mink-history:${actor.storeId}:${actor.adminId}`,
       { max: 60, windowSeconds: 60 },

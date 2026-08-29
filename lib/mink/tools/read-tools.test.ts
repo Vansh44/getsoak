@@ -27,6 +27,8 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "list_orders",
+      "search_help_centre",
     ]);
     for (const declaration of declarations) {
       const properties = declaration.parametersJsonSchema.properties as
@@ -45,19 +47,30 @@ describe("Mink read-tool declarations", () => {
         .declarationsFor({ ...ACTOR, isSuperadmin: false, permissions })
         .map((tool) => tool.name);
 
-    expect(declared({ dashboard: ["view"] })).toEqual(["get_store_profile"]);
+    expect(declared({ dashboard: ["view"] })).toEqual([
+      "get_store_profile",
+      "search_help_centre",
+    ]);
     expect(declared({ dashboard: ["view"], products: ["view"] })).toEqual([
       "get_store_profile",
       "get_catalog_summary",
       "search_products",
+      "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], analytics: ["view"] })).toEqual([
       "get_store_profile",
       "get_sales_summary",
+      "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], inventory: ["view"] })).toEqual([
       "get_store_profile",
       "list_low_stock",
+      "search_help_centre",
+    ]);
+    expect(declared({ dashboard: ["view"], orders: ["view"] })).toEqual([
+      "get_store_profile",
+      "list_orders",
+      "search_help_centre",
     ]);
   });
 
@@ -72,6 +85,7 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "list_orders",
     ]) {
       await expect(
         minkReadToolRegistry.execute(restricted, { name, args: {} }),

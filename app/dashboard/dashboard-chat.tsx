@@ -29,6 +29,8 @@ import { useChat } from "./chat-context";
 import { MinkAnswer } from "./mink-answer";
 import { ASSISTANT_NAME, type MinkConversationSummary } from "./mink-ai";
 import { MinkMark } from "./mink-mark";
+import { MinkArtifacts } from "./mink-artifacts";
+import { MinkFeedbackControls } from "./mink-feedback";
 
 const PANEL_WIDTH_KEY = "storemink:mink-panel-width";
 const DEFAULT_PANEL_WIDTH = 380;
@@ -81,12 +83,14 @@ export function DashboardChat({
     deletingConversationId,
     statusText,
     error,
+    feedbackSubmittingRunId,
     send,
     cancel,
     retry,
     reset,
     loadConversation,
     deleteConversation,
+    submitFeedback,
   } = useChat();
   const isOverlay = variant === "overlay";
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -375,6 +379,12 @@ export function DashboardChat({
                         <div className="rounded-2xl rounded-tl-sm bg-[#f6f6f7] px-3.5 py-2.5 text-sm text-[#1a1a1a]">
                           <MinkAnswer text={message.text} />
                         </div>
+                        <MinkArtifacts artifacts={message.artifacts ?? []} />
+                        <MinkFeedbackControls
+                          message={message}
+                          submitting={feedbackSubmittingRunId === message.runId}
+                          submit={submitFeedback}
+                        />
                       </div>
                     </div>
                   ),

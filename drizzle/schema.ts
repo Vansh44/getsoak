@@ -4698,11 +4698,46 @@ export const stores = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Mink dashboard agent — internal read-only alpha
+// Mink dashboard agent — permission-aware read-only beta
 // (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql and
-//  20260829_0038_mink_phase_1b.sql).
+//  20260829_0039_mink_phase_2.sql).
 // Service-role only: every application query must carry an explicit store id.
 // ---------------------------------------------------------------------------
+export const minkStoreAccess = pgTable(
+  "mink_store_access",
+  {
+    storeId: uuid("store_id").primaryKey().notNull(),
+    enabled: boolean().default(false).notNull(),
+    phase: text().default("merchant_beta").notNull(),
+    invitedBy: text("invited_by"),
+    invitedAt: timestamp("invited_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    updatedAt: timestamp("updated_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_store_access_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_store_access_phase_check",
+      sql`phase = ANY (ARRAY['internal_alpha'::text, 'merchant_beta'::text])`,
+    ),
+    check(
+      "mink_store_access_invitation_check",
+      sql`(enabled = false) OR (invited_by IS NOT NULL AND invited_at IS NOT NULL)`,
+    ),
+  ],
+);
+
 export const minkConversations = pgTable(
   "mink_conversations",
   {
@@ -4729,6 +4764,10 @@ export const minkConversations = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
+    summaryJson: jsonb("summary_json"),
+    summarizedMessageCount: integer("summarized_message_count")
+      .default(0)
+      .notNull(),
   },
   (table) => [
     unique("mink_conversations_id_store_key").on(table.id, table.storeId),
@@ -4752,6 +4791,10 @@ export const minkConversations = pgTable(
       sql`status = ANY (ARRAY['active'::text, 'archived'::text, 'deleted'::text])`,
     ),
     check("mink_conversations_expiry_check", sql`expires_at > created_at`),
+    check(
+      "mink_conversations_summary_check",
+      sql`(summary_json IS NULL OR jsonb_typeof(summary_json) = 'object') AND summarized_message_count >= 0`,
+    ),
   ],
 );
 
@@ -4780,6 +4823,9 @@ export const minkRuns = pgTable(
     retryCount: integer("retry_count").default(0).notNull(),
     latencyMs: integer("latency_ms"),
     errorCode: text("error_code"),
+    currentPath: text("current_path"),
+    selectedResourceType: text("selected_resource_type"),
+    selectedResourceId: uuid("selected_resource_id"),
     startedAt: timestamp("started_at", {
       withTimezone: true,
       mode: "string",
@@ -4837,6 +4883,10 @@ export const minkRuns = pgTable(
     check(
       "mink_runs_completion_check",
       sql`(status = 'running' AND completed_at IS NULL) OR (status <> 'running' AND completed_at IS NOT NULL)`,
+    ),
+    check(
+      "mink_runs_context_check",
+      sql`(current_path IS NULL OR (current_path LIKE '/dashboard%' AND char_length(current_path) <= 500)) AND ((selected_resource_type IS NULL AND selected_resource_id IS NULL) OR (selected_resource_type IN ('product', 'order') AND selected_resource_id IS NOT NULL))`,
     ),
   ],
 );
@@ -4983,6 +5033,8 @@ export const minkUsageLedger = pgTable(
     estimatedCostMicrousd: integer("estimated_cost_microusd"),
     pricingVersion: text("pricing_version"),
     chargedCredits: integer("charged_credits").default(0).notNull(),
+    shadowCredits: integer("shadow_credits").default(0).notNull(),
+    costCohort: text("cost_cohort").default("read_unknown").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
       .defaultNow()
       .notNull(),
@@ -5002,11 +5054,60 @@ export const minkUsageLedger = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_usage_ledger_counts_check",
-      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND charged_credits >= 0 AND (estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0)`,
+      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND charged_credits >= 0 AND shadow_credits >= 0 AND (estimated_cost_microusd IS NULL OR estimated_cost_microusd >= 0)`,
     ),
     check(
       "mink_usage_ledger_status_check",
       sql`usage_status = ANY (ARRAY['reported'::text, 'partial'::text, 'unavailable'::text])`,
+    ),
+    check(
+      "mink_usage_ledger_cohort_check",
+      sql`cost_cohort = ANY (ARRAY['read_lookup'::text, 'read_analysis'::text, 'read_failed'::text, 'read_unknown'::text])`,
+    ),
+  ],
+);
+
+export const minkFeedback = pgTable(
+  "mink_feedback",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    rating: text().notNull(),
+    issueCategory: text("issue_category"),
+    detailsRedacted: text("details_redacted"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_feedback_run_admin_key").on(table.runId, table.adminId),
+    index("mink_feedback_store_created_idx").on(table.storeId, table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_feedback_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkRuns.id, minkRuns.storeId],
+      name: "mink_feedback_run_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_feedback_rating_check",
+      sql`rating = ANY (ARRAY['helpful'::text, 'unhelpful'::text])`,
+    ),
+    check(
+      "mink_feedback_issue_check",
+      sql`issue_category IS NULL OR issue_category = ANY (ARRAY['incorrect'::text, 'missing_context'::text, 'privacy'::text, 'slow'::text, 'other'::text])`,
+    ),
+    check(
+      "mink_feedback_details_check",
+      sql`details_redacted IS NULL OR char_length(details_redacted) BETWEEN 1 AND 500`,
     ),
   ],
 );

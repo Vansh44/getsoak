@@ -3,11 +3,14 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { can } from "@/app/dashboard/lib/permissions";
 import { getViewerContext } from "@/app/dashboard/lib/access";
-import { adminLocations, stores } from "@/drizzle/schema";
+import { adminLocations, orders, products, stores } from "@/drizzle/schema";
 import { withUser } from "@/lib/db/client";
 import { normalizeAnalyticsTimeZone } from "@/lib/analytics/range";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 import { MinkRequestError } from "./errors";
+import { requireMinkStoreInvite } from "./access";
+import { getMinkConfig } from "./config";
+import type { MinkPageContext } from "./page-context";
 import type { MinkActorContext, MinkPlan } from "./types";
 
 const PLANS = new Set<MinkPlan>(["free", "basic", "pro"]);
@@ -15,6 +18,10 @@ const PLANS = new Set<MinkPlan>(["free", "basic", "pro"]);
 /** Resolve every authority-bearing field from the authenticated request. */
 export async function getMinkActorContext(
   requestId: string,
+  options: {
+    pageContext?: MinkPageContext;
+    betaRequireInvite?: boolean;
+  } = {},
 ): Promise<MinkActorContext> {
   const viewer = await getViewerContext();
   if (!viewer) {
@@ -42,6 +49,11 @@ export async function getMinkActorContext(
     );
   }
 
+  await requireMinkStoreInvite(
+    viewer.storeId,
+    options.betaRequireInvite ?? getMinkConfig().betaRequireInvite,
+  );
+
   const identity = { uid: viewer.userId, email: viewer.userEmail };
   const trusted = await withUser(identity, async (db) => {
     const storeRows = await db
@@ -64,7 +76,38 @@ export async function getMinkActorContext(
         ? bindings.map((binding) => binding.locationId)
         : null;
     }
-    return { store: storeRows[0], locationIds };
+    const selectedResource = options.pageContext?.selectedResource;
+    let validatedSelectedResource = null;
+    if (selectedResource?.type === "product") {
+      const selected = await db
+        .select({ id: products.id })
+        .from(products)
+        .where(
+          and(
+            eq(products.id, selectedResource.id),
+            eq(products.storeId, viewer.storeId),
+          ),
+        )
+        .limit(1);
+      if (selected[0]) validatedSelectedResource = selectedResource;
+    } else if (selectedResource?.type === "order") {
+      const selected = await db
+        .select({ id: orders.id })
+        .from(orders)
+        .where(
+          and(
+            eq(orders.id, selectedResource.id),
+            eq(orders.storeId, viewer.storeId),
+          ),
+        )
+        .limit(1);
+      if (selected[0]) validatedSelectedResource = selectedResource;
+    }
+    return {
+      store: storeRows[0],
+      locationIds,
+      selectedResource: validatedSelectedResource,
+    };
   });
   const rawPlan = trusted.store?.plan;
   if (!rawPlan || !PLANS.has(rawPlan as MinkPlan)) {
@@ -104,6 +147,8 @@ export async function getMinkActorContext(
     currency: "INR",
     defaultLowStockThreshold:
       (settings["inventory.lowStockThreshold"] as number | undefined) ?? 5,
+    currentPath: options.pageContext?.currentPath ?? null,
+    selectedResource: trusted.selectedResource ?? null,
     requestId,
   };
 }

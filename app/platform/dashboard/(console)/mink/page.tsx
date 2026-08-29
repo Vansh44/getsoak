@@ -90,7 +90,7 @@ export default async function PlatformMinkRunsPage({
         </button>
       </form>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         <Metric label="Runs" value={formatNumber(data.summary.totalRuns)} />
         <Metric
           label="Success rate"
@@ -99,6 +99,20 @@ export default async function PlatformMinkRunsPage({
               ? "—"
               : `${data.summary.successRate}%`
           }
+        />
+        <Metric
+          label="Merchant feedback"
+          value={`${formatNumber(data.summary.helpfulRuns)} / ${formatNumber(data.summary.unhelpfulRuns)}`}
+          note="helpful / unhelpful"
+        />
+        <Metric
+          label="Shadow credits"
+          value={formatNumber(data.summary.shadowCredits)}
+          note="no customer debit"
+        />
+        <Metric
+          label="Invited stores"
+          value={formatNumber(data.summary.invitedStores)}
         />
         <Metric
           label="P95 latency"
@@ -131,6 +145,8 @@ export default async function PlatformMinkRunsPage({
                 <th className="px-4 py-3">Retries</th>
                 <th className="px-4 py-3">Tokens</th>
                 <th className="px-4 py-3">Cost</th>
+                <th className="px-4 py-3">Context / cohort</th>
+                <th className="px-4 py-3">Feedback</th>
                 <th className="px-4 py-3">Run</th>
               </tr>
             </thead>
@@ -139,6 +155,40 @@ export default async function PlatformMinkRunsPage({
                 <tr key={run.id} className="align-top text-slate-700">
                   <td className="whitespace-nowrap px-4 py-3">
                     {formatDate(run.startedAt)}
+                  </td>
+                  <td className="max-w-56 px-4 py-3 text-xs">
+                    <div>
+                      {run.costCohort ?? "—"} · {run.shadowCredits ?? 0} shadow
+                    </div>
+                    <div
+                      className="truncate text-slate-400"
+                      title={run.currentPath ?? undefined}
+                    >
+                      {run.currentPath ?? "No page context"}
+                    </div>
+                    {run.selectedResourceType ? (
+                      <div className="text-slate-400">
+                        selected {run.selectedResourceType}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="max-w-64 px-4 py-3 text-xs">
+                    <div className="font-medium text-slate-700">
+                      {run.feedbackRating ?? "—"}
+                    </div>
+                    {run.feedbackIssueCategory ? (
+                      <div className="text-amber-700">
+                        {run.feedbackIssueCategory.replaceAll("_", " ")}
+                      </div>
+                    ) : null}
+                    {run.feedbackDetailsRedacted ? (
+                      <div
+                        className="mt-1 line-clamp-2 text-slate-400"
+                        title={run.feedbackDetailsRedacted}
+                      >
+                        {run.feedbackDetailsRedacted}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">
                     <Link
@@ -197,7 +247,7 @@ export default async function PlatformMinkRunsPage({
               {data.runs.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={12}
                     className="px-4 py-12 text-center text-sm text-slate-500"
                   >
                     No Mink runs match these filters.

@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  MinkArtifact,
+  MinkFeedbackIssue,
+  MinkFeedbackRating,
+} from "@/lib/mink/types";
 
 export const ASSISTANT_NAME = "Mink AI";
 export const CANNED_REPLY = `Hi, I'm ${ASSISTANT_NAME} — your store assistant. I'm coming soon, and I'll be able to answer questions about your products, orders and customers right here.`;
@@ -10,6 +15,12 @@ export type MinkMessage = {
   id: number | string;
   role: "user" | "assistant";
   text: string;
+  runId?: string;
+  artifacts?: MinkArtifact[];
+  feedback?: {
+    rating: MinkFeedbackRating;
+    issueCategory: MinkFeedbackIssue | null;
+  } | null;
 };
 
 export type MinkConversationSummary = {
@@ -45,6 +56,9 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
   >(null);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<MinkUiError | null>(null);
+  const [feedbackSubmittingRunId, setFeedbackSubmittingRunId] = useState<
+    string | null
+  >(null);
   const nextId = useRef(0);
   const isReplyingRef = useRef(false);
   const conversationId = useRef<string | null>(null);
@@ -229,6 +243,7 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
             ...(conversationId.current
               ? { conversationId: conversationId.current }
               : {}),
+            context: minkBrowserContext(),
           }),
           signal: controller.signal,
         });
@@ -259,6 +274,8 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
             );
           } else if (event === "message" && typeof data.text === "string") {
             const responseText = data.text;
+            const runId =
+              typeof data.runId === "string" ? data.runId : undefined;
             receivedMessage = true;
             setMessages((previous) => [
               ...previous,
@@ -266,6 +283,9 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
                 id: nextId.current++,
                 role: "assistant",
                 text: responseText,
+                ...(runId ? { runId } : {}),
+                artifacts: readMinkArtifacts(data.artifacts),
+                feedback: null,
               },
             ]);
           } else if (event === "error") {
@@ -336,6 +356,50 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
     setReplying(false);
   }, [setReplying]);
 
+  const submitFeedback = useCallback(
+    async (input: {
+      runId: string;
+      rating: MinkFeedbackRating;
+      issueCategory?: MinkFeedbackIssue | null;
+      details?: string;
+    }): Promise<MinkUiError | null> => {
+      if (!enabled || feedbackSubmittingRunId) {
+        return {
+          code: "feedback_unavailable",
+          message: "Wait for the current feedback request to finish.",
+        };
+      }
+      setFeedbackSubmittingRunId(input.runId);
+      try {
+        const response = await fetch("/api/mink/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!response.ok) throw await responseError(response);
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.runId === input.runId
+              ? {
+                  ...message,
+                  feedback: {
+                    rating: input.rating,
+                    issueCategory: input.issueCategory ?? null,
+                  },
+                }
+              : message,
+          ),
+        );
+        return null;
+      } catch (caught) {
+        return toUiError(caught);
+      } finally {
+        setFeedbackSubmittingRunId(null);
+      }
+    },
+    [enabled, feedbackSubmittingRunId],
+  );
+
   return {
     enabled,
     messages,
@@ -349,12 +413,14 @@ export function useMinkAi({ enabled }: { enabled: boolean }) {
     deletingConversationId,
     statusText,
     error,
+    feedbackSubmittingRunId,
     send,
     cancel,
     retry,
     reset,
     loadConversation,
     deleteConversation,
+    submitFeedback,
   };
 }
 
@@ -490,9 +556,65 @@ function readConversationDetail(value: unknown): {
       return [];
     }
     const role: MinkMessage["role"] = item.role;
-    return [{ id: item.id, role, text: item.text }];
+    const feedback = readMinkFeedback(item.feedback);
+    return [
+      {
+        id: item.id,
+        role,
+        text: item.text,
+        ...(typeof item.runId === "string" ? { runId: item.runId } : {}),
+        artifacts: readMinkArtifacts(item.artifacts),
+        feedback,
+      },
+    ];
   });
   return { id: row.id, title: row.title, messages };
+}
+
+function minkBrowserContext() {
+  if (typeof window === "undefined") return {};
+  const selected = document.querySelector<HTMLElement>(
+    "[data-mink-resource-type][data-mink-resource-id]",
+  );
+  const type = selected?.dataset.minkResourceType;
+  const id = selected?.dataset.minkResourceId;
+  return {
+    currentPath: `${window.location.pathname}${window.location.search}`,
+    ...((type === "product" || type === "order") && id
+      ? { selectedResource: { type, id } }
+      : {}),
+  };
+}
+
+function readMinkArtifacts(value: unknown): MinkArtifact[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((artifact): artifact is MinkArtifact =>
+      Boolean(
+        artifact &&
+        typeof artifact === "object" &&
+        (artifact as { type?: unknown }).type &&
+        ["metrics", "records", "sources"].includes(
+          String((artifact as { type?: unknown }).type),
+        ),
+      ),
+    )
+    .slice(0, 6);
+}
+
+function readMinkFeedback(value: unknown): MinkMessage["feedback"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (row.rating !== "helpful" && row.rating !== "unhelpful") return null;
+  const issueCategory =
+    row.issueCategory === "incorrect" ||
+    row.issueCategory === "missing_context" ||
+    row.issueCategory === "privacy" ||
+    row.issueCategory === "slow" ||
+    row.issueCategory === "other"
+      ? row.issueCategory
+      : null;
+  return { rating: row.rating, issueCategory };
 }
 
 function conversationTitle(message: string): string {

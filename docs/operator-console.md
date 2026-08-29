@@ -114,16 +114,26 @@ the second worst**, hence the banner.
 `/dashboard/mink` reads cross-store run telemetry through
 `lib/platform/mink-runs.ts` only after the page calls `requireOperator()`. It
 shows status, store, model, tool names, steps, latency, retry count, token usage,
-shadow model cost and safe error codes. It deliberately does **not** select or
-render prompts, answers, tool arguments, tool results, provider state, thought
-signatures or model reasoning. An operational inspector is not permission to
-read merchant conversations.
+shadow credits/cost cohort, answer rating, redacted issue category and safe
+error codes. It deliberately does **not** select or render prompts, answers,
+tool arguments, tool results, provider state, thought signatures or model
+reasoning. Free-form feedback is bounded and privacy-redacted before storage.
+An operational inspector is not permission to read merchant conversations.
 
 Unknown and interrupted usage is labelled `partial` or `unavailable`; a null
 estimate is rendered as **Unknown**, never `$0`. Filters are URL-owned and the
 table is capped at the 100 newest matching runs. The aggregate cards still use
 the complete filtered interval, so narrowing by store, status or window changes
-both the table and the operating picture.
+both the table and the operating picture. The cards also show the number of
+currently invited stores and feedback totals, so support can correlate a poor
+rating to a safe run ID without opening the merchant's conversation.
+
+The store detail screen owns the Phase 2 invitation control. **Invite to Mink
+beta** upserts an enabled `mink_store_access` row; **Remove Mink invitation**
+disables it. Both actions require a platform operator and record the actor in
+the access row. This gate is independent of `MINK_AI_ENABLED`: the global flag
+can stop every run, while `MINK_BETA_REQUIRE_INVITE=true` prevents an enabled
+deployment from silently exposing Mink to all stores.
 
 ## Phases
 
@@ -227,10 +237,11 @@ both the table and the operating picture.
 - **Phase 5 — Mink AI run and cost inspector ✅**
   `/dashboard/mink` adds a redacted, read-only view of the last 1, 7 or 30 days
   of agent runs. Summary cards expose success rate, p95 latency, retries,
-  tokens, known provider cost, unknown/partial cost and timeouts; the run table
-  exposes only safe trace metadata and distinct tool names. The pricing
-  schedule is stored on each usage row so a future model price change does not
-  rewrite historical estimates.
+  tokens, known provider cost, shadow credits/cohorts, feedback,
+  unknown/partial cost and timeouts; the run table exposes only safe trace
+  metadata and distinct tool names. Store detail pages also control invited
+  beta membership. The pricing schedule is stored on each usage row so a future
+  model price change does not rewrite historical estimates.
 
 ## ⚠ Announcement SMS cannot send yet, and that is not a code problem
 

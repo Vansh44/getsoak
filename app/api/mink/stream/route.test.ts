@@ -16,6 +16,7 @@ const holder = vi.hoisted(() => ({
 vi.mock("@/lib/mink/config", () => ({
   getMinkConfig: vi.fn(() => ({
     enabled: holder.enabled,
+    betaRequireInvite: true,
     projectId: "project-1",
     location: "global",
     model: "gemini-3.7-flash",
@@ -99,6 +100,7 @@ beforeEach(() => {
       thoughtTokens: 10,
       totalTokens: 130,
     },
+    artifacts: [],
   });
 });
 

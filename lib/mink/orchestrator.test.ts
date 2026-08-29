@@ -34,6 +34,7 @@ const ACTOR: MinkActorContext = {
 function config(overrides: Partial<MinkConfig> = {}): MinkConfig {
   return {
     enabled: true,
+    betaRequireInvite: true,
     projectId: "project-1",
     location: "global",
     model: "gemini-3.7-flash",
@@ -131,6 +132,7 @@ describe("runMinkAgent", () => {
         thoughtTokens: 3,
         totalTokens: 41,
       },
+      artifacts: [],
     });
     expect(onEvent).toHaveBeenCalledWith({
       type: "tool_call",

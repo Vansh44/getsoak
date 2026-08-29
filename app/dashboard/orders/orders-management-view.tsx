@@ -699,7 +699,11 @@ export function OrdersManagementView({
         </div>
 
         {selected && (
-          <aside className="sticky top-2 w-[380px] shrink-0 self-start xl:w-[420px]">
+          <aside
+            className="sticky top-2 w-[380px] shrink-0 self-start xl:w-[420px]"
+            data-mink-resource-type="order"
+            data-mink-resource-id={selected.id}
+          >
             <OrderDetailDrawer
               orderId={selected.id}
               orderRef={selected.order_ref}

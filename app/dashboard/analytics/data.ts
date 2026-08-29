@@ -281,8 +281,11 @@ export async function getSalesAnalytics(
   storeId: string,
   location: AnalyticsLocationSelection,
   range: AnalyticsRange,
+  channel: "all" | "online" | "pos" = "all",
 ): Promise<SalesAnalytics> {
   const scoped = locationCondition(location);
+  const channelScope =
+    channel === "all" ? undefined : eq(orders.salesChannel, channel);
   const grain = grainFor(range.current);
 
   return withService(async (db) => {
@@ -299,6 +302,7 @@ export async function getSalesAnalytics(
             recognizedOrder(),
             orderWindow(window),
             ...(scoped ? [scoped] : []),
+            ...(channelScope ? [channelScope] : []),
           ),
         );
       const [refundRow] = await db
@@ -312,6 +316,7 @@ export async function getSalesAnalytics(
             eq(orders.id, orderRefunds.orderId),
             eq(orders.storeId, storeId),
             ...(scoped ? [scoped] : []),
+            ...(channelScope ? [channelScope] : []),
           ),
         )
         .where(
@@ -334,6 +339,7 @@ export async function getSalesAnalytics(
             recognizedOrder(),
             orderWindow(window),
             ...(scoped ? [scoped] : []),
+            ...(channelScope ? [channelScope] : []),
           ),
         );
       return {
@@ -360,6 +366,7 @@ export async function getSalesAnalytics(
           recognizedOrder(),
           orderWindow(range.current),
           ...(scoped ? [scoped] : []),
+          ...(channelScope ? [channelScope] : []),
         ),
       )
       // Reusing `bucket` here produces fresh bind placeholders in Drizzle, so
@@ -378,6 +385,7 @@ export async function getSalesAnalytics(
           eq(orders.id, orderRefunds.orderId),
           eq(orders.storeId, storeId),
           ...(scoped ? [scoped] : []),
+          ...(channelScope ? [channelScope] : []),
         ),
       )
       .where(
@@ -403,6 +411,7 @@ export async function getSalesAnalytics(
           recognizedOrder(),
           orderWindow(range.current),
           ...(scoped ? [scoped] : []),
+          ...(channelScope ? [channelScope] : []),
         ),
       )
       .groupBy(sql`1`)

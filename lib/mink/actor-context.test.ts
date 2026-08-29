@@ -11,6 +11,9 @@ vi.mock("@/app/dashboard/lib/access", () => ({
 vi.mock("@/lib/db/client", () => ({
   withUser: holder.withUser,
 }));
+vi.mock("./access", () => ({
+  requireMinkStoreInvite: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { getMinkActorContext } from "./actor-context";
 
@@ -57,6 +60,8 @@ describe("getMinkActorContext", () => {
       analyticsTimeZone: "Asia/Kolkata",
       currency: "INR",
       defaultLowStockThreshold: 7,
+      currentPath: null,
+      selectedResource: null,
       requestId: "request-1",
     });
   });

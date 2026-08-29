@@ -15,6 +15,7 @@ import { createVertexMinkSession } from "@/lib/mink/vertex-client";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { rejectForeignMinkOrigin } from "@/lib/mink/request-origin";
+import { normalizeMinkPageContext } from "@/lib/mink/page-context";
 import type { MinkRunProgress } from "@/lib/mink/types";
 
 export const runtime = "nodejs";
@@ -57,7 +58,11 @@ export async function POST(request: Request) {
 
   const requestId = crypto.randomUUID();
   try {
-    const actor = await getMinkActorContext(requestId);
+    const { message, conversationId, pageContext } = await readRequest(request);
+    const actor = await getMinkActorContext(requestId, {
+      pageContext,
+      betaRequireInvite: config.betaRequireInvite,
+    });
     const limited = await rateLimit(`mink:${actor.storeId}:${actor.adminId}`, {
       max: 20,
       windowSeconds: 60,
@@ -69,7 +74,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const { message, conversationId } = await readRequest(request);
     const declarations = minkReadToolRegistry.declarationsFor(actor);
     const started = await startMinkRun({
       actor,
@@ -181,7 +185,12 @@ export async function POST(request: Request) {
             latencyMs: Date.now() - startedAt,
             pricingLocation: config.location,
           });
-          send("message", { role: "assistant", text: result.text });
+          send("message", {
+            role: "assistant",
+            text: result.text,
+            runId: started.runId,
+            artifacts: result.artifacts,
+          });
           send("usage", {
             model: result.model,
             steps: result.steps,
@@ -318,6 +327,7 @@ export async function POST(request: Request) {
 async function readRequest(request: Request): Promise<{
   message: string;
   conversationId?: string;
+  pageContext: ReturnType<typeof normalizeMinkPageContext>;
 }> {
   const body = (await request.json()) as unknown;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -343,6 +353,11 @@ async function readRequest(request: Request): Promise<{
   return {
     message: trimmed,
     ...(typeof conversationId === "string" ? { conversationId } : {}),
+    pageContext: normalizeMinkPageContext(
+      (body as Record<string, unknown>).context as
+        | Record<string, unknown>
+        | undefined,
+    ),
   };
 }
 

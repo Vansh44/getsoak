@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(38);
+    expect(loaded.migrations).toHaveLength(39);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -435,6 +435,21 @@ describe("database migration controls", () => {
     expect(loaded.migrations[37].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[37].sql).toContain("mink_runs_started_idx");
     expect(loaded.migrations[37].sql).toContain("Analytics → View");
+    expect(loaded.migrations[38]).toMatchObject({
+      id: "20260829_0039_mink_phase_2",
+      transaction: true,
+      requires: ["20260829_0038_mink_phase_1b"],
+      verify: {
+        tables: expect.arrayContaining(["mink_store_access", "mink_feedback"]),
+        columns: expect.arrayContaining([
+          "mink_conversations.summary_json",
+          "mink_usage_ledger.shadow_credits",
+        ]),
+      },
+    });
+    expect(loaded.migrations[38].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[38].sql).toContain("invited read-only beta");
+    expect(loaded.migrations[38].sql).toContain("Shadow credits");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

@@ -14,6 +14,7 @@ import {
   type MinkMessage,
   type MinkUiError,
 } from "./mink-ai";
+import type { MinkFeedbackIssue, MinkFeedbackRating } from "@/lib/mink/types";
 
 interface ChatContextType {
   isChatOpen: boolean;
@@ -36,12 +37,19 @@ interface ChatContextType {
   deletingConversationId: string | null;
   statusText: string | null;
   error: { code: string; message: string } | null;
+  feedbackSubmittingRunId: string | null;
   send: (raw?: string) => void;
   cancel: () => void;
   retry: () => void;
   reset: () => void;
   loadConversation: (id: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<MinkUiError | null>;
+  submitFeedback: (input: {
+    runId: string;
+    rating: MinkFeedbackRating;
+    issueCategory?: MinkFeedbackIssue | null;
+    details?: string;
+  }) => Promise<MinkUiError | null>;
 }
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -125,12 +133,17 @@ export function useChat() {
       deletingConversationId: null,
       statusText: null,
       error: null,
+      feedbackSubmittingRunId: null,
       send: () => {},
       cancel: () => {},
       retry: () => {},
       reset: () => {},
       loadConversation: async () => {},
       deleteConversation: async () => ({
+        code: "mink_unavailable",
+        message: "Mink AI is unavailable.",
+      }),
+      submitFeedback: async () => ({
         code: "mink_unavailable",
         message: "Mink AI is unavailable.",
       }),

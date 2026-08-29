@@ -2,6 +2,7 @@ import "server-only";
 
 export interface MinkConfig {
   enabled: boolean;
+  betaRequireInvite: boolean;
   projectId: string | null;
   location: string;
   model: string;
@@ -35,6 +36,9 @@ export function getMinkConfig(): MinkConfig {
     // Fail closed: merely configuring a model must not expose an unfinished
     // merchant feature. An operator must explicitly enable the runtime.
     enabled: enabled(process.env.MINK_AI_ENABLED),
+    // Phase 2 is an invited beta. An explicit false is required to retain the
+    // all-store internal-alpha behavior in a controlled environment.
+    betaRequireInvite: process.env.MINK_BETA_REQUIRE_INVITE !== "false",
     projectId: process.env.GCP_PROJECT_ID?.trim() || null,
     location:
       process.env.MINK_VERTEX_LOCATION?.trim() ||

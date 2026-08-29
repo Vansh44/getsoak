@@ -1312,6 +1312,52 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0039_mink_phase_2",
+      "description": "Add invited Mink beta access, trusted page context, conversation compaction, answer feedback, and shadow cost cohorts",
+      "file": "sql/20260829_0039_mink_phase_2.sql",
+      "transaction": true,
+      "requires": ["20260829_0038_mink_phase_1b"],
+      "verify": {
+        "tables": ["mink_store_access", "mink_feedback"],
+        "columns": [
+          "mink_conversations.summary_json",
+          "mink_conversations.summarized_message_count",
+          "mink_runs.current_path",
+          "mink_runs.selected_resource_type",
+          "mink_runs.selected_resource_id",
+          "mink_usage_ledger.shadow_credits",
+          "mink_usage_ledger.cost_cohort"
+        ],
+        "constraints": [
+          "mink_store_access_invitation_check",
+          "mink_conversations_summary_check",
+          "mink_runs_context_check",
+          "mink_usage_ledger_cohort_check",
+          "mink_feedback_run_admin_key",
+          "mink_feedback_rating_check"
+        ],
+        "rlsTables": ["mink_store_access", "mink_feedback"]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the invited beta cards privacy compaction feedback and shadow metering",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers → View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide contains merchant beta guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%invited read-only beta%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

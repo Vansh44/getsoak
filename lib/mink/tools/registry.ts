@@ -7,6 +7,7 @@ import type {
   MinkActorContext,
   MinkToolCall,
   MinkToolDeclaration,
+  MinkArtifact,
   MinkToolPermission,
   MinkToolResponse,
 } from "../types";
@@ -15,6 +16,8 @@ export interface MinkTool {
   declaration: MinkToolDeclaration;
   permission: MinkToolPermission;
   timeoutMs: number;
+  available?: (actor: MinkActorContext) => boolean;
+  artifact?: (output: Record<string, unknown>) => MinkArtifact | undefined;
   execute: (
     actor: MinkActorContext,
     args: Record<string, unknown>,
@@ -62,10 +65,12 @@ export class MinkToolRegistry {
         () => tool.execute(actor, call.args),
         tool.timeoutMs,
       );
+      const artifact = tool.artifact?.(output);
       return {
         id: call.id,
         name: call.name,
         response: { output },
+        ...(artifact ? { artifact } : {}),
       };
     } catch (error) {
       if (error instanceof MinkToolInputError) {
@@ -94,11 +99,14 @@ export class MinkToolRegistry {
   }
 
   private allowed(actor: MinkActorContext, tool: MinkTool): boolean {
-    return can(
-      actor.permissions,
-      tool.permission.section,
-      tool.permission.action,
-      actor.isSuperadmin,
+    return (
+      (tool.available?.(actor) ?? true) &&
+      can(
+        actor.permissions,
+        tool.permission.section,
+        tool.permission.action,
+        actor.isSuperadmin,
+      )
     );
   }
 }

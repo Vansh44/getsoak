@@ -4,6 +4,7 @@ import type { MinkConfig } from "./config";
 import { MinkAgentError } from "./errors";
 import type {
   MinkActorContext,
+  MinkArtifact,
   MinkModelSession,
   MinkRunEvent,
   MinkRunProgress,
@@ -34,6 +35,7 @@ export async function runMinkAgent(input: {
   let steps = 1;
   let toolCalls = 0;
   let retryCount = 0;
+  const artifacts: MinkArtifact[] = [];
   let turn = await session.sendUserMessage(message);
   usage = addUsage(usage, turn.usage);
   retryCount += turn.retryCount;
@@ -84,10 +86,16 @@ export async function runMinkAgent(input: {
             name: response.name,
             ok: !errorCode,
             ...(errorCode ? { errorCode } : {}),
+            ...(response.artifact ? { artifact: response.artifact } : {}),
           });
         }),
       );
       responses.push(...batchResponses);
+      for (const response of batchResponses) {
+        if (response.artifact && artifacts.length < 6) {
+          artifacts.push(response.artifact);
+        }
+      }
     }
 
     toolCalls += turn.functionCalls.length;
@@ -113,6 +121,7 @@ export async function runMinkAgent(input: {
     toolCalls,
     retryCount,
     usage,
+    artifacts,
   };
 }
 

@@ -13,6 +13,8 @@ import {
 } from "drizzle-orm";
 import {
   minkRuns,
+  minkFeedback,
+  minkStoreAccess,
   minkToolCalls,
   minkUsageLedger,
   stores,
@@ -45,6 +47,10 @@ export interface PlatformMinkRuns {
     knownCostMicrousd: number;
     unknownOrPartialCostRuns: number;
     timedOutRuns: number;
+    helpfulRuns: number;
+    unhelpfulRuns: number;
+    shadowCredits: number;
+    invitedStores: number;
   };
   runs: Array<{
     id: string;
@@ -69,6 +75,13 @@ export interface PlatformMinkRuns {
     usageStatus: string | null;
     estimatedCostMicrousd: number | null;
     pricingVersion: string | null;
+    shadowCredits: number | null;
+    costCohort: string | null;
+    currentPath: string | null;
+    selectedResourceType: string | null;
+    feedbackRating: string | null;
+    feedbackIssueCategory: string | null;
+    feedbackDetailsRedacted: string | null;
     toolNames: string[];
   }>;
 }
@@ -127,10 +140,15 @@ export async function getPlatformMinkRuns(
         knownCostMicrousd: sql<number>`coalesce(sum(${minkUsageLedger.estimatedCostMicrousd}), 0)::float8`,
         unknownOrPartialCostRuns: sql<number>`count(*) filter (where ${minkUsageLedger.runId} is null or ${minkUsageLedger.usageStatus} <> 'reported' or ${minkUsageLedger.estimatedCostMicrousd} is null)::int`,
         timedOutRuns: sql<number>`count(*) filter (where ${minkRuns.errorCode} = 'run_timeout')::int`,
+        helpfulRuns: sql<number>`count(*) filter (where ${minkFeedback.rating} = 'helpful')::int`,
+        unhelpfulRuns: sql<number>`count(*) filter (where ${minkFeedback.rating} = 'unhelpful')::int`,
+        shadowCredits: sql<number>`coalesce(sum(${minkUsageLedger.shadowCredits}), 0)::float8`,
+        invitedStores: sql<number>`(select count(*)::int from ${minkStoreAccess} where ${minkStoreAccess.enabled})`,
       })
       .from(minkRuns)
       .innerJoin(stores, eq(stores.id, minkRuns.storeId))
       .leftJoin(minkUsageLedger, eq(minkUsageLedger.runId, minkRuns.id))
+      .leftJoin(minkFeedback, eq(minkFeedback.runId, minkRuns.id))
       .where(where);
     const runRows = await db
       .select({
@@ -156,10 +174,18 @@ export async function getPlatformMinkRuns(
         usageStatus: minkUsageLedger.usageStatus,
         estimatedCostMicrousd: minkUsageLedger.estimatedCostMicrousd,
         pricingVersion: minkUsageLedger.pricingVersion,
+        shadowCredits: minkUsageLedger.shadowCredits,
+        costCohort: minkUsageLedger.costCohort,
+        currentPath: minkRuns.currentPath,
+        selectedResourceType: minkRuns.selectedResourceType,
+        feedbackRating: minkFeedback.rating,
+        feedbackIssueCategory: minkFeedback.issueCategory,
+        feedbackDetailsRedacted: minkFeedback.detailsRedacted,
       })
       .from(minkRuns)
       .innerJoin(stores, eq(stores.id, minkRuns.storeId))
       .leftJoin(minkUsageLedger, eq(minkUsageLedger.runId, minkRuns.id))
+      .leftJoin(minkFeedback, eq(minkFeedback.runId, minkRuns.id))
       .where(where)
       .orderBy(desc(minkRuns.startedAt))
       .limit(100);
@@ -200,6 +226,10 @@ export async function getPlatformMinkRuns(
           summary?.unknownOrPartialCostRuns ?? 0,
         ),
         timedOutRuns: Number(summary?.timedOutRuns ?? 0),
+        helpfulRuns: Number(summary?.helpfulRuns ?? 0),
+        unhelpfulRuns: Number(summary?.unhelpfulRuns ?? 0),
+        shadowCredits: Number(summary?.shadowCredits ?? 0),
+        invitedStores: Number(summary?.invitedStores ?? 0),
       },
       runs: runRows.map((run) => ({
         ...run,
@@ -215,6 +245,8 @@ export async function getPlatformMinkRuns(
           run.estimatedCostMicrousd == null
             ? null
             : Number(run.estimatedCostMicrousd),
+        shadowCredits:
+          run.shadowCredits == null ? null : Number(run.shadowCredits),
         toolNames: namesByRun.get(run.id) ?? [],
       })),
     };
