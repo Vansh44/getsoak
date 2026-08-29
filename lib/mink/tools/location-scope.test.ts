@@ -23,7 +23,9 @@ const ACTOR: MinkActorContext = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  holder.withUser.mockResolvedValue([{ id: "location-1", name: "Main Store" }]);
+  holder.withUser.mockResolvedValue([
+    { id: "location-1", name: "Main Store", type: "shop" },
+  ]);
 });
 
 describe("resolveMinkLocation", () => {
@@ -33,6 +35,52 @@ describe("resolveMinkLocation", () => {
       selectedId: "location-1",
       label: "Main Store",
       includeUnassigned: false,
+    });
+  });
+
+  it("resolves an accessible name paired with its displayed location type", async () => {
+    holder.withUser.mockResolvedValue([
+      { id: "location-1", name: "Delhi", type: "warehouse" },
+    ]);
+
+    await expect(
+      resolveMinkLocation(ACTOR, " Delhi   warehouse "),
+    ).resolves.toEqual({
+      locationIds: ["location-1"],
+      selectedId: "location-1",
+      label: "Delhi",
+      includeUnassigned: false,
+    });
+    await expect(
+      resolveMinkLocation(ACTOR, "warehouse Delhi"),
+    ).resolves.toMatchObject({
+      selectedId: "location-1",
+      label: "Delhi",
+    });
+  });
+
+  it("does not treat the wrong location type as an alias", async () => {
+    holder.withUser.mockResolvedValue([
+      { id: "location-1", name: "Delhi", type: "warehouse" },
+    ]);
+
+    await expect(
+      resolveMinkLocation(ACTOR, "Delhi shop"),
+    ).rejects.toMatchObject({
+      name: "MinkToolInputError",
+    });
+  });
+
+  it("rejects a name-and-type alias that is not unique", async () => {
+    holder.withUser.mockResolvedValue([
+      { id: "location-1", name: "Delhi", type: "warehouse" },
+      { id: "location-2", name: "Delhi", type: "warehouse" },
+    ]);
+
+    await expect(
+      resolveMinkLocation(ACTOR, "Delhi warehouse"),
+    ).rejects.toMatchObject({
+      name: "MinkToolInputError",
     });
   });
 

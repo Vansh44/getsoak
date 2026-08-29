@@ -968,6 +968,8 @@ wholesip/
 │   │                          # product, recognized-sales, low-stock, order/current-order
 │   │                          # and hybrid Help read tools. Quantitative tools return rich
 │   │                          # card artifacts carrying explicit date/location/channel scope.
+│   │                          # Location scope accepts a unique canonical name or safe
+│   │                          # name-plus-type alias and never broadens a failed named request.
 │   │                          # Order/customer output is role-gated and masks direct PII;
 │   │                          # selected IDs are revalidated against the trusted tenant.
 │   │                          # persistence.ts owns actor-scoped conversations/runs, redacted
@@ -1391,7 +1393,8 @@ wholesip/
 │                              # beta access, trusted page context, compacted history, answer
 │                              # feedback, shadow credit cohorts and the Phase 2 Help contract;
 │                              # 0040 adds the independent drafting gate, private proposal/
-│                              # version/credit ledgers, atomic weighted charging and Phase 3 Help.
+│                              # version/credit ledgers, atomic weighted charging and Phase 3 Help;
+│                              # 0041 documents safe location name/type aliases and no broad fallback.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2823,7 +2826,9 @@ inventory or Help-source cards instead of living only in prose. Browser route
 and selected product/order IDs are hints only: the server normalizes the route
 and revalidates every record against the trusted store before exposing context.
 Model-supplied location names are intersected with server-derived assignments;
-location/store/admin IDs are never tool inputs. Tool declarations are
+the resolver accepts the canonical name or one unambiguous name-plus-type alias
+such as `Delhi warehouse`, but never fuzzy-matches or widens a failed named
+request to the all-location scope. Location/store/admin IDs are never tool inputs. Tool declarations are
 permission-filtered and execution rechecks RBAC; every database query carries
 the trusted `store_id`, and direct customer PII is minimized/masked.
 

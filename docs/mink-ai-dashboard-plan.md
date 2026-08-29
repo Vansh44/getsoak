@@ -59,6 +59,9 @@ The current Phase 0/1/2 read slice and Phase 3 drafting slice now include:
   switch;
 - order list/current-order and selected-product reads with tenant revalidation,
   location scoping and minimized/masked customer data;
+- unambiguous location name/type aliases such as `Delhi warehouse`, resolved
+  only inside the admin's trusted accessible-location scope; a failed named
+  location is never retried as an all-location request;
 - rich metric, order, product, inventory and Help-source cards that repeat the
   applied date, location and channel scope;
 - normalized current-page/selected-record context, never trusted as identity;

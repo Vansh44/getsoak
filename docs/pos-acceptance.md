@@ -426,6 +426,16 @@ stream/history/feedback endpoints. The invited store receives the read-only
 agent; another store remains unchanged. The global flag can still stop all
 stores independently.
 
+**PS-3.10 ★★ — A displayed location type is a safe alias, not a wider scope**
+Keep **Delhi** as a Warehouse and ask Mink for “today's sales for Delhi
+warehouse”. Repeat with “warehouse Delhi”, then ask for “Delhi shop”; run the
+same prompts as an admin assigned only to Mumbai.
+**Expect:** the first two owner requests resolve to the canonical **Delhi** row
+and the answer card names Delhi rather than all locations. “Delhi shop” is
+refused because the type is wrong. The Mumbai-bound admin cannot resolve any
+Delhi alias. A missing, ambiguous or inaccessible named location is never
+silently retried as an all-location sales, inventory or order request.
+
 ---
 
 ## 4. Inventory — the dashboard

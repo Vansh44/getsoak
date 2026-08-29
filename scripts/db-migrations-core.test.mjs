@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(40);
+    expect(loaded.migrations).toHaveLength(41);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -478,6 +478,24 @@ describe("database migration controls", () => {
     expect(loaded.migrations[39].sql).toContain("draft_proposal");
     expect(loaded.migrations[39].sql).toContain(
       "cannot publish a product or blog",
+    );
+    expect(loaded.migrations[40]).toMatchObject({
+      id: "20260830_0041_mink_location_alias_help",
+      transaction: true,
+      requires: ["20260830_0040_mink_phase_3"],
+      applyVerify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: expect.stringContaining("location name/type aliases"),
+            equals: "1",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[40].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[40].sql).toContain("Delhi warehouse");
+    expect(loaded.migrations[40].sql).toContain(
+      "does not replace a failed named-location request with all-store results",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

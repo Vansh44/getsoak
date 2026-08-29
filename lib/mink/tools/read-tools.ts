@@ -243,7 +243,7 @@ const getSalesSummary: MinkTool = {
         location_name: {
           type: "string",
           description:
-            "Optional exact dashboard location name. Never use or invent a location ID.",
+            "Optional accessible dashboard location name. The name may include its displayed type, such as Delhi warehouse. Never use or invent a location ID.",
           minLength: 1,
           maxLength: 100,
         },
@@ -331,7 +331,7 @@ const listLowStock: MinkTool = {
         location_name: {
           type: "string",
           description:
-            "Optional exact dashboard location name. Never use or invent a location ID.",
+            "Optional accessible dashboard location name. The name may include its displayed type, such as Delhi warehouse. Never use or invent a location ID.",
           minLength: 1,
           maxLength: 100,
         },

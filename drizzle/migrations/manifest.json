@@ -1421,6 +1421,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260830_0041_mink_location_alias_help",
+      "description": "Document Mink location name/type aliases and fail-closed named-location scope",
+      "file": "sql/20260830_0041_mink_location_alias_help.sql",
+      "transaction": true,
+      "requires": ["20260830_0040_mink_phase_3"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents safe location name/type aliases without all-store fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Delhi warehouse%' and body like '%does not replace a failed named-location request with all-store results%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already documents safe location name/type aliases",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Delhi warehouse%' and body like '%does not replace a failed named-location request with all-store results%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
