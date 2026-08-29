@@ -13,6 +13,7 @@ import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
 import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
+import { getMinkConfig } from "@/lib/mink/config";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
 import {
@@ -242,7 +243,7 @@ export default async function DashboardLayout({
       // frame (100vh, overflow hidden) that only this element should have.
       className={`dashboard-shell dashboard-frame ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
-      <ChatProvider>
+      <ChatProvider minkEnabled={getMinkConfig().enabled}>
         <MobileNavProvider>
           <DashboardTopbar
             email={profile.email}

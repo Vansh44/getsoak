@@ -4697,6 +4697,310 @@ export const stores = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// Mink dashboard agent — internal read-only alpha
+// (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql).
+// Service-role only: every application query must carry an explicit store id.
+// ---------------------------------------------------------------------------
+export const minkConversations = pgTable(
+  "mink_conversations",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    title: text().notNull(),
+    status: text().default("active").notNull(),
+    lastMessageAt: timestamp("last_message_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .default(sql`(now() + interval '90 days')`)
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_conversations_id_store_key").on(table.id, table.storeId),
+    index("mink_conversations_owner_idx").on(
+      table.storeId,
+      table.adminId,
+      table.lastMessageAt,
+    ),
+    index("mink_conversations_expiry_idx").on(table.expiresAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_conversations_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_conversations_title_check",
+      sql`btrim(title) <> '' AND char_length(title) <= 120`,
+    ),
+    check(
+      "mink_conversations_status_check",
+      sql`status = ANY (ARRAY['active'::text, 'archived'::text, 'deleted'::text])`,
+    ),
+    check("mink_conversations_expiry_check", sql`expires_at > created_at`),
+  ],
+);
+
+export const minkRuns = pgTable(
+  "mink_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    conversationId: uuid("conversation_id").notNull(),
+    requestedBy: text("requested_by").notNull(),
+    requestId: uuid("request_id").notNull(),
+    status: text().default("running").notNull(),
+    model: text().notNull(),
+    thinkingLevel: text("thinking_level").default("low").notNull(),
+    promptVersion: text("prompt_version").default("read-alpha-v1").notNull(),
+    toolRegistryVersion: text("tool_registry_version")
+      .default("read-alpha-v1")
+      .notNull(),
+    riskTier: text("risk_tier").default("R0").notNull(),
+    inputTokens: integer("input_tokens").default(0).notNull(),
+    outputTokens: integer("output_tokens").default(0).notNull(),
+    thoughtTokens: integer("thought_tokens").default(0).notNull(),
+    totalTokens: integer("total_tokens").default(0).notNull(),
+    stepCount: integer("step_count").default(0).notNull(),
+    toolCallCount: integer("tool_call_count").default(0).notNull(),
+    latencyMs: integer("latency_ms"),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_runs_id_store_key").on(table.id, table.storeId),
+    unique("mink_runs_request_id_key").on(table.requestId),
+    index("mink_runs_conversation_idx").on(
+      table.storeId,
+      table.conversationId,
+      table.startedAt,
+    ),
+    index("mink_runs_status_idx").on(
+      table.storeId,
+      table.status,
+      table.startedAt,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_runs_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.conversationId, table.storeId],
+      foreignColumns: [minkConversations.id, minkConversations.storeId],
+      name: "mink_runs_conversation_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_runs_status_check",
+      sql`status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_runs_thinking_level_check",
+      sql`thinking_level = ANY (ARRAY['minimal'::text, 'low'::text, 'medium'::text, 'high'::text])`,
+    ),
+    check(
+      "mink_runs_risk_tier_check",
+      sql`risk_tier = ANY (ARRAY['R0'::text, 'R1'::text, 'R2'::text, 'R3'::text, 'R4'::text])`,
+    ),
+    check(
+      "mink_runs_counts_check",
+      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND step_count >= 0 AND tool_call_count >= 0 AND (latency_ms IS NULL OR latency_ms >= 0)`,
+    ),
+    check(
+      "mink_runs_completion_check",
+      sql`(status = 'running' AND completed_at IS NULL) OR (status <> 'running' AND completed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const minkMessages = pgTable(
+  "mink_messages",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    conversationId: uuid("conversation_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    role: text().notNull(),
+    contentJson: jsonb("content_json").notNull(),
+    providerStateJson: jsonb("provider_state_json"),
+    model: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("mink_messages_conversation_idx").on(
+      table.storeId,
+      table.conversationId,
+      table.createdAt,
+      table.id,
+    ),
+    index("mink_messages_run_idx").on(table.storeId, table.runId),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_messages_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.conversationId, table.storeId],
+      foreignColumns: [minkConversations.id, minkConversations.storeId],
+      name: "mink_messages_conversation_store_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkRuns.id, minkRuns.storeId],
+      name: "mink_messages_run_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_messages_role_check",
+      sql`role = ANY (ARRAY['user'::text, 'assistant'::text])`,
+    ),
+    check(
+      "mink_messages_content_check",
+      sql`jsonb_typeof(content_json) = 'object' AND jsonb_typeof(content_json -> 'text') = 'string' AND char_length(btrim(content_json ->> 'text')) BETWEEN 1 AND 40000`,
+    ),
+    check(
+      "mink_messages_provider_state_check",
+      sql`provider_state_json IS NULL OR jsonb_typeof(provider_state_json) = 'object'`,
+    ),
+  ],
+);
+
+export const minkToolCalls = pgTable(
+  "mink_tool_calls",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    sequence: integer().notNull(),
+    providerCallId: text("provider_call_id"),
+    toolName: text("tool_name").notNull(),
+    toolVersion: integer("tool_version").default(1).notNull(),
+    status: text().default("running").notNull(),
+    riskTier: text("risk_tier").default("R0").notNull(),
+    permissionChecked: boolean("permission_checked").default(true).notNull(),
+    argumentsSummary: jsonb("arguments_summary").default({}).notNull(),
+    resultSummary: jsonb("result_summary"),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", {
+      withTimezone: true,
+      mode: "string",
+    })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_tool_calls_run_sequence_key").on(table.runId, table.sequence),
+    index("mink_tool_calls_run_idx").on(
+      table.storeId,
+      table.runId,
+      table.sequence,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_tool_calls_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkRuns.id, minkRuns.storeId],
+      name: "mink_tool_calls_run_store_fkey",
+    }).onDelete("cascade"),
+    check("mink_tool_calls_sequence_check", sql`sequence > 0`),
+    check("mink_tool_calls_name_check", sql`btrim(tool_name) <> ''`),
+    check("mink_tool_calls_version_check", sql`tool_version > 0`),
+    check(
+      "mink_tool_calls_status_check",
+      sql`status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])`,
+    ),
+    check(
+      "mink_tool_calls_risk_tier_check",
+      sql`risk_tier = ANY (ARRAY['R0'::text, 'R1'::text, 'R2'::text, 'R3'::text, 'R4'::text])`,
+    ),
+    check(
+      "mink_tool_calls_arguments_check",
+      sql`jsonb_typeof(arguments_summary) = 'object'`,
+    ),
+    check(
+      "mink_tool_calls_result_check",
+      sql`result_summary IS NULL OR jsonb_typeof(result_summary) = 'object'`,
+    ),
+    check(
+      "mink_tool_calls_completion_check",
+      sql`(status = 'running' AND completed_at IS NULL) OR (status <> 'running' AND completed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const minkUsageLedger = pgTable(
+  "mink_usage_ledger",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    model: text().notNull(),
+    inputTokens: integer("input_tokens").notNull(),
+    outputTokens: integer("output_tokens").notNull(),
+    thoughtTokens: integer("thought_tokens").notNull(),
+    totalTokens: integer("total_tokens").notNull(),
+    chargedCredits: integer("charged_credits").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_usage_ledger_run_key").on(table.runId),
+    index("mink_usage_ledger_store_idx").on(table.storeId, table.createdAt),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_usage_ledger_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkRuns.id, minkRuns.storeId],
+      name: "mink_usage_ledger_run_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_usage_ledger_counts_check",
+      sql`input_tokens >= 0 AND output_tokens >= 0 AND thought_tokens >= 0 AND total_tokens >= 0 AND charged_credits >= 0`,
+    ),
+  ],
+);
+
 export const taxClasses = pgTable(
   "tax_classes",
   {

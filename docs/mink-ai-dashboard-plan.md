@@ -1,12 +1,49 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Product and engineering plan; no dashboard-agent capability in
-> this document should be treated as shipped.
+> **Status:** The first read-only internal alpha is implemented behind a
+> disabled-by-default server flag. It is not enabled for merchants and remains
+> far narrower than the complete product described in this plan.
 >
 > **Plan date:** 2026-08-29
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
+
+### Implementation checkpoint — 2026-08-29
+
+The current Phase 0/1 foundation slice now includes:
+
+- the official `@google/genai` SDK pinned to the supported 2.x line;
+- a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
+  low-level thinking and SDK-managed chat history/thought signatures;
+- trusted actor construction from the authenticated host, admin, database role,
+  permissions and effective plan;
+- a permission-filtered tool registry that rechecks authorization at execution;
+- three explicitly store-scoped, RLS-backed tools:
+  `get_store_profile`, `get_catalog_summary` and `search_products`;
+- a bounded multi-step orchestration loop with step, tool and parallel-read
+  limits;
+- an authenticated, same-origin, rate-limited SSE endpoint at
+  `POST /api/mink/stream` with an abort-aware Vertex session;
+- service-only, RLS-enabled persistent conversations, runs, successful-turn
+  history, redacted tool telemetry and an append-only raw token ledger;
+- an abortable streaming client integrated with the existing Home prompt,
+  drawer and expanded view, with tool progress, Stop, Retry and safe errors;
+- a separate published Help Centre guide for the dashboard alpha's supported
+  questions, permission behavior, privacy and limits;
+- prompt-injection instructions that treat all tool values as untrusted data;
+- safe public errors while detailed failures remain in server logs; and
+- focused tests for config fail-closed behavior, actor construction,
+  authorization, tenant-free tool schemas, agent limits and the SSE boundary.
+
+The real client and endpoint remain unreachable unless
+`MINK_AI_ENABLED=true`; the disabled state still returns the existing canned
+coming-soon response. The current build does not charge credits, restore a
+thread after page refresh, expose a conversation picker, stream token deltas,
+or provide order, analytics, customer, Help Centre, coding or mutation tools.
+It also does not yet have the evaluation corpus, automatic timeout/retry policy,
+cost dashboards or production invitation controls required to leave internal
+alpha. Those are remaining work, not implied capability.
 
 ## 1. Executive decision
 
@@ -102,8 +139,8 @@ unrelated second system:
 
 - `app/dashboard/dashboard-chat.tsx` already provides side-panel and expanded
   conversation surfaces.
-- `app/dashboard/mink-ai.ts` is intentionally a canned placeholder and is the
-  replacement seam for the real client.
+- `app/dashboard/mink-ai.ts` selects the canned response while the server flag
+  is off and the abortable SSE client while it is on.
 - `app/dashboard/chat-context.tsx` already shares one conversation between the
   Home prompt and the dashboard drawer.
 - `lib/ai/gemini.ts` already proves Vertex ADC calls from Cloud Run and emits
@@ -375,6 +412,7 @@ migrations.
 - `id`
 - `store_id`
 - `conversation_id`
+- `run_id`
 - `role`
 - `content_json`
 - `provider_state_json` for opaque Gemini parts/thought signatures
@@ -382,6 +420,10 @@ migrations.
 - `created_at`
 
 Never parse, display or log opaque thought-signature contents.
+
+The alpha schema creates this field for future opaque provider-state replay but
+currently persists only final user/assistant text. Within a live run the
+official SDK owns the exact function-call parts and thought signatures.
 
 ### `mink_runs`
 
@@ -397,6 +439,11 @@ Never parse, display or log opaque thought-signature contents.
 - estimated provider cost and charged credits
 - latency, step count, error code
 - idempotency key and timestamps
+
+The alpha implements the `running`, `succeeded`, `failed` and `cancelled`
+subset plus token counts, steps, tools, latency and error code. Queuing,
+approval pauses, unknown external outcomes, cost estimates and idempotent
+mutation fields arrive with the relevant later phases.
 
 ### `mink_tool_calls`
 
@@ -423,12 +470,18 @@ Append-only record of model, tokens, provider-cost estimate, tool cost, reserved
 credits, final credits and reversal. This should become the source of truth for
 Mink usage rather than inferring cost from chat messages.
 
+The alpha ledger records raw token counts and zero charged credits. Provider
+cost estimates, reservations, reconciliation and reversals are intentionally
+not active until pilot distributions are measured.
+
 ### `mink_memories` — not before the proactive phase
 
 Only store explicit, user-approved business preferences. Do not create inferred
 long-term memory from customer data, private messages or credentials.
 
 ## 10. Conversation and streaming protocol
+
+Target protocol:
 
 1. The browser sends the message, current route and optional selected record.
 2. The server reconstructs identity, tenant and permissions.
@@ -449,9 +502,16 @@ long-term memory from customer data, private messages or credentials.
 9. The UI renders facts, sources, planned actions and completed actions as
    separate visual blocks.
 
-The existing `useMinkAi` timeout should be replaced by an abortable streaming
-client. Closing the drawer must not necessarily cancel a background run;
-explicit Cancel does.
+The flag-enabled `useMinkAi` path now uses an abortable streaming client;
+closing the drawer does not cancel a run, while explicit Stop does. The
+flag-disabled path deliberately retains the timed canned response.
+
+The current alpha implements the abortable transport with coarser
+`status`/`tool`/`message`/`usage`/`done` events and one final assistant message.
+It creates and commits the run before returning completion, keeps the
+conversation ID across turns in the mounted dashboard, and treats explicit
+Stop as cancellation. Delta rendering, background continuation and
+approval-required events remain later work.
 
 ## 11. Model routing policy
 
@@ -1013,17 +1073,26 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The first sprint should produce evidence, not a broad demo:
+The next sprint should turn the implemented skeleton into measured internal
+evidence, not broaden its authority:
 
-1. Add a standalone Gemini 3.7 Flash experiment using Vertex ADC.
-2. Implement five read-only tools against a demo store.
-3. Preserve and replay thought signatures through two sequential tool calls.
-4. Run 50 representative prompts on 2.5 Flash and 3.7 Flash.
-5. Compare correct tool selection, factual accuracy, token use, latency and
-   cost.
-6. Test cross-tenant IDs and prompt injections in product/customer text.
-7. Write the Phase 0 threat model and expand to the 200-case evaluation set.
-8. Make the go/no-go decision for the persistent Phase 1 runtime.
+1. Apply migration `20260829_0035_mink_dashboard_alpha` to staging before
+   enabling the server flag.
+2. Enable the alpha only for StoreMink's internal staging store and exercise
+   the real drawer with Vertex ADC.
+3. Expand the automated suite with adversarial tenant IDs, permission matrices,
+   prompt injection inside product data, disconnect/cancel races and database
+   failure recovery.
+4. Build the first 50-prompt comparison set for Gemini 2.5 Flash versus 3.7
+   Flash, then expand it toward the 200-case Phase 0 target.
+5. Measure tool selection, factual accuracy, tokens, latency and effective
+   provider cost from `mink_runs` and `mink_usage_ledger`.
+6. Add operator run/cost visibility plus a hard run timeout before any invited
+   merchant test.
+7. Add two more R0 tools only after their store scoping, permissions, result
+   bounds and evaluation cases are reviewed.
+8. Make the documented go/no-go decision for an invited read-only beta; do not
+   add mutation tools in this sprint.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

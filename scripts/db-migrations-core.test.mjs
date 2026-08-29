@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(34);
+    expect(loaded.migrations).toHaveLength(35);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -351,6 +351,34 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[32].sql).toContain(
       "Understand collected pickups in Sales",
+    );
+    expect(loaded.migrations[34]).toMatchObject({
+      id: "20260829_0035_mink_dashboard_alpha",
+      transaction: true,
+      requires: ["20260829_0034_pos_sales_refund_state_help"],
+      verify: {
+        tables: expect.arrayContaining([
+          "mink_conversations",
+          "mink_runs",
+          "mink_messages",
+          "mink_tool_calls",
+          "mink_usage_ledger",
+        ]),
+        rlsTables: expect.arrayContaining([
+          "mink_conversations",
+          "mink_runs",
+          "mink_messages",
+          "mink_tool_calls",
+          "mink_usage_ledger",
+        ]),
+      },
+    });
+    expect(loaded.migrations[34].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[34].sql).toContain(
+      "REVOKE ALL ON TABLE public.mink_conversations FROM PUBLIC, app_user",
+    );
+    expect(loaded.migrations[34].sql).toContain(
+      "use-mink-ai-in-your-dashboard",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

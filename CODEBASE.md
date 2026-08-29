@@ -27,7 +27,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink AI drawer is still a canned placeholder; its Vertex/Gemini agent architecture and phased rollout are specified (not implemented) in `docs/mink-ai-dashboard-plan.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a disabled-by-default Vertex/Gemini 3.7 read-only internal alpha in `lib/mink/` + `app/api/mink/stream/`: when enabled server-side it streams permission-aware store/catalog reads, durable conversations/runs/tool telemetry and shadow token usage; when disabled it retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`.                                                                                                                                                                                                                                                                       |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
 | Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                              |
@@ -238,6 +238,12 @@ wholesip/
 │   │   │                      # so local Cloud SQL latency is paid once, not serially;
 │   │   │                      # topbar Search/⌘K is a keyboard/touch command palette
 │   │   │                      # built only from the viewer's permission-filtered nav
+│   │   ├── mink-ai.ts         # ★ Flag-selected drawer client: disabled → canned reply;
+│   │   │                      # enabled → abortable SSE, per-tab conversation continuity,
+│   │   │                      # tool progress, safe errors, explicit Stop + Retry.
+│   │   ├── chat-context.tsx   # Shares the same Mink thread between Home, drawer and
+│   │   │                      # expanded view; receives the private server-side flag.
+│   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer and composer.
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
@@ -517,6 +523,13 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── mink/stream/      # ★ Internal read-only Mink agent SSE boundary.
+│       │                      # Disabled unless MINK_AI_ENABLED=true; derives the
+│       │                      # actor/tenant/permissions server-side, rate-limits,
+│       │                      # creates a durable run, replays only successful prior
+│       │                      # turns, runs bounded Gemini 3.7 tool turns, records
+│       │                      # redacted tool/token telemetry, and emits typed status/
+│       │                      # tool/message/usage/done events to the dashboard client.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -910,6 +923,15 @@ wholesip/
 │   ├── ai/gemini.ts           # Gemini/Vertex AI client for AI copy (dual backend, §7);
 │   │                          # emits ai.generate telemetry (latency + tokens) via observability
 │   ├── ai/credits.ts          # ★ AI credit pack catalog (pure — the one place to reprice)
+│   ├── mink/                  # ★ Dashboard agent foundation (docs/mink-ai-dashboard-plan.md):
+│   │                          # fail-closed config; trusted actor construction; bounded
+│   │                          # orchestrator; official Google Gen AI SDK Vertex client;
+│   │                          # permission-filtered/rechecked tool registry; three
+│   │                          # store-scoped RLS read tools (profile/catalog/search);
+│   │                          # persistence.ts owns admin/store-scoped conversations,
+│   │                          # runs, successful-turn history, redacted tool records and
+│   │                          # append-only raw usage. Internal alpha only: no live credit
+│   │                          # billing, order/customer/analytics tools or mutations.
 │   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
 │   │                          # assistant-input.ts rejects low-signal turns; chunks.ts
 │   │                          # creates heading-aware plain-text sections; embeddings.ts
@@ -1309,7 +1331,9 @@ wholesip/
 │                              # and the product-editor handoff to physical shelf quantities;
 │                              # 0029–0033 keep Locations and POS Help aligned through
 │                              # fulfilment navigation, phone-first checkout, pickup Razorpay,
-│                              # unified Sales, and policy-driven returns/exchanges.
+│                              # unified Sales, and policy-driven returns/exchanges; 0035 adds
+│                              # the service-only Mink conversation/run/message/tool/raw-usage
+│                              # tables and publishes the separate dashboard-agent alpha guide.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2719,6 +2743,32 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       store-wide Total customers slot. Current catalogue snapshots never show a
       fake period delta. The old unimported hard-coded performance, inventory
       and operational demo widgets were deleted.
+
+20a. **Mink AI dashboard agent — read-only internal alpha.** This is separate
+from the public Help Centre assistant. `MINK_AI_ENABLED` is a private,
+server-read kill switch: false keeps the original canned drawer; true
+connects Home, the side panel and expanded view to
+`POST /api/mink/stream`. The route authenticates the dashboard request,
+derives host store/admin/RBAC/effective plan out of band, rejects foreign
+origins, rate-limits by store + actor and never accepts a tenant or
+permission map from the browser/model. The current Vertex-only Gemini 3.7
+loop has bounded steps/tool calls/parallel reads and exactly three R0
+tools: store profile, catalogue summary and product name/SKU search. Tool
+declarations are permission-filtered and execution rechecks RBAC; every
+database query also carries the trusted `store_id`.
+
+     Migration `20260829_0035_mink_dashboard_alpha` creates service-only,
+     RLS-enabled `mink_conversations`, `mink_runs`, `mink_messages`,
+     `mink_tool_calls` and append-only `mink_usage_ledger`. Conversations are
+     owned by `(store_id, admin_id)`, expire after 90 days, and history replay
+     includes only successful prior runs. Tool arguments/results stay redacted
+     in telemetry; raw prompt/output/thought/total token counts are recorded
+     with `charged_credits=0` for shadow costing. The UI retains one conversation
+     ID for the mounted dashboard session, renders safe tool progress/errors,
+     and has explicit Stop and Retry. A refresh/history picker is not built yet;
+     nor are order/customer/analytics tools, live billing, approvals, mutations
+     or StoreMink source/deployment access. The same migration publishes
+     `use-mink-ai-in-your-dashboard` with these exact capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
     docs (Shopify-style).** StoreMink's OWN product docs, NOT per-store data, so
@@ -7660,6 +7710,18 @@ npm run format      # prettier --write
   768-dimensional schema contract. **`HELP_VECTOR_MIN_SIMILARITY`** optionally
   overrides the conservative `0.55` semantic-match floor (0–1); leave it unset
   until the retrieval evaluation set justifies a tuned value.
+  The separate dashboard-agent foundation in `lib/mink/` is **Vertex-only** and
+  uses the official `@google/genai` SDK with ADC; it never falls back to an API
+  key. It is unreachable unless **`MINK_AI_ENABLED=true`** and reads
+  **`MINK_VERTEX_MODEL`** (default `gemini-3.7-flash`),
+  **`MINK_VERTEX_LOCATION`** (fallback `GCP_LOCATION`, then `global`), plus
+  bounded optional limits **`MINK_MAX_STEPS_PER_RUN`** (8),
+  **`MINK_MAX_TOOL_CALLS_PER_RUN`** (16),
+  **`MINK_MAX_PARALLEL_READ_TOOLS`** (4), and
+  **`MINK_MAX_OUTPUT_TOKENS`** (2048). The dashboard layout reads the private
+  flag server-side: enabled sessions use the SSE client and durable alpha
+  records; disabled sessions keep the canned placeholder. Raw token usage is
+  recorded with zero charged credits, so this build does not bill customers.
 - **Razorpay** (§18, §16): two SEPARATE credential sets. Per-store BYO gateway
   creds live in the DB (`store_payment_providers`, encrypted with env
   **`PAYMENT_CRED_KEY`** — 32-byte base64; generate with

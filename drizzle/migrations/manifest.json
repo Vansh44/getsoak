@@ -1143,6 +1143,65 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0035_mink_dashboard_alpha",
+      "description": "Persist tenant-safe Mink dashboard alpha conversations, runs, tool telemetry, raw usage, and publish its Help Centre guide",
+      "file": "sql/20260829_0035_mink_dashboard_alpha.sql",
+      "transaction": true,
+      "requires": ["20260829_0034_pos_sales_refund_state_help"],
+      "verify": {
+        "tables": [
+          "mink_conversations",
+          "mink_messages",
+          "mink_runs",
+          "mink_tool_calls",
+          "mink_usage_ledger"
+        ],
+        "columns": [
+          "mink_messages.content_json",
+          "mink_messages.provider_state_json",
+          "mink_runs.total_tokens",
+          "mink_runs.tool_registry_version",
+          "mink_usage_ledger.charged_credits"
+        ],
+        "constraints": [
+          "mink_conversations_id_store_key",
+          "mink_conversations_status_check",
+          "mink_messages_content_check",
+          "mink_messages_conversation_store_fkey",
+          "mink_runs_request_id_key",
+          "mink_runs_status_check",
+          "mink_tool_calls_run_sequence_key",
+          "mink_tool_calls_status_check",
+          "mink_usage_ledger_run_key"
+        ],
+        "rlsTables": [
+          "mink_conversations",
+          "mink_messages",
+          "mink_runs",
+          "mink_tool_calls",
+          "mink_usage_ledger"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the dashboard Mink AI alpha guide is published with limits and permissions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products → View%' and body like '%does not debit AI credits%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the dashboard Mink AI alpha guide exists and remains published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
