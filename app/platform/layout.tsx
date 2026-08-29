@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { brandOgImageUrl } from "@/lib/seo/og-card";
+import { BRAND_DESCRIPTION, BRAND_TAGLINE } from "@/lib/seo/brand-identity";
 import { getPlanPricing } from "@/lib/plans/pricing";
 import { PLAN_IDS } from "@/lib/plans";
 import "./platform.css";
@@ -11,7 +12,7 @@ import "./platform.css";
 // depend on a network fetch while a crawler waits.
 const OG_IMAGE = brandOgImageUrl({
   title: "StoreMink",
-  subtitle: "One place to build, sell and grow.",
+  subtitle: BRAND_TAGLINE,
   color: "#17130f",
   logo: "/brand/storemink-mark.png",
   footer: "storemink.com",
@@ -27,10 +28,10 @@ export async function generateMetadata(): Promise<Metadata> {
   const cheapestPaid = Math.min(
     ...PLAN_IDS.map((id) => pricing[id].monthlyInr).filter((n) => n > 0),
   );
-  const DESCRIPTION = `The India-first store builder with everything included — storefront, Point of Sale, GST invoicing, blogs, reviews, coupons and email campaigns. D2C + B2B from ₹${cheapestPaid.toLocaleString("en-IN")}/month. No apps to buy, no transaction fees.`;
+  const DESCRIPTION = `${BRAND_DESCRIPTION} Paid plans start at ₹${cheapestPaid.toLocaleString("en-IN")}/month with 0% StoreMink transaction fees.`;
 
   return {
-    title: "StoreMink — Build, sell and grow in one place",
+    title: `StoreMink — ${BRAND_TAGLINE}`,
     description: DESCRIPTION,
     applicationName: "StoreMink",
     // Self-canonical. Without this the apex emitted NO canonical at all, while
@@ -55,7 +56,7 @@ export async function generateMetadata(): Promise<Metadata> {
       "shopify alternative india",
     ],
     openGraph: {
-      title: "StoreMink — Build, sell and grow in one place",
+      title: `StoreMink — ${BRAND_TAGLINE}`,
       description: DESCRIPTION,
       url: "/",
       siteName: "StoreMink",
@@ -64,7 +65,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     twitter: {
       card: "summary_large_image",
-      title: "StoreMink — Build, sell and grow in one place",
+      title: `StoreMink — ${BRAND_TAGLINE}`,
       description: DESCRIPTION,
       images: [OG_IMAGE],
     },

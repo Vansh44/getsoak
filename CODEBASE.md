@@ -6,12 +6,21 @@
 
 ## 1. What this project is
 
-**StoreMink** (storemink.com) is a multi-tenant, no-code D2C SaaS platform — a
-Shopify-style product. Anyone can sign up, create their own store, and start
-selling within a day. Every store gets:
+**StoreMink** (storemink.com) is a multi-tenant, AI-powered commerce platform
+for Indian brands and retailers. Anyone can create an online store in minutes,
+then manage online and in-person commerce from one connected system. Its public
+positioning is **"Create your store. Sell everywhere. Grow with AI."** Every
+store gets:
 
 - A **storefront** on its own subdomain (`{slug}.storemink.com`) or a verified custom domain.
-- A full **admin dashboard** (`/dashboard`) to manage products, orders-adjacent data, blogs, marketing, users, branding, and settings — all no-code.
+- A full **admin dashboard** (`/dashboard`) to manage products, orders,
+  customers, inventory, locations, sales, blogs, marketing, branding and
+  settings — all no-code.
+- A connected, plan-gated **Point of Sale** for in-store checkout, shared
+  inventory, pickup, returns, shifts and staff operations.
+- **Mink AI**, currently an invited read-and-draft beta, to answer questions
+  from live store data and prepare private, reversible day-to-day content drafts
+  through simple prompts. Live business mutations remain later guarded phases.
 
 The codebase began as **WholeSip** (a single D2C juice brand, store #1) and was
 converted to multi-tenant in phases. It still exists as the fallback store
