@@ -2,6 +2,13 @@ import type {
   PermissionAction,
   RolePermissions,
 } from "@/app/dashboard/lib/permissions";
+import type {
+  MinkDraftContent,
+  MinkDraftCreditSource,
+  MinkDraftField,
+  MinkDraftKind,
+  MinkDraftStatus,
+} from "./draft-types";
 
 export type MinkPlan = "free" | "basic" | "pro";
 
@@ -56,6 +63,22 @@ export type MinkArtifact =
         url: string;
       }>;
       query: string;
+    }
+  | {
+      type: "proposal";
+      draftId: string;
+      draftKind: MinkDraftKind;
+      title: string;
+      destinationLabel: string;
+      destinationPath: string;
+      before: MinkDraftField[];
+      after: MinkDraftField[];
+      content: MinkDraftContent;
+      status: MinkDraftStatus;
+      currentVersion: number;
+      expectedCredits: number;
+      chargedCredits: number;
+      creditSource: MinkDraftCreditSource;
     };
 
 export type MinkFeedbackRating = "helpful" | "unhelpful";
@@ -85,6 +108,12 @@ export interface MinkActorContext {
   defaultLowStockThreshold: number;
   currentPath?: string | null;
   selectedResource?: MinkSelectedResource | null;
+  /** Trusted run id is attached only after the run row is created. */
+  runId?: string;
+  /** Operator-controlled Phase 3 access; never inferred from the prompt. */
+  draftingEnabled?: boolean;
+  /** Store-authored style context. It may shape copy but never authority. */
+  brandVoice?: string;
   requestId: string;
 }
 

@@ -75,7 +75,7 @@ export interface StoreDetail {
   /** Lifetime and 30-day gross, excluding cancelled orders. */
   revenue: { lifetime: number; last30d: number };
   ai: { used: number; cap: number | null; creditBalance: number };
-  mink: { betaEnabled: boolean };
+  mink: { betaEnabled: boolean; draftingEnabled: boolean };
   channels: {
     payments: ChannelState;
     logistics: ChannelState;
@@ -153,6 +153,8 @@ export async function loadStoreDetail(
             where cb.store_id = s.id) as credit_balance,
           (select enabled from mink_store_access ma
             where ma.store_id = s.id) as mink_beta_enabled,
+          (select drafting_enabled from mink_store_access ma
+            where ma.store_id = s.id) as mink_drafting_enabled,
           (select case when enabled then 'enabled' else 'paused' end
              from store_payment_providers pp where pp.store_id = s.id) as gateway,
           (select case when enabled then 'enabled' else 'paused' end
@@ -237,7 +239,10 @@ export async function loadStoreDetail(
           cap: limitsFor(effective).aiGenerationsPerMonth,
           creditBalance: num(row.credit_balance),
         },
-        mink: { betaEnabled: row.mink_beta_enabled === true },
+        mink: {
+          betaEnabled: row.mink_beta_enabled === true,
+          draftingEnabled: row.mink_drafting_enabled === true,
+        },
         channels: {
           payments: (str(row.gateway) ?? "none") as ChannelState,
           logistics: (str(row.logistics) ?? "none") as ChannelState,

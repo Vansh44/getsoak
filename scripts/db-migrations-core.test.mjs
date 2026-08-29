@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(39);
+    expect(loaded.migrations).toHaveLength(40);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -450,6 +450,35 @@ describe("database migration controls", () => {
     expect(loaded.migrations[38].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[38].sql).toContain("invited read-only beta");
     expect(loaded.migrations[38].sql).toContain("Shadow credits");
+    expect(loaded.migrations[39]).toMatchObject({
+      id: "20260830_0040_mink_phase_3",
+      transaction: true,
+      requires: ["20260829_0039_mink_phase_2"],
+      verify: {
+        tables: expect.arrayContaining([
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage",
+        ]),
+        columns: [
+          "mink_store_access.drafting_enabled",
+          "mink_draft_credit_usage.period",
+        ],
+      },
+    });
+    expect(loaded.migrations[39].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[39].sql).toContain("consume_mink_draft_credits");
+    expect(loaded.migrations[39].sql).toContain(
+      "discard_failed_mink_run_drafts",
+    );
+    expect(loaded.migrations[39].sql).toContain(
+      "Refund for unseen Mink draft after failed or cancelled run",
+    );
+    expect(loaded.migrations[39].sql).toContain("Private content drafts");
+    expect(loaded.migrations[39].sql).toContain("draft_proposal");
+    expect(loaded.migrations[39].sql).toContain(
+      "cannot publish a product or blog",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

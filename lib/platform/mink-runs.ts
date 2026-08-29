@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm";
 import {
   minkRuns,
+  minkDrafts,
   minkFeedback,
   minkStoreAccess,
   minkToolCalls,
@@ -50,7 +51,11 @@ export interface PlatformMinkRuns {
     helpfulRuns: number;
     unhelpfulRuns: number;
     shadowCredits: number;
+    chargedCredits: number;
     invitedStores: number;
+    draftingStores: number;
+    proposedDrafts: number;
+    savedDrafts: number;
   };
   runs: Array<{
     id: string;
@@ -143,7 +148,11 @@ export async function getPlatformMinkRuns(
         helpfulRuns: sql<number>`count(*) filter (where ${minkFeedback.rating} = 'helpful')::int`,
         unhelpfulRuns: sql<number>`count(*) filter (where ${minkFeedback.rating} = 'unhelpful')::int`,
         shadowCredits: sql<number>`coalesce(sum(${minkUsageLedger.shadowCredits}), 0)::float8`,
+        chargedCredits: sql<number>`coalesce(sum(${minkUsageLedger.chargedCredits}), 0)::float8`,
         invitedStores: sql<number>`(select count(*)::int from ${minkStoreAccess} where ${minkStoreAccess.enabled})`,
+        draftingStores: sql<number>`(select count(*)::int from ${minkStoreAccess} where ${minkStoreAccess.enabled} and ${minkStoreAccess.draftingEnabled})`,
+        proposedDrafts: sql<number>`(select count(*)::int from ${minkDrafts} where ${minkDrafts.createdAt} >= ${since} and ${minkDrafts.status} = 'proposed')`,
+        savedDrafts: sql<number>`(select count(*)::int from ${minkDrafts} where ${minkDrafts.createdAt} >= ${since} and ${minkDrafts.status} = 'draft')`,
       })
       .from(minkRuns)
       .innerJoin(stores, eq(stores.id, minkRuns.storeId))
@@ -229,7 +238,11 @@ export async function getPlatformMinkRuns(
         helpfulRuns: Number(summary?.helpfulRuns ?? 0),
         unhelpfulRuns: Number(summary?.unhelpfulRuns ?? 0),
         shadowCredits: Number(summary?.shadowCredits ?? 0),
+        chargedCredits: Number(summary?.chargedCredits ?? 0),
         invitedStores: Number(summary?.invitedStores ?? 0),
+        draftingStores: Number(summary?.draftingStores ?? 0),
+        proposedDrafts: Number(summary?.proposedDrafts ?? 0),
+        savedDrafts: Number(summary?.savedDrafts ?? 0),
       },
       runs: runRows.map((run) => ({
         ...run,

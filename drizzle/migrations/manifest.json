@@ -1358,6 +1358,69 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260830_0040_mink_phase_3",
+      "description": "Add operator-gated private Mink proposals, immutable draft versions, and atomic weighted-credit charging",
+      "file": "sql/20260830_0040_mink_phase_3.sql",
+      "transaction": true,
+      "requires": ["20260829_0039_mink_phase_2"],
+      "verify": {
+        "tables": [
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage"
+        ],
+        "columns": [
+          "mink_store_access.drafting_enabled",
+          "mink_draft_credit_usage.period"
+        ],
+        "constraints": [
+          "mink_store_access_drafting_check",
+          "mink_usage_ledger_cohort_check",
+          "mink_drafts_run_store_fkey",
+          "mink_drafts_kind_check",
+          "mink_draft_versions_draft_version_key",
+          "mink_draft_credit_usage_draft_key",
+          "mink_draft_credit_usage_counts_check",
+          "mink_draft_credit_usage_period_check"
+        ],
+        "rlsTables": [
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage"
+        ],
+        "queries": [
+          {
+            "name": "the atomic Mink draft credit function exists",
+            "sql": "select (to_regprocedure('public.consume_mink_draft_credits(uuid,text,uuid,uuid,text,integer,integer,text)') is not null)::text",
+            "equals": "true"
+          },
+          {
+            "name": "the failed-run Mink draft compensation function exists",
+            "sql": "select (to_regprocedure('public.discard_failed_mink_run_drafts(uuid,uuid)') is not null)::text",
+            "equals": "true"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents private versioned weighted drafts and no publish or send authority",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Private content drafts%' and body like '%Save private draft%' and body like '%cannot publish a product or blog%' and body like '%blog drafts cost 5%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide includes Phase 3 private draft guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Private content drafts%' and body like '%cannot publish a product or blog%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

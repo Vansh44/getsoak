@@ -31,6 +31,7 @@ import { ASSISTANT_NAME, type MinkConversationSummary } from "./mink-ai";
 import { MinkMark } from "./mink-mark";
 import { MinkArtifacts } from "./mink-artifacts";
 import { MinkFeedbackControls } from "./mink-feedback";
+import { estimateMinkDraftIntent } from "@/lib/mink/draft-types";
 
 const PANEL_WIDTH_KEY = "storemink:mink-panel-width";
 const DEFAULT_PANEL_WIDTH = 380;
@@ -225,6 +226,7 @@ export function DashboardChat({
   if (isOverlay !== isExpanded) return null;
 
   const hasThread = messages.length > 0 || isReplying || Boolean(error);
+  const draftEstimate = estimateMinkDraftIntent(input);
   const wrapperClass = isOverlay
     ? "absolute inset-0 z-20 flex flex-col overflow-hidden bg-white"
     : "dash-chat relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-t border-[#e5e5e5] bg-white shadow-sm";
@@ -421,60 +423,71 @@ export function DashboardChat({
           )}
 
           <div className="border-t border-[#f1f1f1] p-4">
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                send();
-              }}
-              className={`${columnClass} flex items-end rounded-2xl border border-[#e5e5e5] bg-white px-3 py-2 shadow-sm transition-all focus-within:border-[#6d4dff] focus-within:ring-1 focus-within:ring-[#6d4dff]`}
-            >
-              <textarea
-                ref={composerRef}
-                rows={1}
-                maxLength={4000}
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={composerKeyDown}
-                placeholder="Ask anything..."
-                aria-label={`Message ${ASSISTANT_NAME}`}
-                className="min-h-6 max-h-40 flex-1 resize-none border-none bg-transparent py-0.5 text-sm leading-5 text-[#1a1a1a] outline-none placeholder:text-[#8c9196]"
-              />
-              <div className="ml-2 flex shrink-0 items-center gap-1 self-end text-[#8c9196]">
-                <button
-                  type="button"
-                  className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
-                  aria-label="Attach"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
-                  aria-label="Voice input"
-                >
-                  <Mic className="h-4 w-4" />
-                </button>
-                {isReplying ? (
+            <div className={columnClass}>
+              {draftEstimate ? (
+                <div className="mb-1.5 flex items-center justify-between gap-2 px-1 text-[10px] text-[#6c6573]">
+                  <span>{draftEstimate.label} proposal</span>
+                  <span className="font-semibold text-[#5b3fd0]">
+                    Expected cost: {draftEstimate.expectedCredits} AI credit
+                    {draftEstimate.expectedCredits === 1 ? "" : "s"}
+                  </span>
+                </div>
+              ) : null}
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  send();
+                }}
+                className="flex items-end rounded-2xl border border-[#e5e5e5] bg-white px-3 py-2 shadow-sm transition-all focus-within:border-[#6d4dff] focus-within:ring-1 focus-within:ring-[#6d4dff]"
+              >
+                <textarea
+                  ref={composerRef}
+                  rows={1}
+                  maxLength={4000}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={composerKeyDown}
+                  placeholder="Ask anything..."
+                  aria-label={`Message ${ASSISTANT_NAME}`}
+                  className="min-h-6 max-h-40 flex-1 resize-none border-none bg-transparent py-0.5 text-sm leading-5 text-[#1a1a1a] outline-none placeholder:text-[#8c9196]"
+                />
+                <div className="ml-2 flex shrink-0 items-center gap-1 self-end text-[#8c9196]">
                   <button
                     type="button"
-                    onClick={cancel}
-                    className="rounded-md bg-[#1a1a1a] p-1.5 text-white"
-                    aria-label="Stop Mink AI"
+                    className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
+                    aria-label="Attach"
                   >
-                    <Square className="h-4 w-4 fill-current" />
+                    <Plus className="h-4 w-4" />
                   </button>
-                ) : (
                   <button
-                    type="submit"
-                    disabled={!input.trim() || isHistoryLoading}
-                    className="rounded-md bg-[#6d4dff] p-1.5 text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
-                    aria-label="Send message"
+                    type="button"
+                    className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
+                    aria-label="Voice input"
                   >
-                    <ArrowUp className="h-4 w-4" />
+                    <Mic className="h-4 w-4" />
                   </button>
-                )}
-              </div>
-            </form>
+                  {isReplying ? (
+                    <button
+                      type="button"
+                      onClick={cancel}
+                      className="rounded-md bg-[#1a1a1a] p-1.5 text-white"
+                      aria-label="Stop Mink AI"
+                    >
+                      <Square className="h-4 w-4 fill-current" />
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!input.trim() || isHistoryLoading}
+                      className="rounded-md bg-[#6d4dff] p-1.5 text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
+                      aria-label="Send message"
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
           </div>
         </main>
       </div>

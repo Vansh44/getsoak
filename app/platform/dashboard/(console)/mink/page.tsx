@@ -115,6 +115,20 @@ export default async function PlatformMinkRunsPage({
           value={formatNumber(data.summary.invitedStores)}
         />
         <Metric
+          label="Drafting stores"
+          value={formatNumber(data.summary.draftingStores)}
+        />
+        <Metric
+          label="Private drafts"
+          value={`${formatNumber(data.summary.savedDrafts)} / ${formatNumber(data.summary.proposedDrafts)}`}
+          note="saved / proposed in window"
+        />
+        <Metric
+          label="Charged credits"
+          value={formatNumber(data.summary.chargedCredits)}
+          note="proposal tools"
+        />
+        <Metric
           label="P95 latency"
           value={formatDuration(data.summary.p95LatencyMs)}
         />

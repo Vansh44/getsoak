@@ -1,19 +1,19 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phase 2's invited read-only merchant beta is implemented in code
-> behind a disabled-by-default global flag and a fail-closed per-store
-> invitation gate. Migration `20260829_0039_mink_phase_2`, the live evaluation
-> gate and the rollout checks below must pass in each target environment before
-> invitations are treated as production-ready. No mutation authority is live.
+> **Status:** Phases 0–3 are implemented in code. Phase 2 remains the invited
+> read-only merchant beta. Phase 3 adds a separate, fail-closed operator opt-in
+> for private versioned drafts and atomic weighted credits through migration
+> `20260830_0040_mink_phase_3`. No publish, send, customer-contact or live
+> business-record mutation authority is present.
 >
-> **Plan date:** 2026-08-29
+> **Plan date:** 2026-08-30
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
 
-### Implementation checkpoint — 2026-08-29
+### Implementation checkpoint — 2026-08-30
 
-The current Phase 0/1/2 read-only slice now includes:
+The current Phase 0/1/2 read slice and Phase 3 drafting slice now include:
 
 - the official `@google/genai` SDK pinned to the supported 2.x line;
 - a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
@@ -67,7 +67,20 @@ The current Phase 0/1/2 read-only slice now includes:
   newest eight messages verbatim;
 - actor-owned answer feedback with bounded, privacy-redacted issue detail and
   operator-visible trace correlation; and
-- shadow credit weights and cost cohorts stored with each usage row.
+- shadow credit weights and cost cohorts stored with each read usage row;
+- an independent per-store drafting-beta switch controlled by a platform
+  superadmin;
+- product-description, product-SEO, blog, coupon-email and reusable
+  customer-message proposal tools filtered by Manage permission;
+- store brand voice carried as untrusted style context, never authority;
+- an expected weighted-credit preview in the composer and atomic server-side
+  2/1/5/2/2 charging from monthly allowance then credit balance;
+- editable before/after proposal cards, admin-private persistence, optimistic
+  version saves and append-only rollback history;
+- atomic compensation that discards an unseen proposal and restores its exact
+  plan/balance credits when the enclosing run fails or is cancelled; and
+- explicit absence of any tool or API that publishes, sends, contacts a
+  customer or writes the proposal into a live product/blog/campaign row.
 
 The dev deployment has also passed manual acceptance for ten-conversation
 history, conversation deletion, panel resizing, multiline input growth and
@@ -76,12 +89,14 @@ slice; they do not replace the evaluation and production-readiness gates below.
 
 The real client and endpoint remain unreachable unless
 `MINK_AI_ENABLED=true`; with `MINK_BETA_REQUIRE_INVITE=true`, the store must
-also have an enabled operator invitation. The disabled/uninvited state keeps
-the canned coming-soon response. The current build does not charge live
-credits, stream token deltas, write store data, expose raw customer contact
-details, perform coding work or provide approval tools. The 50 cases are the
+also have an enabled operator invitation. Draft tools additionally require
+`drafting_enabled=true` and the related Manage permission. The
+disabled/uninvited state keeps the canned coming-soon response. The current
+build charges live credits only when it creates a Phase 3 private proposal; it
+does not stream token deltas, alter live business rows, expose raw customer
+contact details, perform coding work or provide approval tools. The 50 cases are the
 first comparison set, not the complete 200-case Phase 0 corpus, and still need
-controlled live execution and cost reconciliation. Phase 2 is code-complete,
+controlled live execution and cost reconciliation. Phases 2 and 3 are code-complete,
 not automatically deployed or accepted by those facts.
 
 ## 1. Executive decision
@@ -758,6 +773,10 @@ Exit criteria:
 
 ### Phase 3 — Drafting and reversible work
 
+**Implementation:** ✅ code-complete on 2026-08-30; migration, regression
+tests, controlled-store opt-in and credit-ledger reconciliation remain rollout
+gates.
+
 **Duration:** 3–5 weeks
 
 Deliver:
@@ -1115,18 +1134,18 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 2 before giving Mink
-write authority:
+The next sprint should validate and safely roll out the Phase 3 private-draft
+boundary before Phase 4 receives guarded business-record authority:
 
-1. Apply migration `20260829_0039_mink_phase_2` to the controlled staging
-   database before deploying code that reads invitation/feedback/context rows.
+1. Apply migration `20260830_0040_mink_phase_3` after 0039 in the controlled
+   staging database before deploying code that reads drafting/proposal rows.
 2. Deploy with `_MINK_AI_ENABLED=true`, `_MINK_BETA_REQUIRE_INVITE=true`,
    `_MINK_MAX_MODEL_RETRIES=1` and `_MINK_RUN_TIMEOUT_SECONDS=120`; verify that
    an uninvited store still receives the canned assistant, then invite one
-   controlled store from its operator detail page.
-3. Smoke-test metric/order/product/inventory/Help cards, displayed
-   date/location/channel scope, selected-record revalidation, compaction and
-   feedback as an owner, permission-restricted admin and location-bound admin.
+   controlled store and enable its separate private-drafting switch.
+3. Smoke-test all five proposal kinds as an owner and permission-restricted
+   admin: expected cost, before/after card, private save, concurrent-tab
+   conflict and rollback. Confirm another admin and another store receive 404.
 4. Run the 50 cases through `npm run mink:eval` against Gemini 2.5 Flash and
    Gemini 3.7 Flash on the same representative internal store; preserve the
    redacted reports and manually review every answer-contract case.
@@ -1134,14 +1153,14 @@ write authority:
    expanding the corpus toward the 200-case Phase 0 target. The release gate is
    100% security cases, at least 90% overall, malformed calls under 1% and p95
    ordinary latency under 8 seconds.
-6. Reconcile each shadow credit cohort and the operator inspector's cost totals
-   with the Vertex billing export for the same run window; do not enable live
-   customer charging until the distributions are stable.
+6. Reconcile `ai_usage`, `ai_credit_balances`, `ai_credit_ledger`,
+   `mink_draft_credit_usage` and the operator charged-credit total for retries,
+   mixed plan/balance charges and insufficient balances before adding stores.
 7. Add prompt-injection fixtures inside controlled product/location names and
    database/disconnect race tests that a normal live prompt cannot create.
-8. Make the documented go/no-go decision for a wider invited read-only beta.
-   Phase 3 may add drafts only after this gate; do not add mutation tools in
-   the validation sprint.
+8. Make the documented go/no-go decision for wider drafting access. Begin
+   Phase 4 product actions only after this gate; do not add publish/send paths
+   to the Phase 3 proposal API.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 
