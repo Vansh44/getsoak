@@ -6,6 +6,7 @@ import type {
   MinkFeedbackIssue,
   MinkFeedbackRating,
 } from "@/lib/mink/types";
+import { readMinkArtifacts } from "./mink-artifact-parser";
 
 export const ASSISTANT_NAME = "Mink AI";
 export const CANNED_REPLY = `Hi, I'm ${ASSISTANT_NAME} — your store assistant. I'm coming soon, and I'll be able to answer questions about your products, orders and customers right here.`;
@@ -584,22 +585,6 @@ function minkBrowserContext() {
       ? { selectedResource: { type, id } }
       : {}),
   };
-}
-
-function readMinkArtifacts(value: unknown): MinkArtifact[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((artifact): artifact is MinkArtifact =>
-      Boolean(
-        artifact &&
-        typeof artifact === "object" &&
-        (artifact as { type?: unknown }).type &&
-        ["metrics", "records", "sources"].includes(
-          String((artifact as { type?: unknown }).type),
-        ),
-      ),
-    )
-    .slice(0, 6);
 }
 
 function readMinkFeedback(value: unknown): MinkMessage["feedback"] {

@@ -177,15 +177,27 @@ gcloud builds triggers create github \
   --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:dev,_SERVICE=storemink-web-dev,_MIN_INSTANCES=0,_MAX_INSTANCES=2,_DB_POOL_MAX=3,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink_staging,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media,_FIREBASE_PROJECT_ID=storemink-staging,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<STAGING_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-staging.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-staging,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-staging.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=68037646295,_NEXT_PUBLIC_FIREBASE_APP_ID=1:68037646295:web:388ef47d32e39c822b1d92,_NEXT_PUBLIC_ROOT_DOMAIN=dev.storemink.com,_NEXT_PUBLIC_APP_URL=https://dev.storemink.com,_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true'
 ```
 
-Mink AI is globally enabled only on dev during the invited read-only beta. The
-model, location and run limits come from the safe defaults in
-`cloudbuild.yaml`; the independent invitation gate defaults to true. Therefore
-even dev shows the real agent only for stores enabled by an operator. For the
-already-created trigger, set both safety substitutions once (this preserves
-all existing substitutions):
+Mink AI is globally enabled by default in every environment. The model,
+location and run limits come from `cloudbuild.yaml`; the independent invitation
+gate still defaults to true, so uninvited stores retain the canned experience.
+For an already-created trigger, set both substitutions explicitly so an older
+trigger-level override cannot retain the previous global default:
 
 ```bash
 gcloud builds triggers update github storemink-web-dev \
+  --project=storemink-prod --region=global \
+  --update-substitutions=_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true
+```
+
+Apply the same update to the existing staging and production triggers before
+their next deployment:
+
+```bash
+gcloud builds triggers update github storemink-web-staging \
+  --project=storemink-prod --region=global \
+  --update-substitutions=_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true
+
+gcloud builds triggers update github storemink-web-prod \
   --project=storemink-prod --region=global \
   --update-substitutions=_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true
 ```
@@ -227,7 +239,7 @@ gcloud builds triggers create github \
   --branch-pattern='^staging$' \
   --build-config=cloudbuild.yaml \
   --service-account=projects/storemink-prod/serviceAccounts/705863961054-compute@developer.gserviceaccount.com \
-  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:staging,_SERVICE=storemink-web,_MIN_INSTANCES=0,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink_staging,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media,_FIREBASE_PROJECT_ID=storemink-staging,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<STAGING_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-staging.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-staging,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-staging.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=68037646295,_NEXT_PUBLIC_FIREBASE_APP_ID=1:68037646295:web:388ef47d32e39c822b1d92,_NEXT_PUBLIC_ROOT_DOMAIN=staging.storemink.com,_NEXT_PUBLIC_APP_URL=https://staging.storemink.com,_MINK_AI_ENABLED=false'
+  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:staging,_SERVICE=storemink-web,_MIN_INSTANCES=0,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink_staging,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media,_FIREBASE_PROJECT_ID=storemink-staging,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-staging.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<STAGING_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-staging.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-staging,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-staging.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=68037646295,_NEXT_PUBLIC_FIREBASE_APP_ID=1:68037646295:web:388ef47d32e39c822b1d92,_NEXT_PUBLIC_ROOT_DOMAIN=staging.storemink.com,_NEXT_PUBLIC_APP_URL=https://staging.storemink.com,_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true'
 ```
 
 ### Production (`main` → `storemink-web-prod`)
@@ -240,7 +252,7 @@ gcloud builds triggers create github \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml \
   --service-account=projects/storemink-prod/serviceAccounts/705863961054-compute@developer.gserviceaccount.com \
-  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=0,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com,_POS_SESSION_SECRET_SECRET=POS_SESSION_SECRET_PROD,_PAYMENT_CRED_KEY_SECRET=PAYMENT_CRED_KEY_PROD,_RAZORPAY_KEY_ID_SECRET=RAZORPAY_KEY_ID_PROD,_RAZORPAY_KEY_SECRET_SECRET=RAZORPAY_KEY_SECRET_PROD,_RAZORPAY_WEBHOOK_SECRET_SECRET=RAZORPAY_WEBHOOK_SECRET_PROD,_RESEND_WEBHOOK_SECRET_SECRET=RESEND_WEBHOOK_SECRET_PROD,_DOMAIN_ENV=prod,_MINK_AI_ENABLED=false'
+  --substitutions='_IMAGE=asia-south1-docker.pkg.dev/storemink-prod/storemink/web:prod,_SERVICE=storemink-web-prod,_MIN_INSTANCES=0,_DB_CONN=storemink-prod:asia-south1:storemink-prod-db,_DB_NAME=storemink,_DB_PASSWORD_SECRET=CLOUDSQL_PROD_APP_PW,_GCS_BUCKET=storemink-media-prod,_FIREBASE_PROJECT_ID=storemink-prod,_FIREBASE_SA_ID=firebase-adminsdk-fbsvc@storemink-prod.iam.gserviceaccount.com,_NEXT_PUBLIC_FIREBASE_API_KEY=<PROD_WEB_API_KEY>,_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=storemink-prod.firebaseapp.com,_NEXT_PUBLIC_FIREBASE_PROJECT_ID=storemink-prod,_NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=storemink-prod.firebasestorage.app,_NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=705863961054,_NEXT_PUBLIC_FIREBASE_APP_ID=1:705863961054:web:e326046a5f9f7b7de9f54f,_NEXT_PUBLIC_ROOT_DOMAIN=storemink.com,_NEXT_PUBLIC_APP_URL=https://storemink.com,_GOOGLE_SEARCH_CONSOLE_PROPERTY=sc-domain:storemink.com,_POS_SESSION_SECRET_SECRET=POS_SESSION_SECRET_PROD,_PAYMENT_CRED_KEY_SECRET=PAYMENT_CRED_KEY_PROD,_RAZORPAY_KEY_ID_SECRET=RAZORPAY_KEY_ID_PROD,_RAZORPAY_KEY_SECRET_SECRET=RAZORPAY_KEY_SECRET_PROD,_RAZORPAY_WEBHOOK_SECRET_SECRET=RAZORPAY_WEBHOOK_SECRET_PROD,_RESEND_WEBHOOK_SECRET_SECRET=RESEND_WEBHOOK_SECRET_PROD,_DOMAIN_ENV=prod,_MINK_AI_ENABLED=true,_MINK_BETA_REQUIRE_INVITE=true'
 ```
 
 > **⚠ The prod trigger must override every per-env secret NAME.** The
@@ -300,7 +312,7 @@ inherits staging's database, Firebase project, bucket and every secret name.
 | `_GOOGLE_SEARCH_CONSOLE_PROPERTY`           | _(empty — never indexed)_                                           | _(empty — never indexed)_                                           | `sc-domain:storemink.com`                                        |
 | `_POS_SESSION_SECRET_SECRET`                | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_STAGING`                                        | `POS_SESSION_SECRET_PROD`                                        |
 | `_RESEND_WEBHOOK_SECRET_SECRET`             | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_STAGING`                                     | `RESEND_WEBHOOK_SECRET_PROD`                                     |
-| `_MINK_AI_ENABLED`                          | `true` **←**                                                        | `false`                                                             | `false`                                                          |
+| `_MINK_AI_ENABLED`                          | `true` **←**                                                        | `true`                                                              | `true`                                                           |
 | `_MINK_BETA_REQUIRE_INVITE`                 | `true`                                                              | `true`                                                              | `true`                                                           |
 | `_MINK_VERTEX_MODEL`                        | `gemini-3.7-flash`                                                  | `gemini-3.7-flash`                                                  | `gemini-3.7-flash`                                               |
 | `_MINK_VERTEX_LOCATION`                     | `global`                                                            | `global`                                                            | `global`                                                         |

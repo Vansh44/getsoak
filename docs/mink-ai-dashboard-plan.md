@@ -24,6 +24,9 @@ guarded-action slice now include:
 - the official `@google/genai` SDK pinned to the supported 2.x line;
 - a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
   low-level thinking and SDK-managed chat history/thought signatures;
+- a reviewed human-readable system-prompt contract in
+  `docs/mink-ai-system-prompt.md`, parsed as the executable runtime template by
+  `lib/mink/system-prompt.ts` and tied to versioned run telemetry;
 - trusted actor construction from the authenticated host, admin, database role,
   permissions and effective plan;
 - a permission-filtered tool registry that rechecks authorization at execution;
@@ -57,7 +60,11 @@ guarded-action slice now include:
   latency, retries, tool names, tokens and cost—never conversation content or
   provider reasoning;
 - a 50-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
-  security refusals, malformed calls, latency and manual grounding review; and
+  security refusals, malformed calls, latency and manual grounding review;
+- a phase-wise manual acceptance catalogue in
+  `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
+  tenancy, drafting, credits, exact approvals, concurrency, rollback and
+  unsupported-action refusals; and
 - focused tests for config fail-closed behavior, actor construction,
   authorization/permission matrices, location scope, tenant-free tool schemas,
   retry/cost logic, agent limits, operator filters and the SSE boundary;
@@ -120,9 +127,10 @@ history, conversation deletion, panel resizing, multiline input growth and
 cross-tenant isolation. These checks validate the internal-alpha UX/security
 slice; they do not replace the evaluation and production-readiness gates below.
 
-The real client and endpoint remain unreachable unless
-`MINK_AI_ENABLED=true`; with `MINK_BETA_REQUIRE_INVITE=true`, the store must
-also have an enabled operator invitation. Draft tools additionally require
+The real client and endpoint are globally enabled when `MINK_AI_ENABLED` is
+unset and can be explicitly disabled with `MINK_AI_ENABLED=false`. With the
+default `MINK_BETA_REQUIRE_INVITE=true`, a store must still have an enabled
+operator invitation. Draft tools additionally require
 `drafting_enabled=true` and the related Manage permission. Every Phase 4 action
 also requires its matching per-tool operator switch and the destination
 section's Manage permission. The
@@ -137,6 +145,15 @@ membership. The 50 cases are the
 first comparison set, not the complete 200-case Phase 0 corpus, and still need
 controlled live execution and cost reconciliation. Code-complete phases are
 not automatically deployed or accepted by those facts.
+
+The post-Phase-4 reliability review is implemented in code: proposal artifacts
+survive both live SSE parsing and retained-history restoration; disabling the
+invitation-only rollout preserves each store's independent drafting switch;
+PostgreSQL timestamp checkpoints keep microsecond precision through the driver;
+and coupon business dates are canonicalized before exact value comparison.
+This closes false apply/rollback conflicts without weakening real concurrent
+edit detection. Migration `20260830_0044_mink_action_reliability_help` keeps the
+published merchant guidance aligned with that contract.
 
 ## 1. Executive decision
 

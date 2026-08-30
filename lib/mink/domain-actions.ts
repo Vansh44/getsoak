@@ -38,6 +38,10 @@ import {
 import { normalizeMinkDraftContent } from "./draft-types";
 import { MinkRequestError } from "./errors";
 import {
+  canonicalMinkTimestamp,
+  canonicalOptionalMinkTimestamp,
+} from "./timestamps";
+import {
   isMinkDomainActionTool,
   type MinkDomainActionTool,
   type MinkProductActionOperation,
@@ -932,8 +936,8 @@ function resourceValues(
       discount_value: money(resource.discountValue),
       min_order_amount: money(resource.minOrderAmount),
       max_uses: String(resource.maxUses),
-      valid_from: resource.validFrom,
-      valid_until: resource.validUntil,
+      valid_from: canonicalOptionalMinkTimestamp(resource.validFrom),
+      valid_until: canonicalOptionalMinkTimestamp(resource.validUntil),
       status: resource.status,
       show_on_storefront: resource.showOnStorefront ? "yes" : "no",
       audience:
@@ -1511,10 +1515,11 @@ function nonNegativeInteger(value: string, label: string) {
 function optionalTimestamp(value: string, label: string) {
   const input = value.trim();
   if (!input) return null;
-  const date = new Date(input);
-  if (Number.isNaN(date.getTime()))
+  try {
+    return canonicalMinkTimestamp(input);
+  } catch {
     throw invalidDraft(`${label} is not a valid date.`);
-  return date.toISOString();
+  }
 }
 
 function resourceStoreId(resource: ResourceRow) {

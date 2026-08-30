@@ -8,14 +8,14 @@ afterEach(() => {
 });
 
 describe("getMinkConfig", () => {
-  it("fails closed and uses the production model defaults", () => {
+  it("enables by default and uses the production model defaults", () => {
     delete process.env.MINK_AI_ENABLED;
     delete process.env.MINK_VERTEX_MODEL;
     delete process.env.MINK_VERTEX_LOCATION;
     process.env.GCP_PROJECT_ID = "storemink-test";
 
     expect(getMinkConfig()).toMatchObject({
-      enabled: false,
+      enabled: true,
       betaRequireInvite: true,
       projectId: "storemink-test",
       location: "global",
@@ -38,8 +38,10 @@ describe("getMinkConfig", () => {
     expect(getMinkConfig().betaRequireInvite).toBe(true);
   });
 
-  it("only enables on an explicit true value", () => {
-    for (const value of ["false", "yes", "TRUE", "enabled", ""]) {
+  it("allows an explicit false value to disable the default-on runtime", () => {
+    delete process.env.MINK_AI_ENABLED;
+    expect(getMinkConfig().enabled).toBe(true);
+    for (const value of ["false", "0", "yes", "TRUE", "enabled", ""]) {
       process.env.MINK_AI_ENABLED = value;
       expect(getMinkConfig().enabled, value).toBe(false);
     }
