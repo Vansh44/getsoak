@@ -43,8 +43,10 @@ export async function requireMinkStoreInvite(
   storeId: string,
   requireInvite: boolean,
 ): Promise<MinkStoreAccessState> {
-  if (!requireInvite) return { enabled: true, draftingEnabled: false };
   const access = await getMinkStoreAccess(storeId);
+  if (!requireInvite) {
+    return { enabled: true, draftingEnabled: access.draftingEnabled };
+  }
   if (access.enabled) return access;
   throw new MinkRequestError(
     "mink_beta_not_invited",

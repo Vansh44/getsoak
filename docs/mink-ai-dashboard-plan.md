@@ -146,6 +146,15 @@ first comparison set, not the complete 200-case Phase 0 corpus, and still need
 controlled live execution and cost reconciliation. Code-complete phases are
 not automatically deployed or accepted by those facts.
 
+The post-Phase-4 reliability review is implemented in code: proposal artifacts
+survive both live SSE parsing and retained-history restoration; disabling the
+invitation-only rollout preserves each store's independent drafting switch;
+PostgreSQL timestamp checkpoints keep microsecond precision through the driver;
+and coupon business dates are canonicalized before exact value comparison.
+This closes false apply/rollback conflicts without weakening real concurrent
+edit detection. Migration `20260830_0044_mink_action_reliability_help` keeps the
+published merchant guidance aligned with that contract.
+
 ## 1. Executive decision
 
 Build Mink AI as a **permission-aware operating agent for each StoreMink

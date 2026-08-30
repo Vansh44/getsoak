@@ -58,11 +58,17 @@ describe("Mink invited-store access", () => {
     );
   });
 
-  it("bypasses the store row only when the server invitation flag is off", async () => {
+  it("bypasses only invitation eligibility while preserving drafting opt-in", async () => {
     await expect(requireMinkStoreInvite("store-1", false)).resolves.toEqual({
+      enabled: true,
+      draftingEnabled: true,
+    });
+    expect(holder.withService).toHaveBeenCalledOnce();
+
+    holder.withService.mockResolvedValueOnce([]);
+    await expect(requireMinkStoreInvite("store-2", false)).resolves.toEqual({
       enabled: true,
       draftingEnabled: false,
     });
-    expect(holder.withService).not.toHaveBeenCalled();
   });
 });

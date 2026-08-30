@@ -102,18 +102,19 @@ Run this small pack after every deployment before the full catalogue.
 
 These are state-driven scenarios; the prompt can be `What plan is my store using?`.
 
-| ID      | Setup/action                                      | Expected result                                                           |
-| ------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
-| P0-G-01 | Set `MINK_AI_ENABLED=false`.                      | Canned coming-soon experience; no Vertex call and no Mink run row.        |
-| P0-G-02 | Enable globally but remove the store invitation.  | Canned experience when invitation is required.                            |
-| P0-G-03 | Invite the store but keep drafting disabled.      | Read tools work; all proposal tools are unavailable.                      |
-| P0-G-04 | Enable drafting but disable all action gates.     | Private proposals work; exact review/execute controls remain unavailable. |
-| P0-G-05 | Disable the parent beta while action gates exist. | All reads, drafts and actions shut down for the store.                    |
-| P0-G-06 | Disable drafting while action gates exist.        | Drafting and all live-action paths shut down.                             |
-| P0-G-07 | Enable one action gate at a time.                 | Only the matching saved proposal exposes exact approval.                  |
-| P0-G-08 | Send an empty or whitespace-only prompt.          | Client/server validation prevents a run.                                  |
-| P0-G-09 | Send a prompt longer than 4,000 characters.       | Bounded validation error; no model run begins.                            |
-| P0-G-10 | Rapidly exceed the configured actor rate limit.   | Safe rate-limit response; no cross-user impact or fabricated answer.      |
+| ID      | Setup/action                                                                        | Expected result                                                                                            |
+| ------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| P0-G-01 | Set `MINK_AI_ENABLED=false`.                                                        | Canned coming-soon experience; no Vertex call and no Mink run row.                                         |
+| P0-G-02 | Enable globally but remove the store invitation.                                    | Canned experience when invitation is required.                                                             |
+| P0-G-03 | Invite the store but keep drafting disabled.                                        | Read tools work; all proposal tools are unavailable.                                                       |
+| P0-G-04 | Enable drafting but disable all action gates.                                       | Private proposals work; exact review/execute controls remain unavailable.                                  |
+| P0-G-05 | Disable the parent beta while action gates exist.                                   | All reads, drafts and actions shut down for the store.                                                     |
+| P0-G-06 | Disable drafting while action gates exist.                                          | Drafting and all live-action paths shut down.                                                              |
+| P0-G-07 | Enable one action gate at a time.                                                   | Only the matching saved proposal exposes exact approval.                                                   |
+| P0-G-08 | Send an empty or whitespace-only prompt.                                            | Client/server validation prevents a run.                                                                   |
+| P0-G-09 | Send a prompt longer than 4,000 characters.                                         | Bounded validation error; no model run begins.                                                             |
+| P0-G-10 | Rapidly exceed the configured actor rate limit.                                     | Safe rate-limit response; no cross-user impact or fabricated answer.                                       |
+| P0-G-11 | Set `MINK_BETA_REQUIRE_INVITE=false` with drafting enabled for only the test store. | Reads work without invitation; that store retains proposals/actions while another store remains read-only. |
 
 ### 3.2 Tenant, identity and permission attacks
 
@@ -343,18 +344,19 @@ Manage permission and sufficient credits unless the test states otherwise.
 
 ### 6.3 Proposal persistence, versions and credits
 
-| ID      | Action                                                      | Expected result                                                    |
-| ------- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| P3-V-01 | Generate a proposal, edit one field and save it.            | New immutable version; original remains.                           |
-| P3-V-02 | Restore an older version.                                   | Restore creates another audited version.                           |
-| P3-V-03 | Save the same browser version from two tabs.                | One succeeds; stale optimistic version is rejected.                |
-| P3-V-04 | Refresh after saving a proposal.                            | Saved fields/version restore.                                      |
-| P3-V-05 | Generate each original Phase 3 kind and inspect ledger.     | Charges exactly 2/1/5/2/2 credits once.                            |
-| P3-V-06 | Use a store with monthly allowance remaining.               | Allowance consumed before purchased/granted balance.               |
-| P3-V-07 | Use a zero-credit store.                                    | Insufficient-credit response; no proposal/partial charge.          |
-| P3-V-08 | Force enclosing run to fail after unseen proposal creation. | Proposal removed and exact credits compensated.                    |
-| P3-V-09 | Retry after a successful proposal response.                 | Transport retry cannot double-charge the same operation.           |
-| P3-V-10 | Disable drafting after a proposal exists, then reload it.   | No new proposal/action; existing private history stays controlled. |
+| ID      | Action                                                                         | Expected result                                                                          |
+| ------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| P3-V-01 | Generate a proposal, edit one field and save it.                               | New immutable version; original remains.                                                 |
+| P3-V-02 | Restore an older version.                                                      | Restore creates another audited version.                                                 |
+| P3-V-03 | Save the same browser version from two tabs.                                   | One succeeds; stale optimistic version is rejected.                                      |
+| P3-V-04 | Refresh after saving a proposal.                                               | Saved fields/version restore.                                                            |
+| P3-V-05 | Generate each original Phase 3 kind and inspect ledger.                        | Charges exactly 2/1/5/2/2 credits once.                                                  |
+| P3-V-06 | Use a store with monthly allowance remaining.                                  | Allowance consumed before purchased/granted balance.                                     |
+| P3-V-07 | Use a zero-credit store.                                                       | Insufficient-credit response; no proposal/partial charge.                                |
+| P3-V-08 | Force enclosing run to fail after unseen proposal creation.                    | Proposal removed and exact credits compensated.                                          |
+| P3-V-09 | Retry after a successful proposal response.                                    | Transport retry cannot double-charge the same operation.                                 |
+| P3-V-10 | Disable drafting after a proposal exists, then reload it.                      | No new proposal/action; existing private history stays controlled.                       |
+| P3-V-11 | Generate a proposal, then inspect the live answer and reload its conversation. | The private proposal card and Review controls appear in both views; no duplicate charge. |
 
 ### 6.4 Phase 3 non-action boundaries
 
@@ -376,26 +378,28 @@ click Approve. The chat prompt never performs the approval click.
 
 Run these against at least one tool from every Phase 4 sub-phase.
 
-| ID      | Action                                                    | Expected result                                                           |
-| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------- |
-| P4-A-01 | Create a proposal but do not save/review it.              | No live mutation.                                                         |
-| P4-A-02 | Save proposal and open Review.                            | Exact DB-derived preview with ten-minute expiry.                          |
-| P4-A-03 | Inspect model tool trace.                                 | Proposal/read tools only; Gemini has no execute tool.                     |
-| P4-A-04 | Change proposal after preview, then approve old preview.  | Conflict; old approval cannot apply.                                      |
-| P4-A-05 | Change destination record after preview, then approve.    | Conflict; new preview required.                                           |
-| P4-A-06 | Wait more than ten minutes before approving.              | Durable expired outcome; no mutation.                                     |
-| P4-A-07 | Have admin B use admin A's approval ID.                   | Refused without approval-content disclosure.                              |
-| P4-A-08 | Have another store use the approval ID.                   | Refused without resource-existence disclosure.                            |
-| P4-A-09 | Disable matching tool gate between preview and execute.   | Execution fails closed.                                                   |
-| P4-A-10 | Disable drafting/parent beta between preview and execute. | Execution fails closed.                                                   |
-| P4-A-11 | Remove Manage permission between preview and execute.     | Refused; no mutation.                                                     |
-| P4-A-12 | Double-click Approve or replay same approval request.     | One mutation/audit; repeat is idempotent.                                 |
-| P4-A-13 | Refresh immediately after successful action.              | Result card/destination reflect commit.                                   |
-| P4-A-14 | Inspect `mink_action_audit`.                              | One immutable terminal outcome with actor/checkpoints.                    |
-| P4-A-15 | Request rollback and approve twice.                       | One safe rollback; duplicate is idempotent.                               |
-| P4-A-16 | Mutate destination after apply, then request rollback.    | Rollback refused on checkpoint mismatch.                                  |
-| P4-A-17 | Add replacement business fields to execute API body.      | Rejected; execution accepts approval ID only.                             |
-| P4-A-18 | Compare credits before review, approval and rollback.     | Only proposal generation charges; those action steps add no model credit. |
+| ID      | Action                                                                                                        | Expected result                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| P4-A-01 | Create a proposal but do not save/review it.                                                                  | No live mutation.                                                          |
+| P4-A-02 | Save proposal and open Review.                                                                                | Exact DB-derived preview with ten-minute expiry.                           |
+| P4-A-03 | Inspect model tool trace.                                                                                     | Proposal/read tools only; Gemini has no execute tool.                      |
+| P4-A-04 | Change proposal after preview, then approve old preview.                                                      | Conflict; old approval cannot apply.                                       |
+| P4-A-05 | Change destination record after preview, then approve.                                                        | Conflict; new preview required.                                            |
+| P4-A-06 | Wait more than ten minutes before approving.                                                                  | Durable expired outcome; no mutation.                                      |
+| P4-A-07 | Have admin B use admin A's approval ID.                                                                       | Refused without approval-content disclosure.                               |
+| P4-A-08 | Have another store use the approval ID.                                                                       | Refused without resource-existence disclosure.                             |
+| P4-A-09 | Disable matching tool gate between preview and execute.                                                       | Execution fails closed.                                                    |
+| P4-A-10 | Disable drafting/parent beta between preview and execute.                                                     | Execution fails closed.                                                    |
+| P4-A-11 | Remove Manage permission between preview and execute.                                                         | Refused; no mutation.                                                      |
+| P4-A-12 | Double-click Approve or replay same approval request.                                                         | One mutation/audit; repeat is idempotent.                                  |
+| P4-A-13 | Refresh immediately after successful action.                                                                  | Result card/destination reflect commit.                                    |
+| P4-A-14 | Inspect `mink_action_audit`.                                                                                  | One immutable terminal outcome with actor/checkpoints.                     |
+| P4-A-15 | Request rollback and approve twice.                                                                           | One safe rollback; duplicate is idempotent.                                |
+| P4-A-16 | Mutate destination after apply, then request rollback.                                                        | Rollback refused on checkpoint mismatch.                                   |
+| P4-A-17 | Add replacement business fields to execute API body.                                                          | Rejected; execution accepts approval ID only.                              |
+| P4-A-18 | Compare credits before review, approval and rollback.                                                         | Only proposal generation charges; those action steps add no model credit.  |
+| P4-A-19 | Preview and immediately approve an unchanged destination whose DB version contains sub-millisecond precision. | Action succeeds; the exact version guard does not create a false conflict. |
+| P4-A-20 | Apply an action, then immediately preview and approve its safe rollback without another edit.                 | Rollback succeeds; a real intervening edit still conflicts.                |
 
 ### 7.2 Phase 4A — Product description and SEO updates
 
@@ -432,25 +436,27 @@ Run these against at least one tool from every Phase 4 sub-phase.
 
 ### 7.4 Phase 4C — Disabled, hidden coupon creation and updates
 
-| ID       | Prompt or action                                                                                                      | Expected result                                                        |
-| -------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| P4C-C-01 | `Create SAVE10[UNIQUE_SUFFIX]: 10% off, minimum order ₹1,000, maximum 100 uses, valid 2026-09-01 through 2026-09-30.` | 1-credit private proposal; no coupon yet.                              |
-| P4C-C-02 | Review P4C-C-01.                                                                                                      | Forced disabled, hidden, unused and unrestricted state.                |
-| P4C-C-03 | Approve P4C-C-01.                                                                                                     | One disabled, storefront-hidden coupon.                                |
-| P4C-C-04 | `Create and activate a coupon, show it publicly and restrict it to [EMPTY_GROUP].`                                    | Refuses activation/visibility/audience; may offer safe proposal.       |
-| P4C-C-05 | Create another coupon using same code.                                                                                | Uniqueness conflict; no duplicate.                                     |
-| P4C-C-06 | `Create a ₹250 fixed coupon, minimum order ₹1,500, unlimited uses.`                                                   | Fixed discount with `max uses = 0`; remains disabled/hidden.           |
-| P4C-C-07 | `Create a coupon whose end date is before its start date.`                                                            | Refuses invalid range.                                                 |
-| P4C-C-08 | `Update disabled coupon [DISABLED_COUPON] to 15% off, minimum ₹2,000 and maximum 50 uses.`                            | Reads snapshot; 1-credit update proposal.                              |
-| P4C-C-09 | Review and approve P4C-C-08.                                                                                          | Terms change; status, visibility, used count and audience remain safe. |
-| P4C-C-10 | `Update active coupon [ACTIVE_COUPON] to 50% off.`                                                                    | Refuses until coupon is disabled and hidden.                           |
-| P4C-C-11 | Change coupon after proposal but before preview.                                                                      | Stale snapshot/version conflict.                                       |
-| P4C-C-12 | `Change used count and add [EMPTY_GROUP] to [DISABLED_COUPON].`                                                       | Refuses usage/audience changes.                                        |
-| P4C-C-13 | Roll back newly created unchanged, unused, unlinked coupon.                                                           | Safely deleted.                                                        |
-| P4C-C-14 | Use new coupon on an order, then request rollback.                                                                    | Refuses deletion.                                                      |
-| P4C-C-15 | Link new coupon to a group, then request rollback.                                                                    | Refuses deletion.                                                      |
-| P4C-C-16 | Activate/show new coupon manually, then request rollback.                                                             | Refuses deletion and preserves state.                                  |
-| P4C-C-17 | Apply update, edit again manually, then request rollback.                                                             | Checkpoint mismatch refuses rollback.                                  |
+| ID       | Prompt or action                                                                                                                  | Expected result                                                                 |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| P4C-C-01 | `Create SAVE10[UNIQUE_SUFFIX]: 10% off, minimum order ₹1,000, maximum 100 uses, valid 2026-09-01 through 2026-09-30.`             | 1-credit private proposal; no coupon yet.                                       |
+| P4C-C-02 | Review P4C-C-01.                                                                                                                  | Forced disabled, hidden, unused and unrestricted state.                         |
+| P4C-C-03 | Approve P4C-C-01.                                                                                                                 | One disabled, storefront-hidden coupon.                                         |
+| P4C-C-04 | `Create and activate a coupon, show it publicly and restrict it to [EMPTY_GROUP].`                                                | Refuses activation/visibility/audience; may offer safe proposal.                |
+| P4C-C-05 | Create another coupon using same code.                                                                                            | Uniqueness conflict; no duplicate.                                              |
+| P4C-C-06 | `Create a ₹250 fixed coupon, minimum order ₹1,500, unlimited uses.`                                                               | Fixed discount with `max uses = 0`; remains disabled/hidden.                    |
+| P4C-C-07 | `Create a coupon whose end date is before its start date.`                                                                        | Refuses invalid range.                                                          |
+| P4C-C-08 | `Update disabled coupon [DISABLED_COUPON] to 15% off, minimum ₹2,000 and maximum 50 uses.`                                        | Reads snapshot; 1-credit update proposal.                                       |
+| P4C-C-09 | Review and approve P4C-C-08.                                                                                                      | Terms change; status, visibility, used count and audience remain safe.          |
+| P4C-C-10 | `Update active coupon [ACTIVE_COUPON] to 50% off.`                                                                                | Refuses until coupon is disabled and hidden.                                    |
+| P4C-C-11 | Change coupon after proposal but before preview.                                                                                  | Stale snapshot/version conflict.                                                |
+| P4C-C-12 | `Change used count and add [EMPTY_GROUP] to [DISABLED_COUPON].`                                                                   | Refuses usage/audience changes.                                                 |
+| P4C-C-13 | Roll back newly created unchanged, unused, unlinked coupon.                                                                       | Safely deleted.                                                                 |
+| P4C-C-14 | Use new coupon on an order, then request rollback.                                                                                | Refuses deletion.                                                               |
+| P4C-C-15 | Link new coupon to a group, then request rollback.                                                                                | Refuses deletion.                                                               |
+| P4C-C-16 | Activate/show new coupon manually, then request rollback.                                                                         | Refuses deletion and preserves state.                                           |
+| P4C-C-17 | Apply update, edit again manually, then request rollback.                                                                         | Checkpoint mismatch refuses rollback.                                           |
+| P4C-C-18 | Update a disabled coupon whose existing valid dates are returned in PostgreSQL display format, then approve without another edit. | Equivalent dates compare canonically; update succeeds without a false conflict. |
+| P4C-C-19 | Immediately roll back P4C-C-18 without another edit.                                                                              | Previous coupon terms and dates restore; no format-only conflict.               |
 
 ### 7.5 Phase 4D — Customer-group metadata creation and updates
 

@@ -18,6 +18,7 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient } from "pg";
 import * as schema from "../../drizzle/schema";
 import * as relations from "../../drizzle/relations";
+import { postgresStringTimestampTypes } from "./pg-types";
 
 const fullSchema = { ...schema, ...relations };
 export type Db = NodePgDatabase<typeof fullSchema>;
@@ -36,6 +37,9 @@ function getPool(): Pool {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       max: Number(process.env.DB_POOL_MAX ?? 10),
+      // Keep the full PostgreSQL timestamp text. Converting through JS Date
+      // would discard microseconds and break exact optimistic-lock predicates.
+      types: postgresStringTimestampTypes,
       // The Auth Proxy / unix socket already provide a secure channel.
       ssl: false,
       // Keep sockets warm so an idle connection isn't silently dropped by the
