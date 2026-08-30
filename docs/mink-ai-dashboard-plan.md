@@ -57,7 +57,11 @@ guarded-action slice now include:
   latency, retries, tool names, tokens and cost—never conversation content or
   provider reasoning;
 - a 50-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
-  security refusals, malformed calls, latency and manual grounding review; and
+  security refusals, malformed calls, latency and manual grounding review;
+- a phase-wise manual acceptance catalogue in
+  `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
+  tenancy, drafting, credits, exact approvals, concurrency, rollback and
+  unsupported-action refusals; and
 - focused tests for config fail-closed behavior, actor construction,
   authorization/permission matrices, location scope, tenant-free tool schemas,
   retry/cost logic, agent limits, operator filters and the SSE boundary;
