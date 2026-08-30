@@ -129,6 +129,21 @@ export default async function PlatformMinkRunsPage({
           note="proposal tools"
         />
         <Metric
+          label="Action-enabled stores"
+          value={formatNumber(data.summary.actionEnabledStores)}
+          note="at least one product-text tool"
+        />
+        <Metric
+          label="Executed actions"
+          value={formatNumber(data.summary.executedActions)}
+          note="approved in window"
+        />
+        <Metric
+          label="Refused actions"
+          value={formatNumber(data.summary.refusedActions)}
+          note="conflicted / expired"
+        />
+        <Metric
           label="P95 latency"
           value={formatDuration(data.summary.p95LatencyMs)}
         />

@@ -20,6 +20,11 @@ describe("Mink draft contracts", () => {
       blog: 5,
       coupon_email: 2,
       customer_message: 2,
+      product_create: 3,
+      coupon_create: 1,
+      coupon_update: 1,
+      customer_group_create: 1,
+      customer_group_update: 1,
     });
   });
 
@@ -57,5 +62,21 @@ describe("Mink draft contracts", () => {
       expectedCredits: 5,
     });
     expect(estimateMinkDraftIntent("How many blogs do I have?")).toBeNull();
+    expect(
+      estimateMinkDraftIntent("Create a new product for masala tea"),
+    ).toMatchObject({
+      kind: "product_create",
+      expectedCredits: 3,
+    });
+    expect(estimateMinkDraftIntent("Update coupon SAVE10")).toMatchObject({
+      kind: "coupon_update",
+      expectedCredits: 1,
+    });
+    expect(
+      estimateMinkDraftIntent("Create a customer group for VIPs"),
+    ).toMatchObject({
+      kind: "customer_group_create",
+      expectedCredits: 1,
+    });
   });
 });

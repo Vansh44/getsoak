@@ -21,6 +21,10 @@ import {
   type MinkDraftVersionSummary,
 } from "./draft-types";
 import { MinkRequestError, MinkToolInputError } from "./errors";
+import { getLatestMinkDomainAction } from "./domain-actions";
+import type { MinkDomainActionResult } from "./domain-action-types";
+import { getLatestMinkProductAction } from "./product-actions";
+import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
 
 const DRAFT_PERMISSION: Record<
@@ -32,6 +36,11 @@ const DRAFT_PERMISSION: Record<
   blog: { section: "blogs", action: "manage" },
   coupon_email: { section: "marketing", action: "manage" },
   customer_message: { section: "users", action: "manage" },
+  product_create: { section: "products", action: "manage" },
+  coupon_create: { section: "marketing", action: "manage" },
+  coupon_update: { section: "marketing", action: "manage" },
+  customer_group_create: { section: "users", action: "manage" },
+  customer_group_update: { section: "users", action: "manage" },
 };
 
 export interface MinkDraftState {
@@ -48,6 +57,8 @@ export interface MinkDraftState {
   chargedCredits: number;
   creditSource: MinkDraftCreditSource;
   versions: MinkDraftVersionSummary[];
+  lastProductAction: MinkProductActionResult | null;
+  lastDomainAction: MinkDomainActionResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -166,7 +177,7 @@ export async function getMinkDraft(
   actor: MinkActorContext,
   draftId: string,
 ): Promise<MinkDraftState> {
-  return withService(async (db) => {
+  const state = await withService(async (db) => {
     const draft = await selectOwnedDraft(db, actor, draftId);
     const versions = await db
       .select({
@@ -186,6 +197,26 @@ export async function getMinkDraft(
       .limit(10);
     return toDraftState(draft, versions);
   });
+  return {
+    ...state,
+    lastProductAction:
+      state.kind === "product_description" || state.kind === "product_seo"
+        ? await getLatestMinkProductAction(actor, draftId)
+        : null,
+    lastDomainAction: domainActionToolForKind(state.kind)
+      ? await getLatestMinkDomainAction(actor, draftId)
+      : null,
+  };
+}
+
+function domainActionToolForKind(kind: MinkDraftKind) {
+  return (
+    kind === "product_create" ||
+    kind === "coupon_create" ||
+    kind === "coupon_update" ||
+    kind === "customer_group_create" ||
+    kind === "customer_group_update"
+  );
 }
 
 export async function saveMinkDraftVersion(input: {
@@ -401,6 +432,8 @@ function toDraftState(
           ]
         : [],
     ),
+    lastProductAction: null,
+    lastDomainAction: null,
   };
 }
 

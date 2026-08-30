@@ -9,6 +9,10 @@ import {
   normalizePlan,
   type Plan,
 } from "@/lib/plans";
+import {
+  isMinkActionTool,
+  type MinkActionTool,
+} from "@/lib/mink/product-action-types";
 
 // ---------------------------------------------------------------------------
 // Everything an operator needs to know about ONE store, on one screen.
@@ -75,7 +79,11 @@ export interface StoreDetail {
   /** Lifetime and 30-day gross, excluding cancelled orders. */
   revenue: { lifetime: number; last30d: number };
   ai: { used: number; cap: number | null; creditBalance: number };
-  mink: { betaEnabled: boolean; draftingEnabled: boolean };
+  mink: {
+    betaEnabled: boolean;
+    draftingEnabled: boolean;
+    enabledActionTools: MinkActionTool[];
+  };
   channels: {
     payments: ChannelState;
     logistics: ChannelState;
@@ -155,6 +163,9 @@ export async function loadStoreDetail(
             where ma.store_id = s.id) as mink_beta_enabled,
           (select drafting_enabled from mink_store_access ma
             where ma.store_id = s.id) as mink_drafting_enabled,
+          array(select ata.tool_name from mink_action_tool_access ata
+            where ata.store_id = s.id and ata.enabled = true
+            order by ata.tool_name) as mink_enabled_action_tools,
           (select case when enabled then 'enabled' else 'paused' end
              from store_payment_providers pp where pp.store_id = s.id) as gateway,
           (select case when enabled then 'enabled' else 'paused' end
@@ -242,6 +253,9 @@ export async function loadStoreDetail(
         mink: {
           betaEnabled: row.mink_beta_enabled === true,
           draftingEnabled: row.mink_drafting_enabled === true,
+          enabledActionTools: Array.isArray(row.mink_enabled_action_tools)
+            ? row.mink_enabled_action_tools.filter(isMinkActionTool)
+            : [],
         },
         channels: {
           payments: (str(row.gateway) ?? "none") as ChannelState,

@@ -12,6 +12,8 @@ import {
   type SQL,
 } from "drizzle-orm";
 import {
+  minkActionAudit,
+  minkActionToolAccess,
   minkRuns,
   minkDrafts,
   minkFeedback,
@@ -56,6 +58,9 @@ export interface PlatformMinkRuns {
     draftingStores: number;
     proposedDrafts: number;
     savedDrafts: number;
+    actionEnabledStores: number;
+    executedActions: number;
+    refusedActions: number;
   };
   runs: Array<{
     id: string;
@@ -153,6 +158,9 @@ export async function getPlatformMinkRuns(
         draftingStores: sql<number>`(select count(*)::int from ${minkStoreAccess} where ${minkStoreAccess.enabled} and ${minkStoreAccess.draftingEnabled})`,
         proposedDrafts: sql<number>`(select count(*)::int from ${minkDrafts} where ${minkDrafts.createdAt} >= ${since} and ${minkDrafts.status} = 'proposed')`,
         savedDrafts: sql<number>`(select count(*)::int from ${minkDrafts} where ${minkDrafts.createdAt} >= ${since} and ${minkDrafts.status} = 'draft')`,
+        actionEnabledStores: sql<number>`(select count(distinct ${minkActionToolAccess.storeId})::int from ${minkActionToolAccess} where ${minkActionToolAccess.enabled})`,
+        executedActions: sql<number>`(select count(*)::int from ${minkActionAudit} where ${minkActionAudit.createdAt} >= ${since} and ${minkActionAudit.outcome} = 'executed')`,
+        refusedActions: sql<number>`(select count(*)::int from ${minkActionAudit} where ${minkActionAudit.createdAt} >= ${since} and ${minkActionAudit.outcome} in ('conflicted', 'expired'))`,
       })
       .from(minkRuns)
       .innerJoin(stores, eq(stores.id, minkRuns.storeId))
@@ -243,6 +251,9 @@ export async function getPlatformMinkRuns(
         draftingStores: Number(summary?.draftingStores ?? 0),
         proposedDrafts: Number(summary?.proposedDrafts ?? 0),
         savedDrafts: Number(summary?.savedDrafts ?? 0),
+        actionEnabledStores: Number(summary?.actionEnabledStores ?? 0),
+        executedActions: Number(summary?.executedActions ?? 0),
+        refusedActions: Number(summary?.refusedActions ?? 0),
       },
       runs: runRows.map((run) => ({
         ...run,

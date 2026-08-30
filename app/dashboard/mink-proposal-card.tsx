@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  ArrowRight,
   Check,
   ExternalLink,
+  Eye,
   History,
   LoaderCircle,
   RotateCcw,
@@ -17,9 +19,23 @@ import {
   type MinkDraftKind,
   type MinkDraftVersionSummary,
 } from "@/lib/mink/draft-types";
+import {
+  MINK_DOMAIN_FIELD_LABELS,
+  domainActionFields,
+  domainActionToolForDraftKind,
+  isCreateDomainTool,
+  type MinkDomainActionApproval,
+  type MinkDomainActionResult,
+} from "@/lib/mink/domain-action-types";
+import type {
+  MinkProductActionApproval,
+  MinkProductActionResult,
+} from "@/lib/mink/product-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "proposal" }>;
+type MinkActionApproval = MinkProductActionApproval | MinkDomainActionApproval;
+type MinkActionResult = MinkProductActionResult | MinkDomainActionResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -34,6 +50,8 @@ type DraftResponse = {
   chargedCredits: number;
   creditSource: MinkDraftCreditSource;
   versions: MinkDraftVersionSummary[];
+  lastProductAction: MinkProductActionResult | null;
+  lastDomainAction: MinkDomainActionResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -42,6 +60,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   );
   const [content, setContent] = useState<MinkDraftContent>(proposal.content);
   const [busy, setBusy] = useState<"load" | "save" | "rollback" | null>("load");
+  const [actionBusy, setActionBusy] = useState<
+    "preview" | "execute" | "rollback" | null
+  >(null);
+  const [approval, setApproval] = useState<MinkActionApproval | null>(null);
+  const [actionResult, setActionResult] = useState<MinkActionResult | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const fields = MINK_DRAFT_CONFIG[draft.kind].fields;
   const dirty = useMemo(
@@ -49,6 +74,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       fields.some((field) => content[field.key] !== draft.content[field.key]),
     [content, draft.content, fields],
   );
+  const supportsProductAction =
+    draft.kind === "product_description" || draft.kind === "product_seo";
+  const supportsDomainAction =
+    domainActionToolForDraftKind(draft.kind) !== null;
+  const supportsLiveAction = supportsProductAction || supportsDomainAction;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,6 +86,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       .then((next) => {
         setDraft(next);
         setContent(next.content);
+        setApproval(null);
+        setActionResult(next.lastProductAction ?? next.lastDomainAction);
         setError(null);
       })
       .catch((loadError) => {
@@ -88,6 +120,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       });
       setDraft(next);
       setContent(next.content);
+      setApproval(null);
+      setActionResult(next.lastProductAction ?? next.lastDomainAction);
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -114,6 +148,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       });
       setDraft(next);
       setContent(next.content);
+      setApproval(null);
+      setActionResult(next.lastProductAction ?? next.lastDomainAction);
     } catch (rollbackError) {
       setError(
         rollbackError instanceof Error
@@ -122,6 +158,87 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       );
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function reviewLiveAction() {
+    setActionBusy("preview");
+    setError(null);
+    try {
+      const next = await requestLiveAction(
+        proposal.draftId,
+        supportsDomainAction,
+        {
+          action: "preview",
+          expectedDraftVersion: draft.currentVersion,
+          idempotencyKey: crypto.randomUUID(),
+        },
+      );
+      setApproval(next.approval ?? null);
+      setActionResult(null);
+    } catch (reviewError) {
+      setError(
+        reviewError instanceof Error
+          ? reviewError.message
+          : "The dashboard change could not be reviewed.",
+      );
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function executeLiveAction() {
+    if (!approval) return;
+    setActionBusy("execute");
+    setError(null);
+    try {
+      const next = await requestLiveAction(
+        proposal.draftId,
+        supportsDomainAction,
+        {
+          action: "execute",
+          approvalId: approval.id,
+        },
+      );
+      if (!next.result) throw new Error("The action result is unavailable.");
+      setApproval(next.result.approval);
+      setActionResult(next.result);
+    } catch (executeError) {
+      setApproval(null);
+      setError(
+        executeError instanceof Error
+          ? executeError.message
+          : "The dashboard change was not applied.",
+      );
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function reviewLiveRollback() {
+    if (!actionResult) return;
+    setActionBusy("rollback");
+    setError(null);
+    try {
+      const next = await requestLiveAction(
+        proposal.draftId,
+        supportsDomainAction,
+        {
+          action: "preview_rollback",
+          sourceApprovalId: actionResult.approval.id,
+          idempotencyKey: crypto.randomUUID(),
+        },
+      );
+      setApproval(next.approval ?? null);
+      setActionResult(null);
+    } catch (rollbackError) {
+      setError(
+        rollbackError instanceof Error
+          ? rollbackError.message
+          : "A safe rollback preview is not available.",
+      );
+    } finally {
+      setActionBusy(null);
     }
   }
 
@@ -173,10 +290,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                 maxLength={field.maxLength}
                 rows={field.key === "content" ? 8 : 4}
                 onChange={(event) =>
-                  setContent((current) => ({
-                    ...current,
-                    [field.key]: event.target.value,
-                  }))
+                  changeContent(field.key, event.target.value)
                 }
                 className="w-full resize-y rounded-lg border border-[#dfdce5] bg-white px-2.5 py-2 text-xs leading-5 text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
               />
@@ -185,10 +299,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                 value={content[field.key] ?? ""}
                 maxLength={field.maxLength}
                 onChange={(event) =>
-                  setContent((current) => ({
-                    ...current,
-                    [field.key]: event.target.value,
-                  }))
+                  changeContent(field.key, event.target.value)
                 }
                 className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
               />
@@ -271,13 +382,178 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           </details>
         ) : null}
 
+        {supportsLiveAction && draft.currentVersion > 0 ? (
+          <div className="space-y-2 rounded-lg border border-[#ddd6f5] bg-[#fcfbff] p-2.5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-semibold text-[#3d3155]">
+                  {actionHeading(draft.kind)}
+                </div>
+                <p className="mt-0.5 text-[9px] leading-4 text-[#746c7d]">
+                  {actionScope(draft.kind)}
+                </p>
+              </div>
+              {!approval && !actionResult ? (
+                <button
+                  type="button"
+                  onClick={reviewLiveAction}
+                  disabled={busy !== null || actionBusy !== null || dirty}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#6d4dff] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#5b3fd0] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {actionBusy === "preview" ? (
+                    <LoaderCircle className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Eye className="h-3 w-3" />
+                  )}
+                  Review exact change
+                </button>
+              ) : null}
+            </div>
+
+            {dirty ? (
+              <p className="text-[9px] font-medium text-amber-700">
+                Save this draft version before reviewing a live change.
+              </p>
+            ) : null}
+
+            {approval?.status === "pending" ? (
+              <div className="space-y-2 rounded-lg border border-[#d8cef8] bg-white p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold text-[#44365f]">
+                    Exact{" "}
+                    {approval.operation === "apply" ? "change" : "rollback"}{" "}
+                    preview
+                  </span>
+                  <span className="text-[9px] text-[#82798d]">
+                    Expires {formatActionTime(approval.expiresAt)}
+                  </span>
+                </div>
+                {actionPreviewFields(approval, fields).map((field) => (
+                  <div key={field.key} className="space-y-1">
+                    <div className="text-[9px] font-semibold text-[#5f5868]">
+                      {field.label}
+                    </div>
+                    <div className="grid gap-1.5 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                      <ActionValue value={approval.before[field.key]} />
+                      <ArrowRight className="mx-auto h-3 w-3 text-[#8a8194]" />
+                      <ActionValue value={approval.after[field.key]} proposed />
+                    </div>
+                  </div>
+                ))}
+                <div className="flex flex-wrap justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setApproval(null)}
+                    disabled={actionBusy !== null}
+                    className="rounded-lg px-2.5 py-1.5 text-[10px] font-semibold text-[#665c75] hover:bg-[#f3f1f6] disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={executeLiveAction}
+                    disabled={actionBusy !== null}
+                    className="inline-flex items-center gap-1 rounded-lg bg-[#6d4dff] px-2.5 py-1.5 text-[10px] font-semibold text-white disabled:opacity-50"
+                  >
+                    {actionBusy === "execute" ? (
+                      <LoaderCircle className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="h-3 w-3" />
+                    )}
+                    Approve and{" "}
+                    {approval.operation === "apply" ? "apply" : "roll back"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {actionResult?.approval.status === "executed" ? (
+              <div className="rounded-lg bg-[#ecfdf3] p-2.5 text-[10px] text-[#166534]">
+                <div className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 h-3 w-3 shrink-0" />
+                  <div>
+                    <div className="font-semibold">
+                      {actionSuccessMessage(actionResult.approval)}
+                    </div>
+                    {!actionRemovedResource(actionResult.approval) ? (
+                      <a
+                        href={
+                          actionResource(actionResult.approval).dashboardPath
+                        }
+                        className="mt-1 inline-flex items-center gap-1 font-semibold underline"
+                      >
+                        Open {actionResource(actionResult.approval).label}
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    ) : (
+                      <div className="mt-1">The unused record was removed.</div>
+                    )}
+                  </div>
+                </div>
+                {actionResult.approval.operation === "apply" ? (
+                  <button
+                    type="button"
+                    onClick={reviewLiveRollback}
+                    disabled={actionBusy !== null}
+                    className="mt-2 inline-flex items-center gap-1 font-semibold underline disabled:opacity-50"
+                  >
+                    {actionBusy === "rollback" ? (
+                      <LoaderCircle className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                    Review safe rollback
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <p className="rounded-lg bg-[#fff9e8] px-2.5 py-2 text-[10px] leading-4 text-[#735b17]">
-          Private Mink drafts are never published or sent. Saving here does not
-          change the linked dashboard record or contact a customer.
+          Saving this private draft never changes a dashboard record, publishes
+          content or contacts a customer. A separately enabled product-text
+          action changes only the exact fields shown after you approve its
+          preview. Product creation stays draft-only, coupon actions stay
+          disabled and hidden, and customer-group membership is never changed.
         </p>
       </div>
     </section>
   );
+
+  function changeContent(field: string, value: string) {
+    setContent((current) => ({ ...current, [field]: value }));
+    setApproval(null);
+    setActionResult(null);
+  }
+}
+
+function ActionValue({
+  value,
+  proposed = false,
+}: {
+  value: string | null | undefined;
+  proposed?: boolean;
+}) {
+  return (
+    <div
+      className={`max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md p-2 text-[9px] leading-4 ${
+        proposed ? "bg-[#f2edff] text-[#3d2b73]" : "bg-[#f5f5f6] text-[#5f5868]"
+      }`}
+    >
+      {value || <span className="italic text-[#99939f]">Empty</span>}
+    </div>
+  );
+}
+
+function formatActionTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "soon"
+    : date.toLocaleTimeString("en-IN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
 }
 
 function fromProposal(proposal: Proposal): DraftResponse {
@@ -297,6 +573,8 @@ function fromProposal(proposal: Proposal): DraftResponse {
     chargedCredits: proposal.chargedCredits,
     creditSource: proposal.creditSource,
     versions: [],
+    lastProductAction: null,
+    lastDomainAction: null,
   };
 }
 
@@ -316,4 +594,94 @@ async function requestDraft(
     throw new Error(payload.error ?? "This private draft is unavailable.");
   }
   return payload.draft;
+}
+
+async function requestLiveAction(
+  draftId: string,
+  domainAction: boolean,
+  body: Record<string, unknown>,
+): Promise<{
+  approval?: MinkActionApproval;
+  result?: MinkActionResult;
+}> {
+  const endpoint = domainAction ? "action" : "product-action";
+  const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    approval?: MinkActionApproval;
+    result?: MinkActionResult;
+    error?: string;
+  };
+  if (!response.ok) {
+    throw new Error(payload.error ?? "The Mink action is unavailable.");
+  }
+  return payload;
+}
+
+function actionPreviewFields(
+  approval: MinkActionApproval,
+  draftFields: Array<{ key: string; label: string }>,
+) {
+  if ("product" in approval) return draftFields;
+  return domainActionFields(approval.toolName).map((key) => ({
+    key,
+    label: MINK_DOMAIN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+  }));
+}
+
+function actionResource(approval: MinkActionApproval) {
+  if ("product" in approval) {
+    return {
+      label: approval.product.name,
+      dashboardPath: approval.product.dashboardPath,
+    };
+  }
+  return {
+    label: approval.resource.label,
+    dashboardPath: approval.resource.dashboardPath,
+  };
+}
+
+function actionHeading(kind: MinkDraftKind) {
+  if (kind === "product_create") return "Create an unpublished draft product";
+  if (kind === "coupon_create") return "Create a disabled, hidden coupon";
+  if (kind === "coupon_update") return "Update disabled coupon terms";
+  if (kind === "customer_group_create") return "Create customer-group metadata";
+  if (kind === "customer_group_update") return "Update customer-group metadata";
+  return "Apply to the linked product";
+}
+
+function actionScope(kind: MinkDraftKind) {
+  if (kind === "product_create") {
+    return "Requires Products Manage and its operator kill switch. The product stays draft, untracked and without variants, stock, images or category.";
+  }
+  if (kind === "coupon_create" || kind === "coupon_update") {
+    return "Requires Marketing Manage and its operator kill switch. Activation, storefront visibility, usage and customer-group audience are outside this action.";
+  }
+  if (kind === "customer_group_create" || kind === "customer_group_update") {
+    return "Requires Users Manage and its operator kill switch. Only name, description and colour can change; membership is outside this action.";
+  }
+  return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
+}
+
+function actionSuccessMessage(approval: MinkActionApproval) {
+  if (approval.operation === "rollback")
+    return "Approved safe rollback completed.";
+  if ("product" in approval) return "Approved text applied to the product.";
+  if (isCreateDomainTool(approval.toolName)) {
+    return `Approved ${approval.resource.type.replace("_", " ")} created.`;
+  }
+  return `Approved ${approval.resource.type.replace("_", " ")} metadata updated.`;
+}
+
+function actionRemovedResource(approval: MinkActionApproval) {
+  return (
+    !("product" in approval) &&
+    approval.operation === "rollback" &&
+    isCreateDomainTool(approval.toolName)
+  );
 }

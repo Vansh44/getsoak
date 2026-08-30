@@ -112,6 +112,11 @@ describe("Mink read-tool declarations", () => {
       "propose_blog_draft",
       "propose_coupon_email",
       "propose_customer_message",
+      "propose_product_create",
+      "propose_coupon_create",
+      "propose_coupon_update",
+      "propose_customer_group_create",
+      "propose_customer_group_update",
     ]);
 
     const marketingTools = names({
@@ -134,6 +139,23 @@ describe("Mink read-tool declarations", () => {
       required: ["coupon_code"],
       additionalProperties: false,
     });
+    const customerTools = names({
+      draftingEnabled: true,
+      permissions: { users: ["view", "manage"] },
+    });
+    expect(
+      customerTools.indexOf("get_customer_group_for_draft"),
+    ).toBeGreaterThan(-1);
+    expect(customerTools.indexOf("get_customer_group_for_draft")).toBeLessThan(
+      customerTools.indexOf("propose_customer_group_update"),
+    );
+    const freeCustomerTools = names({
+      draftingEnabled: true,
+      effectivePlan: "free",
+      permissions: { users: ["view", "manage"] },
+    });
+    expect(freeCustomerTools).not.toContain("propose_customer_group_create");
+    expect(freeCustomerTools).toContain("propose_customer_group_update");
   });
 
   it("rejects direct calls to every hidden business tool before data access", async () => {

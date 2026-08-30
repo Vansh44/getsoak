@@ -191,7 +191,7 @@ export const listOrdersTool: MinkTool = {
   declaration: {
     name: "list_orders",
     description:
-      "List up to 20 compact orders for a date period, exact accessible location, sales channel, and status. Customer identity is minimized and permission-masked. Use this for recent, waiting, delivery, payment, or order-status questions.",
+      "List up to 20 compact orders for a date period, accessible location, sales channel, and status. A location name may include its displayed type, such as Delhi warehouse. Customer identity is minimized and permission-masked. Use this for recent, waiting, delivery, payment, or order-status questions.",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -202,7 +202,8 @@ export const listOrdersTool: MinkTool = {
           type: "string",
           minLength: 1,
           maxLength: 100,
-          description: "Optional exact accessible dashboard location name.",
+          description:
+            "Optional accessible dashboard location name; its displayed type may be included, such as Delhi warehouse.",
         },
         limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
       },

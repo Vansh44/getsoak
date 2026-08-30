@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(40);
+    expect(loaded.migrations).toHaveLength(43);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -479,6 +479,72 @@ describe("database migration controls", () => {
     expect(loaded.migrations[39].sql).toContain(
       "cannot publish a product or blog",
     );
+    expect(loaded.migrations[40]).toMatchObject({
+      id: "20260830_0041_mink_location_alias_help",
+      transaction: true,
+      requires: ["20260830_0040_mink_phase_3"],
+      applyVerify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: expect.stringContaining("location name/type aliases"),
+            equals: "1",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[40].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[40].sql).toContain("Delhi warehouse");
+    expect(loaded.migrations[40].sql).toContain(
+      "does not replace a failed named-location request with all-store results",
+    );
+    expect(loaded.migrations[41]).toMatchObject({
+      id: "20260830_0042_mink_phase_4a_product_actions",
+      transaction: true,
+      requires: ["20260830_0041_mink_location_alias_help"],
+      verify: {
+        tables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+        rlsTables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+      },
+    });
+    expect(loaded.migrations[41].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_idempotency_key",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_product_store_fkey",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "GRANT SELECT, INSERT ON TABLE public.mink_action_audit",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "Approved product-text actions",
+    );
+    expect(loaded.migrations[41].sql).toContain("Approve and apply");
+    expect(loaded.migrations[41].sql).toContain("Review safe rollback");
+    expect(loaded.migrations[42]).toMatchObject({
+      id: "20260830_0043_mink_phase_4b_4d_actions",
+      transaction: true,
+      requires: ["20260830_0042_mink_phase_4a_product_actions"],
+      verify: {
+        columns: expect.arrayContaining([
+          "mink_action_approvals.resource_type",
+          "mink_action_approvals.result_id",
+          "mink_action_audit.resource_version_after",
+        ]),
+      },
+    });
+    expect(loaded.migrations[42].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[42].sql).toContain("create_customer_group");
+    expect(loaded.migrations[42].sql).toContain("unpublished draft product");
+    expect(loaded.migrations[42].sql).toContain("safe rollback preview");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

@@ -266,6 +266,7 @@ export default async function StoreDetailPage({
             canManage={canManage(viewer)}
             minkBetaEnabled={store.mink.betaEnabled}
             minkDraftingEnabled={store.mink.draftingEnabled}
+            minkEnabledActionTools={store.mink.enabledActionTools}
           />
         </div>
       </header>

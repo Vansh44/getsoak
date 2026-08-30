@@ -24,7 +24,11 @@ export async function resolveMinkLocation(
       ? []
       : await withUser({ uid: actor.adminId, email: actor.email }, (db) =>
           db
-            .select({ id: storeLocations.id, name: storeLocations.name })
+            .select({
+              id: storeLocations.id,
+              name: storeLocations.name,
+              type: storeLocations.type,
+            })
             .from(storeLocations)
             .where(
               and(
@@ -38,8 +42,9 @@ export async function resolveMinkLocation(
         );
 
   if (requested) {
-    const matches = options.filter(
-      (option) => normalize(option.name) === normalize(requested),
+    const requestedName = normalize(requested);
+    const matches = options.filter((option) =>
+      locationAliases(option.name, option.type).has(requestedName),
     );
     if (matches.length !== 1) {
       throw new MinkToolInputError(
@@ -90,5 +95,20 @@ function optionalLocationName(value: unknown): string | null {
 }
 
 function normalize(value: string): string {
-  return value.trim().toLocaleLowerCase("en-IN");
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-IN");
+}
+
+/**
+ * Accept the canonical dashboard name or that name paired with its displayed
+ * location type. The alias still has to resolve to exactly one accessible row;
+ * this is intentionally not fuzzy matching.
+ */
+function locationAliases(name: string, type: string): Set<string> {
+  const normalizedName = normalize(name);
+  const normalizedType = normalize(type.replaceAll("_", " "));
+  return new Set([
+    normalizedName,
+    `${normalizedName} ${normalizedType}`,
+    `${normalizedType} ${normalizedName}`,
+  ]);
 }
