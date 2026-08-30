@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(43);
+    expect(loaded.migrations).toHaveLength(44);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -545,6 +545,21 @@ describe("database migration controls", () => {
     expect(loaded.migrations[42].sql).toContain("create_customer_group");
     expect(loaded.migrations[42].sql).toContain("unpublished draft product");
     expect(loaded.migrations[42].sql).toContain("safe rollback preview");
+    expect(loaded.migrations[43]).toMatchObject({
+      id: "20260830_0044_mink_action_reliability_help",
+      transaction: true,
+      requires: ["20260830_0043_mink_phase_4b_4d_actions"],
+    });
+    expect(loaded.migrations[43].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[43].sql).toContain(
+      "Proposal and approval reliability",
+    );
+    expect(loaded.migrations[43].sql).toContain(
+      "does not enable drafting for every store",
+    );
+    expect(loaded.migrations[43].sql).toContain(
+      "exact database checkpoint captured by the preview",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,
