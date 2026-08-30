@@ -4789,7 +4789,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4937,7 +4937,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -4953,7 +4953,19 @@ export const minkActionApprovals = pgTable(
     storeId: uuid("store_id").notNull(),
     adminId: text("admin_id").notNull(),
     draftId: uuid("draft_id").notNull(),
-    productId: uuid("product_id").notNull(),
+    productId: uuid("product_id"),
+    resourceType: text("resource_type").default("product").notNull(),
+    resourceId: uuid("resource_id"),
+    resourceVersion: timestamp("resource_version", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resourceLabel: text("resource_label"),
+    resultId: uuid("result_id"),
+    resultVersion: timestamp("result_version", {
+      withTimezone: true,
+      mode: "string",
+    }),
     sourceApprovalId: uuid("source_approval_id"),
     toolName: text("tool_name").notNull(),
     operation: text().notNull(),
@@ -4962,7 +4974,7 @@ export const minkActionApprovals = pgTable(
     productVersion: timestamp("product_version", {
       withTimezone: true,
       mode: "string",
-    }).notNull(),
+    }),
     beforeJson: jsonb("before_json").notNull(),
     afterJson: jsonb("after_json").notNull(),
     requestHash: text("request_hash").notNull(),
@@ -5010,6 +5022,12 @@ export const minkActionApprovals = pgTable(
       table.productId,
       table.createdAt,
     ),
+    index("mink_action_approvals_resource_idx").on(
+      table.storeId,
+      table.resourceType,
+      table.resourceId,
+      table.createdAt,
+    ),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5032,7 +5050,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
+    ),
+    check(
+      "mink_action_approvals_resource_type_check",
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5066,7 +5088,18 @@ export const minkActionAudit = pgTable(
     storeId: uuid("store_id").notNull(),
     adminId: text("admin_id").notNull(),
     draftId: uuid("draft_id").notNull(),
-    productId: uuid("product_id").notNull(),
+    productId: uuid("product_id"),
+    resourceType: text("resource_type").default("product").notNull(),
+    resourceId: uuid("resource_id"),
+    resourceVersionBefore: timestamp("resource_version_before", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resourceVersionAfter: timestamp("resource_version_after", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    resultId: uuid("result_id"),
     toolName: text("tool_name").notNull(),
     operation: text().notNull(),
     outcome: text().notNull(),
@@ -5075,7 +5108,7 @@ export const minkActionAudit = pgTable(
     productVersionBefore: timestamp("product_version_before", {
       withTimezone: true,
       mode: "string",
-    }).notNull(),
+    }),
     productVersionAfter: timestamp("product_version_after", {
       withTimezone: true,
       mode: "string",
@@ -5103,7 +5136,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
+    ),
+    check(
+      "mink_action_audit_resource_type_check",
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",

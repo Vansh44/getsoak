@@ -1500,6 +1500,46 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260830_0043_mink_phase_4b_4d_actions",
+      "description": "Add exact approvals for unpublished product creation, disabled coupon create/update, and customer-group metadata create/update",
+      "file": "sql/20260830_0043_mink_phase_4b_4d_actions.sql",
+      "transaction": true,
+      "requires": ["20260830_0042_mink_phase_4a_product_actions"],
+      "verify": {
+        "columns": [
+          "mink_action_approvals.resource_type",
+          "mink_action_approvals.resource_version",
+          "mink_action_approvals.result_id",
+          "mink_action_audit.resource_version_after",
+          "mink_action_audit.result_id"
+        ],
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_audit_resource_type_check"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents guarded Phase 4B through 4D actions and safe rollback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Creating products, coupons and customer groups%' and body like '%unpublished draft product%' and body like '%disabled and hidden%' and body like '%safe rollback preview%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded Phase 4B through 4D actions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Creating products, coupons and customer groups%' and body like '%unpublished draft product%' and body like '%disabled and hidden%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

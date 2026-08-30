@@ -156,3 +156,16 @@ export async function assertCanActivateCoupon(
     );
   }
 }
+
+/** Run inside the same transaction as a Mink/customer-group INSERT so a plan
+ * downgrade racing the create cannot bypass the feature gate. Existing groups
+ * remain editable after downgrade; only net-new groups are gated. */
+export async function assertCanCreateCustomerGroup(db: Db, storeId: string) {
+  await lockLimit(db, storeId, "customer-groups");
+  const { limits } = await planContextWithDb(db, storeId);
+  if (!limits.customerGroups) {
+    throw new PlanEntitlementError(
+      "Customer groups are available on Basic and Pro. Upgrade to create a new group; existing groups and memberships remain safe.",
+    );
+  }
+}

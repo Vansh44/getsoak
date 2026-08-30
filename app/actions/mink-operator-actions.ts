@@ -10,8 +10,8 @@ import {
 } from "@/drizzle/schema";
 import { withService } from "@/lib/db/client";
 import {
-  isMinkProductActionTool,
-  type MinkProductActionTool,
+  isMinkActionTool,
+  type MinkActionTool,
 } from "@/lib/mink/product-action-types";
 import { logError, logInfo } from "@/lib/observability/logger";
 
@@ -141,7 +141,7 @@ export async function setMinkDraftingAccess(
 
 export async function setMinkActionToolAccess(
   storeId: string,
-  toolName: MinkProductActionTool,
+  toolName: MinkActionTool,
   enabled: boolean,
 ): Promise<{ success?: true; error?: string }> {
   const viewer = await getPlatformViewer();
@@ -150,7 +150,7 @@ export async function setMinkActionToolAccess(
       error: "Only a platform superadmin can change Mink action access.",
     };
   }
-  if (!isMinkProductActionTool(toolName) || typeof enabled !== "boolean") {
+  if (!isMinkActionTool(toolName) || typeof enabled !== "boolean") {
     return { error: "Invalid Mink action state." };
   }
   try {

@@ -349,7 +349,9 @@ export async function startMinkRun(input: {
         requestedBy: actor.adminId,
         requestId: actor.requestId,
         model,
-        promptVersion: actor.draftingEnabled ? "draft-beta-v3" : "read-beta-v2",
+        promptVersion: actor.draftingEnabled
+          ? "draft-action-beta-v4"
+          : "read-beta-v2",
         toolRegistryVersion: actor.draftingEnabled
           ? "draft-beta-v3"
           : "read-beta-v2",
@@ -537,7 +539,7 @@ export async function startMinkToolCall(input: {
       sequence: input.sequence,
       providerCallId: input.call.id ?? null,
       toolName: input.call.name,
-      toolVersion: input.call.name.startsWith("propose_") ? 3 : 2,
+      toolVersion: input.call.name.startsWith("propose_") ? 4 : 2,
       riskTier: input.call.name.startsWith("propose_") ? "R1" : "R0",
       // Arguments intentionally stay redacted in the alpha ledger. The model
       // receives them, but telemetry never needs a product search phrase.

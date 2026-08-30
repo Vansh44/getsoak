@@ -5,7 +5,22 @@ export const MINK_PRODUCT_ACTION_TOOLS = [
   "apply_product_seo",
 ] as const;
 
+export const MINK_DOMAIN_ACTION_TOOLS = [
+  "create_product",
+  "create_coupon",
+  "update_coupon",
+  "create_customer_group",
+  "update_customer_group",
+] as const;
+
+export const MINK_ACTION_TOOLS = [
+  ...MINK_PRODUCT_ACTION_TOOLS,
+  ...MINK_DOMAIN_ACTION_TOOLS,
+] as const;
+
 export type MinkProductActionTool = (typeof MINK_PRODUCT_ACTION_TOOLS)[number];
+export type MinkDomainActionTool = (typeof MINK_DOMAIN_ACTION_TOOLS)[number];
+export type MinkActionTool = (typeof MINK_ACTION_TOOLS)[number];
 export type MinkProductActionOperation = "apply" | "rollback";
 export type MinkProductActionStatus =
   | "pending"
@@ -47,6 +62,26 @@ export function isMinkProductActionTool(
 ): value is MinkProductActionTool {
   return MINK_PRODUCT_ACTION_TOOLS.includes(value as MinkProductActionTool);
 }
+
+export function isMinkDomainActionTool(
+  value: unknown,
+): value is MinkDomainActionTool {
+  return MINK_DOMAIN_ACTION_TOOLS.includes(value as MinkDomainActionTool);
+}
+
+export function isMinkActionTool(value: unknown): value is MinkActionTool {
+  return MINK_ACTION_TOOLS.includes(value as MinkActionTool);
+}
+
+export const MINK_ACTION_TOOL_LABELS: Record<MinkActionTool, string> = {
+  apply_product_description: "Product descriptions",
+  apply_product_seo: "Product SEO",
+  create_product: "Draft product creation",
+  create_coupon: "Disabled coupon creation",
+  update_coupon: "Disabled coupon updates",
+  create_customer_group: "Customer-group creation",
+  update_customer_group: "Customer-group updates",
+};
 
 export function actionToolForDraftKind(
   kind: string,

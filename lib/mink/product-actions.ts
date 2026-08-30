@@ -702,12 +702,16 @@ function validateApprovalRow(
   if (
     !isMinkProductActionTool(row.toolName) ||
     (row.operation !== "apply" && row.operation !== "rollback") ||
-    !isActionStatus(row.status)
+    !isActionStatus(row.status) ||
+    !row.productId ||
+    !row.productVersion
   ) {
     throw invalidApproval();
   }
   return {
     ...row,
+    productId: row.productId,
+    productVersion: row.productVersion,
     toolName: row.toolName,
     operation: row.operation,
     status: row.status,
@@ -890,9 +894,11 @@ function isActionStatus(value: string): value is MinkProductActionStatus {
 type ProductRow = Awaited<ReturnType<typeof readProduct>>;
 type ApprovalRow = Omit<
   typeof minkActionApprovals.$inferSelect,
-  "toolName" | "operation" | "status"
+  "toolName" | "operation" | "status" | "productId" | "productVersion"
 > & {
   toolName: MinkProductActionTool;
   operation: MinkProductActionOperation;
   status: MinkProductActionStatus;
+  productId: string;
+  productVersion: string;
 };
