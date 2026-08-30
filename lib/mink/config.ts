@@ -15,7 +15,7 @@ export interface MinkConfig {
 }
 
 function enabled(value: string | undefined): boolean {
-  return value === "true" || value === "1";
+  return value === undefined || value === "true" || value === "1";
 }
 
 function boundedInt(
@@ -33,8 +33,8 @@ function boundedInt(
 /** Read at request time so Cloud Run revisions and tests can change config safely. */
 export function getMinkConfig(): MinkConfig {
   return {
-    // Fail closed: merely configuring a model must not expose an unfinished
-    // merchant feature. An operator must explicitly enable the runtime.
+    // The runtime is enabled by default. Store access still fails closed behind
+    // the independent, default-on invitation requirement below.
     enabled: enabled(process.env.MINK_AI_ENABLED),
     // Phase 2 is an invited beta. An explicit false is required to retain the
     // all-store internal-alpha behavior in a controlled environment.
